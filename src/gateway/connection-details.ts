@@ -1,5 +1,5 @@
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { MullusiConfig } from "../config/types.js";
 import { isSecureWebSocketUrl } from "./net.js";
 
 export type GatewayConnectionDetails = {
@@ -11,9 +11,9 @@ export type GatewayConnectionDetails = {
 };
 
 type GatewayConnectionDetailResolvers = {
-  loadConfig?: () => OpenClawConfig;
+  loadConfig?: () => MullusiConfig;
   resolveConfigPath?: (env: NodeJS.ProcessEnv) => string;
-  resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
+  resolveGatewayPort?: (cfg?: MullusiConfig, env?: NodeJS.ProcessEnv) => number;
 };
 
 function trimToUndefined(value: string | undefined): string | undefined {
@@ -23,7 +23,7 @@ function trimToUndefined(value: string | undefined): string | undefined {
 
 export function buildGatewayConnectionDetailsWithResolvers(
   options: {
-    config?: OpenClawConfig;
+    config?: MullusiConfig;
     url?: string;
     configPath?: string;
     urlSource?: "cli" | "env";
@@ -49,7 +49,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
       : undefined;
   const envUrlOverride = cliUrlOverride
     ? undefined
-    : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
+    : trimToUndefined(process.env.MULLUSI_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const remoteUrl =
     typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
@@ -59,7 +59,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const url = urlOverride || remoteUrl || localUrl;
   const urlSource = urlOverride
     ? urlSourceHint === "env"
-      ? "env OPENCLAW_GATEWAY_URL"
+      ? "env MULLUSI_GATEWAY_URL"
       : "cli --url"
     : remoteUrl
       ? "config gateway.remote.url"
@@ -71,7 +71,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
 
-  const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
+  const allowPrivateWs = process.env.MULLUSI_ALLOW_INSECURE_PRIVATE_WS === "1";
   if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
     throw new Error(
       [
@@ -81,13 +81,13 @@ export function buildGatewayConnectionDetailsWithResolvers(
         `Config: ${configPath}`,
         "Fix: Use wss:// for remote gateway URLs.",
         "Safe remote access defaults:",
-        "- keep gateway.bind=loopback and use an SSH tunnel (ssh -N -L 18789:127.0.0.1:18789 user@gateway-host)",
+        "- keep gateway.bind=loopback and use an SSH tunnel (ssh -N -L 18790:127.0.0.1:18790 user@gateway-host)",
         "- or use Tailscale Serve/Funnel for HTTPS remote access",
         allowPrivateWs
           ? undefined
-          : "Break-glass (trusted private networks only): set OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1",
-        "Doctor: openclaw doctor --fix",
-        "Docs: https://docs.openclaw.ai/gateway/remote",
+          : "Break-glass (trusted private networks only): set MULLUSI_ALLOW_INSECURE_PRIVATE_WS=1",
+        "Doctor: mullusi doctor --fix",
+        "Docs: https://docs.mullusi.com/gateway/remote",
       ].join("\n"),
     );
   }

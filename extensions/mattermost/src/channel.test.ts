@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { MullusiConfig } from "../runtime-api.js";
 import { createChannelReplyPipeline } from "../runtime-api.js";
 
 vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
@@ -20,8 +20,8 @@ vi.mock("./mattermost/send.js", () => ({
   sendMessageMattermost: sendMessageMattermostMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
-  const original = (await vi.importActual("openclaw/plugin-sdk/ssrf-runtime")) as Record<
+vi.mock("mullusi/plugin-sdk/ssrf-runtime", async () => {
+  const original = (await vi.importActual("mullusi/plugin-sdk/ssrf-runtime")) as Record<
     string,
     unknown
   >;
@@ -46,7 +46,7 @@ type MattermostSendTextParams = Parameters<MattermostSendText>[0];
 type MattermostSendMedia = NonNullable<NonNullable<typeof mattermostPlugin.outbound>["sendMedia"]>;
 type MattermostSendMediaParams = Parameters<MattermostSendMedia>[0];
 
-function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] {
+function getDescribedActions(cfg: MullusiConfig, accountId?: string): string[] {
   return [...(mattermostPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
 }
 
@@ -155,7 +155,7 @@ describe("mattermostPlugin", () => {
     it("uses replyToMode for channel messages and keeps direct messages off", () => {
       const resolveReplyToMode = requireMattermostReplyToModeResolver();
 
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           mattermost: {
             replyToMode: "all",
@@ -182,7 +182,7 @@ describe("mattermostPlugin", () => {
     it("uses configured defaultAccount when accountId is omitted", () => {
       const resolveReplyToMode = requireMattermostReplyToModeResolver();
 
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           mattermost: {
             defaultAccount: "alerts",
@@ -233,7 +233,7 @@ describe("mattermostPlugin", () => {
     };
 
     it("exposes react when mattermost is configured", () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           mattermost: {
             enabled: true,
@@ -251,7 +251,7 @@ describe("mattermostPlugin", () => {
     });
 
     it("hides react when mattermost is not configured", () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           mattermost: {
             enabled: true,
@@ -264,7 +264,7 @@ describe("mattermostPlugin", () => {
     });
 
     it("keeps buttons optional in message tool schema", () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           mattermost: {
             enabled: true,
@@ -284,7 +284,7 @@ describe("mattermostPlugin", () => {
     });
 
     it("hides react when actions.reactions is false", () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           mattermost: {
             enabled: true,
@@ -301,7 +301,7 @@ describe("mattermostPlugin", () => {
     });
 
     it("respects per-account actions.reactions in message discovery", () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           mattermost: {
             enabled: true,
@@ -323,7 +323,7 @@ describe("mattermostPlugin", () => {
     });
 
     it("honors the selected Mattermost account during discovery", () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           mattermost: {
             enabled: true,
@@ -351,7 +351,7 @@ describe("mattermostPlugin", () => {
     });
 
     it("blocks react when default account disables reactions and accountId is omitted", async () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           mattermost: {
             enabled: true,
@@ -504,7 +504,7 @@ describe("mattermostPlugin", () => {
             baseUrl: "https://chat.example.com",
           },
         },
-      } as OpenClawConfig;
+      } as MullusiConfig;
 
       const params: MattermostSendTextParams = {
         cfg,
@@ -580,14 +580,14 @@ describe("mattermostPlugin", () => {
       const formatAllowFrom = mattermostPlugin.config.formatAllowFrom!;
 
       const formatted = formatAllowFrom({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         allowFrom: [" @Alice ", " user:USER123 ", " mattermost:BOT999 "],
       });
       expect(formatted).toEqual(["@alice", "user123", "bot999"]);
     });
 
     it("uses account responsePrefix overrides", () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           mattermost: {
             responsePrefix: "[Channel]",

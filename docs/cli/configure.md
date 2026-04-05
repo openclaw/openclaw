@@ -1,11 +1,11 @@
 ---
-summary: "CLI reference for `openclaw configure` (interactive configuration prompts)"
+summary: "CLI reference for `mullusi configure` (interactive configuration prompts)"
 read_when:
   - You want to tweak credentials, devices, or agent defaults interactively
 title: "configure"
 ---
 
-# `openclaw configure`
+# `mullusi configure`
 
 Interactive prompt to set up credentials, devices, and agent defaults.
 
@@ -19,10 +19,10 @@ variants (`volcengine-plan/*`, `byteplus-plan/*`). If the preferred-provider
 filter would produce an empty list, configure falls back to the unfiltered
 catalog instead of showing a blank picker.
 
-Tip: `openclaw config` without a subcommand opens the same wizard. Use
-`openclaw config get|set|unset` for non-interactive edits.
+Tip: `mullusi config` without a subcommand opens the same wizard. Use
+`mullusi config get|set|unset` for non-interactive edits.
 
-For web search, `openclaw configure --section web` lets you choose a provider
+For web search, `mullusi configure --section web` lets you choose a provider
 and configure its credentials. Some providers also show provider-specific
 follow-up prompts:
 
@@ -63,8 +63,8 @@ Notes:
 ## Examples
 
 ```bash
-openclaw configure
-openclaw configure --section web
-openclaw configure --section model --section channels
-openclaw configure --section gateway --section daemon
+mullusi configure
+mullusi configure --section web
+mullusi configure --section model --section channels
+mullusi configure --section gateway --section daemon
 ```

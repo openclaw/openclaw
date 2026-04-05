@@ -8,27 +8,27 @@ import {
 } from "./models-config.e2e-harness.js";
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
-const { planOpenClawModelsJsonMock } = vi.hoisted(() => ({
-  planOpenClawModelsJsonMock: vi.fn(),
+const { planMullusiModelsJsonMock } = vi.hoisted(() => ({
+  planMullusiModelsJsonMock: vi.fn(),
 }));
 
 vi.mock("./models-config.plan.js", () => ({
-  planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
+  planMullusiModelsJson: (...args: unknown[]) => planMullusiModelsJsonMock(...args),
 }));
 
 installModelsConfigTestHooks();
 
-let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+let ensureMullusiModelsJson: typeof import("./models-config.js").ensureMullusiModelsJson;
 
 beforeEach(async () => {
   vi.resetModules();
-  planOpenClawModelsJsonMock.mockImplementation(
+  planMullusiModelsJsonMock.mockImplementation(
     async (params: { cfg?: typeof CUSTOM_PROXY_MODELS_CONFIG }) => ({
       action: "write",
       contents: `${JSON.stringify({ providers: params.cfg?.models?.providers ?? {} }, null, 2)}\n`,
     }),
   );
-  ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+  ({ ensureMullusiModelsJson } = await import("./models-config.js"));
 });
 
 describe("models-config write serialization", () => {
@@ -76,7 +76,7 @@ describe("models-config write serialization", () => {
       });
 
       try {
-        await Promise.all([ensureOpenClawModelsJson(first), ensureOpenClawModelsJson(second)]);
+        await Promise.all([ensureMullusiModelsJson(first), ensureMullusiModelsJson(second)]);
       } finally {
         writeSpy.mockRestore();
       }

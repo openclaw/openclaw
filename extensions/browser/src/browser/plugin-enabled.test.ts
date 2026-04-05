@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 
 describe("isDefaultBrowserPluginEnabled", () => {
   it("defaults to enabled", () => {
-    expect(isDefaultBrowserPluginEnabled({} as OpenClawConfig)).toBe(true);
+    expect(isDefaultBrowserPluginEnabled({} as MullusiConfig)).toBe(true);
   });
 
   it("respects explicit plugin disablement", () => {
@@ -17,7 +17,7 @@ describe("isDefaultBrowserPluginEnabled", () => {
             },
           },
         },
-      } as OpenClawConfig),
+      } as MullusiConfig),
     ).toBe(false);
   });
 });

@@ -24,14 +24,14 @@ function applyAndCapture(params: {
 }
 
 describe("extra-params: OpenAI attribution", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_VERSION"]);
+  const envSnapshot = captureEnv(["MULLUSI_VERSION"]);
 
   afterEach(() => {
     envSnapshot.restore();
   });
 
   it("injects originator and release-based user agent for native OpenAI", () => {
-    process.env.OPENCLAW_VERSION = "2026.3.22";
+    process.env.MULLUSI_VERSION = "2026.3.22";
 
     const { headers } = applyAndCapture({
       provider: "openai",
@@ -40,14 +40,14 @@ describe("extra-params: OpenAI attribution", () => {
     });
 
     expect(headers).toEqual({
-      originator: "openclaw",
+      originator: "mullusi",
       version: "2026.3.22",
-      "User-Agent": "openclaw/2026.3.22",
+      "User-Agent": "mullusi/2026.3.22",
     });
   });
 
   it("overrides caller-supplied OpenAI attribution headers", () => {
-    process.env.OPENCLAW_VERSION = "2026.3.22";
+    process.env.MULLUSI_VERSION = "2026.3.22";
 
     const { headers } = applyAndCapture({
       provider: "openai",
@@ -61,15 +61,15 @@ describe("extra-params: OpenAI attribution", () => {
     });
 
     expect(headers).toEqual({
-      originator: "openclaw",
+      originator: "mullusi",
       version: "2026.3.22",
-      "User-Agent": "openclaw/2026.3.22",
+      "User-Agent": "mullusi/2026.3.22",
       "X-Custom": "1",
     });
   });
 
   it("does not inject attribution on non-native OpenAI-compatible base URLs", () => {
-    process.env.OPENCLAW_VERSION = "2026.3.22";
+    process.env.MULLUSI_VERSION = "2026.3.22";
 
     const { headers } = applyAndCapture({
       provider: "openai",
@@ -81,7 +81,7 @@ describe("extra-params: OpenAI attribution", () => {
   });
 
   it("injects attribution for ChatGPT-backed OpenAI Codex traffic", () => {
-    process.env.OPENCLAW_VERSION = "2026.3.22";
+    process.env.MULLUSI_VERSION = "2026.3.22";
 
     const { headers } = applyAndCapture({
       provider: "openai-codex",
@@ -90,9 +90,9 @@ describe("extra-params: OpenAI attribution", () => {
     });
 
     expect(headers).toEqual({
-      originator: "openclaw",
+      originator: "mullusi",
       version: "2026.3.22",
-      "User-Agent": "openclaw/2026.3.22",
+      "User-Agent": "mullusi/2026.3.22",
     });
   });
 });

@@ -1,5 +1,5 @@
 import MarkdownIt from "markdown-it";
-import { isAutoLinkedFileRef } from "openclaw/plugin-sdk/text-runtime";
+import { isAutoLinkedFileRef } from "mullusi/plugin-sdk/text-runtime";
 import type { MatrixClient } from "./sdk.js";
 import { isMatrixQualifiedUserId } from "./target-ids.js";
 

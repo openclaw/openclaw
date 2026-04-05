@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
-import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { type MullusiConfig, loadConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -35,7 +35,7 @@ type GatewayCaller = typeof callGateway;
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   callGateway?: GatewayCaller;
 }): AnyAgentTool {
   return {

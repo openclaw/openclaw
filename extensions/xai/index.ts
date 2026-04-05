@@ -1,8 +1,8 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
+import type { MullusiConfig } from "mullusi/plugin-sdk/plugin-entry";
+import { defineSingleProviderPluginEntry } from "mullusi/plugin-sdk/provider-entry";
+import { buildProviderReplayFamilyHooks } from "mullusi/plugin-sdk/provider-model-shared";
+import { jsonResult, readProviderEnvValue } from "mullusi/plugin-sdk/provider-web-search";
 import {
   applyXaiModelCompat,
   normalizeXaiModelId,
@@ -25,7 +25,7 @@ const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
 
 function hasResolvableXaiApiKey(config: unknown): boolean {
   return Boolean(
-    resolveFallbackXaiAuth(config as OpenClawConfig | undefined)?.apiKey ||
+    resolveFallbackXaiAuth(config as MullusiConfig | undefined)?.apiKey ||
     readProviderEnvValue(["XAI_API_KEY"]),
   );
 }
@@ -99,7 +99,7 @@ function createLazyCodeExecutionTool(ctx: {
           error: "missing_xai_api_key",
           message:
             "code_execution needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
-          docs: "https://docs.openclaw.ai/tools/code-execution",
+          docs: "https://docs.mullusi.com/tools/code-execution",
         });
       }
       return await tool.execute(toolCallId, args);
@@ -157,7 +157,7 @@ function createLazyXSearchTool(ctx: {
           error: "missing_xai_api_key",
           message:
             "x_search needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
-          docs: "https://docs.openclaw.ai/tools/web",
+          docs: "https://docs.mullusi.com/tools/web",
         });
       }
       return await tool.execute(toolCallId, args);
@@ -209,7 +209,7 @@ export default defineSingleProviderPluginEntry({
     // private config layout. Callers may receive a real key from the active
     // runtime snapshot or a non-secret SecretRef marker from source config.
     resolveSyntheticAuth: ({ config }) => {
-      const fallbackAuth = resolveFallbackXaiAuth(config as OpenClawConfig | undefined);
+      const fallbackAuth = resolveFallbackXaiAuth(config as MullusiConfig | undefined);
       if (!fallbackAuth) {
         return undefined;
       }

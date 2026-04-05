@@ -7,7 +7,7 @@ import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./wi
 const tempDirs: string[] = [];
 
 async function createTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "openclaw-windows-spawn-test-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "mullusi-windows-spawn-test-"));
   tempDirs.push(dir);
   return dir;
 }

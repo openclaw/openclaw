@@ -1,8 +1,8 @@
-import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
-import { resolveExactLineGroupConfigKey, type OpenClawConfig } from "./channel-api.js";
+import { resolveChannelGroupRequireMention } from "mullusi/plugin-sdk/channel-policy";
+import { resolveExactLineGroupConfigKey, type MullusiConfig } from "./channel-api.js";
 
 type LineGroupContext = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   groupId?: string | null;
 };

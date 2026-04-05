@@ -20,7 +20,7 @@ describe("gateway startup log", () => {
       },
       bindHost: "127.0.0.1",
       pluginCount: 0,
-      port: 18789,
+      port: 18790,
       log: { info, warn },
       isNixMode: false,
     });
@@ -30,7 +30,7 @@ describe("gateway startup log", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("gateway.controlUi.dangerouslyDisableDeviceAuth=true"),
     );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("openclaw security audit"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("mullusi security audit"));
   });
 
   it("does not warn when dangerous config flags are disabled", () => {
@@ -41,7 +41,7 @@ describe("gateway startup log", () => {
       cfg: {},
       bindHost: "127.0.0.1",
       pluginCount: 0,
-      port: 18789,
+      port: 18790,
       log: { info, warn },
       isNixMode: false,
     });
@@ -61,7 +61,7 @@ describe("gateway startup log", () => {
       bindHost: "127.0.0.1",
       bindHosts: ["127.0.0.1", "::1"],
       pluginCount: 8,
-      port: 18789,
+      port: 18790,
       startupStartedAt: Date.parse("2026-04-03T10:00:00.000Z"),
       log: { info, warn },
       isNixMode: false,

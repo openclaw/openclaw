@@ -1,3 +1,3 @@
-export type { OpenClawConfig as ClawdbotConfig } from "openclaw/plugin-sdk/config-runtime";
-export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+export type { MullusiConfig as ClawdbotConfig } from "mullusi/plugin-sdk/config-runtime";
+export type { RuntimeEnv } from "mullusi/plugin-sdk/runtime";
+export { createChannelPairingController } from "mullusi/plugin-sdk/channel-pairing";

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../runtime-api.js";
+import type { MullusiConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   evaluateMattermostMentionGate,
@@ -32,7 +32,7 @@ function resolveRequireMentionForTest(params: MattermostRequireMentionResolverIn
   return true;
 }
 
-function evaluateMentionGateForMessage(params: { cfg: OpenClawConfig; threadRootId?: string }) {
+function evaluateMentionGateForMessage(params: { cfg: MullusiConfig; threadRootId?: string }) {
   const account = resolveMattermostAccount({ cfg: params.cfg, accountId: "default" });
   const resolver = vi.fn(resolveRequireMentionForTest);
   const input: MattermostMentionGateInput = {
@@ -56,7 +56,7 @@ function evaluateMentionGateForMessage(params: { cfg: OpenClawConfig; threadRoot
 
 describe("mattermost mention gating", () => {
   it("accepts unmentioned root channel posts in onmessage mode", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       channels: {
         mattermost: {
           chatmode: "onmessage",
@@ -77,7 +77,7 @@ describe("mattermost mention gating", () => {
   });
 
   it("accepts unmentioned thread replies in onmessage mode", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       channels: {
         mattermost: {
           chatmode: "onmessage",
@@ -97,7 +97,7 @@ describe("mattermost mention gating", () => {
   });
 
   it("rejects unmentioned channel posts in oncall mode", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       channels: {
         mattermost: {
           chatmode: "oncall",

@@ -37,7 +37,7 @@ describe("docker build cache layout", () => {
         dockerfile,
         `${path} should use a shared pnpm store cache under the active user's home`,
       ).toMatch(
-        /--mount=type=cache,id=openclaw-pnpm-store,target=\/(?:root|home\/appuser)\/\.local\/share\/pnpm\/store,sharing=locked/,
+        /--mount=type=cache,id=mullusi-pnpm-store,target=\/(?:root|home\/appuser)\/\.local\/share\/pnpm\/store,sharing=locked/,
       );
     }
   });
@@ -114,7 +114,7 @@ describe("docker build cache layout", () => {
     expect(
       indexOfPattern(
         dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+tsconfig\.json tsconfig\.plugin-sdk\.dts\.json tsdown\.config\.ts vitest\.config\.ts vitest\.e2e\.config\.ts vitest\.performance-config\.ts vitest\.shared\.config\.ts vitest\.bundled-plugin-paths\.ts openclaw\.mjs \.\/$/m,
+        /^COPY(?:\s+--chown=\S+)?\s+tsconfig\.json tsconfig\.plugin-sdk\.dts\.json tsdown\.config\.ts vitest\.config\.ts vitest\.e2e\.config\.ts vitest\.performance-config\.ts vitest\.shared\.config\.ts vitest\.bundled-plugin-paths\.ts mullusi\.mjs \.\/$/m,
       ),
     ).toBeGreaterThan(installIndex);
     expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+src \.\/src$/m)).toBeGreaterThan(

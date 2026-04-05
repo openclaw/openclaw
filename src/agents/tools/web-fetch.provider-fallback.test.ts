@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createWebFetchTool } from "./web-tools.js";
 
@@ -56,7 +56,7 @@ describe("web_fetch provider fallback normalization", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       sandboxed: false,
     });
 
@@ -109,7 +109,7 @@ describe("web_fetch provider fallback normalization", () => {
     });
 
     const tool = createWebFetchTool({
-      config: {} as OpenClawConfig,
+      config: {} as MullusiConfig,
       sandboxed: false,
     });
 

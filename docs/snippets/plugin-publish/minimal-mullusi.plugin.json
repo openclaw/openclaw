@@ -1,0 +1,9 @@
+{
+  "id": "my-plugin",
+  "name": "My Plugin",
+  "description": "Adds a custom tool to Mullusi",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

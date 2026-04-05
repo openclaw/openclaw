@@ -36,7 +36,7 @@ struct VoiceWakeWordsSettingsView: View {
                 Text("Wake Words")
             } footer: {
                 Text(
-                    "OpenClaw reacts when any trigger appears in a transcription. "
+                    "Mullusi reacts when any trigger appears in a transcription. "
                         + "Keep them short to avoid false positives.")
             }
         }

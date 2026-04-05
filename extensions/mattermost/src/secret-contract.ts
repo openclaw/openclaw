@@ -4,13 +4,13 @@ import {
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "mullusi/plugin-sdk/security-runtime";
 
 export const secretTargetRegistryEntries = [
   {
     id: "channels.mattermost.accounts.*.botToken",
     targetType: "channels.mattermost.accounts.*.botToken",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.mattermost.accounts.*.botToken",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -21,7 +21,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.mattermost.botToken",
     targetType: "channels.mattermost.botToken",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.mattermost.botToken",
     secretShape: "secret_input",
     expectedResolvedValue: "string",

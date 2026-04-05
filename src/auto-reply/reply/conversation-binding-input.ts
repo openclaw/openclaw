@@ -1,6 +1,6 @@
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { resolveConversationBindingContext } from "../../channels/conversation-binding-context.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import type { MsgContext } from "../templating.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -30,7 +30,7 @@ function resolveBindingChannel(ctx: BindingMsgContext, commandChannel?: string |
 
 function resolveBindingAccountId(params: {
   ctx: BindingMsgContext;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   commandChannel?: string | null;
 }): string {
   const channel = resolveBindingChannel(params.ctx, params.commandChannel);
@@ -51,7 +51,7 @@ function resolveBindingThreadId(threadId: string | number | null | undefined): s
 }
 
 export function resolveConversationBindingContextFromMessage(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   ctx: BindingMsgContext;
   senderId?: string | null;
   sessionKey?: string | null;
@@ -103,7 +103,7 @@ export function resolveConversationBindingChannelFromMessage(
 
 export function resolveConversationBindingAccountIdFromMessage(params: {
   ctx: BindingMsgContext;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   commandChannel?: string | null;
 }): string {
   return resolveBindingAccountId(params);

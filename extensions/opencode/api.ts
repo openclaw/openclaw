@@ -27,9 +27,9 @@ function resolveCurrentPrimaryModel(model: unknown): string | undefined {
 }
 
 export function applyOpencodeZenModelDefault(
-  cfg: import("openclaw/plugin-sdk/provider-onboard").OpenClawConfig,
+  cfg: import("mullusi/plugin-sdk/provider-onboard").MullusiConfig,
 ): {
-  next: import("openclaw/plugin-sdk/provider-onboard").OpenClawConfig;
+  next: import("mullusi/plugin-sdk/provider-onboard").MullusiConfig;
   changed: boolean;
 } {
   const current = resolveCurrentPrimaryModel(cfg.agents?.defaults?.model);

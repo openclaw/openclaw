@@ -12,12 +12,12 @@ import type { PluginManifestRecord } from "../manifest-registry.js";
 
 const loadPluginManifestRegistryMock = vi.fn();
 
-const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const originalBundledPluginsDir = process.env.MULLUSI_BUNDLED_PLUGINS_DIR;
 const originalGlobalFetch = globalThis.fetch;
 const tempDirs: string[] = [];
 
 function createRuntimePluginDir(pluginId: string, marker: string): string {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-runtime-contract-${pluginId}-`));
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), `mullusi-runtime-contract-${pluginId}-`));
   tempDirs.push(rootDir);
   const pluginRoot = path.join(rootDir, pluginId);
   fs.mkdirSync(pluginRoot, { recursive: true });
@@ -39,7 +39,7 @@ function buildPluginManifestRecord(params: {
     origin: params.origin,
     rootDir: params.rootDir,
     source: params.rootDir,
-    manifestPath: path.join(params.rootDir, "openclaw.plugin.json"),
+    manifestPath: path.join(params.rootDir, "mullusi.plugin.json"),
     channels: [params.id],
     providers: [],
     cliBackends: [],
@@ -56,9 +56,9 @@ afterEach(() => {
   vi.doUnmock("../manifest-registry.js");
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   if (originalBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    delete process.env.MULLUSI_BUNDLED_PLUGINS_DIR;
   } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+    process.env.MULLUSI_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
   }
   if (originalGlobalFetch) {
     (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
@@ -73,7 +73,7 @@ afterEach(() => {
 describe("shared runtime seam contracts", () => {
   it("allows activated runtime facades when the resolved plugin root matches an installed-style manifest record", async () => {
     const pluginRoot = createRuntimePluginDir("line", "line-ok");
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.dirname(pluginRoot);
+    process.env.MULLUSI_BUNDLED_PLUGINS_DIR = path.dirname(pluginRoot);
     setRuntimeConfigSnapshot({
       plugins: {
         entries: {

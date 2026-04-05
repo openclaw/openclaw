@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -14,7 +14,7 @@ const baseCfg = {
   commands: { text: true },
   channels: { whatsapp: { allowFrom: ["*"] } },
   session: { mainKey: "main", scope: "per-sender" },
-} as OpenClawConfig;
+} as MullusiConfig;
 
 async function buildTasksReplyForTest(params: { sessionKey?: string } = {}) {
   const commandParams = buildCommandTestParams("/tasks", baseCfg);
@@ -85,7 +85,7 @@ describe("buildTasksReply", () => {
       runId: "run-tasks-sanitized-failed",
       endedAt: Date.now(),
       error: [
-        "OpenClaw runtime context (internal):",
+        "Mullusi runtime context (internal):",
         "This context is runtime-generated, not user-authored. Keep internal details private.",
         "",
         "[Internal task completion event]",
@@ -98,7 +98,7 @@ describe("buildTasksReply", () => {
 
     expect(reply.text).toContain("Visible failed task");
     expect(reply.text).toContain("Needs a login refresh.");
-    expect(reply.text).not.toContain("OpenClaw runtime context (internal):");
+    expect(reply.text).not.toContain("Mullusi runtime context (internal):");
     expect(reply.text).not.toContain("Internal task completion event");
   });
 

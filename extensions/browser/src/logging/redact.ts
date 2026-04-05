@@ -1,1 +1,1 @@
-export { redactSensitiveText } from "openclaw/plugin-sdk/browser-support";
+export { redactSensitiveText } from "mullusi/plugin-sdk/browser-support";

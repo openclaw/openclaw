@@ -33,10 +33,10 @@ describe("config identity defaults", () => {
   });
 
   const writeAndLoadConfig = async (home: string, config: Record<string, unknown>) => {
-    const configDir = path.join(home, ".openclaw");
+    const configDir = path.join(home, ".mullusi");
     await fs.mkdir(configDir, { recursive: true });
     await fs.writeFile(
-      path.join(configDir, "openclaw.json"),
+      path.join(configDir, "mullusi.json"),
       JSON.stringify(config, null, 2),
       "utf-8",
     );
@@ -44,7 +44,7 @@ describe("config identity defaults", () => {
   };
 
   it("does not derive mention defaults and only sets ackReactionScope when identity is present", async () => {
-    await withTempHome("openclaw-config-identity-", async (home) => {
+    await withTempHome("mullusi-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, configWithDefaultIdentity({}));
 
       expect(cfg.messages?.responsePrefix).toBeUndefined();
@@ -55,7 +55,7 @@ describe("config identity defaults", () => {
   });
 
   it("keeps ackReaction unset and does not synthesize agent/session defaults when identity is missing", async () => {
-    await withTempHome("openclaw-config-identity-", async (home) => {
+    await withTempHome("mullusi-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, { messages: {} });
 
       expect(cfg.messages?.ackReaction).toBeUndefined();
@@ -70,7 +70,7 @@ describe("config identity defaults", () => {
   });
 
   it("does not override explicit values", async () => {
-    await withTempHome("openclaw-config-identity-", async (home) => {
+    await withTempHome("mullusi-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, {
         agents: {
           list: [
@@ -78,10 +78,10 @@ describe("config identity defaults", () => {
               id: "main",
               identity: {
                 name: "Samantha Sloth",
-                theme: "space lobster",
+                theme: "space mullusi",
                 emoji: "🦞",
               },
-              groupChat: { mentionPatterns: ["@openclaw"] },
+              groupChat: { mentionPatterns: ["@mullusi"] },
             },
           ],
         },
@@ -91,15 +91,15 @@ describe("config identity defaults", () => {
       });
 
       expect(cfg.messages?.responsePrefix).toBe("✅");
-      expect(cfg.agents?.list?.[0]?.groupChat?.mentionPatterns).toEqual(["@openclaw"]);
+      expect(cfg.agents?.list?.[0]?.groupChat?.mentionPatterns).toEqual(["@mullusi"]);
     });
   });
 
   it("supports provider textChunkLimit config", async () => {
-    await withTempHome("openclaw-config-identity-", async (home) => {
+    await withTempHome("mullusi-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, {
         messages: {
-          messagePrefix: "[openclaw]",
+          messagePrefix: "[mullusi]",
           responsePrefix: "🦞",
         },
         channels: {
@@ -128,7 +128,7 @@ describe("config identity defaults", () => {
   });
 
   it("accepts blank model provider apiKey values", async () => {
-    await withTempHome("openclaw-config-identity-", async (home) => {
+    await withTempHome("mullusi-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, {
         models: {
           mode: "merge",
@@ -163,7 +163,7 @@ describe("config identity defaults", () => {
   });
 
   it("accepts SecretRef values in model provider headers", async () => {
-    await withTempHome("openclaw-config-identity-", async (home) => {
+    await withTempHome("mullusi-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, {
         models: {
           providers: {
@@ -192,7 +192,7 @@ describe("config identity defaults", () => {
   });
 
   it("respects empty responsePrefix to disable identity defaults", async () => {
-    await withTempHome("openclaw-config-identity-", async (home) => {
+    await withTempHome("mullusi-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, configWithDefaultIdentity({ responsePrefix: "" }));
 
       expect(cfg.messages?.responsePrefix).toBe("");

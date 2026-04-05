@@ -1,17 +1,17 @@
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import type { ChannelOutboundAdapter } from "mullusi/plugin-sdk/channel-send-result";
 import {
   attachChannelToResult,
   attachChannelToResults,
   createAttachedChannelResultAdapter,
-} from "openclaw/plugin-sdk/channel-send-result";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { createScopedChannelMediaMaxBytesResolver } from "openclaw/plugin-sdk/media-runtime";
+} from "mullusi/plugin-sdk/channel-send-result";
+import { resolveMarkdownTableMode } from "mullusi/plugin-sdk/config-runtime";
+import { createScopedChannelMediaMaxBytesResolver } from "mullusi/plugin-sdk/media-runtime";
 import {
   resolveOutboundSendDep,
   sanitizeForPlainText,
   type OutboundSendDeps,
-} from "openclaw/plugin-sdk/outbound-runtime";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+} from "mullusi/plugin-sdk/outbound-runtime";
+import { resolveTextChunkLimit } from "mullusi/plugin-sdk/reply-runtime";
 import { markdownToSignalTextChunks } from "./format.js";
 import { sendMessageSignal } from "./send.js";
 

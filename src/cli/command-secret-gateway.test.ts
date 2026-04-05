@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 
 const mocks = vi.hoisted(() => ({
@@ -26,7 +26,7 @@ beforeEach(() => {
 });
 
 describe("resolveCommandSecretRefsViaGateway", () => {
-  function makeTalkProviderApiKeySecretRefConfig(envKey: string): OpenClawConfig {
+  function makeTalkProviderApiKeySecretRefConfig(envKey: string): MullusiConfig {
     return {
       talk: {
         providers: {
@@ -35,10 +35,10 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
   }
 
-  function readTalkProviderApiKey(config: OpenClawConfig): unknown {
+  function readTalkProviderApiKey(config: MullusiConfig): unknown {
     return config.talk?.providers?.elevenlabs?.apiKey;
   }
 
@@ -108,7 +108,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
     const result = await resolveCommandSecretRefsViaGateway({
       config,
       commandName: "memory status",
@@ -133,7 +133,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           },
         ],
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
@@ -167,7 +167,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const result = await resolveCommandSecretRefsViaGateway({
       config,
       commandName: "memory status",
@@ -213,7 +213,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       commandName: "message",
       targetIds: new Set(["channels.discord.accounts.*.token"]),
       allowedPaths: new Set(["channels.discord.accounts.ops.token"]),
@@ -242,7 +242,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
                 },
               },
             },
-          } as unknown as OpenClawConfig,
+          } as unknown as MullusiConfig,
           commandName: "memory status",
           targetIds: new Set(["talk.providers.*.apiKey"]),
         }),
@@ -275,7 +275,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               default: { source: "env" },
             },
           },
-        } as unknown as OpenClawConfig,
+        } as unknown as MullusiConfig,
         commandName: "memory status",
         targetIds: new Set(["talk.providers.*.apiKey"]),
       });
@@ -320,7 +320,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               },
             },
           },
-        } as unknown as OpenClawConfig,
+        } as unknown as MullusiConfig,
         commandName: "agent",
         targetIds: new Set(["plugins.entries.google.config.webSearch.apiKey"]),
       });
@@ -360,7 +360,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               },
             },
           },
-        } as unknown as OpenClawConfig,
+        } as unknown as MullusiConfig,
         commandName: "agent",
         targetIds: new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
       });
@@ -403,7 +403,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       commandName: "agent",
       targetIds: new Set(["plugins.entries.google.config.webSearch.apiKey"]),
     });
@@ -460,7 +460,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               },
             },
           },
-        } as unknown as OpenClawConfig,
+        } as unknown as MullusiConfig,
         commandName: "memory status",
         targetIds: new Set(["talk.providers.*.apiKey"]),
       }),
@@ -488,7 +488,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         commandName: "memory status",
         targetIds: new Set(["talk.providers.*.apiKey"]),
       }),
@@ -558,7 +558,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           },
         ],
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
@@ -666,7 +666,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               },
             },
           },
-        } as unknown as OpenClawConfig,
+        } as unknown as MullusiConfig,
         commandName: "message send",
         targetIds: new Set(["talk.providers.*.apiKey"]),
       });
@@ -709,7 +709,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               password: { source: "env", provider: "default", id: gatewayEnvKey },
             },
           },
-        } as unknown as OpenClawConfig,
+        } as unknown as MullusiConfig,
         commandName: "status",
         targetIds: new Set(["talk.providers.*.apiKey"]),
         mode: "read_only_status",
@@ -748,7 +748,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               },
             },
           },
-        } as unknown as OpenClawConfig,
+        } as unknown as MullusiConfig,
         commandName: "channels resolve",
         targetIds: new Set(["talk.providers.*.apiKey"]),
         mode: "read_only_operational",

@@ -1,11 +1,11 @@
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
-import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "mullusi/plugin-sdk/json-store";
+import { resolveAgentIdFromSessionKey } from "mullusi/plugin-sdk/routing";
 import {
   registerSessionBindingAdapter,
   resolveThreadBindingFarewellText,
   type SessionBindingAdapter,
   unregisterSessionBindingAdapter,
-} from "openclaw/plugin-sdk/thread-bindings-runtime";
+} from "mullusi/plugin-sdk/thread-bindings-runtime";
 import { resolveMatrixStateFilePath } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
 import type { MatrixClient } from "./sdk.js";

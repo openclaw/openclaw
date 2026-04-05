@@ -56,14 +56,14 @@ order shown. Set `memorySearch.provider` to override.
 
 ## How indexing works
 
-OpenClaw indexes `MEMORY.md` and `memory/*.md` into chunks (~400 tokens with
+Mullusi indexes `MEMORY.md` and `memory/*.md` into chunks (~400 tokens with
 80-token overlap) and stores them in a per-agent SQLite database.
 
-- **Index location:** `~/.openclaw/memory/<agentId>.sqlite`
+- **Index location:** `~/.mullusi/memory/<agentId>.sqlite`
 - **File watching:** changes to memory files trigger a debounced reindex (1.5s).
 - **Auto-reindex:** when the embedding provider, model, or chunking config
   changes, the entire index is rebuilt automatically.
-- **Reindex on demand:** `openclaw memory index --force`
+- **Reindex on demand:** `mullusi memory index --force`
 
 <Info>
 You can also index Markdown files outside the workspace with
@@ -88,13 +88,13 @@ automatic user modeling.
 
 ## Troubleshooting
 
-**Memory search disabled?** Check `openclaw memory status`. If no provider is
+**Memory search disabled?** Check `mullusi memory status`. If no provider is
 detected, set one explicitly or add an API key.
 
-**Stale results?** Run `openclaw memory index --force` to rebuild. The watcher
+**Stale results?** Run `mullusi memory index --force` to rebuild. The watcher
 may miss changes in rare edge cases.
 
-**sqlite-vec not loading?** OpenClaw falls back to in-process cosine similarity
+**sqlite-vec not loading?** Mullusi falls back to in-process cosine similarity
 automatically. Check logs for the specific load error.
 
 ## Configuration

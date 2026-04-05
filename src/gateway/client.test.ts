@@ -140,7 +140,7 @@ function createClientWithIdentity(
     publicKeyPem: "public-key",
   };
   return new GatewayClient({
-    url: "ws://127.0.0.1:18789",
+    url: "ws://127.0.0.1:18790",
     deviceIdentity: identity,
     onClose,
   });
@@ -156,7 +156,7 @@ function expectSecurityConnectError(
     }),
   );
   const error = onConnectError.mock.calls[0]?.[0] as Error;
-  expect(error.message).toContain("openclaw doctor --fix");
+  expect(error.message).toContain("mullusi doctor --fix");
   if (params?.expectTailscaleHint) {
     expect(error.message).toContain("Tailscale Serve/Funnel");
   }
@@ -167,23 +167,23 @@ beforeAll(async () => {
 });
 
 describe("GatewayClient security checks", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
+  const envSnapshot = captureEnv(["MULLUSI_ALLOW_INSECURE_PRIVATE_WS"]);
 
   beforeEach(() => {
     envSnapshot.restore();
-    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
+    delete process.env.MULLUSI_ALLOW_INSECURE_PRIVATE_WS;
     wsInstances.length = 0;
   });
 
   afterEach(() => {
     envSnapshot.restore();
-    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
+    delete process.env.MULLUSI_ALLOW_INSECURE_PRIVATE_WS;
   });
 
   it("blocks ws:// to non-loopback addresses (CWE-319)", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
-      url: "ws://remote.example.com:18789",
+      url: "ws://remote.example.com:18790",
       onConnectError,
     });
 
@@ -212,7 +212,7 @@ describe("GatewayClient security checks", () => {
   it("allows ws:// to loopback addresses", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       onConnectError,
     });
 
@@ -226,7 +226,7 @@ describe("GatewayClient security checks", () => {
   it("allows wss:// to any address", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
-      url: "wss://remote.example.com:18789",
+      url: "wss://remote.example.com:18790",
       onConnectError,
     });
 
@@ -237,11 +237,11 @@ describe("GatewayClient security checks", () => {
     client.stop();
   });
 
-  it("allows ws:// to private addresses only with OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
-    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+  it("allows ws:// to private addresses only with MULLUSI_ALLOW_INSECURE_PRIVATE_WS=1", () => {
+    process.env.MULLUSI_ALLOW_INSECURE_PRIVATE_WS = "1";
     const onConnectError = vi.fn();
     const client = new GatewayClient({
-      url: "ws://192.168.1.100:18789",
+      url: "ws://192.168.1.100:18790",
       onConnectError,
     });
 
@@ -252,11 +252,11 @@ describe("GatewayClient security checks", () => {
     client.stop();
   });
 
-  it("allows ws:// hostnames with OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
-    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+  it("allows ws:// hostnames with MULLUSI_ALLOW_INSECURE_PRIVATE_WS=1", () => {
+    process.env.MULLUSI_ALLOW_INSECURE_PRIVATE_WS = "1";
     const onConnectError = vi.fn();
     const client = new GatewayClient({
-      url: "ws://openclaw-gateway.ai:18789",
+      url: "ws://mullusi-gateway.ai:18790",
       onConnectError,
     });
 
@@ -330,7 +330,7 @@ describe("GatewayClient close handling", () => {
     vi.useFakeTimers();
     try {
       const client = new GatewayClient({
-        url: "ws://127.0.0.1:18789",
+        url: "ws://127.0.0.1:18790",
       });
 
       client.start();
@@ -353,7 +353,7 @@ describe("GatewayClient close handling", () => {
     vi.useFakeTimers();
     try {
       const client = new GatewayClient({
-        url: "ws://127.0.0.1:18789",
+        url: "ws://127.0.0.1:18790",
       });
 
       client.start();
@@ -390,7 +390,7 @@ describe("GatewayClient close handling", () => {
       publicKeyPem: "public-key",
     };
     const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       deviceIdentity: identity,
       token: "shared-token",
       onClose,
@@ -515,7 +515,7 @@ describe("GatewayClient connect auth payload", () => {
   it("uses explicit shared token and does not inject stored device token", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       token: "shared-token",
     });
 
@@ -534,7 +534,7 @@ describe("GatewayClient connect auth payload", () => {
   it("uses explicit shared password and does not inject stored device token", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       password: "shared-password", // pragma: allowlist secret
     });
 
@@ -557,7 +557,7 @@ describe("GatewayClient connect auth payload", () => {
       scopes: ["operator.read", "operator.write"],
     });
     const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
     });
 
     client.start();
@@ -576,7 +576,7 @@ describe("GatewayClient connect auth payload", () => {
   it("uses bootstrap token when no shared or device token is available", () => {
     loadDeviceAuthTokenMock.mockReturnValue(undefined);
     const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       bootstrapToken: "bootstrap-token",
     });
 
@@ -599,7 +599,7 @@ describe("GatewayClient connect auth payload", () => {
       scopes: ["operator.admin", "operator.read"],
     });
     const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       deviceToken: "explicit-device-token",
       scopes: ["operator.pairing"],
     });
@@ -623,7 +623,7 @@ describe("GatewayClient connect auth payload", () => {
       scopes: [],
     });
     const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       scopes: ["operator.approvals"],
     });
 
@@ -646,7 +646,7 @@ describe("GatewayClient connect auth payload", () => {
       scopes: ["operator.read"],
     });
     const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       token: "shared-token",
     });
 
@@ -671,7 +671,7 @@ describe("GatewayClient connect auth payload", () => {
   it("retries with stored device token when server recommends retry_with_device_token", async () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       token: "shared-token",
     });
 
@@ -690,7 +690,7 @@ describe("GatewayClient connect auth payload", () => {
 
   it("does not auto-reconnect on AUTH_TOKEN_MISSING connect failures", async () => {
     const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       token: "shared-token",
     });
 
@@ -706,7 +706,7 @@ describe("GatewayClient connect auth payload", () => {
   it("does not auto-reconnect on token mismatch when retry is not trusted", async () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
-      url: "wss://gateway.example.com:18789",
+      url: "wss://gateway.example.com:18790",
       token: "shared-token",
     });
 

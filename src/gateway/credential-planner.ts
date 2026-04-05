@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { containsEnvVarReference } from "../config/env-substitution.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 
@@ -40,7 +40,7 @@ export type GatewayCredentialPlan = {
   remotePasswordActive: boolean;
 };
 
-type GatewaySecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
+type GatewaySecretDefaults = NonNullable<MullusiConfig["secrets"]>["defaults"];
 
 export function trimToUndefined(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -52,7 +52,7 @@ export function trimToUndefined(value: unknown): string | undefined {
 
 /**
  * Like trimToUndefined but also rejects unresolved env var placeholders (e.g. `${VAR}`).
- * This prevents literal placeholder strings like `${OPENCLAW_GATEWAY_TOKEN}` from being
+ * This prevents literal placeholder strings like `${MULLUSI_GATEWAY_TOKEN}` from being
  * accepted as valid credentials when the referenced env var is missing.
  * Note: legitimate credential values containing literal `${UPPER_CASE}` patterns will
  * also be rejected, but this is an extremely unlikely edge case.
@@ -66,11 +66,11 @@ export function trimCredentialToUndefined(value: unknown): string | undefined {
 }
 
 export function readGatewayTokenEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
+  return trimToUndefined(env.MULLUSI_GATEWAY_TOKEN);
 }
 
 export function readGatewayPasswordEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
+  return trimToUndefined(env.MULLUSI_GATEWAY_PASSWORD);
 }
 
 export function hasGatewayTokenEnvCandidate(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -100,7 +100,7 @@ function resolveConfiguredGatewayCredentialInput(params: {
 }
 
 export function createGatewayCredentialPlan(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   env?: NodeJS.ProcessEnv;
   defaults?: GatewaySecretDefaults;
 }): GatewayCredentialPlan {

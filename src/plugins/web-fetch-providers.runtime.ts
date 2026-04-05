@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isRecord } from "../utils.js";
 import { withActivatedPluginIds } from "./activation-context.js";
@@ -8,7 +8,7 @@ import {
   shouldUsePluginSnapshotCache,
 } from "./cache-controls.js";
 import {
-  loadOpenClawPlugins,
+  loadMullusiPlugins,
   resolveCompatibleRuntimePluginRegistry,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
@@ -32,13 +32,13 @@ type WebFetchProviderSnapshotCacheEntry = {
   providers: PluginWebFetchProviderEntry[];
 };
 let webFetchProviderSnapshotCache = new WeakMap<
-  OpenClawConfig,
+  MullusiConfig,
   WeakMap<NodeJS.ProcessEnv, Map<string, WebFetchProviderSnapshotCacheEntry>>
 >();
 
 function resetWebFetchProviderSnapshotCacheForTests() {
   webFetchProviderSnapshotCache = new WeakMap<
-    OpenClawConfig,
+    MullusiConfig,
     WeakMap<NodeJS.ProcessEnv, Map<string, WebFetchProviderSnapshotCacheEntry>>
   >();
 }
@@ -48,7 +48,7 @@ export const __testing = {
 } as const;
 
 function buildWebFetchSnapshotCacheKey(params: {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   workspaceDir?: string;
   bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
@@ -156,7 +156,7 @@ function resolveWebFetchLoadOptions(params: {
 }
 
 function mapRegistryWebFetchProviders(params: {
-  registry: ReturnType<typeof loadOpenClawPlugins>;
+  registry: ReturnType<typeof loadMullusiPlugins>;
   onlyPluginIds?: readonly string[];
 }): PluginWebFetchProviderEntry[] {
   const onlyPluginIdSet =
@@ -196,7 +196,7 @@ export function resolvePluginWebFetchProviders(params: {
     if (pluginIds.length === 0) {
       return [];
     }
-    const registry = loadOpenClawPlugins({
+    const registry = loadMullusiPlugins({
       config: withActivatedPluginIds({
         config: params.config,
         pluginIds,
@@ -236,7 +236,7 @@ export function resolvePluginWebFetchProviders(params: {
   // possible, then fall back to a fresh snapshot load only when necessary.
   const resolved = mapRegistryWebFetchProviders({
     registry:
-      resolveCompatibleRuntimePluginRegistry(loadOptions) ?? loadOpenClawPlugins(loadOptions),
+      resolveCompatibleRuntimePluginRegistry(loadOptions) ?? loadMullusiPlugins(loadOptions),
   });
   if (cacheOwnerConfig && shouldMemoizeSnapshot) {
     const ttlMs = resolvePluginSnapshotCacheTtlMs(env);

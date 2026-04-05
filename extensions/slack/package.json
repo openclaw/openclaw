@@ -1,14 +1,14 @@
 {
-  "name": "@openclaw/slack",
+  "name": "@mullusi/slack",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Slack channel plugin",
+  "description": "Mullusi Slack channel plugin",
   "type": "module",
   "dependencies": {
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.15.0"
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],

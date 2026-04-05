@@ -1,9 +1,9 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
-import { createInboundDebouncer, formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
-import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
+import { createInboundDebouncer, formatLocationText } from "mullusi/plugin-sdk/channel-inbound";
+import { recordChannelActivity } from "mullusi/plugin-sdk/infra-runtime";
+import { logVerbose, shouldLogVerbose } from "mullusi/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "mullusi/plugin-sdk/runtime-env";
+import { getChildLogger } from "mullusi/plugin-sdk/text-runtime";
 import { readWebSelfIdentity } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";

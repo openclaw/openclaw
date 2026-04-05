@@ -1,12 +1,12 @@
 import { intro, note, outro, spinner } from "@clack/prompts";
-import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
-import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-runtime";
+import { stylePromptTitle } from "mullusi/plugin-sdk/cli-runtime";
+import { logConfigUpdated, updateConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   applyAuthProfileConfig,
   ensureAuthProfileStore,
   upsertAuthProfile,
-} from "openclaw/plugin-sdk/provider-auth";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+} from "mullusi/plugin-sdk/provider-auth";
+import type { RuntimeEnv } from "mullusi/plugin-sdk/runtime";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const DEVICE_CODE_URL = "https://github.com/login/device/code";

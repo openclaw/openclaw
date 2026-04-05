@@ -1,6 +1,6 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { definePluginEntry } from "mullusi/plugin-sdk/plugin-entry";
+import { createProviderApiKeyAuthMethod } from "mullusi/plugin-sdk/provider-auth-api-key";
+import { buildProviderReplayFamilyHooks } from "mullusi/plugin-sdk/provider-model-shared";
 import { applyOpencodeGoConfig, OPENCODE_GO_DEFAULT_MODEL_REF } from "./api.js";
 
 const PROVIDER_ID = "opencode-go";

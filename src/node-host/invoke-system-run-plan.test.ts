@@ -92,7 +92,7 @@ function writeFakeRuntimeBin(binDir: string, binName: string) {
 function withFakeRuntimeBin<T>(params: { binName: string; run: () => T }): T {
   return withFakeRuntimeBins({
     binNames: [params.binName],
-    tmpPrefix: `openclaw-${params.binName}-bin-`,
+    tmpPrefix: `mullusi-${params.binName}-bin-`,
     run: params.run,
   });
 }
@@ -102,7 +102,7 @@ function withFakeRuntimeBins<T>(params: {
   tmpPrefix?: string;
   run: () => T;
 }): T {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix ?? "openclaw-runtime-bins-"));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix ?? "mullusi-runtime-bins-"));
   const binDir = path.join(tmp, "bin");
   fs.mkdirSync(binDir, { recursive: true });
   for (const binName of params.binNames) {
@@ -187,25 +187,25 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   {
     name: "rejects bun package script names that do not bind a concrete file",
     binName: "bun",
-    tmpPrefix: "openclaw-bun-package-script-",
+    tmpPrefix: "mullusi-bun-package-script-",
     command: ["bun", "run", "dev"],
   },
   {
     name: "rejects deno eval invocations that do not bind a concrete file",
     binName: "deno",
-    tmpPrefix: "openclaw-deno-eval-",
+    tmpPrefix: "mullusi-deno-eval-",
     command: ["deno", "eval", "console.log('SAFE')"],
   },
   {
     name: "rejects tsx eval invocations that do not bind a concrete file",
     binName: "tsx",
-    tmpPrefix: "openclaw-tsx-eval-",
+    tmpPrefix: "mullusi-tsx-eval-",
     command: ["tsx", "--eval", "console.log('SAFE')"],
   },
   {
     name: "rejects node inline import operands that cannot be bound to one stable file",
     binName: "node",
-    tmpPrefix: "openclaw-node-import-inline-",
+    tmpPrefix: "mullusi-node-import-inline-",
     command: ["node", "--import=./preload.mjs", "./main.mjs"],
     setup: (tmp) => {
       fs.writeFileSync(path.join(tmp, "main.mjs"), 'console.log("SAFE")\n');
@@ -215,7 +215,7 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   {
     name: "rejects ruby require preloads that approval cannot bind completely",
     binName: "ruby",
-    tmpPrefix: "openclaw-ruby-require-",
+    tmpPrefix: "mullusi-ruby-require-",
     command: ["ruby", "-r", "attacker", "./safe.rb"],
     setup: (tmp) => {
       fs.writeFileSync(path.join(tmp, "safe.rb"), 'puts "SAFE"\n');
@@ -224,7 +224,7 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   {
     name: "rejects ruby load-path flags that can redirect module resolution after approval",
     binName: "ruby",
-    tmpPrefix: "openclaw-ruby-load-path-",
+    tmpPrefix: "mullusi-ruby-load-path-",
     command: ["ruby", "-I.", "./safe.rb"],
     setup: (tmp) => {
       fs.writeFileSync(path.join(tmp, "safe.rb"), 'puts "SAFE"\n');
@@ -233,7 +233,7 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   {
     name: "rejects perl module preloads that approval cannot bind completely",
     binName: "perl",
-    tmpPrefix: "openclaw-perl-module-preload-",
+    tmpPrefix: "mullusi-perl-module-preload-",
     command: ["perl", "-MPreload", "./safe.pl"],
     setup: (tmp) => {
       fs.writeFileSync(path.join(tmp, "safe.pl"), 'print "SAFE\\n";\n');
@@ -242,7 +242,7 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   {
     name: "rejects perl load-path flags that can redirect module resolution after approval",
     binName: "perl",
-    tmpPrefix: "openclaw-perl-load-path-",
+    tmpPrefix: "mullusi-perl-load-path-",
     command: ["perl", "-Ilib", "./safe.pl"],
     setup: (tmp) => {
       fs.writeFileSync(path.join(tmp, "safe.pl"), 'print "SAFE\\n";\n');
@@ -251,7 +251,7 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   {
     name: "rejects perl combined preload and load-path flags",
     binName: "perl",
-    tmpPrefix: "openclaw-perl-preload-load-path-",
+    tmpPrefix: "mullusi-perl-preload-load-path-",
     command: ["perl", "-Ilib", "-MPreload", "./safe.pl"],
     setup: (tmp) => {
       fs.writeFileSync(path.join(tmp, "safe.pl"), 'print "SAFE\\n";\n');
@@ -260,7 +260,7 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   {
     name: "rejects shell payloads that hide mutable interpreter scripts",
     binName: "node",
-    tmpPrefix: "openclaw-inline-shell-node-",
+    tmpPrefix: "mullusi-inline-shell-node-",
     command: ["sh", "-lc", "node ./run.js"],
     setup: (tmp) => {
       fs.writeFileSync(path.join(tmp, "run.js"), 'console.log("SAFE")\n');
@@ -269,7 +269,7 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   {
     name: "rejects pnpm dlx invocations with unrecognized flags that cannot be safely bound",
     binName: "pnpm",
-    tmpPrefix: "openclaw-pnpm-dlx-unknown-flag-",
+    tmpPrefix: "mullusi-pnpm-dlx-unknown-flag-",
     command: ["pnpm", "dlx", "--future-flag", "tsx", "./run.ts"],
     setup: (tmp) => {
       fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE")\n');
@@ -278,7 +278,7 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   {
     name: "rejects pnpm dlx invocations with unrecognized global flags before dlx when they hide a mutable script",
     binName: "pnpm",
-    tmpPrefix: "openclaw-pnpm-dlx-unknown-prefix-",
+    tmpPrefix: "mullusi-pnpm-dlx-unknown-prefix-",
     command: ["pnpm", "--future-flag", "dlx", "tsx", "./run.ts"],
     setup: (tmp) => {
       fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE")\n');
@@ -287,7 +287,7 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   {
     name: "rejects pnpm dlx invocations with unrecognized global flags that take a value before dlx",
     binName: "pnpm",
-    tmpPrefix: "openclaw-pnpm-dlx-unknown-prefix-value-",
+    tmpPrefix: "mullusi-pnpm-dlx-unknown-prefix-value-",
     command: ["pnpm", "--future-flag", "value", "dlx", "tsx", "./run.ts"],
     setup: (tmp) => {
       fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE")\n');
@@ -296,7 +296,7 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   {
     name: "rejects pnpm dlx invocations with unrecognized flags after a global option terminator",
     binName: "pnpm",
-    tmpPrefix: "openclaw-pnpm-dlx-global-double-dash-",
+    tmpPrefix: "mullusi-pnpm-dlx-global-double-dash-",
     command: ["pnpm", "--", "dlx", "--future-flag", "tsx", "./run.ts"],
     setup: (tmp) => {
       fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE")\n');
@@ -361,7 +361,7 @@ describe("hardenApprovedExecutionPaths", () => {
   ];
 
   it.runIf(process.platform !== "win32").each(cases)("$name", (testCase) => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-hardening-"));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-approval-hardening-"));
     const oldPath = process.env.PATH;
     let pathToken: PathTokenSetup | null = null;
     if (testCase.withPathToken) {
@@ -678,7 +678,7 @@ describe("hardenApprovedExecutionPaths", () => {
         run: () => {
           withScriptOperandPlanFixture(
             {
-              tmpPrefix: "openclaw-approval-script-plan-",
+              tmpPrefix: "mullusi-approval-script-plan-",
               fixture: runtimeCase,
               afterWrite: (fixture, tmp) => {
                 const executablePath = fixture.command[0];
@@ -701,7 +701,7 @@ describe("hardenApprovedExecutionPaths", () => {
   it("captures mutable shell script operands in approval plans", () => {
     withScriptOperandPlanFixture(
       {
-        tmpPrefix: "openclaw-approval-script-plan-",
+        tmpPrefix: "mullusi-approval-script-plan-",
       },
       (fixture, tmp) => {
         expectMutableFileOperandApprovalPlan(fixture, tmp);
@@ -730,7 +730,7 @@ describe("hardenApprovedExecutionPaths", () => {
       run: () => {
         withScriptOperandPlanFixture(
           {
-            tmpPrefix: "openclaw-pnpm-dlx-approval-",
+            tmpPrefix: "mullusi-pnpm-dlx-approval-",
             fixture: {
               name: "pnpm dlx rewritten script",
               argv: ["pnpm", "dlx", "tsx", "./run.ts"],
@@ -767,7 +767,7 @@ describe("hardenApprovedExecutionPaths", () => {
     withFakeRuntimeBins({
       binNames: ["pnpm", "tsx"],
       run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-dlx-shell-mode-"));
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-pnpm-dlx-shell-mode-"));
         try {
           fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE");\n');
           expect(
@@ -788,7 +788,7 @@ describe("hardenApprovedExecutionPaths", () => {
     withFakeRuntimeBin({
       binName: "pnpm",
       run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-bin-"));
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-pnpm-dlx-package-bin-"));
         try {
           expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "hello"], tmp);
         } finally {
@@ -803,7 +803,7 @@ describe("hardenApprovedExecutionPaths", () => {
       binName: "pnpm",
       run: () => {
         const tmp = fs.mkdtempSync(
-          path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-runtime-token-"),
+          path.join(os.tmpdir(), "mullusi-pnpm-dlx-package-runtime-token-"),
         );
         try {
           expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "node"], tmp);
@@ -819,7 +819,7 @@ describe("hardenApprovedExecutionPaths", () => {
       binName: "pnpm",
       run: () => {
         const tmp = fs.mkdtempSync(
-          path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-runtime-token-multi-"),
+          path.join(os.tmpdir(), "mullusi-pnpm-dlx-package-runtime-token-multi-"),
         );
         try {
           expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "node", "hello"], tmp);
@@ -834,7 +834,7 @@ describe("hardenApprovedExecutionPaths", () => {
     withFakeRuntimeBins({
       binNames: ["pnpm", "eslint"],
       run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-file-"));
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-pnpm-dlx-package-file-"));
         try {
           fs.mkdirSync(path.join(tmp, "src"), { recursive: true });
           fs.writeFileSync(path.join(tmp, "src", "index.ts"), 'console.log("SAFE");\n');
@@ -850,7 +850,7 @@ describe("hardenApprovedExecutionPaths", () => {
     withFakeRuntimeBin({
       binName: "pnpm",
       run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-data-tail-"));
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-pnpm-dlx-package-data-tail-"));
         try {
           fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE");\n');
           expectApprovalPlanWithoutMutableOperand(
@@ -870,7 +870,7 @@ describe("hardenApprovedExecutionPaths", () => {
       run: () => {
         withScriptOperandPlanFixture(
           {
-            tmpPrefix: "openclaw-pnpm-dlx-double-dash-",
+            tmpPrefix: "mullusi-pnpm-dlx-double-dash-",
             fixture: {
               name: "pnpm dlx double dash",
               argv: ["pnpm", "dlx", "--", "tsx", "./run.ts"],
@@ -888,7 +888,7 @@ describe("hardenApprovedExecutionPaths", () => {
   });
 
   it("captures the real shell script operand after value-taking shell flags", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-option-value-"));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-shell-option-value-"));
     try {
       const scriptPath = path.join(tmp, "run.sh");
       fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");

@@ -3,12 +3,12 @@ import {
   type ChannelDoctorConfigMutation,
   type ChannelDoctorEmptyAllowlistAccountContext,
   type ChannelDoctorLegacyConfigRule,
-} from "openclaw/plugin-sdk/channel-contract";
-import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/channel-contract";
+import { type MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   getChannelsCommandSecretTargetIds,
   resolveCommandSecretRefsViaGateway,
-} from "openclaw/plugin-sdk/runtime";
+} from "mullusi/plugin-sdk/runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
@@ -79,7 +79,7 @@ function normalizeTelegramStreamingAliases(params: {
   return { entry: updated, changed };
 }
 
-function normalizeTelegramCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
+function normalizeTelegramCompatibilityConfig(cfg: MullusiConfig): ChannelDoctorConfigMutation {
   const rawEntry = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
   if (!rawEntry) {
     return { config: cfg, changes: [] };
@@ -130,8 +130,8 @@ function normalizeTelegramCompatibilityConfig(cfg: OpenClawConfig): ChannelDocto
       ...cfg,
       channels: {
         ...cfg.channels,
-        telegram: updated as unknown as NonNullable<OpenClawConfig["channels"]>["telegram"],
-      } as OpenClawConfig["channels"],
+        telegram: updated as unknown as NonNullable<MullusiConfig["channels"]>["telegram"],
+      } as MullusiConfig["channels"],
     },
     changes,
   };
@@ -142,7 +142,7 @@ function hasAllowFromEntries(values?: DoctorAllowFromList): boolean {
 }
 
 function collectTelegramAccountScopes(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
 ): Array<{ prefix: string; account: Record<string, unknown> }> {
   const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
   const telegram = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
@@ -205,7 +205,7 @@ function collectTelegramAllowFromLists(
 }
 
 export function scanTelegramAllowFromUsernameEntries(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
 ): TelegramAllowFromUsernameHit[] {
   const hits: TelegramAllowFromUsernameHit[] = [];
   const scanList = (pathLabel: string, list: unknown) => {
@@ -243,8 +243,8 @@ export function collectTelegramAllowFromUsernameWarnings(params: {
   ];
 }
 
-export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promise<{
-  config: OpenClawConfig;
+export async function maybeRepairTelegramAllowFromUsernames(cfg: MullusiConfig): Promise<{
+  config: MullusiConfig;
   changes: string[];
 }> {
   const hits = scanTelegramAllowFromUsernameEntries(cfg);

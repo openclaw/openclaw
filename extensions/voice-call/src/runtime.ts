@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { MullusiConfig } from "mullusi/plugin-sdk/core";
 import type {
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
-} from "openclaw/plugin-sdk/realtime-voice";
+} from "mullusi/plugin-sdk/realtime-voice";
 import type { VoiceCallConfig } from "./config.js";
 import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
@@ -150,7 +150,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
 
 async function resolveRealtimeProvider(params: {
   config: VoiceCallConfig;
-  fullConfig: OpenClawConfig;
+  fullConfig: MullusiConfig;
 }): Promise<ResolvedRealtimeProvider> {
   const { getRealtimeVoiceProvider, listRealtimeVoiceProviders } =
     await import("./realtime-voice.runtime.js");
@@ -188,7 +188,7 @@ async function resolveRealtimeProvider(params: {
 export async function createVoiceCallRuntime(params: {
   config: VoiceCallConfig;
   coreConfig: CoreConfig;
-  fullConfig?: OpenClawConfig;
+  fullConfig?: MullusiConfig;
   agentRuntime: CoreAgentDeps;
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: Logger;
@@ -223,7 +223,7 @@ export async function createVoiceCallRuntime(params: {
   const realtimeProvider = config.realtime.enabled
     ? await resolveRealtimeProvider({
         config,
-        fullConfig: (fullConfig ?? (coreConfig as OpenClawConfig)) as OpenClawConfig,
+        fullConfig: (fullConfig ?? (coreConfig as MullusiConfig)) as MullusiConfig,
       })
     : null;
   const webhookServer = new VoiceCallWebhookServer(
@@ -231,7 +231,7 @@ export async function createVoiceCallRuntime(params: {
     manager,
     provider,
     coreConfig,
-    (fullConfig ?? (coreConfig as OpenClawConfig)) as OpenClawConfig,
+    (fullConfig ?? (coreConfig as MullusiConfig)) as MullusiConfig,
     agentRuntime,
   );
   if (realtimeProvider) {

@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/kimi-provider",
+  "name": "@mullusi/kimi-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Kimi provider plugin",
+  "description": "Mullusi Kimi provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

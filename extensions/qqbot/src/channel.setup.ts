@@ -1,12 +1,12 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { ChannelPlugin } from "mullusi/plugin-sdk/core";
 import {
   applyAccountNameToChannelSection,
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk/core";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
-import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
+} from "mullusi/plugin-sdk/core";
+import { hasConfiguredSecretInput } from "mullusi/plugin-sdk/secret-input";
+import type { ChannelSetupInput } from "mullusi/plugin-sdk/setup";
 import { qqbotChannelConfigSchema } from "./config-schema.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -55,10 +55,10 @@ export function validateQQBotSetupInput(params: {
 }
 
 export function applyQQBotSetupAccountConfig(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
   input: ChannelSetupInput;
-}): OpenClawConfig {
+}): MullusiConfig {
   if (params.input.useEnv && params.accountId !== DEFAULT_ACCOUNT_ID) {
     return params.cfg;
   }
@@ -92,8 +92,8 @@ export function applyQQBotSetupAccountConfig(params: {
 }
 
 /**
- * Setup-only QQBot plugin — lightweight subset used during `openclaw onboard`
- * and `openclaw configure` without pulling the full runtime dependencies.
+ * Setup-only QQBot plugin — lightweight subset used during `mullusi onboard`
+ * and `mullusi configure` without pulling the full runtime dependencies.
  */
 export const qqbotSetupPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   id: "qqbot",

@@ -15,8 +15,8 @@ import {
 
 describe("onboard auth credentials secret refs", () => {
   const lifecycle = createAuthTestLifecycle([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
+    "MULLUSI_STATE_DIR",
+    "MULLUSI_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
     "MOONSHOT_API_KEY",
     "OPENAI_API_KEY",
@@ -75,7 +75,7 @@ describe("onboard auth credentials secret refs", () => {
 
   it("keeps env-backed moonshot key as plaintext by default", async () => {
     await expectStoredAuthKey({
-      prefix: "openclaw-onboard-auth-credentials-",
+      prefix: "mullusi-onboard-auth-credentials-",
       envVar: "MOONSHOT_API_KEY",
       envValue: "sk-moonshot-env",
       profileId: "moonshot:default",
@@ -91,7 +91,7 @@ describe("onboard auth credentials secret refs", () => {
 
   it("stores env-backed moonshot key as keyRef when secret-input-mode=ref", async () => {
     await expectStoredAuthKey({
-      prefix: "openclaw-onboard-auth-credentials-ref-",
+      prefix: "mullusi-onboard-auth-credentials-ref-",
       envVar: "MOONSHOT_API_KEY",
       envValue: "sk-moonshot-env",
       profileId: "moonshot:default",
@@ -107,7 +107,7 @@ describe("onboard auth credentials secret refs", () => {
 
   it("stores ${ENV} moonshot input as keyRef even when env value is unset", async () => {
     await expectStoredAuthKey({
-      prefix: "openclaw-onboard-auth-credentials-inline-ref-",
+      prefix: "mullusi-onboard-auth-credentials-inline-ref-",
       profileId: "moonshot:default",
       apply: async () => {
         await setMoonshotApiKey("${MOONSHOT_API_KEY}");
@@ -121,7 +121,7 @@ describe("onboard auth credentials secret refs", () => {
 
   it("keeps plaintext moonshot key when no env ref applies", async () => {
     await expectStoredAuthKey({
-      prefix: "openclaw-onboard-auth-credentials-plaintext-",
+      prefix: "mullusi-onboard-auth-credentials-plaintext-",
       envVar: "MOONSHOT_API_KEY",
       envValue: "sk-moonshot-other",
       profileId: "moonshot:default",
@@ -136,7 +136,7 @@ describe("onboard auth credentials secret refs", () => {
   });
 
   it("preserves cloudflare metadata when storing keyRef", async () => {
-    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-cloudflare-");
+    const env = await setupAuthTestEnv("mullusi-onboard-auth-credentials-cloudflare-");
     lifecycle.setStateDir(env.stateDir);
     process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = "cf-secret"; // pragma: allowlist secret
 
@@ -156,7 +156,7 @@ describe("onboard auth credentials secret refs", () => {
 
   it("keeps env-backed openai key as plaintext by default", async () => {
     await expectStoredAuthKey({
-      prefix: "openclaw-onboard-auth-credentials-openai-",
+      prefix: "mullusi-onboard-auth-credentials-openai-",
       envVar: "OPENAI_API_KEY",
       envValue: "sk-openai-env",
       profileId: "openai:default",
@@ -172,7 +172,7 @@ describe("onboard auth credentials secret refs", () => {
 
   it("stores env-backed openai key as keyRef in ref mode", async () => {
     await expectStoredAuthKey({
-      prefix: "openclaw-onboard-auth-credentials-openai-ref-",
+      prefix: "mullusi-onboard-auth-credentials-openai-ref-",
       envVar: "OPENAI_API_KEY",
       envValue: "sk-openai-env",
       profileId: "openai:default",
@@ -187,7 +187,7 @@ describe("onboard auth credentials secret refs", () => {
   });
 
   it("stores env-backed volcengine and byteplus keys as keyRef in ref mode", async () => {
-    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-volc-byte-");
+    const env = await setupAuthTestEnv("mullusi-onboard-auth-credentials-volc-byte-");
     lifecycle.setStateDir(env.stateDir);
     process.env.VOLCANO_ENGINE_API_KEY = "volcengine-secret"; // pragma: allowlist secret
     process.env.BYTEPLUS_API_KEY = "byteplus-secret"; // pragma: allowlist secret
@@ -211,7 +211,7 @@ describe("onboard auth credentials secret refs", () => {
   });
 
   it("stores shared OpenCode credentials for both runtime providers", async () => {
-    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-opencode-");
+    const env = await setupAuthTestEnv("mullusi-onboard-auth-credentials-opencode-");
     lifecycle.setStateDir(env.stateDir);
     process.env.OPENCODE_API_KEY = "sk-opencode-env"; // pragma: allowlist secret
 

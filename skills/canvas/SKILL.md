@@ -1,6 +1,6 @@
 # Canvas Skill
 
-Display HTML content on connected OpenClaw nodes (Mac app, iOS, Android).
+Display HTML content on connected Mullusi nodes (Mac app, iOS, Android).
 
 ## Overview
 
@@ -40,7 +40,7 @@ The canvas host server binds based on `gateway.bind` setting:
 **Key insight:** The `canvasHostHostForBridge` is derived from `bridgeHost`. When bound to Tailscale, nodes receive URLs like:
 
 ```
-http://<tailscale-hostname>:18793/__openclaw__/canvas/<file>.html
+http://<tailscale-hostname>:18793/__mullusi__/canvas/<file>.html
 ```
 
 This is why localhost URLs don't work - the node receives the Tailscale hostname from the bridge!
@@ -57,14 +57,14 @@ This is why localhost URLs don't work - the node receives the Tailscale hostname
 
 ## Configuration
 
-In the active OpenClaw config file (`$OPENCLAW_CONFIG_PATH`, default `~/.openclaw/openclaw.json`):
+In the active Mullusi config file (`$MULLUSI_CONFIG_PATH`, default `~/.mullusi/mullusi.json`):
 
 ```json
 {
   "canvasHost": {
     "enabled": true,
     "port": 18793,
-    "root": "/Users/you/clawd/canvas",
+    "root": "/Users/you/mullusi/canvas",
     "liveReload": true
   },
   "gateway": {
@@ -87,10 +87,10 @@ Great for development!
 
 ### 1. Create HTML content
 
-Place files in the canvas root directory (default `~/clawd/canvas/`):
+Place files in the canvas root directory (default `~/mullusi/canvas/`):
 
 ```bash
-cat > ~/clawd/canvas/my-game.html << 'HTML'
+cat > ~/mullusi/canvas/my-game.html << 'HTML'
 <!DOCTYPE html>
 <html>
 <head><title>My Game</title></head>
@@ -106,14 +106,14 @@ HTML
 Check how your gateway is bound:
 
 ```bash
-CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/openclaw.json}"
+CONFIG_PATH="${MULLUSI_CONFIG_PATH:-${MULLUSI_STATE_DIR:-$HOME/.mullusi}/mullusi.json}"
 cat "$CONFIG_PATH" | jq '.gateway.bind'
 ```
 
 Then construct the URL:
 
-- **loopback**: `http://127.0.0.1:18793/__openclaw__/canvas/<file>.html`
-- **lan/tailnet/auto**: `http://<hostname>:18793/__openclaw__/canvas/<file>.html`
+- **loopback**: `http://127.0.0.1:18793/__mullusi__/canvas/<file>.html`
+- **lan/tailnet/auto**: `http://<hostname>:18793/__mullusi__/canvas/<file>.html`
 
 Find your Tailscale hostname:
 
@@ -124,7 +124,7 @@ tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//'
 ### 3. Find connected nodes
 
 ```bash
-openclaw nodes list
+mullusi nodes list
 ```
 
 Look for Mac/iOS/Android nodes with canvas capability.
@@ -138,7 +138,7 @@ canvas action:present node:<node-id> target:<full-url>
 **Example:**
 
 ```
-canvas action:present node:mac-63599bc4-b54d-4392-9048-b97abd58343a target:http://peters-mac-studio-1.sheep-coho.ts.net:18793/__openclaw__/canvas/snake.html
+canvas action:present node:mac-63599bc4-b54d-4392-9048-b97abd58343a target:http://peters-mac-studio-1.sheep-coho.ts.net:18793/__mullusi__/canvas/snake.html
 ```
 
 ### 5. Navigate, snapshot, or hide
@@ -157,9 +157,9 @@ canvas action:hide node:<node-id>
 
 **Debug steps:**
 
-1. Check server bind: `CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/openclaw.json}"; cat "$CONFIG_PATH" | jq '.gateway.bind'`
+1. Check server bind: `CONFIG_PATH="${MULLUSI_CONFIG_PATH:-${MULLUSI_STATE_DIR:-$HOME/.mullusi}/mullusi.json}"; cat "$CONFIG_PATH" | jq '.gateway.bind'`
 2. Check what port canvas is on: `lsof -i :18793`
-3. Test URL directly: `curl http://<hostname>:18793/__openclaw__/canvas/<file>.html`
+3. Test URL directly: `curl http://<hostname>:18793/__mullusi__/canvas/<file>.html`
 
 **Solution:** Use the full hostname matching your bind mode, not localhost.
 
@@ -169,7 +169,7 @@ Always specify `node:<node-id>` parameter.
 
 ### "node not connected" error
 
-Node is offline. Use `openclaw nodes list` to find online nodes.
+Node is offline. Use `mullusi nodes list` to find online nodes.
 
 ### Content not updating
 
@@ -181,14 +181,14 @@ If live reload isn't working:
 
 ## URL Path Structure
 
-The canvas host serves from `/__openclaw__/canvas/` prefix:
+The canvas host serves from `/__mullusi__/canvas/` prefix:
 
 ```
-http://<host>:18793/__openclaw__/canvas/index.html  → ~/clawd/canvas/index.html
-http://<host>:18793/__openclaw__/canvas/games/snake.html → ~/clawd/canvas/games/snake.html
+http://<host>:18793/__mullusi__/canvas/index.html  → ~/mullusi/canvas/index.html
+http://<host>:18793/__mullusi__/canvas/games/snake.html → ~/mullusi/canvas/games/snake.html
 ```
 
-The `/__openclaw__/canvas/` prefix is defined by `CANVAS_HOST_PATH` constant.
+The `/__mullusi__/canvas/` prefix is defined by `CANVAS_HOST_PATH` constant.
 
 ## Tips
 

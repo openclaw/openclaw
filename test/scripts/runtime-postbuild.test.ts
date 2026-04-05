@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 async function createTempRoot() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-postbuild-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-runtime-postbuild-"));
   cleanupDirs.push(dir);
   return dir;
 }

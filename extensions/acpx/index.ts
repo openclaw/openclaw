@@ -1,5 +1,5 @@
 import { createAcpxRuntimeService } from "./register.runtime.js";
-import type { OpenClawPluginApi } from "./runtime-api.js";
+import type { MullusiPluginApi } from "./runtime-api.js";
 import { createAcpxPluginConfigSchema } from "./src/config-schema.js";
 
 const plugin = {
@@ -7,7 +7,7 @@ const plugin = {
   name: "ACPX Runtime",
   description: "ACP runtime backend powered by the acpx CLI.",
   configSchema: () => createAcpxPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api: MullusiPluginApi) {
     api.registerService(
       createAcpxRuntimeService({
         pluginConfig: api.pluginConfig,

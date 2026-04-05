@@ -1,14 +1,14 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "name": "OpenClaw",
+  "name": "Mullusi",
   "description": "Self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI coding agents. Run one Gateway process on your own machine and message your AI assistant from anywhere.",
   "theme": "mint",
   "icons": {
     "library": "lucide"
   },
   "logo": {
-    "light": "/assets/pixel-lobster.svg",
-    "dark": "/assets/pixel-lobster.svg"
+    "light": "/assets/pixel-mullusi.svg",
+    "dark": "/assets/pixel-mullusi.svg"
   },
   "fonts": {
     "body": {
@@ -18,7 +18,7 @@
       "family": "DM Sans"
     }
   },
-  "favicon": "/assets/pixel-lobster.svg",
+  "favicon": "/assets/pixel-mullusi.svg",
   "colors": {
     "primary": "#FF5A36",
     "dark": "#FF5A36",
@@ -36,17 +36,17 @@
     "links": [
       {
         "label": "GitHub",
-        "href": "https://github.com/openclaw/openclaw",
+        "href": "https://github.com/mullusi/mullusi",
         "icon": "github"
       },
       {
         "label": "Releases",
-        "href": "https://github.com/openclaw/openclaw/releases",
+        "href": "https://github.com/mullusi/mullusi/releases",
         "icon": "package"
       },
       {
         "label": "Discord",
-        "href": "https://discord.com/invite/clawd",
+        "href": "https://discord.com/invite/mullusi",
         "icon": "discord"
       }
     ]
@@ -341,16 +341,16 @@
       "destination": "/nodes/camera"
     },
     {
-      "source": "/clawd",
-      "destination": "/start/openclaw"
+      "source": "/mullusi",
+      "destination": "/start/mullusi"
     },
     {
-      "source": "/start/clawd",
-      "destination": "/start/openclaw"
+      "source": "/start/mullusi",
+      "destination": "/start/mullusi"
     },
     {
-      "source": "/start/clawd/",
-      "destination": "/start/openclaw"
+      "source": "/start/mullusi/",
+      "destination": "/start/mullusi"
     },
     {
       "source": "/start/pairing",
@@ -361,11 +361,11 @@
       "destination": "/tools/clawhub"
     },
     {
-      "source": "/clawdhub",
+      "source": "/mullusihub",
       "destination": "/tools/clawhub"
     },
     {
-      "source": "/tools/clawdhub",
+      "source": "/tools/mullusihub",
       "destination": "/tools/clawhub"
     },
     {
@@ -933,7 +933,7 @@
               {
                 "group": "Guides",
                 "pages": [
-                  "start/openclaw",
+                  "start/mullusi",
                   "start/wizard-cli-reference",
                   "start/wizard-cli-automation"
                 ]
@@ -952,7 +952,7 @@
                 "pages": [
                   "install/ansible",
                   "install/bun",
-                  "install/clawdock",
+                  "install/mullusiock",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -1193,7 +1193,7 @@
                   "tools/exec-approvals",
                   "tools/image-generation",
                   "tools/llm-task",
-                  "tools/lobster",
+                  "tools/mullusi",
                   "tools/loop-detection",
                   "tools/pdf",
                   "tools/reactions",
@@ -1615,7 +1615,7 @@
               },
               {
                 "group": "指南",
-                "pages": ["zh-CN/start/openclaw"]
+                "pages": ["zh-CN/start/mullusi"]
               }
             ]
           },
@@ -1771,7 +1771,7 @@
                   "zh-CN/tools/exec-approvals",
                   "zh-CN/tools/firecrawl",
                   "zh-CN/tools/llm-task",
-                  "zh-CN/tools/lobster",
+                  "zh-CN/tools/mullusi",
                   "zh-CN/perplexity",
                   "zh-CN/tools/reactions",
                   "zh-CN/tools/thinking",

@@ -187,7 +187,7 @@ x-i18n:
 
 ## 插件默认值
 
-在 `~/.openclaw/openclaw.json` 中设置插件全局默认值：
+在 `~/.mullusi/mullusi.json` 中设置插件全局默认值：
 
 ```json5
 {
@@ -265,7 +265,7 @@ x-i18n:
 
 ## 制品生命周期和存储
 
-- 制品存储在临时子目录下：`$TMPDIR/openclaw-diffs`。
+- 制品存储在临时子目录下：`$TMPDIR/mullusi-diffs`。
 - 查看器制品元数据包含：
   - 随机制品 ID（20 个十六进制字符）
   - 随机令牌（48 个十六进制字符）
@@ -326,9 +326,9 @@ URL 构建行为：
 
 解析顺序：
 
-1. OpenClaw 配置中的 `browser.executablePath`。
+1. Mullusi 配置中的 `browser.executablePath`。
 2. 环境变量：
-   - `OPENCLAW_BROWSER_EXECUTABLE_PATH`
+   - `MULLUSI_BROWSER_EXECUTABLE_PATH`
    - `BROWSER_EXECUTABLE_PATH`
    - `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`
 3. 平台命令或路径发现回退。

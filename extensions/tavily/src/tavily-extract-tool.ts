@@ -1,10 +1,10 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
+import type { MullusiPluginApi } from "mullusi/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
   readNumberParam,
   readStringParam,
-} from "openclaw/plugin-sdk/provider-web-search";
+} from "mullusi/plugin-sdk/provider-web-search";
 import { runTavilyExtract } from "./tavily-client.js";
 
 function optionalStringEnum<const T extends readonly string[]>(
@@ -51,7 +51,7 @@ const TavilyExtractToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export function createTavilyExtractTool(api: OpenClawPluginApi) {
+export function createTavilyExtractTool(api: MullusiPluginApi) {
   return {
     name: "tavily_extract",
     label: "Tavily Extract",

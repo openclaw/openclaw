@@ -116,14 +116,14 @@ async function expectBedrockAuthSource(params: {
 
 describe("getApiKeyForModel", () => {
   it("reads oauth auth-profiles entries from auth-profiles.json via explicit profile", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-oauth-"));
 
     try {
       const agentDir = path.join(tempDir, "agent");
       await withEnvAsync(
         {
-          OPENCLAW_STATE_DIR: tempDir,
-          OPENCLAW_AGENT_DIR: agentDir,
+          MULLUSI_STATE_DIR: tempDir,
+          MULLUSI_AGENT_DIR: agentDir,
           PI_CODING_AGENT_DIR: agentDir,
         },
         async () => {
@@ -154,14 +154,14 @@ describe("getApiKeyForModel", () => {
             api: "openai-codex-responses",
           } as Model<Api>;
 
-          const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
+          const store = ensureAuthProfileStore(process.env.MULLUSI_AGENT_DIR, {
             allowKeychainPrompt: false,
           });
           const apiKey = await getApiKeyForModel({
             model,
             profileId: "openai-codex:default",
             store,
-            agentDir: process.env.OPENCLAW_AGENT_DIR,
+            agentDir: process.env.MULLUSI_AGENT_DIR,
           });
           expect(apiKey.apiKey).toBe(oauthFixture.access);
         },
@@ -172,15 +172,15 @@ describe("getApiKeyForModel", () => {
   });
 
   it("suggests openai-codex when only Codex OAuth is configured", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-auth-"));
 
     try {
       const agentDir = path.join(tempDir, "agent");
       await withEnvAsync(
         {
           OPENAI_API_KEY: undefined,
-          OPENCLAW_STATE_DIR: tempDir,
-          OPENCLAW_AGENT_DIR: agentDir,
+          MULLUSI_STATE_DIR: tempDir,
+          MULLUSI_AGENT_DIR: agentDir,
           PI_CODING_AGENT_DIR: agentDir,
         },
         async () => {
@@ -753,7 +753,7 @@ describe("getApiKeyForModel", () => {
   });
 
   it("resolveEnvApiKey('anthropic-vertex') accepts GOOGLE_APPLICATION_CREDENTIALS with project_id", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-adc-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-adc-"));
     const credentialsPath = path.join(tempDir, "adc.json");
     await fs.writeFile(credentialsPath, JSON.stringify({ project_id: "vertex-project" }), "utf8");
 
@@ -770,7 +770,7 @@ describe("getApiKeyForModel", () => {
   });
 
   it("resolveEnvApiKey('anthropic-vertex') accepts GOOGLE_APPLICATION_CREDENTIALS without a local project field", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-adc-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-adc-"));
     const credentialsPath = path.join(tempDir, "adc.json");
     await fs.writeFile(credentialsPath, "{}", "utf8");
 

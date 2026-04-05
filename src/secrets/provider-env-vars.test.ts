@@ -39,7 +39,7 @@ describe("provider env vars", () => {
     expect(listKnownProviderAuthEnvVarNames()).toEqual(
       expect.arrayContaining(["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"]),
     );
-    expect(listKnownSecretEnvVarNames()).not.toContain("OPENCLAW_API_KEY");
+    expect(listKnownSecretEnvVarNames()).not.toContain("MULLUSI_API_KEY");
   });
 
   it("omits env keys case-insensitively", () => {
@@ -47,14 +47,14 @@ describe("provider env vars", () => {
       {
         OpenAI_Api_Key: "openai-secret",
         Github_Token: "gh-secret",
-        OPENCLAW_API_KEY: "keep-me",
+        MULLUSI_API_KEY: "keep-me",
       },
       ["OPENAI_API_KEY", "GITHUB_TOKEN"],
     );
 
     expect(env.OpenAI_Api_Key).toBeUndefined();
     expect(env.Github_Token).toBeUndefined();
-    expect(env.OPENCLAW_API_KEY).toBe("keep-me");
+    expect(env.MULLUSI_API_KEY).toBe("keep-me");
   });
 
   it("ignores prototype-chain keys when resolving provider env vars", () => {

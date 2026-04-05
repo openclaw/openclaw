@@ -1,23 +1,23 @@
 ---
-summary: "Use Mistral models and Voxtral transcription with OpenClaw"
+summary: "Use Mistral models and Voxtral transcription with Mullusi"
 read_when:
-  - You want to use Mistral models in OpenClaw
+  - You want to use Mistral models in Mullusi
   - You need Mistral API key onboarding and model refs
 title: "Mistral"
 ---
 
 # Mistral
 
-OpenClaw supports Mistral for both text/image model routing (`mistral/...`) and
+Mullusi supports Mistral for both text/image model routing (`mistral/...`) and
 audio transcription via Voxtral in media understanding.
 Mistral can also be used for memory embeddings (`memorySearch.provider = "mistral"`).
 
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice mistral-api-key
+mullusi onboard --auth-choice mistral-api-key
 # or non-interactive
-openclaw onboard --mistral-api-key "$MISTRAL_API_KEY"
+mullusi onboard --mistral-api-key "$MISTRAL_API_KEY"
 ```
 
 ## Config snippet (LLM provider)
@@ -31,7 +31,7 @@ openclaw onboard --mistral-api-key "$MISTRAL_API_KEY"
 
 ## Built-in LLM catalog
 
-OpenClaw currently ships this bundled Mistral catalog:
+Mullusi currently ships this bundled Mistral catalog:
 
 | Model ref                        | Input       | Context | Max output | Notes                    |
 | -------------------------------- | ----------- | ------- | ---------- | ------------------------ |

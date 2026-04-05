@@ -4,7 +4,7 @@ description: Transcribe audio via OpenAI Audio Transcriptions API (Whisper).
 homepage: https://platform.openai.com/docs/guides/speech-to-text
 metadata:
   {
-    "openclaw":
+    "mullusi":
       {
         "emoji": "🌐",
         "requires": { "bins": ["curl"], "env": ["OPENAI_API_KEY"] },
@@ -49,7 +49,7 @@ Defaults:
 
 ## API key
 
-Set `OPENAI_API_KEY`, or configure it in the active OpenClaw config file (`$OPENCLAW_CONFIG_PATH`, default `~/.openclaw/openclaw.json`). Optionally set `OPENAI_BASE_URL` (for example `http://127.0.0.1:51805/v1`) to use an OpenAI-compatible proxy or local gateway:
+Set `OPENAI_API_KEY`, or configure it in the active Mullusi config file (`$MULLUSI_CONFIG_PATH`, default `~/.mullusi/mullusi.json`). Optionally set `OPENAI_BASE_URL` (for example `http://127.0.0.1:51805/v1`) to use an OpenAI-compatible proxy or local gateway:
 
 ```json5
 {

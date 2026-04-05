@@ -16,7 +16,7 @@ function shouldEmitRuntimeLog(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.VITEST !== "true") {
     return true;
   }
-  if (env.OPENCLAW_TEST_RUNTIME_LOG === "1") {
+  if (env.MULLUSI_TEST_RUNTIME_LOG === "1") {
     return true;
   }
   const maybeMockedLog = console.log as unknown as { mock?: unknown };
@@ -27,7 +27,7 @@ function shouldEmitRuntimeStdout(env: NodeJS.ProcessEnv = process.env): boolean 
   if (env.VITEST !== "true") {
     return true;
   }
-  if (env.OPENCLAW_TEST_RUNTIME_LOG === "1") {
+  if (env.MULLUSI_TEST_RUNTIME_LOG === "1") {
     return true;
   }
   const stdout = process.stdout as NodeJS.WriteStream & {

@@ -1,9 +1,9 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
-import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
-import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
-import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
-import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { normalizeHostname } from "mullusi/plugin-sdk/host-runtime";
+import type { FetchLike } from "mullusi/plugin-sdk/media-runtime";
+import { fetchRemoteMedia } from "mullusi/plugin-sdk/media-runtime";
+import { saveMediaBuffer } from "mullusi/plugin-sdk/media-runtime";
+import { resolveRequestUrl } from "mullusi/plugin-sdk/request-url";
 import type { SlackAttachment, SlackFile } from "../types.js";
 
 function isSlackHostname(hostname: string): boolean {

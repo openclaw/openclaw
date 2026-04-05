@@ -14,7 +14,7 @@ const getMessageFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+const originalStateDir = process.env.MULLUSI_STATE_DIR;
 
 const hasControlCommand = () => false;
 const resolveInboundDebounceMs = () => 0;
@@ -123,15 +123,15 @@ describe("Feishu bot menu handler", () => {
   beforeEach(() => {
     handlers = {};
     vi.clearAllMocks();
-    process.env.OPENCLAW_STATE_DIR = `/tmp/openclaw-feishu-bot-menu-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    process.env.MULLUSI_STATE_DIR = `/tmp/mullusi-feishu-bot-menu-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   });
 
   afterEach(() => {
     if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.MULLUSI_STATE_DIR;
       return;
     }
-    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    process.env.MULLUSI_STATE_DIR = originalStateDir;
   });
 
   it("opens the quick-action launcher card at the webhook/event layer", async () => {

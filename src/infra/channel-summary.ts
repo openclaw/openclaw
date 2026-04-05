@@ -11,7 +11,7 @@ import {
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { type MullusiConfig, loadConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
 import { formatTimeAgo } from "./format-time/format-relative.ts";
@@ -19,7 +19,7 @@ import { formatTimeAgo } from "./format-time/format-relative.ts";
 export type ChannelSummaryOptions = {
   colorize?: boolean;
   includeAllowFrom?: boolean;
-  sourceConfig?: OpenClawConfig;
+  sourceConfig?: MullusiConfig;
 };
 
 const DEFAULT_OPTIONS: Omit<Required<ChannelSummaryOptions>, "sourceConfig"> = {
@@ -49,7 +49,7 @@ const accountLine = (label: string, details: string[]) =>
 const buildAccountDetails = (params: {
   entry: ChannelAccountEntry;
   plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   includeAllowFrom: boolean;
 }): string[] => {
   const details: string[] = [];
@@ -107,7 +107,7 @@ const buildAccountDetails = (params: {
 
 async function inspectChannelAccount(
   plugin: ChannelPlugin,
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId: string,
 ) {
   return (
@@ -121,7 +121,7 @@ async function inspectChannelAccount(
 }
 
 export async function buildChannelSummary(
-  cfg?: OpenClawConfig,
+  cfg?: MullusiConfig,
   options?: ChannelSummaryOptions,
 ): Promise<string[]> {
   const effective = cfg ?? loadConfig();

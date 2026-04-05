@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import type { MullusiPluginApi } from "mullusi/plugin-sdk/core";
 
 interface RemindParams {
   action: "add" | "list" | "remove";
@@ -174,7 +174,7 @@ function formatDelay(ms: number): string {
   return `${hours}h${minutes}m`;
 }
 
-export function registerRemindTool(api: OpenClawPluginApi): void {
+export function registerRemindTool(api: MullusiPluginApi): void {
   api.registerTool(
     {
       name: "qqbot_remind",

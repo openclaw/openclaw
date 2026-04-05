@@ -1,4 +1,4 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
+import { DEFAULT_ACCOUNT_ID } from "mullusi/plugin-sdk/setup";
 import {
   applyTlonSetupConfig,
   createTlonSetupWizardBase,

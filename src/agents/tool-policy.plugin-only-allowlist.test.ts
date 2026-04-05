@@ -6,15 +6,15 @@ import {
 } from "./tool-policy.js";
 
 const pluginGroups: PluginToolGroups = {
-  all: ["lobster", "workflow_tool"],
-  byPlugin: new Map([["lobster", ["lobster", "workflow_tool"]]]),
+  all: ["mullusi", "workflow_tool"],
+  byPlugin: new Map([["mullusi", ["mullusi", "workflow_tool"]]]),
 };
 const coreTools = new Set(["read", "write", "exec", "session_status"]);
 
 describe("analyzeAllowlistByToolType", () => {
   it("preserves allowlist when it only targets plugin tools", () => {
-    const policy = analyzeAllowlistByToolType({ allow: ["lobster"] }, pluginGroups, coreTools);
-    expect(policy.policy?.allow).toEqual(["lobster"]);
+    const policy = analyzeAllowlistByToolType({ allow: ["mullusi"] }, pluginGroups, coreTools);
+    expect(policy.policy?.allow).toEqual(["mullusi"]);
     expect(policy.pluginOnlyAllowlist).toBe(true);
     expect(policy.unknownAllowlist).toEqual([]);
   });
@@ -38,31 +38,31 @@ describe("analyzeAllowlistByToolType", () => {
 
   it("keeps allowlist when it mixes plugin and core entries", () => {
     const policy = analyzeAllowlistByToolType(
-      { allow: ["lobster", "read"] },
+      { allow: ["mullusi", "read"] },
       pluginGroups,
       coreTools,
     );
-    expect(policy.policy?.allow).toEqual(["lobster", "read"]);
+    expect(policy.policy?.allow).toEqual(["mullusi", "read"]);
     expect(policy.unknownAllowlist).toEqual([]);
   });
 
   it("preserves allowlist with unknown entries when no core tools match", () => {
     const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
-    const policy = analyzeAllowlistByToolType({ allow: ["lobster"] }, emptyPlugins, coreTools);
-    expect(policy.policy?.allow).toEqual(["lobster"]);
+    const policy = analyzeAllowlistByToolType({ allow: ["mullusi"] }, emptyPlugins, coreTools);
+    expect(policy.policy?.allow).toEqual(["mullusi"]);
     expect(policy.pluginOnlyAllowlist).toBe(false);
-    expect(policy.unknownAllowlist).toEqual(["lobster"]);
+    expect(policy.unknownAllowlist).toEqual(["mullusi"]);
   });
 
   it("keeps allowlist with core tools and reports unknown entries", () => {
     const emptyPlugins: PluginToolGroups = { all: [], byPlugin: new Map() };
     const policy = analyzeAllowlistByToolType(
-      { allow: ["read", "lobster"] },
+      { allow: ["read", "mullusi"] },
       emptyPlugins,
       coreTools,
     );
-    expect(policy.policy?.allow).toEqual(["read", "lobster"]);
-    expect(policy.unknownAllowlist).toEqual(["lobster"]);
+    expect(policy.policy?.allow).toEqual(["read", "mullusi"]);
+    expect(policy.unknownAllowlist).toEqual(["mullusi"]);
   });
 
   it("does not mark unavailable core entries as plugin-only", () => {
@@ -73,10 +73,10 @@ describe("analyzeAllowlistByToolType", () => {
 
   it("ignores empty plugin ids when building groups", () => {
     const groups = buildPluginToolGroups({
-      tools: [{ name: "lobster" }],
+      tools: [{ name: "mullusi" }],
       toolMeta: () => ({ pluginId: "" }),
     });
-    expect(groups.all).toEqual(["lobster"]);
+    expect(groups.all).toEqual(["mullusi"]);
     expect(groups.byPlugin.size).toBe(0);
   });
 });

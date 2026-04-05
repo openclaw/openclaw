@@ -24,7 +24,7 @@ export function collectBundledPluginSources(params = {}) {
     }
 
     const pluginDir = path.join(extensionsRoot, dirent.name);
-    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    const manifestPath = path.join(pluginDir, "mullusi.plugin.json");
     const packageJsonPath = path.join(pluginDir, "package.json");
     if (!fs.existsSync(manifestPath)) {
       continue;

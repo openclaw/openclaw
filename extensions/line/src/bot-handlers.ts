@@ -11,30 +11,30 @@ import {
   buildMentionRegexes,
   matchesMentionPatterns,
   resolveMentionGatingWithBypass,
-} from "openclaw/plugin-sdk/channel-inbound";
-import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { hasControlCommand, resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/channel-inbound";
+import { createChannelPairingChallengeIssuer } from "mullusi/plugin-sdk/channel-pairing";
+import { hasControlCommand, resolveControlCommandGate } from "mullusi/plugin-sdk/command-auth";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/config-runtime";
 import {
   readChannelAllowFromStore,
   resolvePairingIdLabel,
   upsertChannelPairingRequest,
-} from "openclaw/plugin-sdk/conversation-runtime";
-import { evaluateMatchedGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
+} from "mullusi/plugin-sdk/conversation-runtime";
+import { evaluateMatchedGroupAccessForPolicy } from "mullusi/plugin-sdk/group-access";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+} from "mullusi/plugin-sdk/reply-history";
+import { resolveAgentRoute } from "mullusi/plugin-sdk/routing";
+import type { RuntimeEnv } from "mullusi/plugin-sdk/runtime";
+import { danger, logVerbose } from "mullusi/plugin-sdk/runtime-env";
 import {
   firstDefined,
   isSenderAllowed,
@@ -72,7 +72,7 @@ function isDownloadableLineMessageType(
 }
 
 export interface LineHandlerContext {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   account: ResolvedLineAccount;
   runtime: RuntimeEnv;
   mediaMaxBytes: number;
@@ -454,7 +454,7 @@ function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
 }
 
 function resolveLineCommandAuthorized(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   event: MessageEvent | PostbackEvent;
   senderId?: string;
   allow: NormalizedAllowFrom;

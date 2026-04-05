@@ -1,6 +1,6 @@
 import type { Client } from "@buape/carbon";
 import { ChannelType, MessageType } from "@buape/carbon";
-import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { loadConfig } from "mullusi/plugin-sdk/config-runtime";
 import { vi } from "vitest";
 import {
   dispatchMock,
@@ -20,13 +20,13 @@ export const BASE_CFG: Config = {
   agents: {
     defaults: {
       model: { primary: "anthropic/claude-opus-4-5" },
-      workspace: "/tmp/openclaw",
+      workspace: "/tmp/mullusi",
     },
   },
   messages: {
     inbound: { debounceMs: 0 },
   },
-  session: { store: "/tmp/openclaw-sessions.json" },
+  session: { store: "/tmp/mullusi-sessions.json" },
 };
 
 export const CATEGORY_GUILD_CFG = {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
 describe("doctor repair sequencing", () => {
@@ -26,7 +26,7 @@ describe("doctor repair sequencing", () => {
               },
             },
           },
-        } as unknown as OpenClawConfig,
+        } as unknown as MullusiConfig,
         candidate: {
           channels: {
             discord: {
@@ -47,11 +47,11 @@ describe("doctor repair sequencing", () => {
               },
             },
           },
-        } as unknown as OpenClawConfig,
+        } as unknown as MullusiConfig,
         pendingChanges: false,
         fixHints: [],
       },
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "mullusi doctor --fix",
     });
 
     expect(result.state.pendingChanges).toBe(true);
@@ -81,24 +81,24 @@ describe("doctor repair sequencing", () => {
               allowFrom: [106232522769186816],
             },
           },
-        } as unknown as OpenClawConfig,
+        } as unknown as MullusiConfig,
         candidate: {
           channels: {
             discord: {
               allowFrom: [106232522769186816],
             },
           },
-        } as unknown as OpenClawConfig,
+        } as unknown as MullusiConfig,
         pendingChanges: false,
         fixHints: [],
       },
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "mullusi doctor --fix",
     });
 
     expect(result.changeNotes).toEqual([]);
     expect(result.warningNotes).toHaveLength(1);
     expect(result.warningNotes[0]).toContain("could not be auto-repaired");
-    expect(result.warningNotes[0]).toContain('rerun "openclaw doctor --fix"');
+    expect(result.warningNotes[0]).toContain('rerun "mullusi doctor --fix"');
     expect(result.state.pendingChanges).toBe(false);
     expect(result.state.candidate.channels?.discord?.allowFrom).toEqual([106232522769186816]);
   });

@@ -1,4 +1,4 @@
-import type { CliBackendConfig } from "openclaw/plugin-sdk/cli-backend";
+import type { CliBackendConfig } from "mullusi/plugin-sdk/cli-backend";
 
 export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 

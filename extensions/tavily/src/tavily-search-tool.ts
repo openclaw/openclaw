@@ -1,10 +1,10 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
+import type { MullusiPluginApi } from "mullusi/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
   readNumberParam,
   readStringParam,
-} from "openclaw/plugin-sdk/provider-web-search";
+} from "mullusi/plugin-sdk/provider-web-search";
 import { runTavilySearch } from "./tavily-client.js";
 
 function optionalStringEnum<const T extends readonly string[]>(
@@ -58,7 +58,7 @@ const TavilySearchToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export function createTavilySearchTool(api: OpenClawPluginApi) {
+export function createTavilySearchTool(api: MullusiPluginApi) {
   return {
     name: "tavily_search",
     label: "Tavily Search",

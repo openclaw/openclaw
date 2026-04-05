@@ -1,4 +1,4 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "mullusi/plugin-sdk/core";
 import { synologyChatPlugin } from "./src/channel.js";
 import { setSynologyRuntime } from "./src/runtime.js";
 
@@ -8,7 +8,7 @@ export { setSynologyRuntime } from "./src/runtime.js";
 export default defineChannelPluginEntry({
   id: "synology-chat",
   name: "Synology Chat",
-  description: "Native Synology Chat channel plugin for OpenClaw",
+  description: "Native Synology Chat channel plugin for Mullusi",
   plugin: synologyChatPlugin,
   setRuntime: setSynologyRuntime,
 });

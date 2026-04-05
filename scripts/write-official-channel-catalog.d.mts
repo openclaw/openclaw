@@ -5,7 +5,7 @@ export function buildOfficialChannelCatalog(params?: { repoRoot?: string; cwd?: 
     name: string;
     version?: string;
     description?: string;
-    openclaw: {
+    mullusi: {
       channel: Record<string, unknown>;
       install: {
         npmSpec: string;

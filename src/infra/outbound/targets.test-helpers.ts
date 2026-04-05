@@ -3,7 +3,7 @@ import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 function parseTelegramTargetForTest(raw: string): {
@@ -97,7 +97,7 @@ export function createTestChannelPlugin(params: {
   label?: string;
   outbound?: ChannelOutboundAdapter;
   messaging?: ChannelMessagingAdapter;
-  resolveDefaultTo?: (params: { cfg: OpenClawConfig }) => string | undefined;
+  resolveDefaultTo?: (params: { cfg: MullusiConfig }) => string | undefined;
 }): ChannelPlugin {
   return {
     id: params.id,

@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/litellm-provider",
+  "name": "@mullusi/litellm-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw LiteLLM provider plugin",
+  "description": "Mullusi LiteLLM provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

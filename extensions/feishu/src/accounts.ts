@@ -1,12 +1,12 @@
 import {
   DEFAULT_ACCOUNT_ID,
-  type OpenClawConfig as ClawdbotConfig,
+  type MullusiConfig as ClawdbotConfig,
   createAccountListHelpers,
   normalizeAccountId,
   normalizeOptionalAccountId,
   resolveMergedAccountConfig,
-} from "openclaw/plugin-sdk/account-resolution";
-import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+} from "mullusi/plugin-sdk/account-resolution";
+import { coerceSecretRef } from "mullusi/plugin-sdk/provider-auth";
 import type {
   FeishuConfig,
   FeishuAccountConfig,

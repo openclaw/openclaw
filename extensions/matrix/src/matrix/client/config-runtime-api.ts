@@ -2,7 +2,7 @@ export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,
-} from "openclaw/plugin-sdk/account-id";
+} from "mullusi/plugin-sdk/account-id";
 export { isPrivateOrLoopbackHost } from "./private-network-host.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
@@ -10,4 +10,4 @@ export {
   ssrfPolicyFromAllowPrivateNetwork,
   type LookupFn,
   type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+} from "mullusi/plugin-sdk/ssrf-runtime";

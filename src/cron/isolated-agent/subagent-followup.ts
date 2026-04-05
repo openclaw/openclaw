@@ -5,7 +5,7 @@ import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-
 export { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function resolveCronSubagentTimings() {
-  const fastTestMode = process.env.OPENCLAW_TEST_FAST === "1";
+  const fastTestMode = process.env.MULLUSI_TEST_FAST === "1";
   return {
     waitMinMs: fastTestMode ? 10 : 30_000,
     finalReplyGraceMs: fastTestMode ? 50 : 5_000,

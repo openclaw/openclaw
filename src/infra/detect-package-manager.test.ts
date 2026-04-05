@@ -7,7 +7,7 @@ import { detectPackageManager } from "./detect-package-manager.js";
 async function createPackageManagerRoot(
   files: Array<{ path: string; content: string }>,
 ): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-detect-pm-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-detect-pm-"));
   for (const file of files) {
     await fs.writeFile(path.join(root, file.path), file.content, "utf8");
   }

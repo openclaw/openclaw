@@ -1,12 +1,12 @@
 {
-  "name": "@openclaw/acpx",
+  "name": "@mullusi/acpx",
   "version": "2026.4.4",
-  "description": "OpenClaw ACP runtime backend via acpx",
+  "description": "Mullusi ACP runtime backend via acpx",
   "type": "module",
   "dependencies": {
     "acpx": "0.4.1"
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

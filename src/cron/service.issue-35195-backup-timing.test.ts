@@ -6,7 +6,7 @@ import { CronService } from "./service.js";
 import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-issue-35195-" });
+const { makeStorePath } = createCronStoreHarness({ prefix: "mullusi-cron-issue-35195-" });
 
 describe("cron backup timing for edit", () => {
   it("keeps .bak as the pre-edit store even after later normalization persists", async () => {

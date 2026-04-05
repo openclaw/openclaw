@@ -1,23 +1,23 @@
-import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { describeWebhookAccountSnapshot } from "mullusi/plugin-sdk/account-helpers";
+import { formatAllowFromLowercase } from "mullusi/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
-} from "openclaw/plugin-sdk/channel-config-helpers";
-import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
+} from "mullusi/plugin-sdk/channel-config-helpers";
+import { createAccountStatusSink } from "mullusi/plugin-sdk/channel-lifecycle";
 import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
-} from "openclaw/plugin-sdk/channel-pairing";
-import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
-import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
+} from "mullusi/plugin-sdk/channel-pairing";
+import { createAllowlistProviderRouteAllowlistWarningCollector } from "mullusi/plugin-sdk/channel-policy";
+import { createChatChannelPlugin } from "mullusi/plugin-sdk/core";
+import { runStoppablePassiveMonitor } from "mullusi/plugin-sdk/extension-shared";
 import {
   buildWebhookChannelStatusSummary,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
-} from "openclaw/plugin-sdk/status-helpers";
+} from "mullusi/plugin-sdk/status-helpers";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
@@ -30,7 +30,7 @@ import {
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
   type ChannelPlugin,
-  type OpenClawConfig,
+  type MullusiConfig,
 } from "./channel-api.js";
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
@@ -226,7 +226,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           });
         },
         logoutAccount: async ({ accountId, cfg }) => {
-          const nextCfg = { ...cfg } as OpenClawConfig;
+          const nextCfg = { ...cfg } as MullusiConfig;
           const nextSection = cfg.channels?.["nextcloud-talk"]
             ? { ...cfg.channels["nextcloud-talk"] }
             : undefined;
@@ -264,7 +264,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
               const nextChannels = { ...nextCfg.channels } as Record<string, unknown>;
               delete nextChannels["nextcloud-talk"];
               if (Object.keys(nextChannels).length > 0) {
-                nextCfg.channels = nextChannels as OpenClawConfig["channels"];
+                nextCfg.channels = nextChannels as MullusiConfig["channels"];
               } else {
                 delete nextCfg.channels;
               }
@@ -292,7 +292,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
     pairing: {
       text: {
         idLabel: "nextcloudUserId",
-        message: "OpenClaw: your access has been approved.",
+        message: "Mullusi: your access has been approved.",
         normalizeAllowEntry: createPairingPrefixStripper(
           /^(nextcloud-talk|nc-talk|nc):/i,
           (entry) => entry.toLowerCase(),

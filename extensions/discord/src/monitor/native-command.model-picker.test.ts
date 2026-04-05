@@ -1,11 +1,11 @@
 import { ChannelType } from "discord-api-types/v10";
-import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
-import type { ChatCommandDefinition, CommandArgsParsing } from "openclaw/plugin-sdk/command-auth";
-import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
-import * as commandTextModule from "openclaw/plugin-sdk/text-runtime";
+import * as commandRegistryModule from "mullusi/plugin-sdk/command-auth";
+import type { ChatCommandDefinition, CommandArgsParsing } from "mullusi/plugin-sdk/command-auth";
+import type { ModelsProviderData } from "mullusi/plugin-sdk/command-auth";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import * as dispatcherModule from "mullusi/plugin-sdk/reply-dispatch-runtime";
+import * as globalsModule from "mullusi/plugin-sdk/runtime-env";
+import * as commandTextModule from "mullusi/plugin-sdk/text-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
@@ -68,7 +68,7 @@ function createModelPickerContext(): ModelPickerContext {
         },
       },
     },
-  } as unknown as OpenClawConfig;
+  } as unknown as MullusiConfig;
 
   return {
     cfg,
@@ -241,7 +241,7 @@ function createDispatchSpy() {
     .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
     .mockResolvedValue({} as never);
   nativeCommandTesting.setDispatchReplyWithDispatcher(
-    dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
+    dispatcherModule.dispatchReplyWithDispatcher as typeof import("mullusi/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
   );
   return dispatchSpy;
 }
@@ -251,7 +251,7 @@ describe("Discord model picker interactions", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     nativeCommandTesting.setDispatchReplyWithDispatcher(
-      dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
+      dispatcherModule.dispatchReplyWithDispatcher as typeof import("mullusi/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
     );
   });
 

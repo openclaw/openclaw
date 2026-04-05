@@ -26,8 +26,8 @@ export type {
   MemoryFlushPlanResolver,
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
-  OpenClawConfig,
-  OpenClawPluginApi,
+  MullusiConfig,
+  MullusiPluginApi,
 } from "./memory-core-host-runtime-core.js";
 export {
   colorize,

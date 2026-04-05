@@ -1,7 +1,7 @@
 ---
-summary: "Run OpenClaw with SGLang (OpenAI-compatible self-hosted server)"
+summary: "Run Mullusi with SGLang (OpenAI-compatible self-hosted server)"
 read_when:
-  - You want to run OpenClaw against a local SGLang server
+  - You want to run Mullusi against a local SGLang server
   - You want OpenAI-compatible /v1 endpoints with your own models
 title: "SGLang"
 ---
@@ -9,9 +9,9 @@ title: "SGLang"
 # SGLang
 
 SGLang can serve open-source models via an **OpenAI-compatible** HTTP API.
-OpenClaw can connect to SGLang using the `openai-completions` API.
+Mullusi can connect to SGLang using the `openai-completions` API.
 
-OpenClaw can also **auto-discover** available models from SGLang when you opt
+Mullusi can also **auto-discover** available models from SGLang when you opt
 in with `SGLANG_API_KEY` (any value works if your server does not enforce auth)
 and you do not define an explicit `models.providers.sglang` entry.
 
@@ -33,7 +33,7 @@ export SGLANG_API_KEY="sglang-local"
 3. Run onboarding and choose `SGLang`, or set a model directly:
 
 ```bash
-openclaw onboard
+mullusi onboard
 ```
 
 ```json5
@@ -49,7 +49,7 @@ openclaw onboard
 ## Model discovery (implicit provider)
 
 When `SGLANG_API_KEY` is set (or an auth profile exists) and you **do not**
-define `models.providers.sglang`, OpenClaw will query:
+define `models.providers.sglang`, Mullusi will query:
 
 - `GET http://127.0.0.1:30000/v1/models`
 
@@ -111,5 +111,5 @@ native OpenAI endpoint.
 - native OpenAI-only request shaping does not apply here
 - no `service_tier`, no Responses `store`, no prompt-cache hints, and no
   OpenAI reasoning-compat payload shaping
-- hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
+- hidden Mullusi attribution headers (`originator`, `version`, `User-Agent`)
   are not injected on custom SGLang base URLs

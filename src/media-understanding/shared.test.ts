@@ -50,8 +50,8 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(resolved.allowPrivateNetwork).toBe(true);
     expect(resolved.headers.get("authorization")).toBe("Bearer override");
     expect(resolved.headers.get("x-default")).toBe("1");
-    expect(resolved.headers.get("user-agent")).toMatch(/^openclaw\//);
-    expect(resolved.headers.get("originator")).toBe("openclaw");
+    expect(resolved.headers.get("user-agent")).toMatch(/^mullusi\//);
+    expect(resolved.headers.get("originator")).toBe("mullusi");
     expect(resolved.headers.get("version")).toBeTruthy();
   });
 

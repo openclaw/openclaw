@@ -11,7 +11,7 @@ const buildGatewayConnectionDetails = vi.fn(
     url?: string;
     urlSource?: "cli" | "env";
   }) => ({
-    url: "ws://127.0.0.1:18789",
+    url: "ws://127.0.0.1:18790",
     urlSource: "local loopback",
     message: "",
   }),
@@ -55,7 +55,7 @@ describe("logs cli", () => {
 
   it("writes output directly to stdout/stderr", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
-      file: "/tmp/openclaw.log",
+      file: "/tmp/mullusi.log",
       cursor: 1,
       size: 123,
       lines: ["raw line"],
@@ -84,7 +84,7 @@ describe("logs cli", () => {
 
   it("wires --local-time through CLI parsing and emits local timestamps", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
-      file: "/tmp/openclaw.log",
+      file: "/tmp/mullusi.log",
       lines: [
         JSON.stringify({
           time: "2025-01-01T12:00:00.000Z",
@@ -111,7 +111,7 @@ describe("logs cli", () => {
 
   it("warns when the output pipe closes", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
-      file: "/tmp/openclaw.log",
+      file: "/tmp/mullusi.log",
       lines: ["line one"],
     });
 
@@ -134,7 +134,7 @@ describe("logs cli", () => {
   it("falls back to the local log file on loopback pairing-required errors", async () => {
     callGatewayFromCli.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
     readConfiguredLogTail.mockResolvedValueOnce({
-      file: "/tmp/openclaw.log",
+      file: "/tmp/mullusi.log",
       cursor: 5,
       size: 5,
       lines: ["local fallback line"],

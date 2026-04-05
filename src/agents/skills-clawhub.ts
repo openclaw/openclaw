@@ -15,7 +15,7 @@ import { installPackageDir } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir } from "../infra/install-safe-path.js";
 
 const DOT_DIR = ".clawhub";
-const LEGACY_DOT_DIR = ".clawdhub";
+const LEGACY_DOT_DIR = ".mullusihub";
 const SKILL_ORIGIN_RELATIVE_PATH = path.join(DOT_DIR, "origin.json");
 
 export type ClawHubSkillOrigin = {
@@ -292,7 +292,7 @@ async function performClawHubSkillInstall(
     try {
       const install = await withExtractedArchiveRoot({
         archivePath: archive.archivePath,
-        tempDirPrefix: "openclaw-skill-clawhub-",
+        tempDirPrefix: "mullusi-skill-clawhub-",
         timeoutMs: 120_000,
         rootMarkers: ["SKILL.md"],
         onExtracted: async (rootDir) =>

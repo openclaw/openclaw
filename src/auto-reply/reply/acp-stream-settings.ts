@@ -1,5 +1,5 @@
 import type { AcpSessionUpdateTag } from "../../acp/runtime/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { clampPositiveInteger, resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 
 const DEFAULT_ACP_STREAM_COALESCE_IDLE_MS = 350;
@@ -57,7 +57,7 @@ function resolveAcpHiddenBoundarySeparator(
   return fallback;
 }
 
-function resolveAcpStreamCoalesceIdleMs(cfg: OpenClawConfig): number {
+function resolveAcpStreamCoalesceIdleMs(cfg: MullusiConfig): number {
   return clampPositiveInteger(
     cfg.acp?.stream?.coalesceIdleMs,
     DEFAULT_ACP_STREAM_COALESCE_IDLE_MS,
@@ -68,14 +68,14 @@ function resolveAcpStreamCoalesceIdleMs(cfg: OpenClawConfig): number {
   );
 }
 
-function resolveAcpStreamMaxChunkChars(cfg: OpenClawConfig): number {
+function resolveAcpStreamMaxChunkChars(cfg: MullusiConfig): number {
   return clampPositiveInteger(cfg.acp?.stream?.maxChunkChars, DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS, {
     min: 50,
     max: 4_000,
   });
 }
 
-export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjectionSettings {
+export function resolveAcpProjectionSettings(cfg: MullusiConfig): AcpProjectionSettings {
   const stream = cfg.acp?.stream;
   const deliveryMode = resolveAcpDeliveryMode(stream?.deliveryMode);
   const hiddenBoundaryFallback: AcpHiddenBoundarySeparator =
@@ -106,7 +106,7 @@ export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjection
 }
 
 export function resolveAcpStreamingConfig(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   provider?: string;
   accountId?: string;
   deliveryMode?: AcpDeliveryMode;

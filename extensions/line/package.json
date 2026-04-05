@@ -1,21 +1,21 @@
 {
-  "name": "@openclaw/line",
+  "name": "@mullusi/line",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw LINE channel plugin",
+  "description": "Mullusi LINE channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "mullusi": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.4"
+    "mullusi": ">=2026.4.4"
   },
   "peerDependenciesMeta": {
-    "openclaw": {
+    "mullusi": {
       "optional": true
     }
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],
@@ -33,7 +33,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/line",
+      "npmSpec": "@mullusi/line",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.4"
     }

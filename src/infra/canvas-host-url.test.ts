@@ -17,11 +17,11 @@ describe("resolveCanvasHostUrl", () => {
       name: "prefers non-loopback host overrides and preserves explicit ports",
       params: {
         canvasPort: 3000,
-        hostOverride: " canvas.openclaw.ai ",
+        hostOverride: " canvas.mullusi.com ",
         requestHost: "gateway.local:9000",
         localAddress: "192.168.1.10",
       },
-      expected: "http://canvas.openclaw.ai:3000",
+      expected: "http://canvas.mullusi.com:3000",
     },
     {
       name: "falls back from rejected loopback overrides to request hosts",
@@ -35,7 +35,7 @@ describe("resolveCanvasHostUrl", () => {
     {
       name: "maps proxied default gateway ports to request-host ports",
       params: {
-        canvasPort: 18789,
+        canvasPort: 18790,
         requestHost: "gateway.example.com:9443",
         forwardedProto: "https",
       },
@@ -44,7 +44,7 @@ describe("resolveCanvasHostUrl", () => {
     {
       name: "maps proxied default gateway ports to scheme defaults",
       params: {
-        canvasPort: 18789,
+        canvasPort: 18790,
         requestHost: "gateway.example.com",
         forwardedProto: ["https", "http"],
       },
@@ -53,7 +53,7 @@ describe("resolveCanvasHostUrl", () => {
     {
       name: "uses http scheme defaults without forwarded proto",
       params: {
-        canvasPort: 18789,
+        canvasPort: 18790,
         requestHost: "gateway.example.com",
       },
       expected: "http://gateway.example.com:80",

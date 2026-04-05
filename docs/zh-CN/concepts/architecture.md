@@ -19,7 +19,7 @@ x-i18n:
 ## 概述
 
 - 单个长期运行的 **Gateway 网关**拥有所有消息平台（通过 Baileys 的 WhatsApp、通过 grammY 的 Telegram、Slack、Discord、Signal、iMessage、WebChat）。
-- 控制平面客户端（macOS 应用、CLI、Web 界面、自动化）通过配置的绑定主机（默认 `127.0.0.1:18789`）上的 **WebSocket** 连接到 Gateway 网关。
+- 控制平面客户端（macOS 应用、CLI、Web 界面、自动化）通过配置的绑定主机（默认 `127.0.0.1:18790`）上的 **WebSocket** 连接到 Gateway 网关。
 - **节点**（macOS/iOS/Android/无头设备）也通过 **WebSocket** 连接，但声明 `role: node` 并带有明确的能力/命令。
 - 每台主机一个 Gateway 网关；它是唯一打开 WhatsApp 会话的位置。
 - **canvas 主机**（默认 `18793`）提供智能体可编辑的 HTML 和 A2UI。
@@ -80,7 +80,7 @@ Client                    Gateway
 - 握手后：
   - 请求：`{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`
   - 事件：`{type:"event", event, payload, seq?, stateVersion?}`
-- 如果设置了 `OPENCLAW_GATEWAY_TOKEN`（或 `--token`），`connect.params.auth.token` 必须匹配，否则套接字关闭。
+- 如果设置了 `MULLUSI_GATEWAY_TOKEN`（或 `--token`），`connect.params.auth.token` 必须匹配，否则套接字关闭。
 - 有副作用的方法（`send`、`agent`）需要幂等键以安全重试；服务器保持短期去重缓存。
 - 节点必须在 `connect` 中包含 `role: "node"` 以及能力/命令/权限。
 
@@ -105,14 +105,14 @@ Client                    Gateway
 - 推荐：Tailscale 或 VPN。
 - 替代方案：SSH 隧道
   ```bash
-  ssh -N -L 18789:127.0.0.1:18789 user@host
+  ssh -N -L 18790:127.0.0.1:18790 user@host
   ```
 - 相同的握手 + 认证令牌适用于隧道连接。
 - 远程设置中可以为 WS 启用 TLS + 可选的证书固定。
 
 ## 操作快照
 
-- 启动：`openclaw gateway`（前台，日志输出到 stdout）。
+- 启动：`mullusi gateway`（前台，日志输出到 stdout）。
 - 健康检查：通过 WS 的 `health`（也包含在 `hello-ok` 中）。
 - 监控：使用 launchd/systemd 自动重启。
 

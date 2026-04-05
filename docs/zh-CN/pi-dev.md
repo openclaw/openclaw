@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 在 OpenClaw 中处理 Pi 集成代码或测试时
+  - 在 Mullusi 中处理 Pi 集成代码或测试时
   - 运行 Pi 专用的代码规范检查、类型检查和实时测试流程时
 summary: Pi 集成的开发工作流：构建、测试和实时验证
 title: Pi 开发工作流
@@ -15,7 +15,7 @@ x-i18n:
 
 # Pi 开发工作流
 
-本指南总结了在 OpenClaw 中处理 Pi 集成时的一套合理工作流。
+本指南总结了在 Mullusi 中处理 Pi 集成时的一套合理工作流。
 
 ## 类型检查与代码规范检查
 
@@ -41,7 +41,7 @@ pnpm test -- \
 如果还要包含提供商的实时演练：
 
 ```bash
-OPENCLAW_LIVE_TEST=1 pnpm test -- src/agents/pi-embedded-runner-extraparams.live.test.ts
+MULLUSI_LIVE_TEST=1 pnpm test -- src/agents/pi-embedded-runner-extraparams.live.test.ts
 ```
 
 这涵盖了主要的 Pi 单元测试套件：
@@ -60,7 +60,7 @@ OPENCLAW_LIVE_TEST=1 pnpm test -- src/agents/pi-embedded-runner-extraparams.live
 - 以开发模式运行 Gateway 网关：
   - `pnpm gateway:dev`
 - 直接触发智能体：
-  - `pnpm openclaw agent --message "Hello" --thinking low`
+  - `pnpm mullusi agent --message "Hello" --thinking low`
 - 使用终端界面进行交互式调试：
   - `pnpm tui`
 
@@ -68,11 +68,11 @@ OPENCLAW_LIVE_TEST=1 pnpm test -- src/agents/pi-embedded-runner-extraparams.live
 
 ## 彻底重置
 
-状态存储在 OpenClaw 状态目录下。默认路径是 `~/.openclaw`。如果设置了 `OPENCLAW_STATE_DIR`，则改用该目录。
+状态存储在 Mullusi 状态目录下。默认路径是 `~/.mullusi`。如果设置了 `MULLUSI_STATE_DIR`，则改用该目录。
 
 如需重置全部内容：
 
-- `openclaw.json` 用于配置
+- `mullusi.json` 用于配置
 - `credentials/` 用于凭证配置文件和令牌
 - `agents/<agentId>/sessions/` 用于智能体会话历史
 - `agents/<agentId>/sessions.json` 用于会话索引

@@ -1,5 +1,5 @@
 import { expect, it, type Mock } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { MullusiConfig } from "../../../config/config.js";
 import type {
   ResolveProviderRuntimeGroupPolicyParams,
   RuntimeGroupPolicyResolution,
@@ -35,7 +35,7 @@ function sortStrings(values: readonly string[]) {
 
 function resolveContractMessageDiscovery(params: {
   plugin: Pick<ChannelPlugin, "actions">;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
 }) {
   const actions = params.plugin.actions;
   if (!actions) {
@@ -139,7 +139,7 @@ export function installChannelPluginContractSuite(params: {
 
 type ChannelActionsContractCase = {
   name: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   expectedActions: readonly ChannelMessageActionName[];
   expectedCapabilities?: readonly ChannelMessageCapability[];
   beforeTest?: () => void;
@@ -339,7 +339,7 @@ export function installChannelThreadingContractSuite(params: {
       expect(
         ["off", "first", "all"].includes(
           threading.resolveReplyToMode({
-            cfg: {} as OpenClawConfig,
+            cfg: {} as MullusiConfig,
             accountId: "default",
             chatType: "group",
           }),
@@ -349,7 +349,7 @@ export function installChannelThreadingContractSuite(params: {
 
     const repliedRef = { value: false };
     const toolContext = threading?.buildToolContext?.({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       accountId: "default",
       context: {
         Channel: "group:test",
@@ -373,7 +373,7 @@ export function installChannelThreadingContractSuite(params: {
     }
 
     const autoThreadId = threading?.resolveAutoThreadId?.({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       accountId: "default",
       to: "group:test",
       toolContext,
@@ -385,7 +385,7 @@ export function installChannelThreadingContractSuite(params: {
     }
 
     const replyTransport = threading?.resolveReplyTransport?.({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       accountId: "default",
       threadId: "thread-0",
       replyToId: "msg-0",
@@ -395,7 +395,7 @@ export function installChannelThreadingContractSuite(params: {
     }
 
     const focusedBinding = threading?.resolveFocusedBinding?.({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       accountId: "default",
       context: {
         Channel: "group:test",
@@ -418,7 +418,7 @@ export function installChannelThreadingContractSuite(params: {
 export function installChannelDirectoryContractSuite(params: {
   plugin: Pick<ChannelPlugin, "id" | "directory">;
   coverage?: "lookups" | "presence";
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   accountId?: string;
 }) {
   it("exposes the base directory contract", async () => {
@@ -429,7 +429,7 @@ export function installChannelDirectoryContractSuite(params: {
       return;
     }
     const self = await directory?.self?.({
-      cfg: params.cfg ?? ({} as OpenClawConfig),
+      cfg: params.cfg ?? ({} as MullusiConfig),
       accountId: params.accountId ?? "default",
       runtime: contractRuntime,
     });
@@ -439,7 +439,7 @@ export function installChannelDirectoryContractSuite(params: {
 
     const peers =
       (await directory?.listPeers?.({
-        cfg: params.cfg ?? ({} as OpenClawConfig),
+        cfg: params.cfg ?? ({} as MullusiConfig),
         accountId: params.accountId ?? "default",
         query: "",
         limit: 5,
@@ -452,7 +452,7 @@ export function installChannelDirectoryContractSuite(params: {
 
     const groups =
       (await directory?.listGroups?.({
-        cfg: params.cfg ?? ({} as OpenClawConfig),
+        cfg: params.cfg ?? ({} as MullusiConfig),
         accountId: params.accountId ?? "default",
         query: "",
         limit: 5,
@@ -465,7 +465,7 @@ export function installChannelDirectoryContractSuite(params: {
 
     if (directory?.listGroupMembers && groups[0]?.id) {
       const members = await directory.listGroupMembers({
-        cfg: params.cfg ?? ({} as OpenClawConfig),
+        cfg: params.cfg ?? ({} as MullusiConfig),
         accountId: params.accountId ?? "default",
         groupId: groups[0].id,
         limit: 5,
@@ -516,14 +516,14 @@ export function installSessionBindingContractSuite(params: {
 
 type ChannelSetupContractCase<ResolvedAccount> = {
   name: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string;
   input: ChannelSetupInput;
   expectedAccountId?: string;
   expectedValidation?: string | null;
   beforeTest?: () => void;
-  assertPatchedConfig?: (cfg: OpenClawConfig) => void;
-  assertResolvedAccount?: (account: ResolvedAccount, cfg: OpenClawConfig) => void;
+  assertPatchedConfig?: (cfg: MullusiConfig) => void;
+  assertResolvedAccount?: (account: ResolvedAccount, cfg: MullusiConfig) => void;
 };
 
 export function installChannelSetupContractSuite<ResolvedAccount>(params: {
@@ -574,7 +574,7 @@ export function installChannelSetupContractSuite<ResolvedAccount>(params: {
 
 type ChannelStatusContractCase<Probe> = {
   name: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string;
   runtime?: ChannelAccountSnapshot;
   probe?: Probe;

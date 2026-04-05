@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { telegramChannelOutbound } from "./outbound-base.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 
-function createCfg(): OpenClawConfig {
+function createCfg(): MullusiConfig {
   return {
     channels: {
       telegram: {
@@ -13,7 +13,7 @@ function createCfg(): OpenClawConfig {
         },
       },
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
 }
 
 function installSendMessageSpy(sendMessageTelegram: ReturnType<typeof vi.fn>) {

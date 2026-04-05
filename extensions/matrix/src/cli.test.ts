@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
+import { formatZonedTimestamp } from "mullusi/plugin-sdk/matrix-runtime-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMatrixCli, resetMatrixCliStateForTests } from "./cli.js";
 
@@ -271,14 +271,14 @@ describe("matrix CLI verification commands", () => {
     listMatrixOwnDevicesMock.mockResolvedValue([
       {
         deviceId: "A7hWrQ70ea",
-        displayName: "OpenClaw Gateway",
+        displayName: "Mullusi Gateway",
         lastSeenIp: "127.0.0.1",
         lastSeenTs: 1_741_507_200_000,
         current: true,
       },
       {
         deviceId: "BritdXC6iL",
-        displayName: "OpenClaw Gateway",
+        displayName: "Mullusi Gateway",
         lastSeenIp: null,
         lastSeenTs: null,
         current: false,
@@ -290,9 +290,9 @@ describe("matrix CLI verification commands", () => {
 
     expect(listMatrixOwnDevicesMock).toHaveBeenCalledWith({ accountId: "poe" });
     expect(console.log).toHaveBeenCalledWith("Account: poe");
-    expect(console.log).toHaveBeenCalledWith("- A7hWrQ70ea (current, OpenClaw Gateway)");
+    expect(console.log).toHaveBeenCalledWith("- A7hWrQ70ea (current, Mullusi Gateway)");
     expect(console.log).toHaveBeenCalledWith("  Last IP: 127.0.0.1");
-    expect(console.log).toHaveBeenCalledWith("- BritdXC6iL (OpenClaw Gateway)");
+    expect(console.log).toHaveBeenCalledWith("- BritdXC6iL (Mullusi Gateway)");
   });
 
   it("prunes stale matrix gateway devices", async () => {
@@ -300,14 +300,14 @@ describe("matrix CLI verification commands", () => {
       before: [
         {
           deviceId: "A7hWrQ70ea",
-          displayName: "OpenClaw Gateway",
+          displayName: "Mullusi Gateway",
           lastSeenIp: "127.0.0.1",
           lastSeenTs: 1_741_507_200_000,
           current: true,
         },
         {
           deviceId: "BritdXC6iL",
-          displayName: "OpenClaw Gateway",
+          displayName: "Mullusi Gateway",
           lastSeenIp: null,
           lastSeenTs: null,
           current: false,
@@ -319,7 +319,7 @@ describe("matrix CLI verification commands", () => {
       remainingDevices: [
         {
           deviceId: "A7hWrQ70ea",
-          displayName: "OpenClaw Gateway",
+          displayName: "Mullusi Gateway",
           lastSeenIp: "127.0.0.1",
           lastSeenTs: 1_741_507_200_000,
           current: true,
@@ -333,7 +333,7 @@ describe("matrix CLI verification commands", () => {
     });
 
     expect(pruneMatrixStaleGatewayDevicesMock).toHaveBeenCalledWith({ accountId: "poe" });
-    expect(console.log).toHaveBeenCalledWith("Deleted stale OpenClaw devices: BritdXC6iL");
+    expect(console.log).toHaveBeenCalledWith("Deleted stale Mullusi devices: BritdXC6iL");
     expect(console.log).toHaveBeenCalledWith("Current device: A7hWrQ70ea");
     expect(console.log).toHaveBeenCalledWith("Remaining devices: 1");
   });
@@ -399,7 +399,7 @@ describe("matrix CLI verification commands", () => {
     );
     expect(console.log).toHaveBeenCalledWith("Saved matrix account: ops");
     expect(console.log).toHaveBeenCalledWith(
-      "Bind this account to an agent: openclaw agents bind --agent <id> --bind matrix:ops",
+      "Bind this account to an agent: mullusi agents bind --agent <id> --bind matrix:ops",
     );
   });
 
@@ -410,14 +410,14 @@ describe("matrix CLI verification commands", () => {
     listMatrixOwnDevicesMock.mockResolvedValue([
       {
         deviceId: "BritdXC6iL",
-        displayName: "OpenClaw Gateway",
+        displayName: "Mullusi Gateway",
         lastSeenIp: null,
         lastSeenTs: null,
         current: false,
       },
       {
         deviceId: "du314Zpw3A",
-        displayName: "OpenClaw Gateway",
+        displayName: "Mullusi Gateway",
         lastSeenIp: null,
         lastSeenTs: null,
         current: true,
@@ -459,7 +459,7 @@ describe("matrix CLI verification commands", () => {
     );
     expect(console.log).toHaveBeenCalledWith("Backup version: 7");
     expect(console.log).toHaveBeenCalledWith(
-      "Matrix device hygiene warning: stale OpenClaw devices detected (BritdXC6iL). Run 'openclaw matrix devices prune-stale --account ops'.",
+      "Matrix device hygiene warning: stale Mullusi devices detected (BritdXC6iL). Run 'mullusi matrix devices prune-stale --account ops'.",
     );
   });
 
@@ -561,7 +561,7 @@ describe("matrix CLI verification commands", () => {
         accountId: "ops",
         deviceHealth: expect.objectContaining({
           currentDeviceId: null,
-          staleOpenClawDeviceIds: [],
+          staleMullusiDeviceIds: [],
           error: "homeserver unavailable",
         }),
       }),
@@ -603,7 +603,7 @@ describe("matrix CLI verification commands", () => {
       }),
     );
     expect(console.log).toHaveBeenCalledWith(
-      "Bind this account to an agent: openclaw agents bind --agent <id> --bind matrix:main-bot",
+      "Bind this account to an agent: mullusi agents bind --agent <id> --bind matrix:main-bot",
     );
   });
 
@@ -803,10 +803,10 @@ describe("matrix CLI verification commands", () => {
       "Backup issue: backup decryption key is not loaded on this device (secret storage did not return a key)",
     );
     expect(console.log).toHaveBeenCalledWith(
-      "- Backup key is not loaded on this device. Run 'openclaw matrix verify backup restore' to load it and restore old room keys.",
+      "- Backup key is not loaded on this device. Run 'mullusi matrix verify backup restore' to load it and restore old room keys.",
     );
     expect(console.log).not.toHaveBeenCalledWith(
-      "- Backup is present but not trusted for this device. Re-run 'openclaw matrix verify device <key>'.",
+      "- Backup is present but not trusted for this device. Re-run 'mullusi matrix verify device <key>'.",
     );
   });
 
@@ -870,7 +870,7 @@ describe("matrix CLI verification commands", () => {
     await program.parseAsync(["matrix", "verify", "status"], { from: "user" });
 
     expect(console.log).toHaveBeenCalledWith(
-      "- If you want a fresh backup baseline and accept losing unrecoverable history, run 'openclaw matrix verify backup reset --yes'. This may also repair secret storage so the new backup key can be loaded after restart.",
+      "- If you want a fresh backup baseline and accept losing unrecoverable history, run 'mullusi matrix verify backup reset --yes'. This may also repair secret storage so the new backup key can be loaded after restart.",
     );
   });
 
@@ -942,10 +942,10 @@ describe("matrix CLI verification commands", () => {
     });
     expect(console.log).toHaveBeenCalledWith("Account: assistant");
     expect(console.log).toHaveBeenCalledWith(
-      "- Run 'openclaw matrix verify device <key> --account assistant' to verify this device.",
+      "- Run 'mullusi matrix verify device <key> --account assistant' to verify this device.",
     );
     expect(console.log).toHaveBeenCalledWith(
-      "- Run 'openclaw matrix verify bootstrap --account assistant' to create a room key backup.",
+      "- Run 'mullusi matrix verify bootstrap --account assistant' to create a room key backup.",
     );
   });
 

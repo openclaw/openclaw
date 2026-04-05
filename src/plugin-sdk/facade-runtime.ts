@@ -6,7 +6,7 @@ import JSON5 from "json5";
 import { resolveConfigPath } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { MullusiConfig } from "../config/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { resolveBundledPluginPublicSurfacePath } from "../plugins/bundled-plugin-metadata.js";
@@ -26,7 +26,7 @@ import {
   shouldPreferNativeJiti,
 } from "../plugins/sdk-alias.js";
 
-const OPENCLAW_PACKAGE_ROOT =
+const MULLUSI_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
     modulePath: fileURLToPath(import.meta.url),
     moduleUrl: import.meta.url,
@@ -38,15 +38,15 @@ const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
   "media-understanding-core",
   "speech-core",
 ]);
-const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
+const EMPTY_FACADE_BOUNDARY_CONFIG: MullusiConfig = {};
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const loadedFacadeModules = new Map<string, unknown>();
 const loadedFacadePluginIds = new Set<string>();
-let cachedBoundaryRawConfig: OpenClawConfig | undefined;
+let cachedBoundaryRawConfig: MullusiConfig | undefined;
 let cachedBoundaryResolvedConfig:
   | {
-      rawConfig: OpenClawConfig;
-      config: OpenClawConfig;
+      rawConfig: MullusiConfig;
+      config: MullusiConfig;
       normalizedPluginsConfig: ReturnType<typeof normalizePluginsConfig>;
       activationSource: ReturnType<typeof createPluginActivationSource>;
       autoEnabledReasons: Record<string, string[]>;
@@ -59,7 +59,7 @@ function resolveSourceFirstPublicSurfacePath(params: {
   artifactBasename: string;
 }): string | null {
   const sourceBaseName = params.artifactBasename.replace(/\.js$/u, "");
-  const sourceRoot = params.bundledPluginsDir ?? path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
+  const sourceRoot = params.bundledPluginsDir ?? path.resolve(MULLUSI_PACKAGE_ROOT, "extensions");
   for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
     const candidate = path.resolve(sourceRoot, params.dirName, `${sourceBaseName}${ext}`);
     if (fs.existsSync(candidate)) {
@@ -83,7 +83,7 @@ function resolveFacadeModuleLocation(params: {
       }) ??
       resolveSourceFirstPublicSurfacePath(params) ??
       resolveBundledPluginPublicSurfacePath({
-        rootDir: OPENCLAW_PACKAGE_ROOT,
+        rootDir: MULLUSI_PACKAGE_ROOT,
         ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
         dirName: params.dirName,
         artifactBasename: params.artifactBasename,
@@ -96,11 +96,11 @@ function resolveFacadeModuleLocation(params: {
       boundaryRoot:
         bundledPluginsDir && modulePath.startsWith(path.resolve(bundledPluginsDir) + path.sep)
           ? path.resolve(bundledPluginsDir)
-          : OPENCLAW_PACKAGE_ROOT,
+          : MULLUSI_PACKAGE_ROOT,
     };
   }
   const modulePath = resolveBundledPluginPublicSurfacePath({
-    rootDir: OPENCLAW_PACKAGE_ROOT,
+    rootDir: MULLUSI_PACKAGE_ROOT,
     ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
     dirName: params.dirName,
     artifactBasename: params.artifactBasename,
@@ -113,7 +113,7 @@ function resolveFacadeModuleLocation(params: {
     boundaryRoot:
       bundledPluginsDir && modulePath.startsWith(path.resolve(bundledPluginsDir) + path.sep)
         ? path.resolve(bundledPluginsDir)
-        : OPENCLAW_PACKAGE_ROOT,
+        : MULLUSI_PACKAGE_ROOT,
   };
 }
 
@@ -137,7 +137,7 @@ function getJiti(modulePath: string) {
   return loader;
 }
 
-function readFacadeBoundaryConfigSafely(): OpenClawConfig {
+function readFacadeBoundaryConfigSafely(): MullusiConfig {
   try {
     const runtimeSnapshot = getRuntimeConfigSnapshot();
     if (runtimeSnapshot) {
@@ -150,7 +150,7 @@ function readFacadeBoundaryConfigSafely(): OpenClawConfig {
     const raw = fs.readFileSync(configPath, "utf8");
     const parsed = JSON5.parse(raw);
     return parsed && typeof parsed === "object"
-      ? (parsed as OpenClawConfig)
+      ? (parsed as MullusiConfig)
       : EMPTY_FACADE_BOUNDARY_CONFIG;
   } catch {
     return EMPTY_FACADE_BOUNDARY_CONFIG;
@@ -341,8 +341,8 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
     absolutePath: location.modulePath,
     rootPath: location.boundaryRoot,
     boundaryLabel:
-      location.boundaryRoot === OPENCLAW_PACKAGE_ROOT
-        ? "OpenClaw package root"
+      location.boundaryRoot === MULLUSI_PACKAGE_ROOT
+        ? "Mullusi package root"
         : "bundled plugin directory",
     rejectHardlinks: false,
   });

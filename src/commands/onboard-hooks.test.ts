@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -57,7 +57,7 @@ describe("onboard-hooks", () => {
       ? undefined
       : "missing requirements") as HookStatusEntry["blockedReason"],
     ...params,
-    source: "openclaw-bundled" as const,
+    source: "mullusi-bundled" as const,
     pluginId: undefined,
     homepage: undefined,
     always: false,
@@ -85,7 +85,7 @@ describe("onboard-hooks", () => {
 
   const createMockHookReport = (eligible = true): HookStatusReport => ({
     workspaceDir: "/mock/workspace",
-    managedHooksDir: "/mock/.openclaw/hooks",
+    managedHooksDir: "/mock/.mullusi/hooks",
     hooks: [
       createMockHook(
         {
@@ -118,7 +118,7 @@ describe("onboard-hooks", () => {
 
   async function runSetupInternalHooks(params: {
     selected: string[];
-    cfg?: OpenClawConfig;
+    cfg?: MullusiConfig;
     eligible?: boolean;
   }) {
     const { buildWorkspaceHookStatus } = await import("../hooks/hooks-status.js");
@@ -186,7 +186,7 @@ describe("onboard-hooks", () => {
     });
 
     it("should preserve existing hooks config when enabled", async () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         hooks: {
           enabled: true,
           path: "/webhook",
@@ -208,7 +208,7 @@ describe("onboard-hooks", () => {
     });
 
     it("should preserve existing config when user skips", async () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         agents: { defaults: { workspace: "/workspace" } },
       };
       const { result } = await runSetupInternalHooks({
@@ -234,7 +234,7 @@ describe("onboard-hooks", () => {
 
       // Second note should confirm configuration
       expect(noteCalls[1][0]).toContain("Enabled 1 hook: session-memory");
-      expect(noteCalls[1][0]).toMatch(/(?:openclaw|openclaw)( --profile isolated)? hooks list/);
+      expect(noteCalls[1][0]).toMatch(/(?:mullusi|mullusi)( --profile isolated)? hooks list/);
     });
   });
 });

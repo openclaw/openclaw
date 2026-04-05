@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   doesApprovalRequestMatchChannelAccount,
@@ -35,7 +35,7 @@ const baseRequest: ExecApprovalRequest = {
 };
 
 function createTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approval-session-target-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-exec-approval-session-target-"));
   tempDirs.push(dir);
   return dir;
 }
@@ -43,16 +43,16 @@ function createTempDir(): string {
 function writeStoreFile(
   storePath: string,
   entries: Record<string, Partial<SessionEntry>>,
-): OpenClawConfig {
+): MullusiConfig {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(storePath, JSON.stringify(entries), "utf-8");
   return {
     session: { store: storePath },
-  } as OpenClawConfig;
+  } as MullusiConfig;
 }
 
 function expectResolvedSessionTarget(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   request: ExecApprovalRequest,
 ): ReturnType<typeof resolveExecApprovalSessionTarget> {
   return resolveExecApprovalSessionTarget({ cfg, request });
@@ -202,7 +202,7 @@ describe("exec approval session target", () => {
   );
 
   it("prefers explicit turn-source account bindings when session store is missing", () => {
-    const cfg = {} as OpenClawConfig;
+    const cfg = {} as MullusiConfig;
     const request = buildRequest({
       turnSourceChannel: "slack",
       turnSourceAccountId: "Work",
@@ -229,7 +229,7 @@ describe("exec approval session target", () => {
   });
 
   it("rejects mismatched channel bindings before account checks", () => {
-    const cfg = {} as OpenClawConfig;
+    const cfg = {} as MullusiConfig;
     const request = buildRequest({
       turnSourceChannel: "discord",
       turnSourceAccountId: "work",
@@ -391,7 +391,7 @@ describe("exec approval session target", () => {
 
   it("falls back to a legacy origin target when no turn-source or session target exists", () => {
     const target = resolveApprovalRequestOriginTarget({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       request: buildPluginRequest({ sessionKey: "agent:main:missing" }),
       channel: "discord",
       accountId: "default",

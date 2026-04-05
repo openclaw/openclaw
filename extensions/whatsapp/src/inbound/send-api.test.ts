@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const recordChannelActivity = vi.hoisted(() => vi.fn());
 let createWebSendApi: typeof import("./send-api.js").createWebSendApi;
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
-    "openclaw/plugin-sdk/infra-runtime",
+vi.mock("mullusi/plugin-sdk/infra-runtime", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/infra-runtime")>(
+    "mullusi/plugin-sdk/infra-runtime",
   );
   return {
     ...actual,

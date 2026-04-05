@@ -1,4 +1,4 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "mullusi/plugin-sdk/account-id";
 import {
   collectSecretInputAssignment,
   getChannelSurface,
@@ -8,14 +8,14 @@ import {
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "mullusi/plugin-sdk/security-runtime";
 import { getMatrixScopedEnvVarNames } from "./env-vars.js";
 
 export const secretTargetRegistryEntries = [
   {
     id: "channels.matrix.accounts.*.accessToken",
     targetType: "channels.matrix.accounts.*.accessToken",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.matrix.accounts.*.accessToken",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -26,7 +26,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.matrix.accounts.*.password",
     targetType: "channels.matrix.accounts.*.password",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.matrix.accounts.*.password",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -37,7 +37,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.matrix.accessToken",
     targetType: "channels.matrix.accessToken",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.matrix.accessToken",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -48,7 +48,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.matrix.password",
     targetType: "channels.matrix.password",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.matrix.password",
     secretShape: "secret_input",
     expectedResolvedValue: "string",

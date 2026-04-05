@@ -88,7 +88,7 @@ vi.mock("../../terminal/health-style.js", () => ({
 }));
 
 vi.mock("../../terminal/links.js", () => ({
-  formatDocsLink: () => "docs.openclaw.ai/cli/gateway",
+  formatDocsLink: () => "docs.mullusi.com/cli/gateway",
 }));
 
 vi.mock("../../terminal/theme.js", () => ({
@@ -118,7 +118,7 @@ vi.mock("./discover.js", () => ({
   dedupeBeacons: (beacons: unknown[]) => beacons,
   parseDiscoverTimeoutMs: () => 2000,
   pickBeaconHost: () => null,
-  pickGatewayPort: () => 18789,
+  pickGatewayPort: () => 18790,
   renderBeaconLines: () => [],
 }));
 

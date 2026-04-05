@@ -14,7 +14,7 @@ export const BUNDLED_PLUGIN_INSTALL_TARGETS = [];
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
-const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
+const DISABLE_POSTINSTALL_ENV = "MULLUSI_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));

@@ -1,29 +1,29 @@
 ---
-summary: "Updating OpenClaw safely (global install or source), plus rollback strategy"
+summary: "Updating Mullusi safely (global install or source), plus rollback strategy"
 read_when:
-  - Updating OpenClaw
+  - Updating Mullusi
   - Something breaks after an update
 title: "Updating"
 ---
 
 # Updating
 
-Keep OpenClaw up to date.
+Keep Mullusi up to date.
 
-## Recommended: `openclaw update`
+## Recommended: `mullusi update`
 
-The fastest way to update. It detects your install type (npm or git), fetches the latest version, runs `openclaw doctor`, and restarts the gateway.
+The fastest way to update. It detects your install type (npm or git), fetches the latest version, runs `mullusi doctor`, and restarts the gateway.
 
 ```bash
-openclaw update
+mullusi update
 ```
 
 To switch channels or target a specific version:
 
 ```bash
-openclaw update --channel beta
-openclaw update --tag main
-openclaw update --dry-run   # preview without applying
+mullusi update --channel beta
+mullusi update --tag main
+mullusi update --dry-run   # preview without applying
 ```
 
 `--channel beta` prefers beta, but the runtime falls back to stable/latest when
@@ -35,7 +35,7 @@ See [Development channels](/install/development-channels) for channel semantics.
 ## Alternative: re-run the installer
 
 ```bash
-curl -fsSL https://openclaw.ai/install.sh | bash
+curl -fsSL https://mullusi.com/install.sh | bash
 ```
 
 Add `--no-onboard` to skip onboarding. For source installs, pass `--install-method git --no-onboard`.
@@ -43,20 +43,20 @@ Add `--no-onboard` to skip onboarding. For source installs, pass `--install-meth
 ## Alternative: manual npm, pnpm, or bun
 
 ```bash
-npm i -g openclaw@latest
+npm i -g mullusi@latest
 ```
 
 ```bash
-pnpm add -g openclaw@latest
+pnpm add -g mullusi@latest
 ```
 
 ```bash
-bun add -g openclaw@latest
+bun add -g mullusi@latest
 ```
 
 ## Auto-updater
 
-The auto-updater is off by default. Enable it in `~/.openclaw/openclaw.json`:
+The auto-updater is off by default. Enable it in `~/.mullusi/mullusi.json`:
 
 ```json5
 {
@@ -76,7 +76,7 @@ The auto-updater is off by default. Enable it in `~/.openclaw/openclaw.json`:
 | -------- | ------------------------------------------------------------------------------------------------------------- |
 | `stable` | Waits `stableDelayHours`, then applies with deterministic jitter across `stableJitterHours` (spread rollout). |
 | `beta`   | Checks every `betaCheckIntervalHours` (default: hourly) and applies immediately.                              |
-| `dev`    | No automatic apply. Use `openclaw update` manually.                                                           |
+| `dev`    | No automatic apply. Use `mullusi update` manually.                                                           |
 
 The gateway also logs an update hint on startup (disable with `update.checkOnStart: false`).
 
@@ -87,7 +87,7 @@ The gateway also logs an update hint on startup (disable with `update.checkOnSta
 ### Run doctor
 
 ```bash
-openclaw doctor
+mullusi doctor
 ```
 
 Migrates config, audits DM policies, and checks gateway health. Details: [Doctor](/gateway/doctor)
@@ -95,13 +95,13 @@ Migrates config, audits DM policies, and checks gateway health. Details: [Doctor
 ### Restart the gateway
 
 ```bash
-openclaw gateway restart
+mullusi gateway restart
 ```
 
 ### Verify
 
 ```bash
-openclaw health
+mullusi health
 ```
 
 </Steps>
@@ -111,12 +111,12 @@ openclaw health
 ### Pin a version (npm)
 
 ```bash
-npm i -g openclaw@<version>
-openclaw doctor
-openclaw gateway restart
+npm i -g mullusi@<version>
+mullusi doctor
+mullusi gateway restart
 ```
 
-Tip: `npm view openclaw version` shows the current published version.
+Tip: `npm view mullusi version` shows the current published version.
 
 ### Pin a commit (source)
 
@@ -124,16 +124,16 @@ Tip: `npm view openclaw version` shows the current published version.
 git fetch origin
 git checkout "$(git rev-list -n 1 --before=\"2026-01-01\" origin/main)"
 pnpm install && pnpm build
-openclaw gateway restart
+mullusi gateway restart
 ```
 
 To return to latest: `git checkout main && git pull`.
 
 ## If you are stuck
 
-- Run `openclaw doctor` again and read the output carefully.
+- Run `mullusi doctor` again and read the output carefully.
 - Check: [Troubleshooting](/gateway/troubleshooting)
-- Ask in Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
+- Ask in Discord: [https://discord.gg/mullusi](https://discord.gg/mullusi)
 
 ## Related
 

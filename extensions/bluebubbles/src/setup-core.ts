@@ -6,17 +6,17 @@ import {
   prepareScopedSetupConfig,
   type ChannelSetupAdapter,
   type DmPolicy,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/setup";
+  type MullusiConfig,
+} from "mullusi/plugin-sdk/setup";
 import { applyBlueBubblesConnectionConfig } from "./config-apply.js";
 
 const channel = "bluebubbles" as const;
 
 export function setBlueBubblesDmPolicy(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId: string,
   dmPolicy: DmPolicy,
-): OpenClawConfig {
+): MullusiConfig {
   const resolvedAccountId = normalizeAccountId(accountId);
   const existingAllowFrom =
     resolvedAccountId === "default"
@@ -37,10 +37,10 @@ export function setBlueBubblesDmPolicy(
 }
 
 export function setBlueBubblesAllowFrom(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId: string,
   allowFrom: string[],
-): OpenClawConfig {
+): MullusiConfig {
   return patchScopedAccountConfig({
     cfg,
     channelKey: channel,

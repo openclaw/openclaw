@@ -21,7 +21,7 @@ function parsePositiveInt(value: string | undefined): number | null {
 }
 
 function isSystemThrottleDisabled(env: Record<string, string | undefined>): boolean {
-  const normalized = env.OPENCLAW_VITEST_DISABLE_SYSTEM_THROTTLE?.trim().toLowerCase();
+  const normalized = env.MULLUSI_VITEST_DISABLE_SYSTEM_THROTTLE?.trim().toLowerCase();
   return normalized === "1" || normalized === "true";
 }
 
@@ -31,7 +31,7 @@ type VitestHostInfo = {
   totalMemoryBytes?: number;
 };
 
-export type OpenClawVitestPool = "threads";
+export type MullusiVitestPool = "threads";
 
 export type LocalVitestScheduling = {
   maxWorkers: number;
@@ -60,7 +60,7 @@ function detectVitestHostInfo(): Required<VitestHostInfo> {
 export function resolveLocalVitestMaxWorkers(
   env: Record<string, string | undefined> = process.env,
   system: VitestHostInfo = detectVitestHostInfo(),
-  pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
+  pool: MullusiVitestPool = resolveDefaultVitestPool(env),
   processStats: VitestProcessStats = detectVitestProcessStats(env),
 ): number {
   return resolveLocalVitestScheduling(env, system, pool, processStats).maxWorkers;
@@ -69,10 +69,10 @@ export function resolveLocalVitestMaxWorkers(
 export function resolveLocalVitestScheduling(
   env: Record<string, string | undefined> = process.env,
   system: VitestHostInfo = detectVitestHostInfo(),
-  pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
+  pool: MullusiVitestPool = resolveDefaultVitestPool(env),
   processStats: VitestProcessStats = detectVitestProcessStats(env),
 ): LocalVitestScheduling {
-  const override = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
+  const override = parsePositiveInt(env.MULLUSI_VITEST_MAX_WORKERS ?? env.MULLUSI_TEST_WORKERS);
   if (override !== null) {
     const maxWorkers = clamp(override, 1, 16);
     return {
@@ -166,7 +166,7 @@ export function resolveLocalVitestScheduling(
 
 export function resolveDefaultVitestPool(
   _env: Record<string, string | undefined> = process.env,
-): OpenClawVitestPool {
+): MullusiVitestPool {
   return "threads";
 }
 
@@ -193,15 +193,15 @@ export const sharedVitestConfig = {
   resolve: {
     alias: [
       {
-        find: "openclaw/extension-api",
+        find: "mullusi/extension-api",
         replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
       },
       ...pluginSdkSubpaths.map((subpath) => ({
-        find: `openclaw/plugin-sdk/${subpath}`,
+        find: `mullusi/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
       })),
       {
-        find: "openclaw/plugin-sdk",
+        find: "mullusi/plugin-sdk",
         replacement: path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
       },
     ],
@@ -222,7 +222,7 @@ export const sharedVitestConfig = {
       "test/setup.ts",
       "test/setup.shared.ts",
       "test/setup.extensions.ts",
-      "test/setup-openclaw-runtime.ts",
+      "test/setup-mullusi-runtime.ts",
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
       "vitest.acp.config.ts",
@@ -322,7 +322,7 @@ export const sharedVitestConfig = {
       "apps/macos/.build/**",
       "**/node_modules/**",
       "**/vendor/**",
-      "dist/OpenClaw.app/**",
+      "dist/Mullusi.app/**",
       "**/*.live.test.ts",
       "**/*.e2e.test.ts",
     ],

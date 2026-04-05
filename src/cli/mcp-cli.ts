@@ -6,7 +6,7 @@ import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
 } from "../config/mcp-config.js";
-import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
+import { serveMullusiChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
 
 function fail(message: string): never {
@@ -44,11 +44,11 @@ function warnSecretCliFlag(flag: "--token" | "--password") {
 }
 
 export function registerMcpCli(program: Command) {
-  const mcp = program.command("mcp").description("Manage OpenClaw MCP config and channel bridge");
+  const mcp = program.command("mcp").description("Manage Mullusi MCP config and channel bridge");
 
   mcp
     .command("serve")
-    .description("Expose OpenClaw channels over MCP stdio")
+    .description("Expose Mullusi channels over MCP stdio")
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--token-file <path>", "Read gateway token from file")
@@ -92,7 +92,7 @@ export function registerMcpCli(program: Command) {
         ) {
           throw new Error("Invalid --claude-channel-mode value. Use auto, on, or off.");
         }
-        await serveOpenClawChannelMcp({
+        await serveMullusiChannelMcp({
           gatewayUrl: opts.url as string | undefined,
           gatewayToken,
           gatewayPassword,

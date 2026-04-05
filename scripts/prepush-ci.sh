@@ -17,8 +17,8 @@ run_step() {
 run_protocol_ci_mirror() {
   local targets=(
     "dist/protocol.schema.json"
-    "apps/macos/Sources/OpenClawProtocol/GatewayModels.swift"
-    "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift"
+    "apps/macos/Sources/MullusiProtocol/GatewayModels.swift"
+    "apps/shared/MullusiKit/Sources/MullusiProtocol/GatewayModels.swift"
   )
   local before after
   before="$(git diff --no-ext-diff -- "${targets[@]}" || true)"
@@ -37,17 +37,17 @@ run_protocol_ci_mirror() {
 
 has_native_swift_changes() {
   if git rev-parse --verify --quiet origin/main >/dev/null; then
-    if git diff --name-only --relative origin/main...HEAD -- apps/macos apps/ios apps/shared/OpenClawKit | rg -q .; then
+    if git diff --name-only --relative origin/main...HEAD -- apps/macos apps/ios apps/shared/MullusiKit | rg -q .; then
       return 0
     fi
   fi
 
   if git rev-parse --verify --quiet HEAD^ >/dev/null; then
-    git diff --name-only --relative HEAD^..HEAD -- apps/macos apps/ios apps/shared/OpenClawKit | rg -q .
+    git diff --name-only --relative HEAD^..HEAD -- apps/macos apps/ios apps/shared/MullusiKit | rg -q .
     return $?
   fi
 
-  git show --name-only --relative --pretty='' HEAD -- apps/macos apps/ios apps/shared/OpenClawKit | rg -q .
+  git show --name-only --relative --pretty='' HEAD -- apps/macos apps/ios apps/shared/MullusiKit | rg -q .
 }
 
 run_linux_ci_mirror() {
@@ -59,15 +59,15 @@ run_linux_ci_mirror() {
   run_step pnpm exec vitest run --config vitest.extensions.config.ts --maxWorkers=1
   run_step env CI=true pnpm exec vitest run --config vitest.unit.config.ts --maxWorkers=1
 
-  log_step "OPENCLAW_VITEST_MAX_WORKERS=${OPENCLAW_VITEST_MAX_WORKERS:-1} NODE_OPTIONS=${NODE_OPTIONS:---max-old-space-size=6144} pnpm test"
-  OPENCLAW_VITEST_MAX_WORKERS="${OPENCLAW_VITEST_MAX_WORKERS:-1}" \
+  log_step "MULLUSI_VITEST_MAX_WORKERS=${MULLUSI_VITEST_MAX_WORKERS:-1} NODE_OPTIONS=${NODE_OPTIONS:---max-old-space-size=6144} pnpm test"
+  MULLUSI_VITEST_MAX_WORKERS="${MULLUSI_VITEST_MAX_WORKERS:-1}" \
   NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=6144}" \
     pnpm test
 }
 
 run_macos_ci_mirror() {
-  if [[ "${OPENCLAW_PREPUSH_SKIP_MACOS:-0}" == "1" ]]; then
-    log_step "Skipping macOS mirror because OPENCLAW_PREPUSH_SKIP_MACOS=1"
+  if [[ "${MULLUSI_PREPUSH_SKIP_MACOS:-0}" == "1" ]]; then
+    log_step "Skipping macOS mirror because MULLUSI_PREPUSH_SKIP_MACOS=1"
     return 0
   fi
 

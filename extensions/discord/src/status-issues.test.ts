@@ -1,4 +1,4 @@
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelAccountSnapshot } from "mullusi/plugin-sdk/channel-contract";
 import { describe, expect, it } from "vitest";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 

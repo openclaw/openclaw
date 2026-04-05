@@ -214,13 +214,13 @@ function sleep(ms) {
 
 function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir) {
   const shellSource = [
-    'echo "$$" > "$OPENCLAW_WATCH_PID_FILE"',
+    'echo "$$" > "$MULLUSI_WATCH_PID_FILE"',
     "exec node scripts/watch-node.mjs gateway --force --allow-unconfigured",
   ].join("\n");
   const env = {
-    OPENCLAW_WATCH_PID_FILE: pidFilePath,
+    MULLUSI_WATCH_PID_FILE: pidFilePath,
     HOME: isolatedHomeDir,
-    OPENCLAW_HOME: isolatedHomeDir,
+    MULLUSI_HOME: isolatedHomeDir,
   };
 
   if (process.platform === "darwin") {
@@ -270,7 +270,7 @@ function parseTimingFile(timeFilePath) {
 async function runTimedWatch(options, outputDir) {
   const pidFilePath = path.join(outputDir, "watch.pid");
   const timeFilePath = path.join(outputDir, "watch.time.log");
-  const isolatedHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-watch-"));
+  const isolatedHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-gateway-watch-"));
   fs.writeFileSync(path.join(outputDir, "watch.home.txt"), `${isolatedHomeDir}\n`, "utf8");
   const stdoutPath = path.join(outputDir, "watch.stdout.log");
   const stderrPath = path.join(outputDir, "watch.stderr.log");

@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/plugin-package-contract",
+  "name": "@mullusi/plugin-package-contract",
   "version": "0.0.0-private",
   "private": true,
   "type": "module",

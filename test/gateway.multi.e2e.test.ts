@@ -48,7 +48,7 @@ describe("gateway multi-instance e2e", () => {
             text: "wake a",
             mode: "now",
           },
-          { "x-openclaw-token": gwA.hookToken },
+          { "x-mullusi-token": gwA.hookToken },
         ),
         postJson(
           `http://127.0.0.1:${gwB.port}/hooks/wake`,
@@ -56,7 +56,7 @@ describe("gateway multi-instance e2e", () => {
             text: "wake b",
             mode: "now",
           },
-          { "x-openclaw-token": gwB.hookToken },
+          { "x-mullusi-token": gwB.hookToken },
         ),
       ]);
       expect(hookResA.status).toBe(200);

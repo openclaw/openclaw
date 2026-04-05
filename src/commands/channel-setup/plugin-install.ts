@@ -4,7 +4,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import { getChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../../cli/plugin-install-plan.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -15,7 +15,7 @@ import { clearPluginDiscoveryCache } from "../../plugins/discovery.js";
 import { enablePluginInConfig } from "../../plugins/enable.js";
 import { installPluginFromNpmSpec } from "../../plugins/install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../../plugins/installs.js";
-import { loadOpenClawPlugins } from "../../plugins/loader.js";
+import { loadMullusiPlugins } from "../../plugins/loader.js";
 import { createPluginLoaderLogger } from "../../plugins/logger.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
@@ -26,7 +26,7 @@ import type { WizardPrompter } from "../../wizard/prompts.js";
 type InstallChoice = "npm" | "local" | "skip";
 
 type InstallResult = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   installed: boolean;
   pluginId?: string;
 };
@@ -70,7 +70,7 @@ function resolveLocalPath(
   return null;
 }
 
-function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawConfig {
+function addPluginLoadPath(cfg: MullusiConfig, pluginPath: string): MullusiConfig {
   const existing = cfg.plugins?.load?.paths ?? [];
   const merged = Array.from(new Set([...existing, pluginPath]));
   return {
@@ -116,7 +116,7 @@ async function promptInstallChoice(params: {
 }
 
 function resolveInstallDefaultChoice(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   entry: ChannelPluginCatalogEntry;
   localPath?: string | null;
   bundledLocalPath?: string | null;
@@ -143,7 +143,7 @@ function resolveInstallDefaultChoice(params: {
 }
 
 export async function ensureChannelSetupPluginInstalled(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   entry: ChannelPluginCatalogEntry;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -229,7 +229,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
 }
 
 export function reloadChannelSetupPluginRegistry(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   runtime: RuntimeEnv;
   workspaceDir?: string;
 }): void {
@@ -237,7 +237,7 @@ export function reloadChannelSetupPluginRegistry(params: {
 }
 
 function loadChannelSetupPluginRegistry(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   runtime: RuntimeEnv;
   workspaceDir?: string;
   onlyPluginIds?: string[];
@@ -250,7 +250,7 @@ function loadChannelSetupPluginRegistry(params: {
     params.workspaceDir ??
     resolveAgentWorkspaceDir(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
   const log = createSubsystemLogger("plugins");
-  return loadOpenClawPlugins({
+  return loadMullusiPlugins({
     config: resolvedConfig,
     activationSourceConfig: params.cfg,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
@@ -264,7 +264,7 @@ function loadChannelSetupPluginRegistry(params: {
 }
 
 function resolveScopedChannelPluginId(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   channel: string;
   pluginId?: string;
   workspaceDir?: string;
@@ -281,7 +281,7 @@ function resolveScopedChannelPluginId(params: {
 }
 
 function resolveUniqueManifestScopedChannelPluginId(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   channel: string;
   workspaceDir?: string;
 }): string | undefined {
@@ -295,7 +295,7 @@ function resolveUniqueManifestScopedChannelPluginId(params: {
 }
 
 export function reloadChannelSetupPluginRegistryForChannel(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   runtime: RuntimeEnv;
   channel: string;
   pluginId?: string;
@@ -320,7 +320,7 @@ export function reloadChannelSetupPluginRegistryForChannel(params: {
 }
 
 export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   runtime: RuntimeEnv;
   channel: string;
   pluginId?: string;

@@ -7,7 +7,7 @@ type DaemonStatusSummary = {
   label: string;
   installed: boolean | null;
   loaded: boolean;
-  managedByOpenClaw: boolean;
+  managedByMullusi: boolean;
   externallyManaged: boolean;
   loadedText: string;
   runtimeShort: string | null;
@@ -23,7 +23,7 @@ async function buildDaemonStatusSummary(
     label: summary.label,
     installed: summary.installed,
     loaded: summary.loaded,
-    managedByOpenClaw: summary.managedByOpenClaw,
+    managedByMullusi: summary.managedByMullusi,
     externallyManaged: summary.externallyManaged,
     loadedText: summary.loadedText,
     runtimeShort: formatDaemonRuntimeShort(summary.runtime),

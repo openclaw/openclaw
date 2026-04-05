@@ -1,6 +1,6 @@
-export { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+export { definePluginEntry } from "mullusi/plugin-sdk/plugin-entry";
 export type {
-  OpenClawPluginApi,
+  MullusiPluginApi,
   ProviderAuthContext,
   ProviderAuthResult,
-} from "openclaw/plugin-sdk/core";
+} from "mullusi/plugin-sdk/core";

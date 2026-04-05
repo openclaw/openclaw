@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { migrateOrphanedSessionKeys } from "./state-migrations.js";
 
 function makeTmpDir(): string {
@@ -24,7 +24,7 @@ describe("migrateOrphanedSessionKeys", () => {
 
   beforeEach(() => {
     tmpDir = makeTmpDir();
-    stateDir = path.join(tmpDir, ".openclaw");
+    stateDir = path.join(tmpDir, ".mullusi");
     fs.mkdirSync(stateDir, { recursive: true });
   });
 
@@ -41,11 +41,11 @@ describe("migrateOrphanedSessionKeys", () => {
     const cfg = {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const result = await migrateOrphanedSessionKeys({
       cfg,
-      env: { OPENCLAW_STATE_DIR: stateDir },
+      env: { MULLUSI_STATE_DIR: stateDir },
     });
 
     expect(result.changes.length).toBeGreaterThan(0);
@@ -65,11 +65,11 @@ describe("migrateOrphanedSessionKeys", () => {
     const cfg = {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     await migrateOrphanedSessionKeys({
       cfg,
-      env: { OPENCLAW_STATE_DIR: stateDir },
+      env: { MULLUSI_STATE_DIR: stateDir },
     });
 
     const store = readStore(storePath);
@@ -86,11 +86,11 @@ describe("migrateOrphanedSessionKeys", () => {
     const cfg = {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const result = await migrateOrphanedSessionKeys({
       cfg,
-      env: { OPENCLAW_STATE_DIR: stateDir },
+      env: { MULLUSI_STATE_DIR: stateDir },
     });
 
     expect(result.changes).toHaveLength(0);
@@ -101,11 +101,11 @@ describe("migrateOrphanedSessionKeys", () => {
     const cfg = {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const result = await migrateOrphanedSessionKeys({
       cfg,
-      env: { OPENCLAW_STATE_DIR: stateDir },
+      env: { MULLUSI_STATE_DIR: stateDir },
     });
 
     expect(result.changes).toHaveLength(0);
@@ -121,9 +121,9 @@ describe("migrateOrphanedSessionKeys", () => {
     const cfg = {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
-    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const env = { MULLUSI_STATE_DIR: stateDir };
     await migrateOrphanedSessionKeys({ cfg, env });
     const result2 = await migrateOrphanedSessionKeys({ cfg, env });
 
@@ -144,11 +144,11 @@ describe("migrateOrphanedSessionKeys", () => {
     const cfg = {
       session: { mainKey: "work", store: sharedStorePath },
       agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     await migrateOrphanedSessionKeys({
       cfg,
-      env: { OPENCLAW_STATE_DIR: stateDir },
+      env: { MULLUSI_STATE_DIR: stateDir },
     });
 
     const store = readStore(sharedStorePath);
@@ -172,11 +172,11 @@ describe("migrateOrphanedSessionKeys", () => {
     const cfg = {
       session: { mainKey: "work", store: sharedStorePath },
       agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     await migrateOrphanedSessionKeys({
       cfg,
-      env: { OPENCLAW_STATE_DIR: stateDir },
+      env: { MULLUSI_STATE_DIR: stateDir },
     });
 
     const store = readStore(sharedStorePath);
@@ -192,11 +192,11 @@ describe("migrateOrphanedSessionKeys", () => {
       "agent:main:main": { sessionId: "abc-123", updatedAt: 1000 },
     });
 
-    const cfg = {} as OpenClawConfig;
+    const cfg = {} as MullusiConfig;
 
     const result = await migrateOrphanedSessionKeys({
       cfg,
-      env: { OPENCLAW_STATE_DIR: stateDir },
+      env: { MULLUSI_STATE_DIR: stateDir },
     });
 
     expect(result.changes).toHaveLength(0);

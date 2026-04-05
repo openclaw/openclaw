@@ -1,14 +1,14 @@
 ---
 summary: "Voice Call plugin: outbound + inbound calls via Twilio/Telnyx/Plivo (plugin install + config + CLI)"
 read_when:
-  - You want to place an outbound voice call from OpenClaw
+  - You want to place an outbound voice call from Mullusi
   - You are configuring or developing the voice-call plugin
 title: "Voice Call Plugin"
 ---
 
 # Voice Call (plugin)
 
-Voice calls for OpenClaw via a plugin. Supports outbound notifications and
+Voice calls for Mullusi via a plugin. Supports outbound notifications and
 multi-turn conversations with inbound policies.
 
 Current providers:
@@ -23,7 +23,7 @@ Quick mental model:
 - Install plugin
 - Restart Gateway
 - Configure under `plugins.entries.voice-call.config`
-- Use `openclaw voicecall ...` or the `voice_call` tool
+- Use `mullusi voicecall ...` or the `voice_call` tool
 
 ## Where it runs (local vs remote)
 
@@ -36,7 +36,7 @@ If you use a remote Gateway, install/configure the plugin on the **machine runni
 ### Option A: install from npm (recommended)
 
 ```bash
-openclaw plugins install @openclaw/voice-call
+mullusi plugins install @mullusi/voice-call
 ```
 
 Restart the Gateway afterwards.
@@ -45,7 +45,7 @@ Restart the Gateway afterwards.
 
 ```bash
 PLUGIN_SRC=./path/to/local/voice-call-plugin
-openclaw plugins install "$PLUGIN_SRC"
+mullusi plugins install "$PLUGIN_SRC"
 cd "$PLUGIN_SRC" && pnpm install
 ```
 
@@ -134,7 +134,7 @@ Notes:
 - Twilio/Telnyx require a **publicly reachable** webhook URL.
 - Plivo requires a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
-- If older configs still use `provider: "log"`, `twilio.from`, or legacy `streaming.*` OpenAI keys, run `openclaw doctor --fix` to rewrite them.
+- If older configs still use `provider: "log"`, `twilio.from`, or legacy `streaming.*` OpenAI keys, run `mullusi doctor --fix` to rewrite them.
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
 - `skipSignatureVerification` is for local testing only.
 - If you use ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
@@ -145,7 +145,7 @@ Notes:
 - `streaming.maxPendingConnections` caps total unauthenticated pre-start sockets.
 - `streaming.maxPendingConnectionsPerIp` caps unauthenticated pre-start sockets per source IP.
 - `streaming.maxConnections` caps total open media stream sockets (pending + active).
-- Runtime fallback still accepts those old voice-call keys for now, but the rewrite path is `openclaw doctor --fix` and the compat shim is temporary.
+- Runtime fallback still accepts those old voice-call keys for now, but the rewrite path is `mullusi doctor --fix` and the compat shim is temporary.
 
 ## Streaming transcription
 
@@ -197,7 +197,7 @@ Example:
 }
 ```
 
-Legacy keys are still auto-migrated by `openclaw doctor --fix`:
+Legacy keys are still auto-migrated by `mullusi doctor --fix`:
 
 - `streaming.sttProvider` → `streaming.provider`
 - `streaming.openaiApiKey` → `streaming.providers.openai.apiKey`
@@ -427,15 +427,15 @@ When a Twilio media stream disconnects, Voice Call waits `2000ms` before auto-en
 ## CLI
 
 ```bash
-openclaw voicecall call --to "+15555550123" --message "Hello from OpenClaw"
-openclaw voicecall start --to "+15555550123"   # alias for call
-openclaw voicecall continue --call-id <id> --message "Any questions?"
-openclaw voicecall speak --call-id <id> --message "One moment"
-openclaw voicecall end --call-id <id>
-openclaw voicecall status --call-id <id>
-openclaw voicecall tail
-openclaw voicecall latency                     # summarize turn latency from logs
-openclaw voicecall expose --mode funnel
+mullusi voicecall call --to "+15555550123" --message "Hello from Mullusi"
+mullusi voicecall start --to "+15555550123"   # alias for call
+mullusi voicecall continue --call-id <id> --message "Any questions?"
+mullusi voicecall speak --call-id <id> --message "One moment"
+mullusi voicecall end --call-id <id>
+mullusi voicecall status --call-id <id>
+mullusi voicecall tail
+mullusi voicecall latency                     # summarize turn latency from logs
+mullusi voicecall expose --mode funnel
 ```
 
 `latency` reads `calls.jsonl` from the default voice-call storage path. Use

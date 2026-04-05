@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { PluginWebFetchProviderEntry } from "../plugins/types.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
 
@@ -91,7 +91,7 @@ describe("web fetch runtime", () => {
     });
     resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
 
-    const config: OpenClawConfig = {
+    const config: MullusiConfig = {
       plugins: {
         entries: {
           firecrawl: {
@@ -197,7 +197,7 @@ describe("web fetch runtime", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     });
 
     expect(resolved?.provider.id).toBe("firecrawl");

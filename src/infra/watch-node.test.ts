@@ -5,7 +5,7 @@ import { runWatchMain } from "../../scripts/watch-node.mjs";
 import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 
 const VOICE_CALL_README = bundledPluginFile("voice-call", "README.md");
-const VOICE_CALL_MANIFEST = bundledPluginFile("voice-call", "openclaw.plugin.json");
+const VOICE_CALL_MANIFEST = bundledPluginFile("voice-call", "mullusi.plugin.json");
 const VOICE_CALL_PACKAGE = bundledPluginFile("voice-call", "package.json");
 const VOICE_CALL_INDEX = bundledPluginFile("voice-call", "index.ts");
 const VOICE_CALL_RUNTIME = bundledPluginFile("voice-call", "src/runtime.ts");
@@ -35,7 +35,7 @@ describe("watch-node script", () => {
 
     const runPromise = runWatchMain({
       args: ["gateway", "--force"],
-      cwd: "/tmp/openclaw",
+      cwd: "/tmp/mullusi",
       createWatcher,
       env: { PATH: "/usr/bin" },
       now: () => 1700000000000,
@@ -70,13 +70,13 @@ describe("watch-node script", () => {
       "/usr/local/bin/node",
       ["scripts/run-node.mjs", "gateway", "--force"],
       expect.objectContaining({
-        cwd: "/tmp/openclaw",
+        cwd: "/tmp/mullusi",
         stdio: "inherit",
         env: expect.objectContaining({
           PATH: "/usr/bin",
-          OPENCLAW_WATCH_MODE: "1",
-          OPENCLAW_WATCH_SESSION: "1700000000000-4242",
-          OPENCLAW_WATCH_COMMAND: "gateway --force",
+          MULLUSI_WATCH_MODE: "1",
+          MULLUSI_WATCH_SESSION: "1700000000000-4242",
+          MULLUSI_WATCH_COMMAND: "gateway --force",
         }),
       }),
     );

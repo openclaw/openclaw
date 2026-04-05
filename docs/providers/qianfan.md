@@ -1,5 +1,5 @@
 ---
-summary: "Use Qianfan's unified API to access many models in OpenClaw"
+summary: "Use Qianfan's unified API to access many models in Mullusi"
 read_when:
   - You want a single API key for many LLMs
   - You need Baidu Qianfan setup guidance
@@ -15,19 +15,19 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 
 1. A Baidu Cloud account with Qianfan API access
 2. An API key from the Qianfan console
-3. OpenClaw installed on your system
+3. Mullusi installed on your system
 
 ## Getting Your API Key
 
 1. Visit the [Qianfan Console](https://console.bce.baidu.com/qianfan/ais/console/apiKey)
 2. Create a new application or select an existing one
 3. Generate an API key (format: `bce-v3/ALTAK-...`)
-4. Copy the API key for use with OpenClaw
+4. Copy the API key for use with Mullusi
 
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice qianfan-api-key
+mullusi onboard --auth-choice qianfan-api-key
 ```
 
 ## Config snippet
@@ -84,7 +84,7 @@ openclaw onboard --auth-choice qianfan-api-key
 
 ## Related Documentation
 
-- [OpenClaw Configuration](/gateway/configuration)
+- [Mullusi Configuration](/gateway/configuration)
 - [Model Providers](/concepts/model-providers)
 - [Agent Setup](/concepts/agent)
 - [Qianfan API Documentation](https://cloud.baidu.com/doc/qianfan-api/s/3m7of64lb)

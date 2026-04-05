@@ -87,7 +87,7 @@ describe("edit tool recovery hardening", () => {
   }
 
   it("adds current file contents to exact-match mismatch errors", async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");
     await fs.writeFile(filePath, "actual current content", "utf-8");
 
@@ -110,7 +110,7 @@ describe("edit tool recovery hardening", () => {
   });
 
   it("recovers success after a post-write throw when CRLF output contains newText and oldText is only a substring", async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");
     await fs.writeFile(filePath, 'const value = "foo";\r\n', "utf-8");
 
@@ -140,7 +140,7 @@ describe("edit tool recovery hardening", () => {
   });
 
   it("does not recover false success when the file never changed", async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");
     await fs.writeFile(filePath, "replacement already present", "utf-8");
 
@@ -161,7 +161,7 @@ describe("edit tool recovery hardening", () => {
   });
 
   it("recovers deletion edits when the file changed and oldText is gone", async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");
     await fs.writeFile(filePath, "before delete me after\n", "utf-8");
 
@@ -187,7 +187,7 @@ describe("edit tool recovery hardening", () => {
   });
 
   it("recovers multi-edit payloads after a post-write throw", async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");
     await fs.writeFile(filePath, "alpha beta gamma delta\n", "utf-8");
 
@@ -219,7 +219,7 @@ describe("edit tool recovery hardening", () => {
   });
 
   it("applies the same recovery path to sandboxed edit tools", async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");
     const files = new Map<string, string>([[filePath, "before old text after\n"]]);
 

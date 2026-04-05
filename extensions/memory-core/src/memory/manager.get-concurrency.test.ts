@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { MullusiConfig } from "mullusi/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
@@ -51,7 +51,7 @@ describe("memory manager cache hydration", () => {
   beforeEach(async () => {
     await closeAllMemoryIndexManagers();
     vi.clearAllMocks();
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-concurrent-"));
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-mem-concurrent-"));
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
     hoisted.providerCreateCalls = 0;
@@ -63,7 +63,7 @@ describe("memory manager cache hydration", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
-  function createMemoryConcurrencyConfig(indexPath: string): OpenClawConfig {
+  function createMemoryConcurrencyConfig(indexPath: string): MullusiConfig {
     return {
       agents: {
         defaults: {
@@ -77,7 +77,7 @@ describe("memory manager cache hydration", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
   }
 
   it("deduplicates concurrent manager creation for the same cache key", async () => {

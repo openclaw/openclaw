@@ -1,8 +1,8 @@
 ---
 read_when:
   - 你想用一个 API key 访问许多 LLM
-  - 你想通过 OpenRouter 在 OpenClaw 中运行模型
-summary: 使用 OpenRouter 的统一 API 在 OpenClaw 中访问许多模型
+  - 你想通过 OpenRouter 在 Mullusi 中运行模型
+summary: 使用 OpenRouter 的统一 API 在 Mullusi 中访问许多模型
 title: OpenRouter
 x-i18n:
   generated_at: "2026-03-16T06:26:52Z"
@@ -21,7 +21,7 @@ OpenRouter 提供一个**统一 API**，可通过单个
 ## CLI 设置
 
 ```bash
-openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
+mullusi onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
 ```
 
 ## 配置片段

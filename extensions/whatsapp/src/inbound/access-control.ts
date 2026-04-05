@@ -1,16 +1,16 @@
-import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { createChannelPairingChallengeIssuer } from "mullusi/plugin-sdk/channel-pairing";
+import { loadConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
-import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+} from "mullusi/plugin-sdk/config-runtime";
+import { upsertChannelPairingRequest } from "mullusi/plugin-sdk/conversation-runtime";
+import { logVerbose } from "mullusi/plugin-sdk/runtime-env";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "mullusi/plugin-sdk/security-runtime";
 import { resolveWhatsAppAccount } from "../accounts.js";
 import { isSelfChatMode, normalizeE164 } from "../text-runtime.js";
 

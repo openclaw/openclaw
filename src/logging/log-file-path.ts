@@ -1,11 +1,11 @@
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.js";
+import type { MullusiConfig } from "../config/types.js";
 import {
-  POSIX_OPENCLAW_TMP_DIR,
-  resolvePreferredOpenClawTmpDir,
-} from "../infra/tmp-openclaw-dir.js";
+  POSIX_MULLUSI_TMP_DIR,
+  resolvePreferredMullusiTmpDir,
+} from "../infra/tmp-mullusi-dir.js";
 
-const LOG_PREFIX = "openclaw";
+const LOG_PREFIX = "mullusi";
 const LOG_SUFFIX = ".log";
 
 function canUseNodeFs(): boolean {
@@ -32,10 +32,10 @@ function formatLocalDate(date: Date): string {
 }
 
 export function resolveDefaultRollingLogFile(date = new Date()): string {
-  const logDir = canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
+  const logDir = canUseNodeFs() ? resolvePreferredMullusiTmpDir() : POSIX_MULLUSI_TMP_DIR;
   return path.join(logDir, `${LOG_PREFIX}-${formatLocalDate(date)}${LOG_SUFFIX}`);
 }
 
-export function resolveConfiguredLogFilePath(config?: OpenClawConfig | null): string {
+export function resolveConfiguredLogFilePath(config?: MullusiConfig | null): string {
   return config?.logging?.file ?? resolveDefaultRollingLogFile();
 }

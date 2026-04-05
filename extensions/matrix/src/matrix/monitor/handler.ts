@@ -1,7 +1,7 @@
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
+import { resolveControlCommandGate } from "mullusi/plugin-sdk/command-auth";
+import { resolveChannelContextVisibilityMode } from "mullusi/plugin-sdk/config-runtime";
+import { getSessionBindingService } from "mullusi/plugin-sdk/conversation-runtime";
+import { evaluateSupplementalContextVisibility } from "mullusi/plugin-sdk/security-runtime";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { createMatrixDraftStream } from "../draft-stream.js";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";

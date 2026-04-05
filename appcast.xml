@@ -1,26 +1,26 @@
 <?xml version="1.0" standalone="yes"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
-        <title>OpenClaw</title>
+        <title>Mullusi</title>
         <item>
             <title>2026.4.2</title>
             <pubDate>Thu, 02 Apr 2026 18:57:54 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
+            <link>https://raw.githubusercontent.com/mullusi/mullusi/main/appcast.xml</link>
             <sparkle:version>2026040290</sparkle:version>
             <sparkle:shortVersionString>2026.4.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.4.2</h2>
+            <description><![CDATA[<h2>Mullusi 2026.4.2</h2>
 <h3>Breaking</h3>
 <ul>
-<li>Plugins/xAI: move <code>x_search</code> settings from the legacy core <code>tools.web.x_search.*</code> path to the plugin-owned <code>plugins.entries.xai.config.xSearch.*</code> path, standardize <code>x_search</code> auth on <code>plugins.entries.xai.config.webSearch.apiKey</code> / <code>XAI_API_KEY</code>, and migrate legacy config with <code>openclaw doctor --fix</code>. (#59674) Thanks @vincentkoc.</li>
-<li>Plugins/web fetch: move Firecrawl <code>web_fetch</code> config from the legacy core <code>tools.web.fetch.firecrawl.*</code> path to the plugin-owned <code>plugins.entries.firecrawl.config.webFetch.*</code> path, route <code>web_fetch</code> fallback through the new fetch-provider boundary instead of a Firecrawl-only core branch, and migrate legacy config with <code>openclaw doctor --fix</code>. (#59465) Thanks @vincentkoc.</li>
+<li>Plugins/xAI: move <code>x_search</code> settings from the legacy core <code>tools.web.x_search.*</code> path to the plugin-owned <code>plugins.entries.xai.config.xSearch.*</code> path, standardize <code>x_search</code> auth on <code>plugins.entries.xai.config.webSearch.apiKey</code> / <code>XAI_API_KEY</code>, and migrate legacy config with <code>mullusi doctor --fix</code>. (#59674) Thanks @vincentkoc.</li>
+<li>Plugins/web fetch: move Firecrawl <code>web_fetch</code> config from the legacy core <code>tools.web.fetch.firecrawl.*</code> path to the plugin-owned <code>plugins.entries.firecrawl.config.webFetch.*</code> path, route <code>web_fetch</code> fallback through the new fetch-provider boundary instead of a Firecrawl-only core branch, and migrate legacy config with <code>mullusi doctor --fix</code>. (#59465) Thanks @vincentkoc.</li>
 </ul>
 <h3>Changes</h3>
 <ul>
-<li>Tasks/Task Flow: restore the core Task Flow substrate with managed-vs-mirrored sync modes, durable flow state/revision tracking, and <code>openclaw flows</code> inspection/recovery primitives so background orchestration can persist and be operated separately from plugin authoring layers. (#58930) Thanks @mbelinky.</li>
+<li>Tasks/Task Flow: restore the core Task Flow substrate with managed-vs-mirrored sync modes, durable flow state/revision tracking, and <code>mullusi flows</code> inspection/recovery primitives so background orchestration can persist and be operated separately from plugin authoring layers. (#58930) Thanks @mbelinky.</li>
 <li>Tasks/Task Flow: add managed child task spawning plus sticky cancel intent, so external orchestrators can stop scheduling immediately and let parent Task Flows settle to <code>cancelled</code> once active child tasks finish. (#59610) Thanks @mbelinky.</li>
-<li>Plugins/Task Flow: add a bound <code>api.runtime.taskFlow</code> seam so plugins and trusted authoring layers can create and drive managed Task Flows from host-resolved OpenClaw context without passing owner identifiers on each call. (#59622) Thanks @mbelinky.</li>
-<li>Android/assistant: add assistant-role entrypoints plus Google Assistant App Actions metadata so Android can launch OpenClaw from the assistant trigger and hand prompts into the chat composer. (#59596) Thanks @obviyus.</li>
+<li>Plugins/Task Flow: add a bound <code>api.runtime.taskFlow</code> seam so plugins and trusted authoring layers can create and drive managed Task Flows from host-resolved Mullusi context without passing owner identifiers on each call. (#59622) Thanks @mbelinky.</li>
+<li>Android/assistant: add assistant-role entrypoints plus Google Assistant App Actions metadata so Android can launch Mullusi from the assistant trigger and hand prompts into the chat composer. (#59596) Thanks @obviyus.</li>
 <li>Exec defaults: make gateway/node host exec default to YOLO mode by requesting <code>security=full</code> with <code>ask=off</code>, and align host approval-file fallbacks plus docs/doctor reporting with that no-prompt default.</li>
 <li>Providers/runtime: add provider-owned replay hook surfaces for transcript policy, replay cleanup, and reasoning-mode dispatch. (#59143) Thanks @jalehman.</li>
 <li>Plugins/hooks: add <code>before_agent_reply</code> so plugins can short-circuit the LLM with synthetic replies after inline actions. (#20067) Thanks @JoshuaLelon.</li>
@@ -43,13 +43,13 @@
 <li>Providers/Anthropic routing: centralize native-vs-proxy endpoint classification for direct Anthropic <code>service_tier</code> handling so spoofed or proxied hosts do not inherit native Anthropic defaults. (#59608) Thanks @vincentkoc.</li>
 <li>Gateway/exec loopback: restore legacy-role fallback for empty paired-device token maps and allow silent local role upgrades so local exec and node clients stop failing with pairing-required errors after <code>2026.3.31</code>. (#59092) Thanks @openperf.</li>
 <li>Agents/subagents: pin admin-only subagent gateway calls to <code>operator.admin</code> while keeping <code>agent</code> at least privilege, so <code>sessions_spawn</code> no longer dies on loopback scope-upgrade pairing with <code>close(1008) "pairing required"</code>. (#59555) Thanks @openperf.</li>
-<li>Exec approvals/config: strip invalid <code>security</code>, <code>ask</code>, and <code>askFallback</code> values from <code>~/.openclaw/exec-approvals.json</code> during normalization so malformed policy enums fall back cleanly to the documented defaults instead of corrupting runtime policy resolution. (#59112) Thanks @openperf.</li>
+<li>Exec approvals/config: strip invalid <code>security</code>, <code>ask</code>, and <code>askFallback</code> values from <code>~/.mullusi/exec-approvals.json</code> during normalization so malformed policy enums fall back cleanly to the documented defaults instead of corrupting runtime policy resolution. (#59112) Thanks @openperf.</li>
 <li>Exec approvals/doctor: report host policy sources from the real approvals file path and ignore malformed host override values when attributing effective policy conflicts. (#59367) Thanks @gumadeiras.</li>
 <li>Exec/runtime: treat <code>tools.exec.host=auto</code> as routing-only, keep implicit no-config exec on sandbox when available or gateway otherwise, and reject per-call host overrides that would bypass the configured sandbox or host target. (#58897) Thanks @vincentkoc.</li>
 <li>Slack/mrkdwn formatting: add built-in Slack mrkdwn guidance in inbound context so Slack replies stop falling back to generic Markdown patterns that render poorly in Slack. (#59100) Thanks @jadewon.</li>
 <li>WhatsApp/presence: send <code>unavailable</code> presence on connect in self-chat mode so personal-phone users stop losing all push notifications while the gateway is running. (#59410) Thanks @mcaxtr.</li>
 <li>WhatsApp/media: add HTML, XML, and CSS to the MIME map and fall back gracefully for unknown media types instead of dropping the attachment. (#51562) Thanks @bobbyt74.</li>
-<li>Matrix/onboarding: restore guided setup in <code>openclaw channels add</code> and <code>openclaw configure --section channels</code>, while keeping custom plugin wizards on the shared <code>setupWizard</code> seam. (#59462) Thanks @gumadeiras.</li>
+<li>Matrix/onboarding: restore guided setup in <code>mullusi channels add</code> and <code>mullusi configure --section channels</code>, while keeping custom plugin wizards on the shared <code>setupWizard</code> seam. (#59462) Thanks @gumadeiras.</li>
 <li>Matrix/streaming: keep live partial previews for the current assistant block while preserving completed block updates as separate messages when <code>channels.matrix.blockStreaming</code> is enabled. (#59384) Thanks @gumadeiras.</li>
 <li>Feishu/comment threads: harden document comment-thread delivery so whole-document comments fall back to <code>add_comment</code>, delayed reply lookups retry more reliably, and user-visible replies avoid reasoning/planning spillover. (#59129) Thanks @wittam-01.</li>
 <li>MS Teams/streaming: strip already-streamed text from fallback block delivery when replies exceed the 4000-character streaming limit so long responses stop duplicating content. (#59297) Thanks @bradgroux.</li>
@@ -59,12 +59,12 @@
 <li>QQBot/structured payloads: restrict local file paths to QQ Bot-owned media storage, block traversal outside that root, reduce path leakage in logs, and keep inline image data URLs working. (#58453) Thanks @jacobtomlinson.</li>
 <li>Image generation/providers: route OpenAI, MiniMax, and fal image requests through the shared provider HTTP transport path so custom base URLs, guarded private-network routing, and provider request defaults stay aligned with the rest of provider HTTP. Thanks @vincentkoc.</li>
 <li>Image generation/providers: stop inferring private-network access from configured OpenAI, MiniMax, and fal image base URLs, and cap shared HTTP error-body reads so hostile or misconfigured endpoints fail closed without relaxing SSRF policy or buffering unbounded error payloads. Thanks @vincentkoc.</li>
-<li>Browser/host inspection: keep static Chrome inspection helpers out of the activated browser runtime so <code>openclaw doctor browser</code> and related checks do not eagerly load the bundled browser plugin. (#59471) Thanks @vincentkoc.</li>
+<li>Browser/host inspection: keep static Chrome inspection helpers out of the activated browser runtime so <code>mullusi doctor browser</code> and related checks do not eagerly load the bundled browser plugin. (#59471) Thanks @vincentkoc.</li>
 <li>Browser/CDP: normalize trailing-dot localhost absolute-form hosts before loopback checks so remote CDP websocket URLs like <code>ws://localhost.:...</code> rewrite back to the configured remote host. (#59236) Thanks @mappel-nv.</li>
 <li>Agents/output sanitization: strip namespaced <code>antml:thinking</code> blocks from user-visible text so Anthropic-style internal monologue tags do not leak into replies. (#59550) Thanks @obviyus.</li>
 <li>Kimi Coding/tools: normalize Anthropic tool payloads into the OpenAI-compatible function shape Kimi Coding expects so tool calls stop losing required arguments. (#59440) Thanks @obviyus.</li>
 <li>Image tool/paths: resolve relative local media paths against the agent <code>workspaceDir</code> instead of <code>process.cwd()</code> so inputs like <code>inbox/receipt.png</code> pass the local-path allowlist reliably. (#57222) Thanks Priyansh Gupta.</li>
-<li>Podman/launch: remove noisy container output from <code>scripts/run-openclaw-podman.sh</code> and align the Podman install guidance with the quieter startup flow. (#59368) Thanks @sallyom.</li>
+<li>Podman/launch: remove noisy container output from <code>scripts/run-mullusi-podman.sh</code> and align the Podman install guidance with the quieter startup flow. (#59368) Thanks @sallyom.</li>
 <li>Plugins/runtime: keep LINE reply directives and browser-backed cleanup/reset flows working even when those plugins are disabled while tightening bundled plugin activation guards. (#59412) Thanks @vincentkoc.</li>
 <li>ACP/gateway reconnects: keep ACP prompts alive across transient websocket drops while still failing boundedly when reconnect recovery does not complete. (#59473) Thanks @obviyus.</li>
 <li>ACP/gateway reconnects: reject stale pre-ack ACP prompts after reconnect grace expiry so callers fail cleanly instead of hanging indefinitely when the gateway never confirms the run.</li>
@@ -77,8 +77,8 @@
 <li>OpenShell/mirror: constrain <code>remoteWorkspaceDir</code> and <code>remoteAgentWorkspaceDir</code> to the managed <code>/sandbox</code> and <code>/agent</code> roots, and keep mirror sync from overwriting or removing user-added shell roots during config synchronization. (#58515) Thanks @eleqtrizit.</li>
 <li>Plugins/activation: preserve explicit, auto-enabled, and default activation provenance plus reason metadata across CLI, gateway bootstrap, and status surfaces so plugin enablement state stays accurate after auto-enable resolution. (#59641) Thanks @vincentkoc.</li>
 <li>Exec/env: block additional host environment override pivots for package roots, language runtimes, compiler include paths, and credential/config locations so request-scoped exec cannot redirect trusted toolchains or config lookups. (#59233) Thanks @drobison00.</li>
-<li>Dotenv/workspace overrides: block workspace <code>.env</code> files from overriding <code>OPENCLAW_PINNED_PYTHON</code> and <code>OPENCLAW_PINNED_WRITE_PYTHON</code> so trusted helper interpreters cannot be redirected by repo-local env injection. (#58473) Thanks @eleqtrizit.</li>
-<li>Plugins/install: accept JSON5 syntax in <code>openclaw.plugin.json</code> and bundle <code>plugin.json</code> manifests during install/validation, so third-party plugins with trailing commas, comments, or unquoted keys no longer fail to install. (#59084) Thanks @singleGanghood.</li>
+<li>Dotenv/workspace overrides: block workspace <code>.env</code> files from overriding <code>MULLUSI_PINNED_PYTHON</code> and <code>MULLUSI_PINNED_WRITE_PYTHON</code> so trusted helper interpreters cannot be redirected by repo-local env injection. (#58473) Thanks @eleqtrizit.</li>
+<li>Plugins/install: accept JSON5 syntax in <code>mullusi.plugin.json</code> and bundle <code>plugin.json</code> manifests during install/validation, so third-party plugins with trailing commas, comments, or unquoted keys no longer fail to install. (#59084) Thanks @singleGanghood.</li>
 <li>Telegram/exec approvals: rewrite shared <code>/approve … allow-always</code> callback payloads to <code>/approve … always</code> before Telegram button rendering so plugin approval IDs still fit Telegram's <code>callback_data</code> limit and keep the Allow Always action visible. (#59217) Thanks @jameslcowan.</li>
 <li>Cron/exec timeouts: surface timed-out <code>exec</code> and <code>bash</code> failures in isolated cron runs even when <code>verbose: off</code>, including custom session-target cron jobs, so scheduled runs stop failing silently. (#58247) Thanks @skainguyen1412.</li>
 <li>Telegram/exec approvals: fall back to the origin session key for async approval followups and keep resume-failure status delivery sanitized so Telegram followups still land without leaking raw exec metadata. (#59351) Thanks @seonang.</li>
@@ -98,7 +98,7 @@
 <li>Agents/default params: add <code>agents.defaults.params</code> for global default provider parameters. (#58548) Thanks @lpender.</li>
 <li>Agents/failover: cap prompt-side and assistant-side same-provider auth-profile retries for rate-limit failures before cross-provider model fallback, add the <code>auth.cooldowns.rateLimitedProfileRotations</code> knob, and document the new fallback behavior. (#58707) Thanks @Forgely3D</li>
 <li>Agents/compaction: resolve <code>agents.defaults.compaction.model</code> consistently for manual <code>/compact</code> and other context-engine compaction paths, so engine-owned compaction uses the configured override model across runtime entrypoints. (#56710) Thanks @oliviareid-svg</li>
-<li>Cron/tools allowlist: add <code>openclaw cron --tools</code> for per-job tool allowlists. (#58504) Thanks @andyk-ms.</li>
+<li>Cron/tools allowlist: add <code>mullusi cron --tools</code> for per-job tool allowlists. (#58504) Thanks @andyk-ms.</li>
 </ul>
 <h3>Fixes</h3>
 <ul>
@@ -112,18 +112,18 @@
 <li>Channels/WhatsApp: pass inbound message timestamp to model context so the AI can see when WhatsApp messages were sent. (#58590) Thanks @Maninae</li>
 <li>QQBot/voice: lazy-load <code>silk-wasm</code> in <code>audio-convert.ts</code> so qqbot still starts when the optional voice dependency is missing, while voice encode/decode degrades gracefully instead of crashing at module load time. (#58829) Thanks @WideLee.</li>
 </ul>
-<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+<p><a href="https://github.com/mullusi/mullusi/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.4.2/OpenClaw-2026.4.2.zip" length="25843797" type="application/octet-stream" sparkle:edSignature="bNNXr4BJEU8W7ghXOujLJTYHZL2PL/r/p4llGBw0BFL+46mJ2Bir+IK8XQaCj5zp+O5JSuh5mY+Y/Nrq6TR7Cg=="/>
+            <enclosure url="https://github.com/mullusi/mullusi/releases/download/v2026.4.2/Mullusi-2026.4.2.zip" length="25843797" type="application/octet-stream" sparkle:edSignature="bNNXr4BJEU8W7ghXOujLJTYHZL2PL/r/p4llGBw0BFL+46mJ2Bir+IK8XQaCj5zp+O5JSuh5mY+Y/Nrq6TR7Cg=="/>
         </item>
         <item>
             <title>2026.4.1</title>
             <pubDate>Wed, 01 Apr 2026 17:14:12 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
+            <link>https://raw.githubusercontent.com/mullusi/mullusi/main/appcast.xml</link>
             <sparkle:version>2026040190</sparkle:version>
             <sparkle:shortVersionString>2026.4.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.4.1</h2>
+            <description><![CDATA[<h2>Mullusi 2026.4.1</h2>
 <h3>Changes</h3>
 <ul>
 <li>Tasks/chat: add <code>/tasks</code> as a chat-native background task board for the current session, with recent task details and agent-local fallback counts when no linked tasks are visible. Related #54226. Thanks @vincentkoc.</li>
@@ -134,7 +134,7 @@
 <li>Gateway/webchat: make <code>chat.history</code> text truncation configurable with <code>gateway.webchat.chatHistoryMaxChars</code> and per-request <code>maxChars</code>, while preserving silent-reply filtering and existing default payload limits. (#58900)</li>
 <li>Agents/default params: add <code>agents.defaults.params</code> for global default provider parameters. (#58548) Thanks @lpender.</li>
 <li>Agents/failover: cap prompt-side and assistant-side same-provider auth-profile retries for rate-limit failures before cross-provider model fallback, add the <code>auth.cooldowns.rateLimitedProfileRotations</code> knob, and document the new fallback behavior. (#58707) Thanks @Forgely3D</li>
-<li>Cron/tools allowlist: add <code>openclaw cron --tools</code> for per-job tool allowlists. (#58504) Thanks @andyk-ms.</li>
+<li>Cron/tools allowlist: add <code>mullusi cron --tools</code> for per-job tool allowlists. (#58504) Thanks @andyk-ms.</li>
 <li>Channels/session routing: move provider-specific session conversation grammar into plugin-owned session-key surfaces, preserving Telegram topic routing and Feishu scoped inheritance across bootstrap, model override, restart, and tool-policy paths.</li>
 <li>WhatsApp/reactions: add <code>reactionLevel</code> guidance for agent reactions. Thanks @mcaxtr.</li>
 <li>Telegram/errors: add configurable <code>errorPolicy</code> and <code>errorCooldownMs</code> controls so Telegram can suppress repeated delivery errors per account, chat, and topic without muting distinct failures. (#51914) Thanks @chinar-amrutkar</li>
@@ -150,7 +150,7 @@
 <li>Tasks/gateway: re-check the current task record before maintenance marks runs lost or prunes them, so a task heartbeat or cleanup update that lands during a sweep no longer gets overwritten by stale snapshot state.</li>
 <li>Exec/approvals: honor <code>exec-approvals.json</code> security defaults when inline or configured tool policy is unset, and keep Slack and Discord native approval handling aligned with inferred approvers and real channel enablement so remote exec stops falling into false approval timeouts and disabled states. Thanks @scoootscooob and @vincentkoc.</li>
 <li>Exec/approvals: make <code>allow-always</code> persist as durable user-approved trust instead of behaving like <code>allow-once</code>, reuse exact-command trust on shell-wrapper paths that cannot safely persist an executable allowlist entry, keep static allowlist entries from silently bypassing <code>ask:"always"</code>, and require explicit approval when Windows cannot build an allowlist execution plan instead of hard-dead-ending remote exec. Thanks @scoootscooob and @vincentkoc.</li>
-<li>Exec/cron: resolve isolated cron no-route approval dead-ends from the effective host fallback policy when trusted automation is allowed, and make <code>openclaw doctor</code> warn when <code>tools.exec</code> is broader than <code>~/.openclaw/exec-approvals.json</code> so stricter host-policy conflicts are explicit. Thanks @scoootscooob and @vincentkoc.</li>
+<li>Exec/cron: resolve isolated cron no-route approval dead-ends from the effective host fallback policy when trusted automation is allowed, and make <code>mullusi doctor</code> warn when <code>tools.exec</code> is broader than <code>~/.mullusi/exec-approvals.json</code> so stricter host-policy conflicts are explicit. Thanks @scoootscooob and @vincentkoc.</li>
 <li>Sessions/model switching: keep <code>/model</code> changes queued behind busy runs instead of interrupting the active turn, and retarget queued followups so later work picks up the new model as soon as the current turn finishes.</li>
 <li>Gateway/HTTP: skip failing HTTP request stages so one broken facade no longer forces every HTTP endpoint to return 500. (#58746) Thanks @yelog</li>
 <li>Gateway/nodes: stop pinning live node commands to the approved node-pair record. Node pairing remains a trust/token flow, while per-node <code>system.run</code> policy stays in that node's exec approvals config. Fixes #58824.</li>
@@ -162,7 +162,7 @@
 <li>Telegram/local Bot API: preserve media MIME types for absolute-path downloads so local audio files still trigger transcription and other MIME-based handling. (#54603) Thanks @jzakirov</li>
 <li>Channels/WhatsApp: pass inbound message timestamp to model context so the AI can see when WhatsApp messages were sent. (#58590) Thanks @Maninae</li>
 <li>Channels/QQ Bot: keep <code>/bot-logs</code> export gated behind a truly explicit QQBot allowlist, rejecting wildcard and mixed wildcard entries while preserving the real framework command path. Thanks @vincentkoc.</li>
-<li>Channels/plugins: keep bundled channel plugins loadable from legacy <code>channels.<id></code> config even under restrictive plugin allowlists, and make <code>openclaw doctor</code> warn only on real plugin blockers instead of misleading setup guidance. (#58873) Thanks @obviyus</li>
+<li>Channels/plugins: keep bundled channel plugins loadable from legacy <code>channels.<id></code> config even under restrictive plugin allowlists, and make <code>mullusi doctor</code> warn only on real plugin blockers instead of misleading setup guidance. (#58873) Thanks @obviyus</li>
 <li>Plugins/bundled runtimes: restore externalized bundled plugin runtime dependency staging across packed installs, Docker builds, and local runtime staging so bundled plugins keep their declared runtime deps after the 2026.3.31 externalization change. (#58782)</li>
 <li>LINE/runtime: resolve the packaged runtime contract from the built <code>dist/plugins/runtime</code> layout so LINE channels start correctly again after global npm installs on <code>2026.3.31</code>. (#58799) Thanks @vincentkoc.</li>
 <li>MiniMax/plugins: auto-enable the bundled MiniMax plugin for API-key auth/config so MiniMax image generation and other plugin-owned capabilities load without manual plugin allowlisting. (#57127) Thanks @tars90percent.</li>
@@ -172,7 +172,7 @@
 <li>Memory/session indexing: keep full reindexes from skipping session transcripts when sync is triggered by <code>session-start</code> or <code>watch</code>, so restart-driven reindexes preserve session memory. (#39732) Thanks @upupc</li>
 <li>Memory/QMD: prefer <code>--mask</code> over <code>--glob</code> when creating QMD collections so default memory collections keep their intended patterns and stop colliding on restart. (#58643) Thanks @GitZhangChi.</li>
 <li>Subagents/tasks: keep subagent completion and cleanup from crashing when task-registry writes fail, so a corrupt or missing task row no longer takes down the gateway during lifecycle finalization. Thanks @vincentkoc.</li>
-<li>Sandbox/browser: compare browser runtime inspection against <code>agents.defaults.sandbox.browser.image</code> so <code>openclaw sandbox list --browser</code> stops reporting healthy browser containers as image mismatches. (#58759) Thanks @sandpile.</li>
+<li>Sandbox/browser: compare browser runtime inspection against <code>agents.defaults.sandbox.browser.image</code> so <code>mullusi sandbox list --browser</code> stops reporting healthy browser containers as image mismatches. (#58759) Thanks @sandpile.</li>
 <li>Plugins/install: forward <code>--dangerously-force-unsafe-install</code> through archive and npm-spec plugin installs so the documented override reaches the security scanner on those install paths. (#58879) Thanks @ryanlee-gemini.</li>
 <li>Auto-reply/commands: strip inbound metadata before slash command detection so wrapped <code>/model</code>, <code>/new</code>, and <code>/status</code> commands are recognized. (#58725) Thanks @Mlightsnow.</li>
 <li>Agents/Anthropic: preserve thinking blocks and signatures across replay, cache-control patching, and context pruning so compacted Anthropic sessions continue working instead of failing on later turns. (#58916) Thanks @obviyus</li>
@@ -183,22 +183,22 @@
 <li>Auth/OpenAI Codex: persist plugin-refreshed OAuth credentials to <code>auth-profiles.json</code> before returning them, so rotated Codex refresh tokens survive restart and stop falling into <code>refresh_token_reused</code> loops. (#53082)</li>
 <li>Discord/gateway: hand reconnect ownership back to Carbon, keep runtime status aligned with close/reconnect state, and force-stop sockets that open without reaching READY so Discord monitors recover promptly instead of waiting on stale health timeouts. (#59019) Thanks @obviyus</li>
 </ul>
-<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+<p><a href="https://github.com/mullusi/mullusi/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.4.1/OpenClaw-2026.4.1.zip" length="25841903" type="application/octet-stream" sparkle:edSignature="0TPiyshScmwDbgs626JU08NOUUFJmIsVFa5g0xmizfl64Fr+IoT4l/dkXarFqbZAJidtj5WN7Bff7fG8ye/7AA=="/>
+            <enclosure url="https://github.com/mullusi/mullusi/releases/download/v2026.4.1/Mullusi-2026.4.1.zip" length="25841903" type="application/octet-stream" sparkle:edSignature="0TPiyshScmwDbgs626JU08NOUUFJmIsVFa5g0xmizfl64Fr+IoT4l/dkXarFqbZAJidtj5WN7Bff7fG8ye/7AA=="/>
         </item>
         <item>
             <title>2026.3.31</title>
             <pubDate>Tue, 31 Mar 2026 21:47:15 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
+            <link>https://raw.githubusercontent.com/mullusi/mullusi/main/appcast.xml</link>
             <sparkle:version>2026033190</sparkle:version>
             <sparkle:shortVersionString>2026.3.31</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.3.31</h2>
+            <description><![CDATA[<h2>Mullusi 2026.3.31</h2>
 <h3>Breaking</h3>
 <ul>
 <li>Nodes/exec: remove the duplicated <code>nodes.run</code> shell wrapper from the CLI and agent <code>nodes</code> tool so node shell execution always goes through <code>exec host=node</code>, keeping node-specific capabilities on <code>nodes invoke</code> and the dedicated media/location/notify actions.</li>
-<li>Plugin SDK: deprecate the legacy provider compat subpaths plus the older bundled provider setup and channel-runtime compatibility shims, emit migration warnings, and keep the current documented <code>openclaw/plugin-sdk/*</code> entrypoints plus local <code>api.ts</code> / <code>runtime-api.ts</code> barrels as the forward path ahead of a future major-release removal.</li>
+<li>Plugin SDK: deprecate the legacy provider compat subpaths plus the older bundled provider setup and channel-runtime compatibility shims, emit migration warnings, and keep the current documented <code>mullusi/plugin-sdk/*</code> entrypoints plus local <code>api.ts</code> / <code>runtime-api.ts</code> barrels as the forward path ahead of a future major-release removal.</li>
 <li>Skills/install and Plugins/install: built-in dangerous-code <code>critical</code> findings and install-time scan failures now fail closed by default, so plugin installs and gateway-backed skill dependency installs that previously succeeded may now require an explicit dangerous override such as <code>--dangerously-force-unsafe-install</code> to proceed.</li>
 <li>Gateway/auth: <code>trusted-proxy</code> now rejects mixed shared-token configs, and local-direct fallback requires the configured token instead of implicitly authenticating same-host callers. Thanks @zhangning-agent, @jacobtomlinson, and @vincentkoc.</li>
 <li>Gateway/node commands: node commands now stay disabled until node pairing is approved, so device pairing alone is no longer enough to expose declared node commands. (#57777) Thanks @jacobtomlinson.</li>
@@ -211,7 +211,7 @@
 <li>Agents/MCP: materialize bundle MCP tools with provider-safe names (<code>serverName__toolName</code>), support optional <code>streamable-http</code> transport selection plus per-server connection timeouts, and preserve real tool results from aborted/error turns unless truncation explicitly drops them. (#49505) Thanks @ziomancer.</li>
 <li>Android/notifications: add notification-forwarding controls with package filtering, quiet hours, rate limiting, and safer picker behavior for forwarded notification events. (#40175) Thanks @nimbleenigma.</li>
 <li>Background tasks: turn tasks into a real shared background-run control plane instead of ACP-only bookkeeping by unifying ACP, subagent, cron, and background CLI execution under one SQLite-backed ledger, routing detached lifecycle updates through the executor seam, adding audit/maintenance/status visibility, tightening auto-cleanup and lost-run recovery, improving task awareness in internal status/tool surfaces, and clarifying the split between heartbeat/main-session automation and detached scheduled runs. Thanks @mbelinky and @vincentkoc.</li>
-<li>Background tasks: add the first linear task flow control surface with <code>openclaw flows list|show|cancel</code>, keep manual multi-task flows separate from one-task auto-sync flows, and surface doctor recovery hints for obviously orphaned or broken flow/task linkage. Thanks @mbelinky and @vincentkoc.</li>
+<li>Background tasks: add the first linear task flow control surface with <code>mullusi flows list|show|cancel</code>, keep manual multi-task flows separate from one-task auto-sync flows, and surface doctor recovery hints for obviously orphaned or broken flow/task linkage. Thanks @mbelinky and @vincentkoc.</li>
 <li>Channels/QQ Bot: add QQ Bot as a bundled channel plugin with multi-account setup, SecretRef-aware credentials, slash commands, reminders, and media send/receive support. (#52986) Thanks @sliverp.</li>
 <li>Diffs: skip unused viewer-versus-file SSR preload work so <code>diffs</code> view-only and file-only runs do less render work while keeping mode outputs aligned. (#57909) thanks @gumadeiras.</li>
 <li>Tasks: add a minimal SQLite-backed task flow registry plus task-to-flow linkage scaffolding, so orchestrated work can start gaining a first-class parent record without changing current task delivery behavior. Thanks @mbelinky and @vincentkoc.</li>
@@ -252,10 +252,10 @@
 <li>Android/device info: read the app's version metadata from the package manager instead of hidden APIs so Android 15+ onboarding and device info no longer fail to compile or report placeholder values. (#58126) Thanks @L3ER0Y.</li>
 <li>Android/pairing: stop appending duplicate push receiver entries to <code>gateway-service.conf</code> on repeated QR pairing and keep push registration bounded to the current successful pairing, so Android push delivery stays healthy across re-pair and token rotation. (#58256) Thanks @surrealroad.</li>
 <li>App install smoke: pin the latest-release lookup to <code>latest</code>, cache the first stable install version across the rerun, and relax prerelease package assertions so the Parallels smoke lane can validate stable-to-main upgrades even when <code>beta</code> moves ahead or the guest starts from an older stable. (#58177) Thanks @vincentkoc.</li>
-<li>Auth/profiles: keep the last successful config load in memory for the running process and refresh that snapshot on successful writes/reloads, so hot paths stop reparsing <code>openclaw.json</code> between watcher-driven swaps.</li>
+<li>Auth/profiles: keep the last successful config load in memory for the running process and refresh that snapshot on successful writes/reloads, so hot paths stop reparsing <code>mullusi.json</code> between watcher-driven swaps.</li>
 <li>Config/SecretRef + Control UI: harden SecretRef redaction round-trip restore, block unsafe raw fallback (force Form mode when raw is unavailable), and preflight submitted-config SecretRefs before config write RPC persistence. (#58044) Thanks @joshavant.</li>
 <li>Config/Telegram: migrate removed <code>channels.telegram.groupMentionsOnly</code> into <code>channels.telegram.groups[\"*\"].requireMention</code> on load so legacy configs no longer crash at startup. (#55336) thanks @jameslcowan.</li>
-<li>Config/update: stop <code>openclaw doctor</code> write-backs from persisting plugin-injected channel defaults, so <code>openclaw update</code> no longer seeds config keys that later break service refresh validation. (#56834) Thanks @openperf.</li>
+<li>Config/update: stop <code>mullusi doctor</code> write-backs from persisting plugin-injected channel defaults, so <code>mullusi update</code> no longer seeds config keys that later break service refresh validation. (#56834) Thanks @openperf.</li>
 <li>Control UI/agents: auto-load agent workspace files on initial Files panel open, and populate overview model/workspace/fallbacks from effective runtime agent metadata so defaulted models no longer show as <code>Not set</code>. (#56637) Thanks @dxsx84.</li>
 <li>Control UI/slash commands: make <code>/steer</code> and <code>/redirect</code> work from the chat command palette with visible pending state for active-run <code>/steer</code>, correct redirected-run tracking, and a single canonical <code>/steer</code> entry in the command menu. (#54625) Thanks @fuller-stack-dev.</li>
 <li>Cron/announce: preserve all deliverable text payloads for announce mode instead of collapsing to the last chunk, so multi-line cron reports deliver in full to Telegram forum topics.</li>
@@ -284,7 +284,7 @@
 <li>Gateway/health: carry webhook-vs-polling account mode from channel descriptors into runtime snapshots so passive channels like LINE and BlueBubbles skip false stale-socket health failures. (#47488) Thanks @karesansui-u.</li>
 <li>Gateway/pairing: restore QR bootstrap onboarding handoff so fresh <code>/pair qr</code> iPhone setup can auto-approve the initial node pairing, receive a reusable node device token, and stop retrying with spent bootstrap auth. (#58382) Thanks @ngutman.</li>
 <li>Gateway/OpenAI compatibility: accept flat Responses API function tool definitions on <code>/v1/responses</code> and preserve <code>strict</code> when normalizing hosted tools into the embedded runner, so spec-compliant clients like Codex no longer fail validation or silently lose strict tool enforcement. Thanks @malaiwah and @vincentkoc.</li>
-<li>Gateway/OpenAI HTTP: restore default operator scopes for bearer-authenticated requests that omit <code>x-openclaw-scopes</code>, so headless <code>/v1/chat/completions</code> and session-history callers work again after the recent method-scope hardening. (#57596) Thanks @openperf.</li>
+<li>Gateway/OpenAI HTTP: restore default operator scopes for bearer-authenticated requests that omit <code>x-mullusi-scopes</code>, so headless <code>/v1/chat/completions</code> and session-history callers work again after the recent method-scope hardening. (#57596) Thanks @openperf.</li>
 <li>Gateway/plugins: scope plugin-auth HTTP route runtime clients to read-only access and keep gateway-authenticated plugin routes on write scope, so plugin-owned webhook handlers do not inherit write-capable runtime access by default. Thanks @davidluzsilva and @vincentkoc.</li>
 <li>Gateway/SecretRef: resolve restart token drift checks with merged service/runtime env sources and hard-fail unsupported mutable SecretRef plus OAuth-profile combinations so restart warnings and policy enforcement match runtime behavior. (#58141) Thanks @joshavant.</li>
 <li>Gateway/tools HTTP: tighten HTTP tool-invoke authorization so owner-only tools stay off HTTP invoke paths. (#57773) Thanks @jacobtomlinson.</li>
@@ -299,9 +299,9 @@
 <li>LINE/markdown: preserve underscores inside Latin, Cyrillic, and CJK words when stripping markdown, while still removing standalone <code>_italic_</code> markers on the shared text-runtime path used by LINE and TTS. (#47465) Thanks @jackjin1997.</li>
 <li>Agents/failover: make overloaded same-provider retry count and retry delay configurable via <code>auth.cooldowns</code>, default to one retry with no delay, and document the model-fallback behavior.</li>
 </ul>
-<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+<p><a href="https://github.com/mullusi/mullusi/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.3.31/OpenClaw-2026.3.31.zip" length="25820093" type="application/octet-stream" sparkle:edSignature="NjpuH/j7OaNASEatBTpQ4uQy6+oUNq/lIwjrY69rJfkgGSk3/kU8vgxo9osjSgx034m7TpuZvWyulu57OBsQCg=="/>
+            <enclosure url="https://github.com/mullusi/mullusi/releases/download/v2026.3.31/Mullusi-2026.3.31.zip" length="25820093" type="application/octet-stream" sparkle:edSignature="NjpuH/j7OaNASEatBTpQ4uQy6+oUNq/lIwjrY69rJfkgGSk3/kU8vgxo9osjSgx034m7TpuZvWyulu57OBsQCg=="/>
         </item>
     </channel>
 </rss>

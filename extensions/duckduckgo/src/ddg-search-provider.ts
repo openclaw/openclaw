@@ -6,7 +6,7 @@ import {
   readStringParam,
   setScopedCredentialValue,
   type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search";
+} from "mullusi/plugin-sdk/provider-web-search";
 import { runDuckDuckGoSearch } from "./ddg-client.js";
 
 const DuckDuckGoSearchSchema = Type.Object(
@@ -42,7 +42,7 @@ export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
     envVars: [],
     placeholder: "(no key needed)",
     signupUrl: "https://duckduckgo.com/",
-    docsUrl: "https://docs.openclaw.ai/tools/web",
+    docsUrl: "https://docs.mullusi.com/tools/web",
     autoDetectOrder: 100,
     credentialPath: "",
     inactiveSecretPaths: [],

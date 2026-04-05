@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   resolveEffectiveToolFsRootExpansionAllowed,
   resolveEffectiveToolFsWorkspaceOnly,
@@ -11,14 +11,14 @@ describe("resolveEffectiveToolFsWorkspaceOnly", () => {
   });
 
   it("uses global tools.fs.workspaceOnly when no agent override exists", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: { fs: { workspaceOnly: true } },
     };
     expect(resolveEffectiveToolFsWorkspaceOnly({ cfg, agentId: "main" })).toBe(true);
   });
 
   it("prefers agent-specific tools.fs.workspaceOnly override over global setting", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: { fs: { workspaceOnly: true } },
       agents: {
         list: [
@@ -35,7 +35,7 @@ describe("resolveEffectiveToolFsWorkspaceOnly", () => {
   });
 
   it("supports agent-specific enablement when global workspaceOnly is off", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: { fs: { workspaceOnly: false } },
       agents: {
         list: [
@@ -58,14 +58,14 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
   });
 
   it("disables root expansion for messaging profile agents without filesystem opt-in", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: { profile: "messaging" },
     };
     expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(false);
   });
 
   it("re-enables root expansion when tools.fs explicitly allows non-workspace reads", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         profile: "messaging",
         fs: { workspaceOnly: false },
@@ -75,7 +75,7 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
   });
 
   it("treats an explicit tools.fs block as a filesystem opt-in", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         profile: "messaging",
         fs: {},
@@ -85,7 +85,7 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
   });
 
   it("keeps root expansion disabled when tools.fs only restricts access to the workspace", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         profile: "messaging",
         fs: { workspaceOnly: true },
@@ -95,7 +95,7 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
   });
 
   it("prefers agent profile overrides over the global profile in both directions", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: { profile: "messaging" },
       agents: {
         list: [
@@ -107,7 +107,7 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
 
     expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "coder" })).toBe(true);
 
-    const invertedCfg: OpenClawConfig = {
+    const invertedCfg: MullusiConfig = {
       tools: { profile: "coding" },
       agents: {
         list: [{ id: "messenger", tools: { profile: "messaging" } }],
@@ -120,7 +120,7 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
   });
 
   it("uses agent alsoAllow in place of global alsoAllow when resolving expansion", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         profile: "messaging",
         alsoAllow: ["read"],
@@ -141,7 +141,7 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
   });
 
   it("honors agent workspaceOnly overrides over global fs opt-in", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         profile: "messaging",
         fs: { workspaceOnly: false },

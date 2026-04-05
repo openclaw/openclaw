@@ -7,7 +7,7 @@ import {
 import {
   listSkillCommandsForAgents,
   parseStrictPositiveInteger,
-  type OpenClawConfig,
+  type MullusiConfig,
   type RuntimeEnv,
 } from "./runtime-api.js";
 import {
@@ -27,7 +27,7 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 function buildSlashCommands(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   runtime: RuntimeEnv;
   nativeSkills: boolean;
 }): MattermostCommandSpec[] {
@@ -134,7 +134,7 @@ async function registerSlashCommandsAcrossTeams(params: {
 
 export async function registerMattermostMonitorSlashCommands(params: {
   client: MattermostClient;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   runtime: RuntimeEnv;
   account: ResolvedMattermostAccount;
   baseUrl: string;
@@ -150,8 +150,8 @@ export async function registerMattermostMonitorSlashCommands(params: {
 
   try {
     const teams = await fetchMattermostUserTeams(params.client, params.botUserId);
-    const envPort = parseStrictPositiveInteger(process.env.OPENCLAW_GATEWAY_PORT?.trim());
-    const slashGatewayPort = envPort ?? params.cfg.gateway?.port ?? 18789;
+    const envPort = parseStrictPositiveInteger(process.env.MULLUSI_GATEWAY_PORT?.trim());
+    const slashGatewayPort = envPort ?? params.cfg.gateway?.port ?? 18790;
     const slashCallbackUrl = resolveCallbackUrl({
       config: slashConfig,
       gatewayPort: slashGatewayPort,

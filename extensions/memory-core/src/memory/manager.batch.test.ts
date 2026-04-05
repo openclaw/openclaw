@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { MullusiConfig } from "mullusi/plugin-sdk/memory-core-host-engine-foundation";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useFastShortTimeouts } from "../../../../test/helpers/fast-short-timeouts.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
@@ -92,7 +92,7 @@ describe("memory indexing with OpenAI batches", () => {
     return { fetchMock, state };
   }
 
-  function createBatchCfg(): OpenClawConfig {
+  function createBatchCfg(): MullusiConfig {
     return {
       agents: {
         defaults: {
@@ -108,7 +108,7 @@ describe("memory indexing with OpenAI batches", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
   }
 
   beforeAll(async () => {
@@ -123,7 +123,7 @@ describe("memory indexing with OpenAI batches", () => {
     await import("./test-runtime-mocks.js");
     ({ getMemorySearchManager } = await import("./index.js"));
 
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-batch-"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-mem-batch-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
     indexPath = path.join(fixtureRoot, "index.sqlite");

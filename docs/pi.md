@@ -1,18 +1,18 @@
 ---
 title: "Pi Integration Architecture"
-summary: "Architecture of OpenClaw's embedded Pi agent integration and session lifecycle"
+summary: "Architecture of Mullusi's embedded Pi agent integration and session lifecycle"
 read_when:
-  - Understanding Pi SDK integration design in OpenClaw
+  - Understanding Pi SDK integration design in Mullusi
   - Modifying agent session lifecycle, tooling, or provider wiring for Pi
 ---
 
 # Pi Integration Architecture
 
-This document describes how OpenClaw integrates with [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) and its sibling packages (`pi-ai`, `pi-agent-core`, `pi-tui`) to power its AI agent capabilities.
+This document describes how Mullusi integrates with [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) and its sibling packages (`pi-ai`, `mullusi-kernel`, `pi-tui`) to power its AI agent capabilities.
 
 ## Overview
 
-OpenClaw uses the pi SDK to embed an AI coding agent into its messaging gateway architecture. Instead of spawning pi as a subprocess or using RPC mode, OpenClaw directly imports and instantiates pi's `AgentSession` via `createAgentSession()`. This embedded approach provides:
+Mullusi uses the pi SDK to embed an AI coding agent into its messaging gateway architecture. Instead of spawning pi as a subprocess or using RPC mode, Mullusi directly imports and instantiates pi's `AgentSession` via `createAgentSession()`. This embedded approach provides:
 
 - Full control over session lifecycle and event handling
 - Custom tool injection (messaging, sandbox, channel-specific actions)
@@ -35,9 +35,9 @@ OpenClaw uses the pi SDK to embed an AI coding agent into its messaging gateway 
 | Package           | Purpose                                                                                                |
 | ----------------- | ------------------------------------------------------------------------------------------------------ |
 | `pi-ai`           | Core LLM abstractions: `Model`, `streamSimple`, message types, provider APIs                           |
-| `pi-agent-core`   | Agent loop, tool execution, `AgentMessage` types                                                       |
+| `mullusi-kernel`   | Agent loop, tool execution, `AgentMessage` types                                                       |
 | `pi-coding-agent` | High-level SDK: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, built-in tools |
-| `pi-tui`          | Terminal UI components (used in OpenClaw's local TUI mode)                                             |
+| `pi-tui`          | Terminal UI components (used in Mullusi's local TUI mode)                                             |
 
 ## File Structure
 
@@ -80,7 +80,7 @@ src/agents/
 ├── pi-embedded-helpers.ts         # Error classification, turn validation
 ├── pi-embedded-helpers/           # Helper modules
 ├── pi-embedded-utils.ts           # Formatting utilities
-├── pi-tools.ts                    # createOpenClawCodingTools()
+├── pi-tools.ts                    # createMullusiCodingTools()
 ├── pi-tools.abort.ts              # AbortSignal wrapping for tools
 ├── pi-tools.policy.ts             # Tool allowlist/denylist policy
 ├── pi-tools.read.ts               # Read tool customizations
@@ -112,7 +112,7 @@ src/agents/
 ├── sandbox.ts                     # Sandbox context resolution
 ├── sandbox/                       # Sandbox subsystem
 ├── channel-tools.ts               # Channel-specific tool injection
-├── openclaw-tools.ts              # OpenClaw-specific tools
+├── mullusi-tools.ts              # Mullusi-specific tools
 ├── bash-tools.ts                  # exec/process tools
 ├── apply-patch.ts                 # apply_patch tool (OpenAI)
 ├── tools/                         # Individual tool implementations
@@ -151,7 +151,7 @@ const result = await runEmbeddedPiAgent({
   sessionKey: "main:whatsapp:+1234567890",
   sessionFile: "/path/to/session.jsonl",
   workspaceDir: "/path/to/workspace",
-  config: openclawConfig,
+  config: mullusiConfig,
   prompt: "Hello, how are you?",
   provider: "anthropic",
   model: "claude-sonnet-4-6",
@@ -237,7 +237,7 @@ await session.prompt(effectivePrompt, { images: imageResult.images });
 
 The SDK handles the full agent loop: sending to LLM, executing tool calls, streaming responses.
 
-Image injection is prompt-local: OpenClaw loads image refs from the current prompt and
+Image injection is prompt-local: Mullusi loads image refs from the current prompt and
 passes them via `images` for that turn only. It does not re-scan older history turns
 to re-inject image payloads.
 
@@ -246,8 +246,8 @@ to re-inject image payloads.
 ### Tool Pipeline
 
 1. **Base Tools**: pi's `codingTools` (read, bash, edit, write)
-2. **Custom Replacements**: OpenClaw replaces bash with `exec`/`process`, customizes read/edit/write for sandbox
-3. **OpenClaw Tools**: messaging, browser, canvas, sessions, cron, gateway, etc.
+2. **Custom Replacements**: Mullusi replaces bash with `exec`/`process`, customizes read/edit/write for sandbox
+3. **Mullusi Tools**: messaging, browser, canvas, sessions, cron, gateway, etc.
 4. **Channel Tools**: Discord/Telegram/Slack/WhatsApp-specific action tools
 5. **Policy Filtering**: Tools filtered by profile, provider, agent, group, sandbox policies
 6. **Schema Normalization**: Schemas cleaned for Gemini/OpenAI quirks
@@ -255,7 +255,7 @@ to re-inject image payloads.
 
 ### Tool Definition Adapter
 
-pi-agent-core's `AgentTool` has a different `execute` signature than pi-coding-agent's `ToolDefinition`. The adapter in `pi-tool-definition-adapter.ts` bridges this:
+mullusi-kernel's `AgentTool` has a different `execute` signature than pi-coding-agent's `ToolDefinition`. The adapter in `pi-tool-definition-adapter.ts` bridges this:
 
 ```typescript
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
@@ -265,7 +265,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
     description: tool.description ?? "",
     parameters: tool.parameters,
     execute: async (toolCallId, params, onUpdate, _ctx, signal) => {
-      // pi-coding-agent signature differs from pi-agent-core
+      // pi-coding-agent signature differs from mullusi-kernel
       return await tool.execute(toolCallId, params, signal, onUpdate);
     },
   }));
@@ -285,11 +285,11 @@ export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: 
 }
 ```
 
-This ensures OpenClaw's policy filtering, sandbox integration, and extended toolset remain consistent across providers.
+This ensures Mullusi's policy filtering, sandbox integration, and extended toolset remain consistent across providers.
 
 ## System Prompt Construction
 
-The system prompt is built in `buildAgentSystemPrompt()` (`system-prompt.ts`). It assembles a full prompt with sections including Tooling, Tool Call Style, Safety guardrails, OpenClaw CLI reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime metadata, plus Memory and Reactions when enabled, and optional context files and extra system prompt content. Sections are trimmed for minimal prompt mode used by subagents.
+The system prompt is built in `buildAgentSystemPrompt()` (`system-prompt.ts`). It assembles a full prompt with sections including Tooling, Tool Call Style, Safety guardrails, Mullusi CLI reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime metadata, plus Memory and Reactions when enabled, and optional context files and extra system prompt content. Sections are trimmed for minimal prompt mode used by subagents.
 
 The prompt is applied after session creation via `applySystemPromptOverrideToSession()`:
 
@@ -308,7 +308,7 @@ Sessions are JSONL files with tree structure (id/parentId linking). Pi's `Sessio
 const sessionManager = SessionManager.open(params.sessionFile);
 ```
 
-OpenClaw wraps this with `guardSessionManager()` for tool result safety.
+Mullusi wraps this with `guardSessionManager()` for tool result safety.
 
 ### Session Caching
 
@@ -343,7 +343,7 @@ const compactResult = await compactEmbeddedPiSessionDirect({
 
 ### Auth Profiles
 
-OpenClaw maintains an auth profile store with multiple API keys per provider:
+Mullusi maintains an auth profile store with multiple API keys per provider:
 
 ```typescript
 const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
@@ -391,7 +391,7 @@ if (fallbackConfigured && isFailoverErrorMessage(errorText)) {
 
 ## Pi Extensions
 
-OpenClaw loads custom pi extensions for specialized behavior:
+Mullusi loads custom pi extensions for specialized behavior:
 
 ### Compaction Safeguard
 
@@ -516,7 +516,7 @@ if (sandboxRoot) {
 
 ## TUI Integration
 
-OpenClaw also has a local TUI mode that uses pi-tui components directly:
+Mullusi also has a local TUI mode that uses pi-tui components directly:
 
 ```typescript
 // src/tui/tui.ts
@@ -527,12 +527,12 @@ This provides the interactive terminal experience similar to pi's native mode.
 
 ## Key Differences from Pi CLI
 
-| Aspect          | Pi CLI                  | OpenClaw Embedded                                                                              |
+| Aspect          | Pi CLI                  | Mullusi Embedded                                                                              |
 | --------------- | ----------------------- | ---------------------------------------------------------------------------------------------- |
 | Invocation      | `pi` command / RPC      | SDK via `createAgentSession()`                                                                 |
-| Tools           | Default coding tools    | Custom OpenClaw tool suite                                                                     |
+| Tools           | Default coding tools    | Custom Mullusi tool suite                                                                     |
 | System prompt   | AGENTS.md + prompts     | Dynamic per-channel/context                                                                    |
-| Session storage | `~/.pi/agent/sessions/` | `~/.openclaw/agents/<agentId>/sessions/` (or `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
+| Session storage | `~/.pi/agent/sessions/` | `~/.mullusi/agents/<agentId>/sessions/` (or `$MULLUSI_STATE_DIR/agents/<agentId>/sessions/`) |
 | Auth            | Single credential       | Multi-profile with rotation                                                                    |
 | Extensions      | Loaded from disk        | Programmatic + disk paths                                                                      |
 | Event handling  | TUI rendering           | Callback-based (onBlockReply, etc.)                                                            |
@@ -541,7 +541,7 @@ This provides the interactive terminal experience similar to pi's native mode.
 
 Areas for potential rework:
 
-1. **Tool signature alignment**: Currently adapting between pi-agent-core and pi-coding-agent signatures
+1. **Tool signature alignment**: Currently adapting between mullusi-kernel and pi-coding-agent signatures
 2. **Session manager wrapping**: `guardSessionManager` adds safety but increases complexity
 3. **Extension loading**: Could use pi's `ResourceLoader` more directly
 4. **Streaming handler complexity**: `subscribeEmbeddedPiSession` has grown large
@@ -565,6 +565,6 @@ Pi integration coverage spans these suites:
 
 Live/opt-in:
 
-- `src/agents/pi-embedded-runner-extraparams.live.test.ts` (enable `OPENCLAW_LIVE_TEST=1`)
+- `src/agents/pi-embedded-runner-extraparams.live.test.ts` (enable `MULLUSI_LIVE_TEST=1`)
 
 For current run commands, see [Pi Development Workflow](/pi-dev).

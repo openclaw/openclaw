@@ -10,7 +10,7 @@ API_KEY_ENV=""
 AUTH_CHOICE=""
 AUTH_KEY_FLAG=""
 MODEL_ID=""
-INSTALL_URL="https://openclaw.ai/install.sh"
+INSTALL_URL="https://mullusi.com/install.sh"
 HOST_PORT="18427"
 HOST_PORT_EXPLICIT=0
 HOST_IP=""
@@ -27,8 +27,8 @@ PACKED_MAIN_COMMIT_SHORT=""
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
 SERVER_PID=""
-RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-linux.XXXXXX)"
-BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
+RUN_DIR="$(mktemp -d /tmp/mullusi-parallels-linux.XXXXXX)"
+BUILD_LOCK_DIR="${TMPDIR:-/tmp}/mullusi-parallels-build.lock"
 
 TIMEOUT_SNAPSHOT_S=180
 TIMEOUT_BOOTSTRAP_S=600
@@ -102,14 +102,14 @@ Options:
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
-  --install-url <url>        Installer URL for latest release. Default: https://openclaw.ai/install.sh
+  --install-url <url>        Installer URL for latest release. Default: https://mullusi.com/install.sh
   --host-port <port>         Host HTTP port for current-main tgz. Default: 18427
   --host-ip <ip>             Override Parallels host IP.
   --latest-version <ver>     Override npm latest version lookup.
   --install-version <ver>    Pin site-installer version/dist-tag for the baseline lane.
   --target-package-spec <npm-spec>
                              Install this npm package tarball instead of packing current main.
-                             Example: openclaw@2026.3.13-beta.1
+                             Example: mullusi@2026.3.13-beta.1
   --keep-server              Leave temp host HTTP server running.
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
@@ -451,7 +451,7 @@ resolve_latest_version() {
     printf '%s\n' "$LATEST_VERSION"
     return
   fi
-  npm view openclaw version --userconfig "$(mktemp)"
+  npm view mullusi version --userconfig "$(mktemp)"
 }
 
 current_build_commit() {
@@ -530,7 +530,7 @@ pack_main_tgz() {
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
       | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
   )"
-  MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
+  MAIN_TGZ_PATH="$MAIN_TGZ_DIR/mullusi-main-$short_head.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
   packed_commit="$(extract_package_build_commit_from_tgz "$MAIN_TGZ_PATH")"
   [[ -n "$packed_commit" ]] || die "failed to read packed build commit from $MAIN_TGZ_PATH"
@@ -559,7 +559,7 @@ start_server() {
     (
       cd "$MAIN_TGZ_DIR"
       exec python3 -m http.server "$HOST_PORT" --bind 0.0.0.0
-    ) >/tmp/openclaw-parallels-linux-http.log 2>&1 &
+    ) >/tmp/mullusi-parallels-linux-http.log 2>&1 &
     SERVER_PID=$!
     sleep 1
     probe_url="http://127.0.0.1:$HOST_PORT/$artifact"
@@ -582,9 +582,9 @@ install_latest_release() {
   if [[ -n "$INSTALL_VERSION" ]]; then
     version_args=(--version "$INSTALL_VERSION")
   fi
-  guest_exec curl -fsSL "$INSTALL_URL" -o /tmp/openclaw-install.sh
-  guest_exec /usr/bin/env OPENCLAW_NO_ONBOARD=1 bash /tmp/openclaw-install.sh "${version_args[@]}" --no-onboard
-  guest_exec openclaw --version
+  guest_exec curl -fsSL "$INSTALL_URL" -o /tmp/mullusi-install.sh
+  guest_exec /usr/bin/env MULLUSI_NO_ONBOARD=1 bash /tmp/mullusi-install.sh "${version_args[@]}" --no-onboard
+  guest_exec mullusi --version
 }
 
 install_main_tgz() {
@@ -593,13 +593,13 @@ install_main_tgz() {
   local tgz_url="http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
   guest_exec curl -fsSL "$tgz_url" -o "/tmp/$temp_name"
   guest_exec npm install -g "/tmp/$temp_name" --no-fund --no-audit
-  guest_exec openclaw --version
+  guest_exec mullusi --version
 }
 
 verify_version_contains() {
   local needle="$1"
   local version
-  version="$(guest_exec openclaw --version)"
+  version="$(guest_exec mullusi --version)"
   printf '%s\n' "$version"
   case "$version" in
     *"$needle"*) ;;
@@ -611,12 +611,12 @@ verify_version_contains() {
 }
 
 run_ref_onboard() {
-  guest_exec /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" openclaw onboard \
+  guest_exec /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" mullusi onboard \
     --non-interactive \
     --mode local \
     --auth-choice "$AUTH_CHOICE" \
     --secret-input-mode ref \
-    --gateway-port 18789 \
+    --gateway-port 18790 \
     --gateway-bind loopback \
     --skip-skills \
     --skip-health \
@@ -628,9 +628,9 @@ start_gateway_background() {
   local cmd api_key_value_q
   api_key_value_q="$(shell_quote "$API_KEY_VALUE")"
   cmd="$(cat <<EOF
-pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
-rm -f /tmp/openclaw-parallels-linux-gateway.log
-setsid sh -lc 'exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json ${API_KEY_ENV}=${api_key_value_q} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1' >/dev/null 2>&1 < /dev/null &
+pkill -f "mullusi gateway run" >/dev/null 2>&1 || true
+rm -f /tmp/mullusi-parallels-linux-gateway.log
+setsid sh -lc 'exec env MULLUSI_HOME=/root MULLUSI_STATE_DIR=/root/.mullusi MULLUSI_CONFIG_PATH=/root/.mullusi/mullusi.json ${API_KEY_ENV}=${api_key_value_q} mullusi gateway run --bind loopback --port 18790 --force >/tmp/mullusi-parallels-linux-gateway.log 2>&1' >/dev/null 2>&1 < /dev/null &
 EOF
 )"
   guest_exec bash -lc "$cmd"
@@ -651,16 +651,16 @@ EOF
 }
 
 show_gateway_status_compat() {
-  if guest_exec openclaw gateway status --help | grep -Fq -- "--require-rpc"; then
-    guest_exec openclaw gateway status --deep --require-rpc
+  if guest_exec mullusi gateway status --help | grep -Fq -- "--require-rpc"; then
+    guest_exec mullusi gateway status --deep --require-rpc
     return
   fi
-  guest_exec openclaw gateway status --deep
+  guest_exec mullusi gateway status --deep
 }
 
 verify_local_turn() {
-  guest_exec openclaw models set "$MODEL_ID"
-  guest_exec /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" openclaw agent \
+  guest_exec mullusi models set "$MODEL_ID"
+  guest_exec /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" mullusi agent \
     --local \
     --agent main \
     --message ping \
@@ -679,7 +679,7 @@ import re
 import sys
 
 text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
-matches = re.findall(r"OpenClaw [^\r\n]+ \([0-9a-f]{7,}\)", text)
+matches = re.findall(r"Mullusi [^\r\n]+ \([0-9a-f]{7,}\)", text)
 print(matches[-1] if matches else "")
 PY
 }
@@ -783,7 +783,7 @@ run_fresh_main_lane() {
   phase_run "fresh.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id"
   phase_run "fresh.bootstrap-guest" "$TIMEOUT_BOOTSTRAP_S" bootstrap_guest
   phase_run "fresh.install-latest-bootstrap" "$TIMEOUT_INSTALL_S" install_latest_release
-  phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"
+  phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "mullusi-main-fresh.tgz"
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
@@ -802,7 +802,7 @@ run_upgrade_lane() {
   phase_run "upgrade.install-latest" "$TIMEOUT_INSTALL_S" install_latest_release
   LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-latest)")"
   phase_run "upgrade.verify-latest-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$LATEST_VERSION"
-  phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz"
+  phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "mullusi-main-upgrade.tgz"
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
   phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard

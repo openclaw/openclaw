@@ -1,8 +1,8 @@
-import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { DmPolicy, GroupPolicy } from "mullusi/plugin-sdk/setup";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "mullusi/plugin-sdk/ssrf-runtime";
 
-export type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
+export type { SsrFPolicy } from "mullusi/plugin-sdk/ssrf-runtime";
+export type { DmPolicy, GroupPolicy } from "mullusi/plugin-sdk/setup";
 
 export type BlueBubblesGroupConfig = {
   /** If true, only respond in this group when mentioned. */

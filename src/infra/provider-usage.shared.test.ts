@@ -13,7 +13,7 @@ async function withLegacyPiAuthFile(
   contents: string,
   run: (home: string) => Promise<void> | void,
 ): Promise<void> {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-usage-"));
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-provider-usage-"));
   await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
   await fs.writeFile(path.join(home, ".pi", "agent", "auth.json"), contents, "utf8");
 

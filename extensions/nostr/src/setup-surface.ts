@@ -1,10 +1,10 @@
-import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import type { ChannelSetupAdapter } from "mullusi/plugin-sdk/channel-setup";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { DEFAULT_ACCOUNT_ID } from "mullusi/plugin-sdk/routing";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
+} from "mullusi/plugin-sdk/secret-input";
 import {
   createTopLevelChannelParsedAllowFromPrompt,
   createTopLevelChannelDmPolicy,
@@ -13,10 +13,10 @@ import {
   parseSetupEntriesWithParser,
   patchTopLevelChannelConfigSection,
   splitSetupEntries,
-} from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "openclaw/plugin-sdk/setup";
+} from "mullusi/plugin-sdk/setup";
+import type { ChannelSetupDmPolicy } from "mullusi/plugin-sdk/setup";
+import type { ChannelSetupWizard } from "mullusi/plugin-sdk/setup";
+import { formatDocsLink } from "mullusi/plugin-sdk/setup";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-bus.js";
 import { resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";

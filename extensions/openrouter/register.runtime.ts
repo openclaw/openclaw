@@ -1,8 +1,8 @@
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { createProviderApiKeyAuthMethod } from "mullusi/plugin-sdk/provider-auth-api-key";
 import {
   buildProviderReplayFamilyHooks,
   DEFAULT_CONTEXT_TOKENS,
-} from "openclaw/plugin-sdk/provider-model-shared";
+} from "mullusi/plugin-sdk/provider-model-shared";
 import {
   buildProviderStreamFamilyHooks,
   createOpenRouterSystemCacheWrapper,
@@ -10,7 +10,7 @@ import {
   getOpenRouterModelCapabilities,
   isProxyReasoningUnsupported,
   loadOpenRouterModelCapabilities,
-} from "openclaw/plugin-sdk/provider-stream";
+} from "mullusi/plugin-sdk/provider-stream";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildOpenrouterProvider } from "./provider-catalog.js";

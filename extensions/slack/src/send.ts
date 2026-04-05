@@ -1,16 +1,16 @@
 import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
+import { loadConfig, type MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "mullusi/plugin-sdk/config-runtime";
+import { withTrustedEnvProxyGuardedFetchMode } from "mullusi/plugin-sdk/fetch-runtime";
 import {
   chunkMarkdownTextWithMode,
   isSilentReplyText,
   resolveChunkMode,
   resolveTextChunkLimit,
-} from "openclaw/plugin-sdk/reply-chunking";
-import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+} from "mullusi/plugin-sdk/reply-chunking";
+import { resolveTextChunksWithFallback } from "mullusi/plugin-sdk/reply-payload";
+import { logVerbose } from "mullusi/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "mullusi/plugin-sdk/ssrf-runtime";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
@@ -45,7 +45,7 @@ export type SlackSendIdentity = {
 };
 
 type SlackSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   token?: string;
   accountId?: string;
   mediaUrl?: string;

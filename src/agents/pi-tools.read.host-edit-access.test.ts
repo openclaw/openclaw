@@ -47,7 +47,7 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
   it.runIf(process.platform !== "win32")(
     "silently passes access for outside-workspace paths so readFile reports the real error",
     async () => {
-      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-access-test-"));
+      tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-edit-access-test-"));
       const workspaceDir = path.join(tmpDir, "workspace");
       const outsideDir = path.join(tmpDir, "outside");
       const linkDir = path.join(workspaceDir, "escape");

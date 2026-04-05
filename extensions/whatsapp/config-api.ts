@@ -1,4 +1,4 @@
 export {
   buildChannelConfigSchema,
   WhatsAppConfigSchema,
-} from "openclaw/plugin-sdk/channel-config-schema";
+} from "mullusi/plugin-sdk/channel-config-schema";

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
@@ -21,7 +21,7 @@ const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({ channelId: "C12
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 
 describe("handleSlackAction", () => {
-  function slackConfig(overrides?: Record<string, unknown>): OpenClawConfig {
+  function slackConfig(overrides?: Record<string, unknown>): MullusiConfig {
     return {
       channels: {
         slack: {
@@ -29,7 +29,7 @@ describe("handleSlackAction", () => {
           ...overrides,
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
   }
 
   function createReplyToFirstContext(hasRepliedRef: { value: boolean }) {
@@ -42,7 +42,7 @@ describe("handleSlackAction", () => {
   }
 
   function createReplyToFirstScenario() {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as MullusiConfig;
     sendSlackMessage.mockClear();
     const hasRepliedRef = { value: false };
     const context = createReplyToFirstContext(hasRepliedRef);
@@ -58,7 +58,7 @@ describe("handleSlackAction", () => {
   }
 
   async function sendSecondMessageAndExpectNoThread(params: {
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     context: ReturnType<typeof createReplyToFirstContext>;
   }) {
     await handleSlackAction(
@@ -69,7 +69,7 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("Second");
   }
 
-  async function resolveReadToken(cfg: OpenClawConfig): Promise<string | undefined> {
+  async function resolveReadToken(cfg: MullusiConfig): Promise<string | undefined> {
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
     await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
@@ -77,7 +77,7 @@ describe("handleSlackAction", () => {
     return opts?.token;
   }
 
-  async function resolveSendToken(cfg: OpenClawConfig): Promise<string | undefined> {
+  async function resolveSendToken(cfg: MullusiConfig): Promise<string | undefined> {
     sendSlackMessage.mockClear();
     await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
     const opts = sendSlackMessage.mock.calls[0]?.[2] as { token?: string } | undefined;
@@ -626,7 +626,7 @@ describe("handleSlackAction", () => {
           },
         },
       },
-    } as OpenClawConfig);
+    } as MullusiConfig);
     expect(token).toBe("xoxp-user");
   });
 

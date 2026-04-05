@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   createTestWizardPrompter,
@@ -15,7 +15,7 @@ describe("slackSetupWizard.finalize", () => {
         appToken: "xapp-test",
       },
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
 
   it("prompts to enable interactive replies for newly configured Slack accounts", async () => {
     const confirm = vi.fn(async () => true);
@@ -81,7 +81,7 @@ describe("slackSetupWizard.dmPolicy", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         "alerts",
       ),
     ).toBe("allowlist");
@@ -108,7 +108,7 @@ describe("slackSetupWizard.dmPolicy", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       "open",
       "alerts",
     );
@@ -140,7 +140,7 @@ describe("slackSetupWizard.status", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     });
 
     expect(configured).toBe(false);

@@ -1,13 +1,13 @@
 import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import type { HistoryEntry } from "mullusi/plugin-sdk/reply-history";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
-vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
-    "openclaw/plugin-sdk/runtime-env",
+vi.mock("mullusi/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/runtime-env")>(
+    "mullusi/plugin-sdk/runtime-env",
   );
   return {
     ...actual,
@@ -22,9 +22,9 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   upsertPairingRequestMock: vi.fn(async () => ({ code: "CODE", created: true })),
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
-    "openclaw/plugin-sdk/conversation-runtime",
+vi.mock("mullusi/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/conversation-runtime")>(
+    "mullusi/plugin-sdk/conversation-runtime",
   );
   return {
     ...actual,

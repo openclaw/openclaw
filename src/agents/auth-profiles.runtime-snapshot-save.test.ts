@@ -11,7 +11,7 @@ import { ensureAuthProfileStore, markAuthProfileUsed } from "./auth-profiles.js"
 
 describe("auth profile runtime snapshot persistence", () => {
   it("does not write resolved plaintext keys during usage updates", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-runtime-save-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-auth-runtime-save-"));
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const authPath = path.join(agentDir, "auth-profiles.json");
     try {

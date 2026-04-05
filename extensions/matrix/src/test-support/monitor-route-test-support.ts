@@ -5,4 +5,4 @@ export {
 export { setActivePluginRegistry } from "../../../../src/plugins/runtime.js";
 export { resolveAgentRoute } from "../../../../src/routing/resolve-route.js";
 export { createTestRegistry } from "../../../../src/test-utils/channel-plugins.js";
-export type { OpenClawConfig } from "../../../../src/config/config.js";
+export type { MullusiConfig } from "../../../../src/config/config.js";

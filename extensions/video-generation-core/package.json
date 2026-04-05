@@ -1,7 +1,7 @@
 {
-  "name": "@openclaw/video-generation-core",
+  "name": "@mullusi/video-generation-core",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw video generation runtime package",
+  "description": "Mullusi video generation runtime package",
   "type": "module"
 }

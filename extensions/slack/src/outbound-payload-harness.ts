@@ -1,9 +1,9 @@
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { ChannelOutboundAdapter } from "mullusi/plugin-sdk/channel-contract";
+import type { ReplyPayload } from "mullusi/plugin-sdk/reply-runtime";
 import {
   loadBundledPluginTestApiSync,
   primeChannelOutboundSendMock,
-} from "openclaw/plugin-sdk/testing";
+} from "mullusi/plugin-sdk/testing";
 import { vi, type Mock } from "vitest";
 
 type OutboundSendMock = Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;

@@ -9,17 +9,17 @@ import {
 } from "./state-dir-env.js";
 
 type EnvSnapshot = {
-  openclaw?: string;
+  mullusi?: string;
 };
 
 function snapshotCurrentStateDirVars(): EnvSnapshot {
   return {
-    openclaw: process.env.OPENCLAW_STATE_DIR,
+    mullusi: process.env.MULLUSI_STATE_DIR,
   };
 }
 
 function expectStateDirVars(snapshot: EnvSnapshot) {
-  expect(process.env.OPENCLAW_STATE_DIR).toBe(snapshot.openclaw);
+  expect(process.env.MULLUSI_STATE_DIR).toBe(snapshot.mullusi);
 }
 
 async function expectPathMissing(filePath: string) {
@@ -37,12 +37,12 @@ async function expectStateDirEnvRestored(params: {
 }
 
 describe("state-dir-env helpers", () => {
-  it("set/snapshot/restore round-trips OPENCLAW_STATE_DIR", () => {
+  it("set/snapshot/restore round-trips MULLUSI_STATE_DIR", () => {
     const prev = snapshotCurrentStateDirVars();
     const snapshot = snapshotStateDirEnv();
 
-    setStateDirEnv("/tmp/openclaw-state-dir-test");
-    expect(process.env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-state-dir-test");
+    setStateDirEnv("/tmp/mullusi-state-dir-test");
+    expect(process.env.MULLUSI_STATE_DIR).toBe("/tmp/mullusi-state-dir-test");
 
     restoreStateDirEnv(snapshot);
     expectStateDirVars(prev);
@@ -53,10 +53,10 @@ describe("state-dir-env helpers", () => {
 
     let capturedTempRoot = "";
     let capturedStateDir = "";
-    await withStateDirEnv("openclaw-state-dir-env-", async ({ tempRoot, stateDir }) => {
+    await withStateDirEnv("mullusi-state-dir-env-", async ({ tempRoot, stateDir }) => {
       capturedTempRoot = tempRoot;
       capturedStateDir = stateDir;
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
+      expect(process.env.MULLUSI_STATE_DIR).toBe(stateDir);
       await fs.writeFile(path.join(stateDir, "probe.txt"), "ok", "utf8");
     });
 
@@ -69,7 +69,7 @@ describe("state-dir-env helpers", () => {
     let capturedTempRoot = "";
     let capturedStateDir = "";
     await expect(
-      withStateDirEnv("openclaw-state-dir-env-", async ({ tempRoot, stateDir }) => {
+      withStateDirEnv("mullusi-state-dir-env-", async ({ tempRoot, stateDir }) => {
         capturedTempRoot = tempRoot;
         capturedStateDir = stateDir;
         throw new Error("boom");

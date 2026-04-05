@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { MullusiConfig } from "../../../config/config.js";
 import { installGatewayDaemonNonInteractive } from "./daemon-install.js";
 
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
@@ -47,7 +47,7 @@ describe("installGatewayDaemonNonInteractive", () => {
       warnings: [],
     });
     buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
+      programArguments: ["mullusi", "gateway", "run"],
       workingDirectory: "/tmp",
       environment: {},
     });
@@ -64,14 +64,14 @@ describe("installGatewayDaemonNonInteractive", () => {
             token: {
               source: "env",
               provider: "default",
-              id: "OPENCLAW_GATEWAY_TOKEN",
+              id: "MULLUSI_GATEWAY_TOKEN",
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       opts: { installDaemon: true },
       runtime,
-      port: 18789,
+      port: 18790,
     });
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
@@ -90,10 +90,10 @@ describe("installGatewayDaemonNonInteractive", () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
     await installGatewayDaemonNonInteractive({
-      nextConfig: {} as OpenClawConfig,
+      nextConfig: {} as MullusiConfig,
       opts: { installDaemon: true },
       runtime,
-      port: 18789,
+      port: 18790,
     });
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Gateway install blocked"));
@@ -114,10 +114,10 @@ describe("installGatewayDaemonNonInteractive", () => {
 
     try {
       const result = await installGatewayDaemonNonInteractive({
-        nextConfig: {} as OpenClawConfig,
+        nextConfig: {} as MullusiConfig,
         opts: { installDaemon: true },
         runtime,
-        port: 18789,
+        port: 18790,
       });
 
       expect(result).toEqual({

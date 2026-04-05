@@ -120,19 +120,19 @@ Preview and apply promotions from the command line:
 
 ```bash
 # Preview promotion candidates
-openclaw memory promote
+mullusi memory promote
 
 # Apply promotions to MEMORY.md
-openclaw memory promote --apply
+mullusi memory promote --apply
 
 # Limit preview count
-openclaw memory promote --limit 5
+mullusi memory promote --limit 5
 
 # Include already-promoted entries
-openclaw memory promote --include-promoted
+mullusi memory promote --include-promoted
 
 # Check dreaming status
-openclaw memory status --deep
+mullusi memory status --deep
 ```
 
 See [memory CLI](/cli/memory) for the full flag reference.

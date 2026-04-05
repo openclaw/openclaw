@@ -180,9 +180,9 @@ describe("pairing setup code", () => {
   }
 
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
-    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
+    vi.stubEnv("MULLUSI_GATEWAY_TOKEN", "");
+    vi.stubEnv("MULLUSI_GATEWAY_PASSWORD", "");
+    vi.stubEnv("MULLUSI_GATEWAY_PORT", "");
   });
 
   beforeAll(async () => {
@@ -239,13 +239,13 @@ describe("pairing setup code", () => {
       expectedAuthLabel: "password",
     },
     {
-      name: "uses OPENCLAW_GATEWAY_PASSWORD without resolving configured password SecretRef",
+      name: "uses MULLUSI_GATEWAY_PASSWORD without resolving configured password SecretRef",
       auth: {
         mode: "password",
         password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
       } as const,
       env: {
-        OPENCLAW_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
+        MULLUSI_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
       },
       expectedAuthLabel: "password",
     },
@@ -308,7 +308,7 @@ describe("pairing setup code", () => {
       },
       {
         env: {
-          OPENCLAW_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
+          MULLUSI_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
         },
       },
     );
@@ -395,12 +395,12 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupConfig,
       options: {
         env: {
-          OPENCLAW_GATEWAY_TOKEN: "new-token",
+          MULLUSI_GATEWAY_TOKEN: "new-token",
         },
       } satisfies ResolveSetupOptions,
       expected: {
         authLabel: "token",
-        url: "ws://127.0.0.1:18789",
+        url: "ws://127.0.0.1:18790",
         urlSource: "gateway.bind=custom",
       },
     },
@@ -415,7 +415,7 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupConfig,
       expected: {
         authLabel: "token",
-        url: "ws://10.0.2.2:18789",
+        url: "ws://10.0.2.2:18790",
         urlSource: "gateway.bind=custom",
       },
     },
@@ -430,7 +430,7 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupConfig,
       expected: {
         authLabel: "token",
-        url: "ws://192.168.1.20:18789",
+        url: "ws://192.168.1.20:18790",
         urlSource: "gateway.bind=custom",
       },
     },
@@ -445,7 +445,7 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupConfig,
       expected: {
         authLabel: "token",
-        url: "ws://gateway.local:18789",
+        url: "ws://gateway.local:18790",
         urlSource: "gateway.bind=custom",
       },
     },
@@ -503,7 +503,7 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupOptions,
       expected: {
         authLabel: "password",
-        url: "ws://192.168.1.20:18789",
+        url: "ws://192.168.1.20:18790",
         urlSource: "gateway.bind=lan",
       },
     });

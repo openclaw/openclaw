@@ -1,8 +1,8 @@
 import Foundation
 import Network
-import OpenClawKit
+import MullusiKit
 import Testing
-@testable import OpenClaw
+@testable import Mullusi
 
 @Suite(.serialized) struct GatewayConnectionSecurityTests {
     @MainActor
@@ -17,7 +17,7 @@ import Testing
         gatewayPort: Int?,
         fingerprint: String?) -> GatewayDiscoveryModel.DiscoveredGateway
     {
-        let endpoint: NWEndpoint = .service(name: "Test", type: "_openclaw-gw._tcp", domain: "local.", interface: nil)
+        let endpoint: NWEndpoint = .service(name: "Test", type: "_mullusi-gw._tcp", domain: "local.", interface: nil)
         return GatewayDiscoveryModel.DiscoveredGateway(
             name: "Test",
             endpoint: endpoint,
@@ -94,7 +94,7 @@ import Testing
             stableID: stableID,
             lanHost: "test.local",
             tailnetDns: nil,
-            gatewayPort: 18789,
+            gatewayPort: 18790,
             fingerprint: nil)
         let controller = makeController()
         controller._test_setGateways([gateway])
@@ -107,7 +107,7 @@ import Testing
         let controller = makeController()
 
         #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: false) == true)
-        #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "mullusi.local", useTLS: false) == true)
         #expect(controller._test_resolveManualUseTLS(host: "127.attacker.example", useTLS: false) == true)
 
         #expect(controller._test_resolveManualUseTLS(host: "localhost", useTLS: false) == false)
@@ -121,10 +121,10 @@ import Testing
     @Test @MainActor func manualDefaultPortUses443OnlyForTailnetTLSHosts() async {
         let controller = makeController()
 
-        #expect(controller._test_resolveManualPort(host: "gateway.example.com", port: 0, useTLS: true) == 18789)
+        #expect(controller._test_resolveManualPort(host: "gateway.example.com", port: 0, useTLS: true) == 18790)
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 0, useTLS: true) == 443)
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net.", port: 0, useTLS: true) == 443)
-        #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 18789, useTLS: true) == 18789)
+        #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 18790, useTLS: true) == 18790)
     }
 
     @Test @MainActor func clearAllTLSFingerprints_removesStoredPins() async {

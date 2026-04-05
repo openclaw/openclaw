@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/zai-provider",
+  "name": "@mullusi/zai-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Z.AI provider plugin",
+  "description": "Mullusi Z.AI provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

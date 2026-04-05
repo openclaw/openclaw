@@ -1,5 +1,5 @@
 ---
-summary: "First-run setup flow for OpenClaw (macOS app)"
+summary: "First-run setup flow for Mullusi (macOS app)"
 read_when:
   - Designing the macOS onboarding assistant
   - Implementing auth or identity setup
@@ -32,7 +32,7 @@ For a general overview of onboarding paths, see [Onboarding Overview](/start/onb
 
 Security trust model:
 
-- By default, OpenClaw is a personal agent: one trusted operator boundary.
+- By default, Mullusi is a personal agent: one trusted operator boundary.
 - Shared/multi-user setups require lock-down (split trust boundaries, keep tool access minimal, and follow [Security](/gateway/security)).
 - Local onboarding now defaults new configs to `tools.profile: "coding"` so fresh local setups keep filesystem/runtime tools without forcing the unrestricted `full` profile.
 - If hooks/webhooks or other untrusted content feeds are enabled, use a strong modern model tier and keep strict tool policy/sandboxing.
@@ -61,7 +61,7 @@ Where does the **Gateway** run?
 </Tip>
 </Step>
 <Step title="Permissions">
-<Frame caption="Choose what permissions do you want to give OpenClaw">
+<Frame caption="Choose what permissions do you want to give Mullusi">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
 
@@ -79,7 +79,7 @@ Onboarding requests TCC permissions needed for:
 </Step>
 <Step title="CLI">
   <Info>This step is optional</Info>
-  The app can install the global `openclaw` CLI via npm, pnpm, or bun.
+  The app can install the global `mullusi` CLI via npm, pnpm, or bun.
   It prefers npm first, then pnpm, then bun if that is the only detected
   package manager. For the Gateway runtime, Node remains the recommended path.
 </Step>

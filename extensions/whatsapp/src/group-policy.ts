@@ -2,11 +2,11 @@ import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
   type GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk/channel-policy";
-import type { OpenClawConfig } from "./runtime-api.js";
+} from "mullusi/plugin-sdk/channel-policy";
+import type { MullusiConfig } from "./runtime-api.js";
 
 type WhatsAppGroupContext = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   groupId?: string | null;
   senderId?: string | null;

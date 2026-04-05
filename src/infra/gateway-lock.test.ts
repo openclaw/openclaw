@@ -21,12 +21,12 @@ function resolveTestLockDir() {
 async function makeEnv() {
   const dir = path.join(fixtureRoot, `case-${fixtureCount++}`);
   await fs.mkdir(dir, { recursive: true });
-  const configPath = path.join(dir, "openclaw.json");
+  const configPath = path.join(dir, "mullusi.json");
   await fs.writeFile(configPath, "{}", "utf8");
   return {
     ...process.env,
-    OPENCLAW_STATE_DIR: dir,
-    OPENCLAW_CONFIG_PATH: configPath,
+    MULLUSI_STATE_DIR: dir,
+    MULLUSI_CONFIG_PATH: configPath,
   };
 }
 
@@ -149,7 +149,7 @@ async function writeRecentLockFile(env: NodeJS.ProcessEnv, startTime = 111) {
 
 describe("gateway lock", () => {
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-gateway-lock-"));
   });
 
   beforeEach(() => {
@@ -179,7 +179,7 @@ describe("gateway lock", () => {
 
     const pending = acquireForTest(env, {
       timeoutMs: 15,
-      readProcessCmdline: () => ["openclaw", "gateway", "run"],
+      readProcessCmdline: () => ["mullusi", "gateway", "run"],
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
@@ -257,7 +257,7 @@ describe("gateway lock", () => {
       pollIntervalMs: 5,
       staleMs: 10_000,
       platform: "darwin",
-      port: 18789,
+      port: 18790,
     });
     expect(lock).not.toBeNull();
     await lock?.release();
@@ -275,8 +275,8 @@ describe("gateway lock", () => {
         pollIntervalMs: 2,
         staleMs: 10_000,
         platform: "darwin",
-        port: 18789,
-        readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run"],
+        port: 18790,
+        readProcessCmdline: () => ["/usr/local/bin/mullusi", "gateway", "run"],
       });
       await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
     } finally {
@@ -287,7 +287,7 @@ describe("gateway lock", () => {
   it("returns null when multi-gateway override is enabled", async () => {
     const env = await makeEnv();
     const lock = await acquireGatewayLock({
-      env: { ...env, OPENCLAW_ALLOW_MULTI_GATEWAY: "1", VITEST: "" },
+      env: { ...env, MULLUSI_ALLOW_MULTI_GATEWAY: "1", VITEST: "" },
       lockDir: resolveTestLockDir(),
     });
     expect(lock).toBeNull();
@@ -326,7 +326,7 @@ describe("gateway lock", () => {
       pollIntervalMs: 5,
       staleMs: 10_000,
       platform: "win32",
-      port: 18789,
+      port: 18790,
       readProcessCmdline: () => ["chrome.exe", "--no-sandbox"],
     });
     expect(lock).not.toBeNull();
@@ -347,9 +347,9 @@ describe("gateway lock", () => {
       pollIntervalMs: 2,
       staleMs: 10_000,
       platform: "win32",
-      port: 18789,
+      port: 18790,
       readProcessCmdline: () => [
-        "C:\\Users\\me\\AppData\\Roaming\\npm\\openclaw.cmd",
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\mullusi.cmd",
         "gateway",
         "run",
       ],
@@ -371,7 +371,7 @@ describe("gateway lock", () => {
       pollIntervalMs: 2,
       staleMs: 10_000,
       platform: "win32",
-      port: 18789,
+      port: 18790,
       readProcessCmdline: () => null,
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
@@ -391,7 +391,7 @@ describe("gateway lock", () => {
       pollIntervalMs: 5,
       staleMs: 10_000,
       platform: "darwin",
-      port: 18789,
+      port: 18790,
       readProcessCmdline: () => ["/Applications/Safari.app/Contents/MacOS/Safari"],
     });
     expect(lock).not.toBeNull();
@@ -412,8 +412,8 @@ describe("gateway lock", () => {
       pollIntervalMs: 2,
       staleMs: 10_000,
       platform: "darwin",
-      port: 18789,
-      readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run", "--port", "18789"],
+      port: 18790,
+      readProcessCmdline: () => ["/usr/local/bin/mullusi", "gateway", "run", "--port", "18790"],
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 

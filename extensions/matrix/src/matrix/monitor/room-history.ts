@@ -13,7 +13,7 @@
  * while the agent is processing stay visible to the next trigger for that agent.
  */
 
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import type { HistoryEntry } from "mullusi/plugin-sdk/reply-history";
 
 /** Maximum entries retained per room (hard cap to bound memory). */
 const DEFAULT_MAX_QUEUE_SIZE = 200;

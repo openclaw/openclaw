@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "../../config/types.js";
+import type { MullusiConfig } from "../../config/types.js";
 
 export type DirectoryConfigParams = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   query?: string | null;
   limit?: number | null;

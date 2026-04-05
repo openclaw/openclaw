@@ -5,7 +5,7 @@ import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
-const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
+const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18790));
 const copyToClipboardMock = vi.hoisted(() => vi.fn(async () => false));
 const {
   runtimeLogs,
@@ -54,7 +54,7 @@ function createGatewayTokenRefFixture() {
     gateway: {
       bind: "custom",
       customBindHost: "127.0.0.1",
-      port: 18789,
+      port: 18790,
       auth: {
         mode: "token",
         token: {
@@ -107,8 +107,8 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
   beforeAll(() => {
     envSnapshot = captureEnv([
       "SHARED_GATEWAY_TOKEN",
-      "OPENCLAW_GATEWAY_TOKEN",
-      "OPENCLAW_GATEWAY_PASSWORD",
+      "MULLUSI_GATEWAY_TOKEN",
+      "MULLUSI_GATEWAY_PASSWORD",
     ]);
   });
 
@@ -116,8 +116,8 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     resetRuntimeCapture();
     vi.clearAllMocks();
     runtimeExit.mockImplementation(() => {});
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.MULLUSI_GATEWAY_TOKEN;
+    delete process.env.MULLUSI_GATEWAY_PASSWORD;
     delete process.env.SHARED_GATEWAY_TOKEN;
   });
 
@@ -126,7 +126,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     process.env.SHARED_GATEWAY_TOKEN = "shared-token-123";
     loadConfigMock.mockReturnValue(fixture);
     readConfigFileSnapshotMock.mockResolvedValue({
-      path: "/tmp/openclaw.json",
+      path: "/tmp/mullusi.json",
       exists: true,
       valid: true,
       issues: [],
@@ -137,7 +137,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     const setupCode = findSetupCodeLogLine(runtimeLogs);
     expect(setupCode).toBeTruthy();
     const payload = decodeSetupCode(setupCode ?? "");
-    expect(payload.url).toBe("ws://127.0.0.1:18789");
+    expect(payload.url).toBe("ws://127.0.0.1:18790");
     expect(payload.bootstrapToken).toBeTruthy();
     expect(runtimeErrors).toEqual([]);
 
@@ -145,7 +145,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     runtimeErrors.length = 0;
     await dashboardCommand(runtime, { noOpen: true });
     const joined = runtimeLogs.join("\n");
-    expect(joined).toContain("Dashboard URL: http://127.0.0.1:18789/");
+    expect(joined).toContain("Dashboard URL: http://127.0.0.1:18790/");
     expect(joined).not.toContain("#token=");
     expect(joined).toContain(
       "Token auto-auth is disabled for SecretRef-managed gateway.auth.token",
@@ -158,7 +158,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     const fixture = createGatewayTokenRefFixture();
     loadConfigMock.mockReturnValue(fixture);
     readConfigFileSnapshotMock.mockResolvedValue({
-      path: "/tmp/openclaw.json",
+      path: "/tmp/mullusi.json",
       exists: true,
       valid: true,
       issues: [],
@@ -173,10 +173,10 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     runtimeErrors.length = 0;
     await dashboardCommand(runtime, { noOpen: true });
     const joined = runtimeLogs.join("\n");
-    expect(joined).toContain("Dashboard URL: http://127.0.0.1:18789/");
+    expect(joined).toContain("Dashboard URL: http://127.0.0.1:18790/");
     expect(joined).not.toContain("#token=");
     expect(joined).toContain("Token auto-auth unavailable");
-    expect(joined).toContain("Set OPENCLAW_GATEWAY_TOKEN");
+    expect(joined).toContain("Set MULLUSI_GATEWAY_TOKEN");
   });
 
   afterAll(() => {

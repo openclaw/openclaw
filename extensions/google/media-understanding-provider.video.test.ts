@@ -1,5 +1,5 @@
-import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
-import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
+import * as ssrf from "mullusi/plugin-sdk/infra-runtime";
+import { withFetchPreconnect } from "mullusi/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRequestCaptureJsonFetch } from "../../test/helpers/plugins/media-understanding.js";
 import { describeGeminiVideo } from "./media-understanding-provider.js";

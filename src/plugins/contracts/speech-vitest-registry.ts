@@ -53,20 +53,20 @@ export type VideoGenerationProviderContractEntry = {
 };
 
 function buildVitestCapabilityAliasMap(modulePath: string): Record<string, string> {
-  const { ["openclaw/plugin-sdk"]: _ignoredRootAlias, ...scopedAliasMap } =
+  const { ["mullusi/plugin-sdk"]: _ignoredRootAlias, ...scopedAliasMap } =
     buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url, "dist");
   return {
     ...scopedAliasMap,
-    "openclaw/plugin-sdk/llm-task": fileURLToPath(
+    "mullusi/plugin-sdk/llm-task": fileURLToPath(
       new URL("../capability-runtime-vitest-shims/llm-task.ts", import.meta.url),
     ),
-    "openclaw/plugin-sdk/media-runtime": fileURLToPath(
+    "mullusi/plugin-sdk/media-runtime": fileURLToPath(
       new URL("../capability-runtime-vitest-shims/media-runtime.ts", import.meta.url),
     ),
-    "openclaw/plugin-sdk/provider-onboard": fileURLToPath(
+    "mullusi/plugin-sdk/provider-onboard": fileURLToPath(
       new URL("../../plugin-sdk/provider-onboard.ts", import.meta.url),
     ),
-    "openclaw/plugin-sdk/speech-core": fileURLToPath(
+    "mullusi/plugin-sdk/speech-core": fileURLToPath(
       new URL("../capability-runtime-vitest-shims/speech-core.ts", import.meta.url),
     ),
   };

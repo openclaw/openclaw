@@ -1,9 +1,9 @@
 import {
   normalizeAccountId,
   resolveMergedAccountConfig,
-} from "openclaw/plugin-sdk/account-resolution";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
+} from "mullusi/plugin-sdk/account-resolution";
+import type { MullusiConfig } from "mullusi/plugin-sdk/core";
+import { evaluateSenderGroupAccessForPolicy } from "mullusi/plugin-sdk/group-access";
 import type { AllowlistMatch, ChannelGroupContext, GroupToolPolicyConfig } from "../runtime-api.js";
 import { normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
@@ -110,7 +110,7 @@ export function isFeishuGroupAllowed(params: {
 
 export function resolveFeishuReplyPolicy(params: {
   isDirectMessage: boolean;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   groupId?: string | null;
   /**

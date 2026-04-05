@@ -25,7 +25,7 @@ x-i18n:
 
 ## 机制
 
-- Gateway 网关在启动时立即使用独占 TCP 监听器绑定 WebSocket 监听器（默认 `ws://127.0.0.1:18789`）。
+- Gateway 网关在启动时立即使用独占 TCP 监听器绑定 WebSocket 监听器（默认 `ws://127.0.0.1:18790`）。
 - 如果绑定因 `EADDRINUSE` 失败，启动会抛出 `GatewayLockError("another gateway instance is already listening on ws://127.0.0.1:<port>")`。
 - 操作系统在任何进程退出时（包括崩溃和 SIGKILL）自动释放监听器——不需要单独的锁文件或清理步骤。
 - 关闭时，Gateway 网关关闭 WebSocket 服务器和底层 HTTP 服务器以及时释放端口。
@@ -37,5 +37,5 @@ x-i18n:
 
 ## 运维说明
 
-- 如果端口被*另一个*进程占用，错误是相同的；释放端口或使用 `openclaw gateway --port <port>` 选择另一个端口。
+- 如果端口被*另一个*进程占用，错误是相同的；释放端口或使用 `mullusi gateway --port <port>` 选择另一个端口。
 - macOS 应用在启动 Gateway 网关之前仍维护自己的轻量级 PID 保护；运行时锁由 WebSocket 绑定强制执行。

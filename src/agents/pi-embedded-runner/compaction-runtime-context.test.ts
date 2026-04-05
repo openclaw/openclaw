@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveEmbeddedCompactionTarget,
@@ -19,7 +19,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
         authProfileId: "openai:p1",
         workspaceDir: "/tmp/workspace",
         agentDir: "/tmp/agent",
-        config: {} as OpenClawConfig,
+        config: {} as MullusiConfig,
         senderIsOwner: true,
         senderId: "user-123",
         provider: "openai-codex",
@@ -84,7 +84,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       agentDir: "/tmp/agent",
       config: {
         agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       provider: "ollama",
       modelId: "minimax-m2.7:cloud",
       authProfileId: "ollama:default",
@@ -101,7 +101,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       agentDir: "/tmp/agent",
       config: {
         agents: { defaults: { compaction: { model: "gpt-4o" } } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       provider: "openai",
       modelId: "gpt-3.5-turbo",
       authProfileId: "openai:p1",
@@ -116,7 +116,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
-      config: {} as OpenClawConfig,
+      config: {} as MullusiConfig,
       provider: "ollama",
       modelId: "minimax-m2.7:cloud",
       authProfileId: "ollama:default",
@@ -131,7 +131,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       resolveEmbeddedCompactionTarget({
         config: {
           agents: { defaults: { compaction: { model: "anthropic/" } } },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         provider: "openai-codex",
         modelId: "gpt-5.4",
         authProfileId: "openai:p1",

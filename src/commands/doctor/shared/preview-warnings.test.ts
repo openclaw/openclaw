@@ -16,7 +16,7 @@ function manifest(id: string): PluginManifestRecord {
     origin: "bundled",
     rootDir: `/plugins/${id}`,
     source: `/plugins/${id}`,
-    manifestPath: `/plugins/${id}/openclaw.plugin.json`,
+    manifestPath: `/plugins/${id}/mullusi.plugin.json`,
   };
 }
 
@@ -51,7 +51,7 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "mullusi doctor --fix",
     });
 
     expect(warnings).toEqual([
@@ -73,7 +73,7 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "mullusi doctor --fix",
     });
 
     expect(warnings).toEqual([
@@ -93,19 +93,19 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "mullusi doctor --fix",
     });
 
     expect(warnings).toEqual([
       expect.stringContaining('plugins.allow: stale plugin reference "acpx"'),
     ]);
     expect(warnings[0]).toContain("plugins.entries.acpx");
-    expect(warnings[0]).toContain('Run "openclaw doctor --fix"');
+    expect(warnings[0]).toContain('Run "mullusi doctor --fix"');
     expect(warnings[0]).not.toContain("Auto-removal is paused");
   });
 
   it("includes bundled plugin load path migration warnings", async () => {
-    const packageRoot = path.resolve("app-node-modules", "openclaw");
+    const packageRoot = path.resolve("app-node-modules", "mullusi");
     const legacyPath = path.join(packageRoot, "extensions", "feishu");
     const bundledPath = path.join(packageRoot, "dist", "extensions", "feishu");
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
@@ -119,7 +119,7 @@ describe("doctor preview warnings", () => {
           {
             pluginId: "feishu",
             localPath: bundledPath,
-            npmSpec: "@openclaw/feishu",
+            npmSpec: "@mullusi/feishu",
           },
         ],
       ]),
@@ -133,13 +133,13 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "mullusi doctor --fix",
     });
 
     expect(warnings).toEqual([
       expect.stringContaining(`plugins.load.paths: legacy bundled plugin path "${legacyPath}"`),
     ]);
-    expect(warnings[0]).toContain('Run "openclaw doctor --fix"');
+    expect(warnings[0]).toContain('Run "mullusi doctor --fix"');
   });
 
   it("warns but skips auto-removal when plugin discovery has errors", async () => {
@@ -159,14 +159,14 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "mullusi doctor --fix",
     });
 
     expect(warnings).toEqual([
       expect.stringContaining('plugins.allow: stale plugin reference "acpx"'),
     ]);
     expect(warnings[0]).toContain("Auto-removal is paused");
-    expect(warnings[0]).toContain('rerun "openclaw doctor --fix"');
+    expect(warnings[0]).toContain('rerun "mullusi doctor --fix"');
   });
 
   it("warns when a configured channel plugin is disabled explicitly", async () => {
@@ -191,7 +191,7 @@ describe("doctor preview warnings", () => {
           },
         },
       },
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "mullusi doctor --fix",
     });
 
     expect(warnings).toEqual([
@@ -220,7 +220,7 @@ describe("doctor preview warnings", () => {
           enabled: false,
         },
       },
-      doctorFixCommand: "openclaw doctor --fix",
+      doctorFixCommand: "mullusi doctor --fix",
     });
 
     expect(warnings).toEqual([

@@ -10,7 +10,7 @@ describe("resolveStableNodePath", () => {
   });
 
   it("prefers the Homebrew opt symlink for default and versioned formulas", async () => {
-    const prefix = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stable-node-"));
+    const prefix = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-stable-node-"));
     const defaultNode = path.join(prefix, "Cellar", "node", "25.7.0", "bin", "node");
     const versionedNode = path.join(prefix, "Cellar", "node@22", "22.17.0", "bin", "node");
     const optDefault = path.join(prefix, "opt", "node", "bin", "node");
@@ -26,7 +26,7 @@ describe("resolveStableNodePath", () => {
   });
 
   it("falls back to the bin symlink for the default formula, otherwise original path", async () => {
-    const prefix = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stable-node-"));
+    const prefix = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-stable-node-"));
     const defaultNode = path.join(prefix, "Cellar", "node", "25.7.0", "bin", "node");
     const versionedNode = path.join(prefix, "Cellar", "node@22", "22.17.0", "bin", "node");
     const binNode = path.join(prefix, "bin", "node");

@@ -41,9 +41,9 @@ describe("secrets runtime snapshot auth integration", () => {
   it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {
     await withEnvAsync(
       {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_VERSION: undefined,
+        MULLUSI_BUNDLED_PLUGINS_DIR: undefined,
+        MULLUSI_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+        MULLUSI_VERSION: undefined,
       },
       async () => {
         const prepared = await prepareSecretsRuntimeSnapshot({
@@ -59,7 +59,7 @@ describe("secrets runtime snapshot auth integration", () => {
             },
           }),
           env: { OPENAI_API_KEY: "sk-runtime" },
-          agentDirs: ["/tmp/openclaw-agent-main"],
+          agentDirs: ["/tmp/mullusi-agent-main"],
           loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
           loadAuthStore: () =>
             loadAuthStoreWithProfiles({
@@ -75,7 +75,7 @@ describe("secrets runtime snapshot auth integration", () => {
 
         expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
         expect(
-          ensureAuthProfileStore("/tmp/openclaw-agent-main").profiles["openai:default"],
+          ensureAuthProfileStore("/tmp/mullusi-agent-main").profiles["openai:default"],
         ).toMatchObject({
           type: "api_key",
           key: "sk-runtime",
@@ -88,7 +88,7 @@ describe("secrets runtime snapshot auth integration", () => {
     if (os.platform() === "win32") {
       return;
     }
-    await withTempHome("openclaw-secrets-runtime-write-", async (home) => {
+    await withTempHome("mullusi-secrets-runtime-write-", async (home) => {
       const { secretFile, agentDir } = await createOpenAIFileRuntimeFixture(home);
 
       const prepared = await prepareSecretsRuntimeSnapshot({
@@ -115,7 +115,7 @@ describe("secrets runtime snapshot auth integration", () => {
     if (os.platform() === "win32") {
       return;
     }
-    await withTempHome("openclaw-secrets-runtime-refresh-fail-", async (home) => {
+    await withTempHome("mullusi-secrets-runtime-refresh-fail-", async (home) => {
       const { secretFile, agentDir } = await createOpenAIFileRuntimeFixture(home);
 
       let loadAuthStoreCalls = 0;
@@ -162,9 +162,9 @@ describe("secrets runtime snapshot auth integration", () => {
   });
 
   it("recomputes config-derived agent dirs when refreshing active secrets runtime snapshots", async () => {
-    await withTempHome("openclaw-secrets-runtime-agent-dirs-", async (home) => {
-      const mainAgentDir = path.join(home, ".openclaw", "agents", "main", "agent");
-      const opsAgentDir = path.join(home, ".openclaw", "agents", "ops", "agent");
+    await withTempHome("mullusi-secrets-runtime-agent-dirs-", async (home) => {
+      const mainAgentDir = path.join(home, ".mullusi", "agents", "main", "agent");
+      const opsAgentDir = path.join(home, ".mullusi", "agents", "ops", "agent");
       await fs.mkdir(mainAgentDir, { recursive: true });
       await fs.mkdir(opsAgentDir, { recursive: true });
       await fs.writeFile(

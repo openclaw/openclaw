@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "../api.js";
+import type { MullusiConfig } from "../api.js";
 
-const DEFAULT_GATEWAY_PORT = 18789;
+const DEFAULT_GATEWAY_PORT = 18790;
 type ViewerBaseUrlFieldName = "baseUrl" | "viewerBaseUrl";
 
 export function buildViewerUrl(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   viewerPath: string;
   baseUrl?: string;
 }): string {
@@ -44,7 +44,7 @@ export function normalizeViewerBaseUrl(
   return withoutTrailingSlash;
 }
 
-function resolveGatewayBaseUrl(config: OpenClawConfig): string {
+function resolveGatewayBaseUrl(config: MullusiConfig): string {
   const scheme = config.gateway?.tls?.enabled ? "https" : "http";
   const port =
     typeof config.gateway?.port === "number" ? config.gateway.port : DEFAULT_GATEWAY_PORT;

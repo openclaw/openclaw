@@ -104,7 +104,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         messageId: expect.any(String),
         message: expect.objectContaining({
           role: "assistant",
-          provider: "openclaw",
+          provider: "mullusi",
           model: "delivery-mirror",
           content: [{ type: "text", text: "Hello from delivery mirror!" }],
         }),

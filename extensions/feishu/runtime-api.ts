@@ -11,40 +11,40 @@ export type {
   ChannelOutboundAdapter,
   ChannelPlugin,
   HistoryEntry,
-  OpenClawConfig,
-  OpenClawPluginApi,
+  MullusiConfig,
+  MullusiPluginApi,
   OutboundIdentity,
   PluginRuntime,
   ReplyPayload,
-} from "openclaw/plugin-sdk/core";
-export type { OpenClawConfig as ClawdbotConfig } from "openclaw/plugin-sdk/core";
-export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/core";
+export type { MullusiConfig as ClawdbotConfig } from "mullusi/plugin-sdk/core";
+export type { RuntimeEnv } from "mullusi/plugin-sdk/runtime";
+export type { GroupToolPolicyConfig } from "mullusi/plugin-sdk/config-runtime";
 export {
   DEFAULT_ACCOUNT_ID,
   buildChannelConfigSchema,
   createActionGate,
   createDedupeCache,
-} from "openclaw/plugin-sdk/core";
+} from "mullusi/plugin-sdk/core";
 export {
   PAIRING_APPROVED_MESSAGE,
   buildProbeChannelStatusSummary,
   createDefaultChannelRuntimeState,
-} from "openclaw/plugin-sdk/channel-status";
-export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
-export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createReplyPrefixContext } from "openclaw/plugin-sdk/channel-reply-pipeline";
+} from "mullusi/plugin-sdk/channel-status";
+export { buildAgentMediaPayload } from "mullusi/plugin-sdk/agent-media-payload";
+export { createChannelPairingController } from "mullusi/plugin-sdk/channel-pairing";
+export { createReplyPrefixContext } from "mullusi/plugin-sdk/channel-reply-pipeline";
 export {
   evaluateSupplementalContextVisibility,
   filterSupplementalContextItems,
   resolveChannelContextVisibilityMode,
-} from "openclaw/plugin-sdk/config-runtime";
-export { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
-export { createPersistentDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
-export { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+} from "mullusi/plugin-sdk/config-runtime";
+export { readJsonFileWithFallback } from "mullusi/plugin-sdk/json-store";
+export { createPersistentDedupe } from "mullusi/plugin-sdk/persistent-dedupe";
+export { normalizeAgentId } from "mullusi/plugin-sdk/routing";
+export { chunkTextForOutbound } from "mullusi/plugin-sdk/text-chunking";
 export {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/webhook-ingress";
+} from "mullusi/plugin-sdk/webhook-ingress";

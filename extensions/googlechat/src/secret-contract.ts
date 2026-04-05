@@ -1,4 +1,4 @@
-import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+import { coerceSecretRef } from "mullusi/plugin-sdk/provider-auth";
 import {
   getChannelSurface,
   hasOwnProperty,
@@ -9,7 +9,7 @@ import {
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "mullusi/plugin-sdk/security-runtime";
 
 type GoogleChatAccountLike = {
   serviceAccount?: unknown;
@@ -22,7 +22,7 @@ export const secretTargetRegistryEntries = [
     id: "channels.googlechat.accounts.*.serviceAccount",
     targetType: "channels.googlechat.serviceAccount",
     targetTypeAliases: ["channels.googlechat.accounts.*.serviceAccount"],
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.googlechat.accounts.*.serviceAccount",
     refPathPattern: "channels.googlechat.accounts.*.serviceAccountRef",
     secretShape: "sibling_ref",
@@ -35,7 +35,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.googlechat.serviceAccount",
     targetType: "channels.googlechat.serviceAccount",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.googlechat.serviceAccount",
     refPathPattern: "channels.googlechat.serviceAccountRef",
     secretShape: "sibling_ref",

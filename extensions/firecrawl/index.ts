@@ -1,4 +1,4 @@
-import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry, type AnyAgentTool } from "mullusi/plugin-sdk/plugin-entry";
 import { createFirecrawlWebFetchProvider } from "./src/firecrawl-fetch-provider.js";
 import { createFirecrawlScrapeTool } from "./src/firecrawl-scrape-tool.js";
 import { createFirecrawlWebSearchProvider } from "./src/firecrawl-search-provider.js";

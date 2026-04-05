@@ -1,8 +1,8 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolvePreferredMullusiTmpDir } from "../infra/tmp-mullusi-dir.js";
 import { resolveConfigDir } from "../utils.js";
 
 type BuildMediaLocalRootsOptions = {
@@ -13,7 +13,7 @@ let cachedPreferredTmpDir: string | undefined;
 
 function resolveCachedPreferredTmpDir(): string {
   if (!cachedPreferredTmpDir) {
-    cachedPreferredTmpDir = resolvePreferredOpenClawTmpDir();
+    cachedPreferredTmpDir = resolvePreferredMullusiTmpDir();
   }
   return cachedPreferredTmpDir;
 }
@@ -33,7 +33,7 @@ export function buildMediaLocalRoots(
       path.join(resolvedStateDir, "workspace"),
       path.join(resolvedStateDir, "sandboxes"),
       // Upgraded installs can still resolve the active state dir to the legacy
-      // ~/.clawdbot tree while new media writes already go under ~/.openclaw/media.
+      // ~/.mullusi tree while new media writes already go under ~/.mullusi/media.
       // Keep inbound media readable across that split without widening roots beyond
       // the managed media cache.
       path.join(resolvedConfigDir, "media"),
@@ -46,7 +46,7 @@ export function getDefaultMediaLocalRoots(): readonly string[] {
 }
 
 export function getAgentScopedMediaLocalRoots(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   agentId?: string,
 ): readonly string[] {
   const roots = buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
@@ -79,7 +79,7 @@ export function getAgentScopedMediaLocalRootsForSources({
   agentId,
   mediaSources: _mediaSources,
 }: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentId?: string;
   mediaSources?: readonly string[];
 }): readonly string[] {

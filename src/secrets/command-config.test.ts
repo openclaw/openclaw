@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { collectCommandSecretAssignmentsFromSnapshot } from "./command-config.js";
 
 describe("collectCommandSecretAssignmentsFromSnapshot", () => {
@@ -12,7 +12,7 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
     const resolvedConfig = {
       talk: {
         providers: {
@@ -21,7 +21,7 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
 
     const result = collectCommandSecretAssignmentsFromSnapshot({
       sourceConfig,
@@ -48,14 +48,14 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
     const resolvedConfig = {
       talk: {
         providers: {
           elevenlabs: {},
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
 
     expect(() =>
       collectCommandSecretAssignmentsFromSnapshot({
@@ -80,7 +80,7 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
     const resolvedConfig = {
       agents: {
         defaults: {
@@ -91,7 +91,7 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
 
     const result = collectCommandSecretAssignmentsFromSnapshot({
       sourceConfig,

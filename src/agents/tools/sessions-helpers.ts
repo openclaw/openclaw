@@ -33,7 +33,7 @@ export {
   sanitizeTextContent,
   stripToolMessages,
 } from "./chat-history-text.js";
-import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { type MullusiConfig, loadConfig } from "../../config/config.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
@@ -94,7 +94,7 @@ function normalizeKey(value?: string) {
 export function resolveSessionToolContext(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
 }) {
   const cfg = opts?.config ?? loadConfig();
   return {

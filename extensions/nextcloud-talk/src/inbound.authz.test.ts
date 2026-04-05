@@ -38,7 +38,7 @@ function createTestRuntimeEnv(): RuntimeEnv {
 describe("nextcloud-talk inbound authz", () => {
   it("does not treat DM pairing-store entries as group allowlist entries", async () => {
     const readAllowFromStore = vi.fn(async () => ["attacker"]);
-    const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
+    const buildMentionRegexes = vi.fn(() => [/@mullusi/i]);
 
     installInboundAuthzRuntime({ readAllowFromStore, buildMentionRegexes });
 
@@ -95,7 +95,7 @@ describe("nextcloud-talk inbound authz", () => {
 
   it("matches group rooms by token instead of colliding room names", async () => {
     const readAllowFromStore = vi.fn(async () => []);
-    const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
+    const buildMentionRegexes = vi.fn(() => [/@mullusi/i]);
 
     installInboundAuthzRuntime({ readAllowFromStore, buildMentionRegexes });
 

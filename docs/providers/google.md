@@ -2,7 +2,7 @@
 title: "Google (Gemini)"
 summary: "Google Gemini setup (API key + OAuth, image generation, media understanding, web search)"
 read_when:
-  - You want to use Google Gemini models with OpenClaw
+  - You want to use Google Gemini models with Mullusi
   - You need the API key or OAuth auth flow
 ---
 
@@ -22,7 +22,7 @@ Gemini Grounding.
 1. Set the API key:
 
 ```bash
-openclaw onboard --auth-choice gemini-api-key
+mullusi onboard --auth-choice gemini-api-key
 ```
 
 2. Set a default model:
@@ -40,7 +40,7 @@ openclaw onboard --auth-choice gemini-api-key
 ## Non-interactive example
 
 ```bash
-openclaw onboard --non-interactive \
+mullusi onboard --non-interactive \
   --mode local \
   --auth-choice gemini-api-key \
   --gemini-api-key "$GEMINI_API_KEY"
@@ -60,13 +60,13 @@ restrictions. Use at your own risk.
 - Login:
 
 ```bash
-openclaw models auth login --provider google-gemini-cli --set-default
+mullusi models auth login --provider google-gemini-cli --set-default
 ```
 
 Environment variables:
 
-- `OPENCLAW_GEMINI_OAUTH_CLIENT_ID`
-- `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET`
+- `MULLUSI_GEMINI_OAUTH_CLIENT_ID`
+- `MULLUSI_GEMINI_OAUTH_CLIENT_SECRET`
 
 (Or the `GEMINI_CLI_*` variants.)
 
@@ -75,15 +75,15 @@ If Gemini CLI OAuth requests fail after login, set
 retry.
 
 If login fails before the browser flow starts, make sure the local `gemini`
-command is installed and on `PATH`. OpenClaw supports both Homebrew installs
+command is installed and on `PATH`. Mullusi supports both Homebrew installs
 and global npm installs, including common Windows/npm layouts.
 
 Gemini CLI JSON usage notes:
 
 - Reply text comes from the CLI JSON `response` field.
 - Usage falls back to `stats` when the CLI leaves `usage` empty.
-- `stats.cached` is normalized into OpenClaw `cacheRead`.
-- If `stats.input` is missing, OpenClaw derives input tokens from
+- `stats.cached` is normalized into Mullusi `cacheRead`.
+- If `stats.input` is missing, Mullusi derives input tokens from
   `stats.input_tokens - stats.cached`.
 
 ## Capabilities
@@ -100,14 +100,14 @@ Gemini CLI JSON usage notes:
 
 ## Direct Gemini cache reuse
 
-For direct Gemini API runs (`api: "google-generative-ai"`), OpenClaw now
+For direct Gemini API runs (`api: "google-generative-ai"`), Mullusi now
 passes a configured `cachedContent` handle through to Gemini requests.
 
 - Configure per-model or global params with either
   `cachedContent` or legacy `cached_content`
 - If both are present, `cachedContent` wins
 - Example value: `cachedContents/prebuilt-context`
-- Gemini cache-hit usage is normalized into OpenClaw `cacheRead` from
+- Gemini cache-hit usage is normalized into Mullusi `cacheRead` from
   upstream `cachedContentTokenCount`
 
 Example:
@@ -145,5 +145,5 @@ the `google` provider id.
 ## Environment note
 
 If the Gateway runs as a daemon (launchd/systemd), make sure `GEMINI_API_KEY`
-is available to that process (for example, in `~/.openclaw/.env` or via
+is available to that process (for example, in `~/.mullusi/.env` or via
 `env.shellEnv`).

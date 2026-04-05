@@ -316,12 +316,12 @@ describe("zalouser send helpers", () => {
   it("delegates link helper to JS transport", async () => {
     mockSendLink.mockResolvedValueOnce({ ok: false, error: "boom" });
 
-    const result = await sendLinkZalouser("thread-3", "https://openclaw.ai", {
+    const result = await sendLinkZalouser("thread-3", "https://mullusi.com", {
       profile: "p3",
       isGroup: true,
     });
 
-    expect(mockSendLink).toHaveBeenCalledWith("thread-3", "https://openclaw.ai", {
+    expect(mockSendLink).toHaveBeenCalledWith("thread-3", "https://mullusi.com", {
       profile: "p3",
       isGroup: true,
     });

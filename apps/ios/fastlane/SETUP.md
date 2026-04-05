@@ -1,4 +1,4 @@
-# fastlane setup (OpenClaw iOS)
+# fastlane setup (Mullusi iOS)
 
 Install:
 
@@ -25,14 +25,14 @@ This writes these auth variables in `apps/ios/fastlane/.env`:
 ```bash
 ASC_KEY_ID=YOUR_KEY_ID
 ASC_ISSUER_ID=YOUR_ISSUER_ID
-ASC_KEYCHAIN_SERVICE=openclaw-asc-key
+ASC_KEYCHAIN_SERVICE=mullusi-asc-key
 ASC_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
 ```
 
 Optional app targeting variables (helpful if Fastlane cannot auto-resolve app by bundle):
 
 ```bash
-ASC_APP_IDENTIFIER=ai.openclaw.client
+ASC_APP_IDENTIFIER=ai.mullusi.client
 # or
 ASC_APP_ID=YOUR_APP_STORE_CONNECT_APP_ID
 ```
@@ -51,7 +51,7 @@ Code signing variable (optional in `.env`):
 IOS_DEVELOPMENT_TEAM=YOUR_TEAM_ID
 ```
 
-Tip: run `scripts/ios-team-id.sh` from repo root to print a Team ID for `.env`. The helper prefers the canonical OpenClaw team (`Y5PE65HELJ`) when present locally; otherwise it prefers the first non-personal team from your Xcode account (then personal team if needed). Fastlane uses this helper automatically if `IOS_DEVELOPMENT_TEAM` is missing.
+Tip: run `scripts/ios-team-id.sh` from repo root to print a Team ID for `.env`. The helper prefers the canonical Mullusi team (`Y5PE65HELJ`) when present locally; otherwise it prefers the first non-personal team from your Xcode account (then personal team if needed). Fastlane uses this helper automatically if `IOS_DEVELOPMENT_TEAM` is missing.
 
 Validate auth:
 
@@ -92,5 +92,5 @@ Versioning rules:
 - Use `YYYY.M.D` for stable versions and `YYYY.M.D-beta.N` for beta versions
 - Fastlane stamps `CFBundleShortVersionString` to `YYYY.M.D`
 - Fastlane resolves `CFBundleVersion` as the next integer TestFlight build number for that short version
-- The beta flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
+- The beta flow regenerates `apps/ios/Mullusi.xcodeproj` from `apps/ios/project.yml` before archiving
 - Local beta signing uses a temporary generated xcconfig and leaves local development signing overrides untouched

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { MullusiConfig } from "mullusi/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers } from "./index.js";
@@ -24,7 +24,7 @@ describe("memory search async sync", () => {
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
 
-  const buildConfig = (): OpenClawConfig =>
+  const buildConfig = (): MullusiConfig =>
     ({
       agents: {
         defaults: {
@@ -40,13 +40,13 @@ describe("memory search async sync", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    }) as OpenClawConfig;
+    }) as MullusiConfig;
 
   beforeEach(async () => {
     await closeAllMemorySearchManagers();
     embedBatch.mockClear();
     embedBatch.mockImplementation(async (input: string[]) => input.map(() => [0.2, 0.2, 0.2]));
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-async-"));
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-mem-async-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"));
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-07.md"), "hello\n");

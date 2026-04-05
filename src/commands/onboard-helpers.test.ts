@@ -77,42 +77,42 @@ describe("resolveBrowserOpenCommand", () => {
 describe("resolveControlUiLinks", () => {
   it("uses customBindHost for custom bind", () => {
     const links = resolveControlUiLinks({
-      port: 18789,
+      port: 18790,
       bind: "custom",
       customBindHost: "192.168.1.100",
     });
-    expect(links.httpUrl).toBe("http://192.168.1.100:18789/");
-    expect(links.wsUrl).toBe("ws://192.168.1.100:18789");
+    expect(links.httpUrl).toBe("http://192.168.1.100:18790/");
+    expect(links.wsUrl).toBe("ws://192.168.1.100:18790");
   });
 
   it("falls back to loopback for invalid customBindHost", () => {
     const links = resolveControlUiLinks({
-      port: 18789,
+      port: 18790,
       bind: "custom",
       customBindHost: "192.168.001.100",
     });
-    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
-    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
+    expect(links.httpUrl).toBe("http://127.0.0.1:18790/");
+    expect(links.wsUrl).toBe("ws://127.0.0.1:18790");
   });
 
   it("uses tailnet IP for tailnet bind", () => {
     mocks.pickPrimaryTailnetIPv4.mockReturnValueOnce("100.64.0.9");
     const links = resolveControlUiLinks({
-      port: 18789,
+      port: 18790,
       bind: "tailnet",
     });
-    expect(links.httpUrl).toBe("http://100.64.0.9:18789/");
-    expect(links.wsUrl).toBe("ws://100.64.0.9:18789");
+    expect(links.httpUrl).toBe("http://100.64.0.9:18790/");
+    expect(links.wsUrl).toBe("ws://100.64.0.9:18790");
   });
 
   it("keeps loopback for auto even when tailnet is present", () => {
     mocks.pickPrimaryTailnetIPv4.mockReturnValueOnce("100.64.0.9");
     const links = resolveControlUiLinks({
-      port: 18789,
+      port: 18790,
       bind: "auto",
     });
-    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
-    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
+    expect(links.httpUrl).toBe("http://127.0.0.1:18790/");
+    expect(links.wsUrl).toBe("ws://127.0.0.1:18790");
   });
 
   it("falls back to loopback for tailnet bind when interface discovery throws", () => {
@@ -121,12 +121,12 @@ describe("resolveControlUiLinks", () => {
     });
 
     const links = resolveControlUiLinks({
-      port: 18789,
+      port: 18790,
       bind: "tailnet",
     });
 
-    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
-    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
+    expect(links.httpUrl).toBe("http://127.0.0.1:18790/");
+    expect(links.wsUrl).toBe("ws://127.0.0.1:18790");
   });
 
   it("falls back to loopback for LAN bind when interface discovery throws", () => {
@@ -135,12 +135,12 @@ describe("resolveControlUiLinks", () => {
     });
 
     const links = resolveControlUiLinks({
-      port: 18789,
+      port: 18790,
       bind: "lan",
     });
 
-    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
-    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
+    expect(links.httpUrl).toBe("http://127.0.0.1:18790/");
+    expect(links.wsUrl).toBe("ws://127.0.0.1:18790");
   });
 });
 

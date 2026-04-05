@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectGeneratedTokenPersistedToGatewayAuth } from "../../test-support.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn<() => OpenClawConfig>(),
+  loadConfig: vi.fn<() => MullusiConfig>(),
   resolveGatewayAuth: vi.fn(
     ({
       authConfig,
     }: {
-      authConfig?: NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]> | undefined;
+      authConfig?: NonNullable<NonNullable<MullusiConfig["gateway"]>["auth"]> | undefined;
     }) => {
       const token =
         typeof authConfig?.token === "string"
@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
       };
     },
   ),
-  ensureGatewayStartupAuth: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+  ensureGatewayStartupAuth: vi.fn(async ({ cfg }: { cfg: MullusiConfig }) => ({
     cfg: {
       ...cfg,
       gateway: {
@@ -60,7 +60,7 @@ let ensureBrowserControlAuth: typeof import("./control-auth.js").ensureBrowserCo
 
 describe("ensureBrowserControlAuth", () => {
   const expectExplicitModeSkipsAutoAuth = async (mode: "password" | "none") => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       gateway: {
         auth: { mode },
       },
@@ -98,7 +98,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("returns existing auth and skips writes", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       gateway: {
         auth: {
           token: "already-set",
@@ -114,7 +114,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("auto-generates and persists a token when auth is missing", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       browser: {
         enabled: true,
       },
@@ -130,7 +130,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("skips auto-generation in test env", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       browser: {
         enabled: true,
       },
@@ -155,7 +155,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("reuses auth from latest config snapshot", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       browser: {
         enabled: true,
       },
@@ -178,7 +178,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("fails when gateway.auth.token SecretRef is unresolved", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       gateway: {
         auth: {
           mode: "token",

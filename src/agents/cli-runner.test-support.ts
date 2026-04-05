@@ -4,7 +4,7 @@ import { beforeEach, vi } from "vitest";
 import { buildAnthropicCliBackend } from "../../extensions/anthropic/test-api.js";
 import { buildGoogleGeminiCliBackend } from "../../extensions/google/test-api.js";
 import { buildOpenAICodexCliBackend } from "../../extensions/openai/test-api.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import type { enqueueSystemEvent } from "../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -143,7 +143,7 @@ export const EXISTING_CODEX_CONFIG = {
       },
     },
   },
-} satisfies OpenClawConfig;
+} satisfies MullusiConfig;
 
 export async function setupCliRunnerTestModule() {
   const registry = createEmptyPluginRegistry();
@@ -208,7 +208,7 @@ export async function runCliAgentWithBackendConfig(params: {
           },
         },
       },
-    } satisfies OpenClawConfig,
+    } satisfies MullusiConfig,
     prompt: "hi",
     provider: "codex-cli",
     model: "gpt-5.4",

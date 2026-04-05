@@ -47,7 +47,7 @@ async function inspectGatewayRestartWithSnapshot(params: {
   const { inspectGatewayRestart } = await import("./restart-health.js");
   return inspectGatewayRestart({
     service,
-    port: 18789,
+    port: 18790,
     ...(params.includeUnknownListenersAsStale === undefined
       ? {}
       : { includeUnknownListenersAsStale: params.includeUnknownListenersAsStale }),
@@ -63,7 +63,7 @@ async function inspectUnknownListenerFallback(params: {
   return inspectGatewayRestartWithSnapshot({
     runtime: params.runtime,
     portUsage: {
-      port: 18789,
+      port: 18790,
       status: "busy",
       listeners: [{ pid: 10920, command: "unknown" }],
       hints: [],
@@ -80,7 +80,7 @@ async function inspectAmbiguousOwnershipWithProbe(
   return inspectGatewayRestartWithSnapshot({
     runtime: { status: "running", pid: 8000 },
     portUsage: {
-      port: 18789,
+      port: 18790,
       status: "busy",
       listeners: [{ commandLine: "" }],
       hints: [],
@@ -115,9 +115,9 @@ describe("inspectGatewayRestart", () => {
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "running", pid: 7000 },
       portUsage: {
-        port: 18789,
+        port: 18790,
         status: "busy",
-        listeners: [{ pid: 7001, ppid: 7000, commandLine: "openclaw-gateway" }],
+        listeners: [{ pid: 7001, ppid: 7000, commandLine: "mullusi-gateway" }],
         hints: [],
       },
     });
@@ -130,9 +130,9 @@ describe("inspectGatewayRestart", () => {
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "running", pid: 8000 },
       portUsage: {
-        port: 18789,
+        port: 18790,
         status: "busy",
-        listeners: [{ pid: 9000, ppid: 8999, commandLine: "openclaw-gateway" }],
+        listeners: [{ pid: 9000, ppid: 8999, commandLine: "mullusi-gateway" }],
         hints: [],
       },
     });
@@ -175,7 +175,7 @@ describe("inspectGatewayRestart", () => {
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "stopped" },
       portUsage: {
-        port: 18789,
+        port: 18790,
         status: "busy",
         listeners: [{ pid: 22001, command: "nginx.exe" }],
         hints: [],
@@ -194,7 +194,7 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+      expect.objectContaining({ url: "ws://127.0.0.1:18790" }),
     );
   });
 
@@ -209,9 +209,9 @@ describe("inspectGatewayRestart", () => {
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "stopped" },
       portUsage: {
-        port: 18789,
+        port: 18790,
         status: "busy",
-        listeners: [{ pid: 9100, commandLine: "openclaw-gateway" }],
+        listeners: [{ pid: 9100, commandLine: "mullusi-gateway" }],
         hints: [],
       },
     });
@@ -235,7 +235,7 @@ describe("inspectGatewayRestart", () => {
     } as unknown as GatewayService;
 
     inspectPortUsage.mockResolvedValue({
-      port: 18789,
+      port: 18790,
       status: "busy",
       listeners: [],
       hints: [
@@ -245,7 +245,7 @@ describe("inspectGatewayRestart", () => {
     });
 
     const { inspectGatewayRestart } = await import("./restart-health.js");
-    const snapshot = await inspectGatewayRestart({ service, port: 18789 });
+    const snapshot = await inspectGatewayRestart({ service, port: 18790 });
 
     expect(snapshot.healthy).toBe(true);
     expect(probeGateway).not.toHaveBeenCalled();
@@ -254,7 +254,7 @@ describe("inspectGatewayRestart", () => {
   it("annotates stopped-free early exits with the actual elapsed time", async () => {
     const service = makeGatewayService({ status: "stopped" });
     inspectPortUsage.mockResolvedValue({
-      port: 18789,
+      port: 18790,
       status: "free",
       listeners: [],
       hints: [],
@@ -263,7 +263,7 @@ describe("inspectGatewayRestart", () => {
     const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
       service,
-      port: 18789,
+      port: 18790,
       attempts: 120,
       delayMs: 500,
     });
@@ -281,7 +281,7 @@ describe("inspectGatewayRestart", () => {
   it("annotates timeout waits when the health loop exhausts all attempts", async () => {
     const service = makeGatewayService({ status: "running", pid: 8000 });
     inspectPortUsage.mockResolvedValue({
-      port: 18789,
+      port: 18790,
       status: "free",
       listeners: [],
       hints: [],
@@ -290,7 +290,7 @@ describe("inspectGatewayRestart", () => {
     const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
       service,
-      port: 18789,
+      port: 18790,
       attempts: 4,
       delayMs: 1_000,
     });

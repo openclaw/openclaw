@@ -4,13 +4,13 @@ import {
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "mullusi/plugin-sdk/security-runtime";
 
 export const secretTargetRegistryEntries = [
   {
     id: "channels.bluebubbles.accounts.*.password",
     targetType: "channels.bluebubbles.accounts.*.password",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.bluebubbles.accounts.*.password",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -21,7 +21,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.bluebubbles.password",
     targetType: "channels.bluebubbles.password",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.bluebubbles.password",
     secretShape: "secret_input",
     expectedResolvedValue: "string",

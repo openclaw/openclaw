@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../../test/helpers/temp-home.js";
 import { autoMigrateLegacyMatrixState, detectLegacyMatrixState } from "./legacy-state.js";
@@ -13,11 +13,11 @@ function writeFile(filePath: string, value: string) {
 describe("matrix legacy state migration", () => {
   it("migrates the flat legacy Matrix store into account-scoped storage", async () => {
     await withTempHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
+      const stateDir = path.join(home, ".mullusi");
       writeFile(path.join(stateDir, "matrix", "bot-storage.json"), '{"next_batch":"s1"}');
       writeFile(path.join(stateDir, "matrix", "crypto", "store.db"), "crypto");
 
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           matrix: {
             homeserver: "https://matrix.example.org",
@@ -45,7 +45,7 @@ describe("matrix legacy state migration", () => {
 
   it("uses cached Matrix credentials when the config no longer stores an access token", async () => {
     await withTempHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
+      const stateDir = path.join(home, ".mullusi");
       writeFile(path.join(stateDir, "matrix", "bot-storage.json"), '{"next_batch":"s1"}');
       writeFile(
         path.join(stateDir, "credentials", "matrix", "credentials.json"),
@@ -60,7 +60,7 @@ describe("matrix legacy state migration", () => {
         ),
       );
 
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           matrix: {
             homeserver: "https://matrix.example.org",

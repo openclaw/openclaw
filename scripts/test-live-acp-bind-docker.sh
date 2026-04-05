@@ -3,14 +3,14 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/live-docker-auth.sh"
-IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
-LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
-CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
-WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
-PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
-CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/openclaw/docker-cli-tools}"
-ACP_AGENT="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
-ACPX_VERSION="${OPENCLAW_DOCKER_ACPX_VERSION:-$(node -p "const pkg=require(process.argv[1]); process.stdout.write(String(pkg.dependencies?.acpx ?? ''))" "$ROOT_DIR/extensions/acpx/package.json")}"
+IMAGE_NAME="${MULLUSI_IMAGE:-mullusi:local}"
+LIVE_IMAGE_NAME="${MULLUSI_LIVE_IMAGE:-${IMAGE_NAME}-live}"
+CONFIG_DIR="${MULLUSI_CONFIG_DIR:-$HOME/.mullusi}"
+WORKSPACE_DIR="${MULLUSI_WORKSPACE_DIR:-$HOME/.mullusi/workspace}"
+PROFILE_FILE="${MULLUSI_PROFILE_FILE:-$HOME/.profile}"
+CLI_TOOLS_DIR="${MULLUSI_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/mullusi/docker-cli-tools}"
+ACP_AGENT="${MULLUSI_LIVE_ACP_BIND_AGENT:-claude}"
+ACPX_VERSION="${MULLUSI_DOCKER_ACPX_VERSION:-$(node -p "const pkg=require(process.argv[1]); process.stdout.write(String(pkg.dependencies?.acpx ?? ''))" "$ROOT_DIR/extensions/acpx/package.json")}"
 
 if [[ -z "$ACPX_VERSION" ]]; then
   echo "Unable to resolve bundled ACPX version from extensions/acpx/package.json" >&2
@@ -29,7 +29,7 @@ case "$ACP_AGENT" in
     CLI_BIN="codex"
     ;;
   *)
-    echo "Unsupported OPENCLAW_LIVE_ACP_BIND_AGENT: $ACP_AGENT (expected claude or codex)" >&2
+    echo "Unsupported MULLUSI_LIVE_ACP_BIND_AGENT: $ACP_AGENT (expected claude or codex)" >&2
     exit 1
     ;;
 esac
@@ -43,32 +43,32 @@ fi
 
 AUTH_DIRS=()
 AUTH_FILES=()
-if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
+if [[ -n "${MULLUSI_DOCKER_AUTH_DIRS:-}" ]]; then
   while IFS= read -r auth_dir; do
     [[ -n "$auth_dir" ]] || continue
     AUTH_DIRS+=("$auth_dir")
-  done < <(openclaw_live_collect_auth_dirs)
+  done < <(mullusi_live_collect_auth_dirs)
   while IFS= read -r auth_file; do
     [[ -n "$auth_file" ]] || continue
     AUTH_FILES+=("$auth_file")
-  done < <(openclaw_live_collect_auth_files)
+  done < <(mullusi_live_collect_auth_files)
 else
   while IFS= read -r auth_dir; do
     [[ -n "$auth_dir" ]] || continue
     AUTH_DIRS+=("$auth_dir")
-  done < <(openclaw_live_collect_auth_dirs_from_csv "$AUTH_PROVIDER")
+  done < <(mullusi_live_collect_auth_dirs_from_csv "$AUTH_PROVIDER")
   while IFS= read -r auth_file; do
     [[ -n "$auth_file" ]] || continue
     AUTH_FILES+=("$auth_file")
-  done < <(openclaw_live_collect_auth_files_from_csv "$AUTH_PROVIDER")
+  done < <(mullusi_live_collect_auth_files_from_csv "$AUTH_PROVIDER")
 fi
 AUTH_DIRS_CSV=""
 if ((${#AUTH_DIRS[@]} > 0)); then
-  AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
+  AUTH_DIRS_CSV="$(mullusi_live_join_csv "${AUTH_DIRS[@]}")"
 fi
 AUTH_FILES_CSV=""
 if ((${#AUTH_FILES[@]} > 0)); then
-  AUTH_FILES_CSV="$(openclaw_live_join_csv "${AUTH_FILES[@]}")"
+  AUTH_FILES_CSV="$(mullusi_live_join_csv "${AUTH_FILES[@]}")"
 fi
 
 EXTERNAL_AUTH_MOUNTS=()
@@ -93,7 +93,7 @@ read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
 [ -f "$HOME/.profile" ] && source "$HOME/.profile" || true
 export PATH="$HOME/.npm-global/bin:$PATH"
-IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
+IFS=',' read -r -a auth_files <<<"${MULLUSI_DOCKER_AUTH_FILES_RESOLVED:-}"
 if ((${#auth_files[@]} > 0)); then
   for auth_file in "${auth_files[@]}"; do
     [ -n "$auth_file" ] || continue
@@ -104,9 +104,9 @@ if ((${#auth_files[@]} > 0)); then
   done
 fi
 if [ ! -x "$HOME/.npm-global/bin/acpx" ]; then
-  npm_config_prefix="$HOME/.npm-global" npm install -g "acpx@${OPENCLAW_DOCKER_ACPX_VERSION}"
+  npm_config_prefix="$HOME/.npm-global" npm install -g "acpx@${MULLUSI_DOCKER_ACPX_VERSION}"
 fi
-agent="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
+agent="${MULLUSI_LIVE_ACP_BIND_AGENT:-claude}"
 case "$agent" in
   claude)
     if [ ! -x "$HOME/.npm-global/bin/claude" ]; then
@@ -120,11 +120,11 @@ case "$agent" in
       cat > "$HOME/.npm-global/bin/claude" <<WRAP
 #!/usr/bin/env bash
 script_dir="\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)"
-if [ -n "\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY:-}" ]; then
-  export ANTHROPIC_API_KEY="\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY}"
+if [ -n "\${MULLUSI_LIVE_ACP_BIND_ANTHROPIC_API_KEY:-}" ]; then
+  export ANTHROPIC_API_KEY="\${MULLUSI_LIVE_ACP_BIND_ANTHROPIC_API_KEY}"
 fi
-if [ -n "\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD:-}" ]; then
-  export ANTHROPIC_API_KEY_OLD="\${OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD}"
+if [ -n "\${MULLUSI_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD:-}" ]; then
+  export ANTHROPIC_API_KEY_OLD="\${MULLUSI_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD}"
 fi
 exec "\$script_dir/claude-real" "\$@"
 WRAP
@@ -138,7 +138,7 @@ WRAP
     fi
     ;;
   *)
-    echo "Unsupported OPENCLAW_LIVE_ACP_BIND_AGENT: $agent" >&2
+    echo "Unsupported MULLUSI_LIVE_ACP_BIND_AGENT: $agent" >&2
     exit 1
     ;;
 esac
@@ -157,12 +157,12 @@ tar -C /src \
 ln -s /app/node_modules "$tmp_dir/node_modules"
 ln -s /app/dist "$tmp_dir/dist"
 if [ -d /app/dist-runtime/extensions ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
+  export MULLUSI_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
 elif [ -d /app/dist/extensions ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
+  export MULLUSI_BUNDLED_PLUGINS_DIR=/app/dist/extensions
 fi
 cd "$tmp_dir"
-export OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND="$HOME/.npm-global/bin/acpx"
+export MULLUSI_LIVE_ACP_BIND_ACPX_COMMAND="$HOME/.npm-global/bin/acpx"
 pnpm test:live src/gateway/gateway-acp-bind.live.test.ts
 EOF
 
@@ -177,23 +177,23 @@ docker run --rm -t \
   --entrypoint bash \
   -e ANTHROPIC_API_KEY \
   -e ANTHROPIC_API_KEY_OLD \
-  -e OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
-  -e OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}" \
+  -e MULLUSI_LIVE_ACP_BIND_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+  -e MULLUSI_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}" \
   -e OPENAI_API_KEY \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e HOME=/home/node \
   -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
-  -e OPENCLAW_SKIP_CHANNELS=1 \
-  -e OPENCLAW_VITEST_FS_MODULE_CACHE=0 \
-  -e OPENCLAW_DOCKER_ACPX_VERSION="$ACPX_VERSION" \
-  -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
-  -e OPENCLAW_LIVE_TEST=1 \
-  -e OPENCLAW_LIVE_ACP_BIND=1 \
-  -e OPENCLAW_LIVE_ACP_BIND_AGENT="$ACP_AGENT" \
-  -e OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND="${OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND:-}" \
+  -e MULLUSI_SKIP_CHANNELS=1 \
+  -e MULLUSI_VITEST_FS_MODULE_CACHE=0 \
+  -e MULLUSI_DOCKER_ACPX_VERSION="$ACPX_VERSION" \
+  -e MULLUSI_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
+  -e MULLUSI_LIVE_TEST=1 \
+  -e MULLUSI_LIVE_ACP_BIND=1 \
+  -e MULLUSI_LIVE_ACP_BIND_AGENT="$ACP_AGENT" \
+  -e MULLUSI_LIVE_ACP_BIND_ACPX_COMMAND="${MULLUSI_LIVE_ACP_BIND_ACPX_COMMAND:-}" \
   -v "$ROOT_DIR":/src:ro \
-  -v "$CONFIG_DIR":/home/node/.openclaw \
-  -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \
+  -v "$CONFIG_DIR":/home/node/.mullusi \
+  -v "$WORKSPACE_DIR":/home/node/.mullusi/workspace \
   -v "$CLI_TOOLS_DIR":/home/node/.npm-global \
   "${EXTERNAL_AUTH_MOUNTS[@]}" \
   "${PROFILE_MOUNT[@]}" \

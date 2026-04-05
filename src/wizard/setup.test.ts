@@ -32,7 +32,7 @@ const configureGatewayForSetup = vi.hoisted(() =>
   vi.fn(async (args) => ({
     nextConfig: args.nextConfig,
     settings: {
-      port: args.localPort ?? 18789,
+      port: args.localPort ?? 18790,
       bind: "loopback",
       authMode: "token",
       gatewayToken: "test-token",
@@ -82,14 +82,14 @@ const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
 const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
 const resolveGatewayPort = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
-    const raw = env?.OPENCLAW_GATEWAY_PORT ?? process.env.OPENCLAW_GATEWAY_PORT;
+    const raw = env?.MULLUSI_GATEWAY_PORT ?? process.env.MULLUSI_GATEWAY_PORT;
     const port = raw ? Number.parseInt(String(raw), 10) : Number.NaN;
-    return Number.isFinite(port) && port > 0 ? port : 18789;
+    return Number.isFinite(port) && port > 0 ? port : 18790;
   }),
 );
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async () => ({
-    path: "/tmp/.openclaw/openclaw.json",
+    path: "/tmp/.mullusi/mullusi.json",
     exists: false,
     raw: null as string | null,
     parsed: {},
@@ -163,14 +163,14 @@ vi.mock("../commands/onboard-hooks.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  DEFAULT_GATEWAY_PORT: 18789,
+  DEFAULT_GATEWAY_PORT: 18790,
   resolveGatewayPort,
   readConfigFileSnapshot,
   writeConfigFile,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
-  DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
+  DEFAULT_WORKSPACE: "/tmp/mullusi-workspace",
   applyWizardMetadata: (cfg: unknown) => cfg,
   summarizeExistingConfig: () => "summary",
   handleReset: async () => {},
@@ -189,8 +189,8 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   waitForGatewayReachable: vi.fn(async () => {}),
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
   resolveControlUiLinks: vi.fn(() => ({
-    httpUrl: "http://127.0.0.1:18789",
-    wsUrl: "ws://127.0.0.1:18789",
+    httpUrl: "http://127.0.0.1:18790",
+    wsUrl: "ws://127.0.0.1:18790",
   })),
 }));
 
@@ -258,7 +258,7 @@ describe("runSetupWizard", () => {
   let suiteCase = 0;
 
   beforeAll(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-suite-"));
+    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-onboard-suite-"));
   });
 
   afterAll(async () => {
@@ -275,7 +275,7 @@ describe("runSetupWizard", () => {
 
   it("exits when config is invalid", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
-      path: "/tmp/.openclaw/openclaw.json",
+      path: "/tmp/.mullusi/mullusi.json",
       exists: true,
       raw: "{}",
       parsed: {},
@@ -502,7 +502,7 @@ describe("runSetupWizard", () => {
       },
     ]);
     readConfigFileSnapshot.mockResolvedValueOnce({
-      path: "/tmp/.openclaw/openclaw.json",
+      path: "/tmp/.mullusi/mullusi.json",
       exists: true,
       raw: "{}",
       parsed: {},
@@ -553,11 +553,11 @@ describe("runSetupWizard", () => {
   });
 
   it("resolves gateway.auth.password SecretRef for local setup probe", async () => {
-    const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "gateway-ref-password"; // pragma: allowlist secret
+    const previous = process.env.MULLUSI_GATEWAY_PASSWORD;
+    process.env.MULLUSI_GATEWAY_PASSWORD = "gateway-ref-password"; // pragma: allowlist secret
     probeGatewayReachable.mockClear();
     readConfigFileSnapshot.mockResolvedValueOnce({
-      path: "/tmp/.openclaw/openclaw.json",
+      path: "/tmp/.mullusi/mullusi.json",
       exists: true,
       raw: "{}",
       parsed: {},
@@ -570,7 +570,7 @@ describe("runSetupWizard", () => {
             password: {
               source: "env",
               provider: "default",
-              id: "OPENCLAW_GATEWAY_PASSWORD",
+              id: "MULLUSI_GATEWAY_PASSWORD",
             },
           },
         },
@@ -607,15 +607,15 @@ describe("runSetupWizard", () => {
       );
     } finally {
       if (previous === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+        delete process.env.MULLUSI_GATEWAY_PASSWORD;
       } else {
-        process.env.OPENCLAW_GATEWAY_PASSWORD = previous;
+        process.env.MULLUSI_GATEWAY_PASSWORD = previous;
       }
     }
 
     expect(probeGatewayReachable).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
+        url: "ws://127.0.0.1:18790",
         password: "gateway-ref-password", // pragma: allowlist secret
       }),
     );
@@ -652,8 +652,8 @@ describe("runSetupWizard", () => {
   });
 
   it("shows the resolved gateway port in quickstart for fresh envs", async () => {
-    const previousPort = process.env.OPENCLAW_GATEWAY_PORT;
-    process.env.OPENCLAW_GATEWAY_PORT = "18791";
+    const previousPort = process.env.MULLUSI_GATEWAY_PORT;
+    process.env.MULLUSI_GATEWAY_PORT = "18791";
     const note: WizardPrompter["note"] = vi.fn(async () => {});
     const prompter = buildWizardPrompter({ note });
     const runtime = createRuntime();
@@ -676,9 +676,9 @@ describe("runSetupWizard", () => {
       );
     } finally {
       if (previousPort === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_PORT;
+        delete process.env.MULLUSI_GATEWAY_PORT;
       } else {
-        process.env.OPENCLAW_GATEWAY_PORT = previousPort;
+        process.env.MULLUSI_GATEWAY_PORT = previousPort;
       }
     }
 

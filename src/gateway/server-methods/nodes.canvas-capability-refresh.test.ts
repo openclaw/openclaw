@@ -7,7 +7,7 @@ describe("node.canvas.capability.refresh", () => {
     const respond = vi.fn();
     const client = {
       connect: { role: "node", client: { id: "node-1" } },
-      canvasHostUrl: "http://127.0.0.1:18789",
+      canvasHostUrl: "http://127.0.0.1:18790",
       canvasCapability: "old-token",
       canvasCapabilityExpiresAtMs: Date.now() - 1,
     };
@@ -35,7 +35,7 @@ describe("node.canvas.capability.refresh", () => {
     const payload = call?.[1] ?? {};
     expect(typeof payload.canvasCapability).toBe("string");
     expect(payload.canvasCapability).not.toBe("old-token");
-    expect(payload.canvasHostUrl).toContain("/__openclaw__/cap/");
+    expect(payload.canvasHostUrl).toContain("/__mullusi__/cap/");
     expect(typeof payload.canvasCapabilityExpiresAtMs).toBe("number");
     expect(payload.canvasCapabilityExpiresAtMs).toBeGreaterThan(Date.now());
     expect(client.canvasCapability).toBe(payload.canvasCapability);

@@ -1,5 +1,5 @@
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createInspectedDirectoryEntriesLister } from "openclaw/plugin-sdk/directory-runtime";
+import { mapAllowFromEntries } from "mullusi/plugin-sdk/channel-config-helpers";
+import { createInspectedDirectoryEntriesLister } from "mullusi/plugin-sdk/directory-runtime";
 import { inspectTelegramAccount, type InspectedTelegramAccount } from "./account-inspect.js";
 
 export const listTelegramDirectoryPeersFromConfig =

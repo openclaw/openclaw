@@ -1,5 +1,5 @@
-import { buildMentionRegexes, normalizeMentionText } from "openclaw/plugin-sdk/channel-inbound";
-import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { buildMentionRegexes, normalizeMentionText } from "mullusi/plugin-sdk/channel-inbound";
+import type { loadConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   getComparableIdentityValues,
   getMentionIdentities,

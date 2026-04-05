@@ -1,6 +1,6 @@
 import type { PluginRegistry } from "./registry.js";
 
-export const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+export const PLUGIN_REGISTRY_STATE = Symbol.for("mullusi.pluginRegistryState");
 
 export type RegistrySurfaceState = {
   registry: PluginRegistry | null;

@@ -30,9 +30,9 @@ function renderInto(props: DreamsProps): HTMLDivElement {
 }
 
 describe("dreams view", () => {
-  it("renders the sleeping lobster SVG", () => {
+  it("renders the sleeping mullusi SVG", () => {
     const container = renderInto(buildProps());
-    const svg = container.querySelector(".dreams__lobster svg");
+    const svg = container.querySelector(".dreams__mullusi svg");
     expect(svg).not.toBeNull();
   });
 

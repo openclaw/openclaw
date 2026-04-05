@@ -1,4 +1,4 @@
-import { countLines, hasBalancedFences } from "openclaw/plugin-sdk/testing";
+import { countLines, hasBalancedFences } from "mullusi/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
 import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
 

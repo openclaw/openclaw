@@ -13,7 +13,7 @@ import {
 async function withIdentity(
   run: (identity: ReturnType<typeof loadOrCreateDeviceIdentity>) => void,
 ) {
-  await withTempDir("openclaw-device-identity-", async (dir) => {
+  await withTempDir("mullusi-device-identity-", async (dir) => {
     const identity = loadOrCreateDeviceIdentity(path.join(dir, "device.json"));
     run(identity);
   });

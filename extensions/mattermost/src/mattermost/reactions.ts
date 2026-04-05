@@ -1,4 +1,4 @@
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isPrivateNetworkOptInEnabled } from "mullusi/plugin-sdk/ssrf-runtime";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -6,11 +6,11 @@ import {
   type MattermostClient,
   type MattermostFetch,
 } from "./client.js";
-import type { OpenClawConfig } from "./runtime-api.js";
+import type { MullusiConfig } from "./runtime-api.js";
 
 type Result = { ok: true } | { ok: false; error: string };
 type ReactionParams = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   postId: string;
   emojiName: string;
   accountId?: string | null;
@@ -40,7 +40,7 @@ async function resolveBotUserId(
 }
 
 export async function addMattermostReaction(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   postId: string;
   emojiName: string;
   accountId?: string | null;
@@ -53,7 +53,7 @@ export async function addMattermostReaction(params: {
 }
 
 export async function removeMattermostReaction(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   postId: string;
   emojiName: string;
   accountId?: string | null;

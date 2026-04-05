@@ -53,7 +53,7 @@ describe("loadEnabledClaudeBundleCommands", () => {
   it("loads enabled Claude bundle markdown commands and skips disabled-model-invocation entries", async () => {
     await withBundleHomeEnv(
       tempHarness,
-      "openclaw-bundle-commands",
+      "mullusi-bundle-commands",
       async ({ homeDir, workspaceDir }) => {
         await writeClaudeBundleCommandFixture({
           homeDir,

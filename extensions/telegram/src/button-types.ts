@@ -1,9 +1,9 @@
-import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import { reduceInteractiveReply } from "mullusi/plugin-sdk/interactive-runtime";
 import {
   normalizeInteractiveReply,
   type InteractiveReply,
   type InteractiveReplyButton,
-} from "openclaw/plugin-sdk/interactive-runtime";
+} from "mullusi/plugin-sdk/interactive-runtime";
 import { sanitizeTelegramCallbackData } from "./approval-callback-data.js";
 
 export type TelegramButtonStyle = "danger" | "success" | "primary";

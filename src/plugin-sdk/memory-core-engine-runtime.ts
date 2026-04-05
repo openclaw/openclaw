@@ -1,5 +1,5 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/memory-core/runtime-api.js");
+type FacadeModule = typeof import("@mullusi/memory-core/runtime-api.js");
 import {
   createLazyFacadeObjectValue,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
@@ -38,8 +38,8 @@ export const repairShortTermPromotionArtifacts: FacadeModule["repairShortTermPro
       ...args,
     )) as FacadeModule["repairShortTermPromotionArtifacts"];
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata =
-  import("@openclaw/memory-core/runtime-api.js").BuiltinMemoryEmbeddingProviderDoctorMetadata;
+  import("@mullusi/memory-core/runtime-api.js").BuiltinMemoryEmbeddingProviderDoctorMetadata;
 export type RepairShortTermPromotionArtifactsResult =
-  import("@openclaw/memory-core/runtime-api.js").RepairShortTermPromotionArtifactsResult;
+  import("@mullusi/memory-core/runtime-api.js").RepairShortTermPromotionArtifactsResult;
 export type ShortTermAuditSummary =
-  import("@openclaw/memory-core/runtime-api.js").ShortTermAuditSummary;
+  import("@mullusi/memory-core/runtime-api.js").ShortTermAuditSummary;

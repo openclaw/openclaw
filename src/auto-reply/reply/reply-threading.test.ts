@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import {
   resolveConfiguredReplyToMode,
   resolveReplyToMode,
   resolveReplyToModeWithThreading,
 } from "./reply-threading.js";
 
-const emptyCfg = {} as OpenClawConfig;
+const emptyCfg = {} as MullusiConfig;
 
 describe("resolveReplyToMode", () => {
   it("falls back to configured channel defaults when channel threading plugins are unavailable", () => {
@@ -16,7 +16,7 @@ describe("resolveReplyToMode", () => {
         discord: { replyToMode: "first" },
         slack: { replyToMode: "all" },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const chatTypeCfg = {
       channels: {
         slack: {
@@ -24,14 +24,14 @@ describe("resolveReplyToMode", () => {
           replyToModeByChatType: { direct: "all", group: "first" },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const topLevelFallbackCfg = {
       channels: {
         slack: {
           replyToMode: "first",
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const legacyDmCfg = {
       channels: {
         slack: {
@@ -39,10 +39,10 @@ describe("resolveReplyToMode", () => {
           dm: { replyToMode: "all" },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const cases: Array<{
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       channel?: "telegram" | "discord" | "slack";
       chatType?: "direct" | "group" | "channel";
       expected: "off" | "all" | "first";
@@ -79,7 +79,7 @@ describe("resolveReplyToMode", () => {
               replyToMode: "off",
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         {
           resolveReplyToMode: () => "first",
         },
@@ -103,7 +103,7 @@ describe("resolveConfiguredReplyToMode", () => {
           dm: { replyToMode: "all" },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     expect(resolveConfiguredReplyToMode(cfg, "slack", "direct")).toBe("all");
     expect(resolveConfiguredReplyToMode(cfg, "slack", "group")).toBe("first");

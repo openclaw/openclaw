@@ -27,7 +27,7 @@ export function createBundleMcpTempHarness() {
 }
 
 export function resolveBundlePluginRoot(homeDir: string, pluginId: string) {
-  return path.join(homeDir, ".openclaw", "extensions", pluginId);
+  return path.join(homeDir, ".mullusi", "extensions", pluginId);
 }
 
 export async function writeClaudeBundleManifest(params: {
@@ -96,14 +96,14 @@ export async function withBundleHomeEnv<T>(
   prefix: string,
   run: (params: { homeDir: string; workspaceDir: string }) => Promise<T>,
 ): Promise<T> {
-  const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+  const env = captureEnv(["HOME", "USERPROFILE", "MULLUSI_HOME", "MULLUSI_STATE_DIR"]);
   try {
     const homeDir = await tempHarness.createTempDir(`${prefix}-home-`);
     const workspaceDir = await tempHarness.createTempDir(`${prefix}-workspace-`);
     process.env.HOME = homeDir;
     process.env.USERPROFILE = homeDir;
-    delete process.env.OPENCLAW_HOME;
-    delete process.env.OPENCLAW_STATE_DIR;
+    delete process.env.MULLUSI_HOME;
+    delete process.env.MULLUSI_STATE_DIR;
     return await run({ homeDir, workspaceDir });
   } finally {
     env.restore();

@@ -21,12 +21,12 @@ describe("backupCreateCommand atomic archive write", () => {
 
   async function resetTempHome() {
     await fs.rm(tempHome.home, { recursive: true, force: true });
-    await fs.mkdir(path.join(tempHome.home, ".openclaw"), { recursive: true });
-    delete process.env.OPENCLAW_CONFIG_PATH;
+    await fs.mkdir(path.join(tempHome.home, ".mullusi"), { recursive: true });
+    delete process.env.MULLUSI_CONFIG_PATH;
   }
 
   beforeAll(async () => {
-    tempHome = await createTempHomeEnv("openclaw-backup-atomic-test-");
+    tempHome = await createTempHomeEnv("mullusi-backup-atomic-test-");
   });
 
   beforeEach(async () => {
@@ -44,10 +44,10 @@ describe("backupCreateCommand atomic archive write", () => {
   });
 
   it("does not leave a partial final archive behind when tar creation fails", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-failure-"));
+    const stateDir = path.join(tempHome.home, ".mullusi");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-backup-failure-"));
     try {
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "mullusi.json"), JSON.stringify({}), "utf8");
       await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
 
       tarCreateMock.mockRejectedValueOnce(new Error("disk full"));
@@ -74,12 +74,12 @@ describe("backupCreateCommand atomic archive write", () => {
   });
 
   it("does not overwrite an archive created after readiness checks complete", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-race-"));
+    const stateDir = path.join(tempHome.home, ".mullusi");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-backup-race-"));
     const realLink = fs.link.bind(fs);
     const linkSpy = vi.spyOn(fs, "link");
     try {
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "mullusi.json"), JSON.stringify({}), "utf8");
       await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
 
       tarCreateMock.mockImplementationOnce(async ({ file }: { file: string }) => {
@@ -111,11 +111,11 @@ describe("backupCreateCommand atomic archive write", () => {
   });
 
   it("falls back to exclusive copy when hard-link publication is unsupported", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-copy-fallback-"));
+    const stateDir = path.join(tempHome.home, ".mullusi");
+    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-backup-copy-fallback-"));
     const linkSpy = vi.spyOn(fs, "link");
     try {
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "mullusi.json"), JSON.stringify({}), "utf8");
       await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
 
       tarCreateMock.mockImplementationOnce(async ({ file }: { file: string }) => {

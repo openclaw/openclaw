@@ -1,1 +1,1 @@
-export { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+export { saveMediaBuffer } from "mullusi/plugin-sdk/media-runtime";

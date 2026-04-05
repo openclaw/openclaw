@@ -9,7 +9,7 @@ title: "CLI Backends"
 
 # CLI backends (fallback runtime)
 
-OpenClaw can run **local AI CLIs** as a **text-only fallback** when API providers are down,
+Mullusi can run **local AI CLIs** as a **text-only fallback** when API providers are down,
 rate-limited, or temporarily misbehaving. This is intentionally conservative:
 
 - **Tools are disabled** (no tool calls).
@@ -30,13 +30,13 @@ You can use Claude CLI **without any config** (the bundled Anthropic plugin
 registers a default backend):
 
 ```bash
-openclaw agent --message "hi" --model claude-cli/claude-sonnet-4-6
+mullusi agent --message "hi" --model claude-cli/claude-sonnet-4-6
 ```
 
 Codex CLI also works out of the box (via the bundled OpenAI plugin):
 
 ```bash
-openclaw agent --message "hi" --model codex-cli/gpt-5.4
+mullusi agent --message "hi" --model codex-cli/gpt-5.4
 ```
 
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
@@ -59,7 +59,7 @@ command path:
 That’s it. No keys, no extra auth config needed beyond the CLI itself.
 
 If you use a bundled CLI backend as the **primary message provider** on a
-gateway host, OpenClaw now auto-loads the owning bundled plugin when your config
+gateway host, Mullusi now auto-loads the owning bundled plugin when your config
 explicitly references that backend in a model ref or under
 `agents.defaults.cliBackends`.
 
@@ -88,7 +88,7 @@ Add a CLI backend to your fallback list so it only runs when primary models fail
 Notes:
 
 - If you use `agents.defaults.models` (allowlist), you must include `claude-cli/...`.
-- If the primary provider fails (auth, rate limits, timeouts), OpenClaw will
+- If the primary provider fails (auth, rate limits, timeouts), Mullusi will
   try the CLI backend next.
 - The bundled Claude CLI backend still accepts shorter aliases like
   `claude-cli/opus`, `claude-cli/opus-4.6`, or `claude-cli/sonnet`, but docs
@@ -147,7 +147,7 @@ The provider id becomes the left side of your model ref:
 ## How it works
 
 1. **Selects a backend** based on the provider prefix (`claude-cli/...`).
-2. **Builds a system prompt** using the same OpenClaw prompt + workspace context.
+2. **Builds a system prompt** using the same Mullusi prompt + workspace context.
 3. **Executes the CLI** with a session id (if supported) so history stays consistent.
 4. **Parses output** (JSON or plain text) and returns the final text.
 5. **Persists session ids** per backend, so follow-ups reuse the same CLI session.
@@ -170,7 +170,7 @@ Serialization notes:
 - `serialize: true` keeps same-lane runs ordered.
 - Most CLIs serialize on one provider lane.
 - `claude-cli` is narrower: resumed runs serialize per Claude session id, and fresh runs serialize per workspace path. Independent workspaces can run in parallel.
-- OpenClaw drops stored CLI session reuse when the backend auth state changes, including relogin, token rotation, or a changed auth profile credential.
+- Mullusi drops stored CLI session reuse when the backend auth state changes, including relogin, token rotation, or a changed auth profile credential.
 
 ## Images (pass-through)
 
@@ -181,15 +181,15 @@ imageArg: "--image",
 imageMode: "repeat"
 ```
 
-OpenClaw will write base64 images to temp files. If `imageArg` is set, those
-paths are passed as CLI args. If `imageArg` is missing, OpenClaw appends the
+Mullusi will write base64 images to temp files. If `imageArg` is set, those
+paths are passed as CLI args. If `imageArg` is missing, Mullusi appends the
 file paths to the prompt (path injection), which is enough for CLIs that auto-
 load local files from plain paths (Claude CLI behavior).
 
 ## Inputs / outputs
 
 - `output: "json"` (default) tries to parse JSON and extract text + session id.
-- For Gemini CLI JSON output, OpenClaw reads reply text from `response` and
+- For Gemini CLI JSON output, Mullusi reads reply text from `response` and
   usage from `stats` when `usage` is missing or empty.
 - `output: "jsonl"` parses JSONL streams (for example Claude CLI `stream-json`
   and Codex CLI `--json`) and extracts the final agent message plus session
@@ -245,8 +245,8 @@ Gemini CLI JSON notes:
 
 - Reply text is read from the JSON `response` field.
 - Usage falls back to `stats` when `usage` is absent or empty.
-- `stats.cached` is normalized into OpenClaw `cacheRead`.
-- If `stats.input` is missing, OpenClaw derives input tokens from
+- `stats.cached` is normalized into Mullusi `cacheRead`.
+- If `stats.input` is missing, Mullusi derives input tokens from
   `stats.input_tokens - stats.cached`.
 
 Override only if needed (common: absolute `command` path).
@@ -263,7 +263,7 @@ CLI backend defaults are now part of the plugin surface:
 
 ## Bundle MCP overlays
 
-CLI backends still do **not** receive OpenClaw tool calls, but a backend can opt
+CLI backends still do **not** receive Mullusi tool calls, but a backend can opt
 into a generated MCP config overlay with `bundleMcp: true`.
 
 Current bundled behavior:
@@ -272,19 +272,19 @@ Current bundled behavior:
 - `codex-cli`: no bundle MCP overlay
 - `google-gemini-cli`: no bundle MCP overlay
 
-When bundle MCP is enabled, OpenClaw:
+When bundle MCP is enabled, Mullusi:
 
 - loads enabled bundle-MCP servers for the current workspace
 - merges them with any existing backend `--mcp-config`
 - rewrites the CLI args to pass `--strict-mcp-config --mcp-config <generated-file>`
 
-If no MCP servers are enabled, OpenClaw still injects a strict empty config.
+If no MCP servers are enabled, Mullusi still injects a strict empty config.
 That prevents background Claude CLI runs from inheriting ambient user/global MCP
 servers unexpectedly.
 
 ## Limitations
 
-- **No OpenClaw tools** (the CLI backend never receives tool calls). Some CLIs
+- **No Mullusi tools** (the CLI backend never receives tool calls). Some CLIs
   may still run their own agent tooling. Backends with `bundleMcp: true`
   can still receive a generated MCP config overlay for their own CLI-native MCP
   support.
@@ -292,7 +292,7 @@ servers unexpectedly.
   `stream-json`; other CLI backends may still be buffered until exit.
 - **Structured outputs** depend on the CLI’s JSON format.
 - **Codex CLI sessions** resume via text output (no JSONL), which is less
-  structured than the initial `--json` run. OpenClaw sessions still work
+  structured than the initial `--json` run. Mullusi sessions still work
   normally.
 
 ## Troubleshooting

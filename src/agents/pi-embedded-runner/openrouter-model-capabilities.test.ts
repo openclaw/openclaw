@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 
 async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) {
-  const stateDir = mkdtempSync(join(tmpdir(), "openclaw-openrouter-capabilities-"));
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  const stateDir = mkdtempSync(join(tmpdir(), "mullusi-openrouter-capabilities-"));
+  process.env.MULLUSI_STATE_DIR = stateDir;
   try {
     await run(stateDir);
   } finally {
@@ -24,7 +24,7 @@ async function importOpenRouterModelCapabilities(scope: string) {
 describe("openrouter-model-capabilities", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
-    delete process.env.OPENCLAW_STATE_DIR;
+    delete process.env.MULLUSI_STATE_DIR;
   });
 
   it("uses top-level OpenRouter max token fields when top_provider is absent", async () => {

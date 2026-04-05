@@ -1,17 +1,17 @@
-# @openclaw/zalo
+# @mullusi/zalo
 
-Zalo channel plugin for OpenClaw (Bot API).
+Zalo channel plugin for Mullusi (Bot API).
 
 ## Install (local checkout)
 
 ```bash
-openclaw plugins install ./path/to/local/zalo-plugin
+mullusi plugins install ./path/to/local/zalo-plugin
 ```
 
 ## Install (npm)
 
 ```bash
-openclaw plugins install @openclaw/zalo
+mullusi plugins install @mullusi/zalo
 ```
 
 Onboarding: select Zalo and confirm the install prompt to fetch the plugin automatically.

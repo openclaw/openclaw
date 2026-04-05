@@ -134,7 +134,7 @@ export function getPluginBoundaryJiti(
     modulePath,
   });
   const aliasMap = {
-    ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+    ...(pluginSdkAlias ? { "mullusi/plugin-sdk": pluginSdkAlias } : {}),
     ...resolvePluginSdkScopedAliasMap({ modulePath }),
   };
   const loader = createJiti(import.meta.url, {

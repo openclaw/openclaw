@@ -1,7 +1,7 @@
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+} from "mullusi/plugin-sdk/provider-model-shared";
 
 export const STEPFUN_PROVIDER_ID = "stepfun";
 export const STEPFUN_PLAN_PROVIDER_ID = "stepfun-plan";

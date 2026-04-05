@@ -2,7 +2,7 @@ import { afterEach, beforeEach, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../../local-storage.ts";
 import "../app.ts";
-import type { OpenClawApp } from "../app.ts";
+import type { MullusiApp } from "../app.ts";
 
 class MockWebSocket {
   static CONNECTING = 0;
@@ -23,7 +23,7 @@ class MockWebSocket {
 
 export function mountApp(pathname: string) {
   window.history.replaceState({}, "", pathname);
-  const app = document.createElement("openclaw-app") as OpenClawApp;
+  const app = document.createElement("mullusi-app") as MullusiApp;
   document.body.append(app);
   app.connected = true;
   app.requestUpdate();
@@ -32,7 +32,7 @@ export function mountApp(pathname: string) {
 
 export function registerAppMountHooks() {
   beforeEach(async () => {
-    window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
+    window.__MULLUSI_CONTROL_UI_BASE_PATH__ = undefined;
     getSafeLocalStorage()?.clear();
     getSafeSessionStorage()?.clear();
     document.body.innerHTML = "";
@@ -45,7 +45,7 @@ export function registerAppMountHooks() {
   });
 
   afterEach(async () => {
-    window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
+    window.__MULLUSI_CONTROL_UI_BASE_PATH__ = undefined;
     getSafeLocalStorage()?.clear();
     getSafeSessionStorage()?.clear();
     document.body.innerHTML = "";

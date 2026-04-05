@@ -14,7 +14,7 @@ describe("resolveAcpxAgentCommand", () => {
   it.each([
     ["cursor", "cursor-agent acp"],
     ["gemini", "gemini --acp"],
-    ["openclaw", "openclaw acp"],
+    ["mullusi", "mullusi acp"],
     ["copilot", "copilot --acp --stdio"],
     ["pi", "npx -y pi-acp@0.0.22"],
     ["codex", "npx -y @zed-industries/codex-acp@0.9.5"],

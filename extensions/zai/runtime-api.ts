@@ -2,4 +2,4 @@ export {
   detectZaiEndpoint,
   type ZaiDetectedEndpoint,
   type ZaiEndpointId,
-} from "openclaw/plugin-sdk/provider-zai-endpoint";
+} from "mullusi/plugin-sdk/provider-zai-endpoint";

@@ -21,7 +21,7 @@ x-i18n:
 
 ## 模型选择的工作方式
 
-OpenClaw 按以下顺序选择模型：
+Mullusi 按以下顺序选择模型：
 
 1. **主模型**（`agents.defaults.model.primary` 或 `agents.defaults.model`）。
 2. `agents.defaults.model.fallbacks` 中的 **回退模型**（按顺序）。
@@ -29,7 +29,7 @@ OpenClaw 按以下顺序选择模型：
 
 相关内容：
 
-- `agents.defaults.models` 是 OpenClaw 可使用的模型允许列表/目录（以及别名）。
+- `agents.defaults.models` 是 Mullusi 可使用的模型允许列表/目录（以及别名）。
 - `agents.defaults.imageModel` **仅在** 主模型无法接受图像时使用。
 - 每个智能体的默认值可以通过 `agents.list[].model` 加上绑定来覆盖 `agents.defaults.model`（见 [/concepts/multi-agent](/concepts/multi-agent)）。
 
@@ -44,7 +44,7 @@ OpenClaw 按以下顺序选择模型：
 如果你不想手动编辑配置，请运行设置向导：
 
 ```bash
-openclaw onboard
+mullusi onboard
 ```
 
 它可以为常见提供商设置模型 + 凭证，包括 **OpenAI Code (Codex)**
@@ -66,7 +66,7 @@ openclaw onboard
 ## “Model is not allowed”（以及为什么回复会停止）
 
 如果设置了 `agents.defaults.models`，它就会成为 `/model` 和会话覆盖的 **允许列表**。当用户选择了不在该允许列表中的模型时，
-OpenClaw 会返回：
+Mullusi 会返回：
 
 ```
 Model "provider/model" is not allowed. Use /model to list available models.
@@ -113,34 +113,34 @@ Model "provider/model" is not allowed. Use /model to list available models.
 - `/model status` 是详细视图（凭证候选项，以及在已配置时显示提供商端点 `baseUrl` + `api` 模式）。
 - 模型引用是通过按 **第一个** `/` 进行分割来解析的。输入 `/model <ref>` 时请使用 `provider/model`。
 - 如果模型 ID 本身包含 `/`（OpenRouter 风格），你必须包含提供商前缀（示例：`/model openrouter/moonshotai/kimi-k2`）。
-- 如果你省略提供商，OpenClaw 会将输入视为别名或 **默认提供商** 的模型（仅在模型 ID 中没有 `/` 时有效）。
+- 如果你省略提供商，Mullusi 会将输入视为别名或 **默认提供商** 的模型（仅在模型 ID 中没有 `/` 时有效）。
 
 完整命令行为/配置： [Slash commands](/tools/slash-commands)。
 
 ## CLI 命令
 
 ```bash
-openclaw models list
-openclaw models status
-openclaw models set <provider/model>
-openclaw models set-image <provider/model>
+mullusi models list
+mullusi models status
+mullusi models set <provider/model>
+mullusi models set-image <provider/model>
 
-openclaw models aliases list
-openclaw models aliases add <alias> <provider/model>
-openclaw models aliases remove <alias>
+mullusi models aliases list
+mullusi models aliases add <alias> <provider/model>
+mullusi models aliases remove <alias>
 
-openclaw models fallbacks list
-openclaw models fallbacks add <provider/model>
-openclaw models fallbacks remove <provider/model>
-openclaw models fallbacks clear
+mullusi models fallbacks list
+mullusi models fallbacks add <provider/model>
+mullusi models fallbacks remove <provider/model>
+mullusi models fallbacks clear
 
-openclaw models image-fallbacks list
-openclaw models image-fallbacks add <provider/model>
-openclaw models image-fallbacks remove <provider/model>
-openclaw models image-fallbacks clear
+mullusi models image-fallbacks list
+mullusi models image-fallbacks add <provider/model>
+mullusi models image-fallbacks remove <provider/model>
+mullusi models image-fallbacks clear
 ```
 
-`openclaw models`（无子命令）是 `models status` 的快捷方式。
+`mullusi models`（无子命令）是 `models status` 的快捷方式。
 
 ### `models list`
 
@@ -169,12 +169,12 @@ JSON 包含 `auth.oauth`（警告窗口 + 配置文件）和 `auth.providers`
 
 ```bash
 claude setup-token
-openclaw models status
+mullusi models status
 ```
 
 ## 扫描（OpenRouter 免费模型）
 
-`openclaw models scan` 会检查 OpenRouter 的 **免费模型目录**，并且可以
+`mullusi models scan` 会检查 OpenRouter 的 **免费模型目录**，并且可以
 选择性地探测模型对工具和图像的支持。
 
 关键标志：
@@ -210,7 +210,7 @@ openclaw models status
 ## 模型注册表（`models.json`）
 
 `models.providers` 中的自定义提供商会写入
-智能体目录下的 `models.json`（默认是 `~/.openclaw/agents/<agentId>/agent/models.json`）。默认会合并此文件，除非将 `models.mode` 设置为 `replace`。
+智能体目录下的 `models.json`（默认是 `~/.mullusi/agents/<agentId>/agent/models.json`）。默认会合并此文件，除非将 `models.mode` 设置为 `replace`。
 
 匹配提供商 ID 时的合并模式优先级：
 
@@ -221,5 +221,5 @@ openclaw models status
 - 智能体中为空或缺失的 `apiKey`/`baseUrl` 会回退到配置中的 `models.providers`。
 - 其他提供商字段会从配置和规范化后的目录数据中刷新。
 
-标记持久化以源为准：OpenClaw 会根据活动源配置快照（预解析）写入标记，而不是根据运行时已解析的 secret 值写入。
-这适用于 OpenClaw 重新生成 `models.json` 的所有情况，包括像 `openclaw agent` 这样的命令驱动路径。
+标记持久化以源为准：Mullusi 会根据活动源配置快照（预解析）写入标记，而不是根据运行时已解析的 secret 值写入。
+这适用于 Mullusi 重新生成 `models.json` 的所有情况，包括像 `mullusi agent` 这样的命令驱动路径。

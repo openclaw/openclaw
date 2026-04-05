@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
-import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import * as conversationRuntime from "mullusi/plugin-sdk/conversation-runtime";
+import type { ResolvedAgentRoute } from "mullusi/plugin-sdk/routing";
 import {
   resolveDiscordBoundConversationRoute,
   resolveDiscordEffectiveRoute,
@@ -26,7 +26,7 @@ export type DiscordNativeInteractionRouteState = {
 };
 
 export async function resolveDiscordNativeInteractionRouteState(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
   guildId?: string;
   memberRoleIds?: string[];

@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
+import { getRuntimeConfigSnapshot } from "mullusi/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/plugin-entry";
+import { jsonResult, readStringParam } from "mullusi/plugin-sdk/provider-web-search";
 import {
   buildXaiCodeExecutionPayload,
   requestXaiCodeExecution,
@@ -11,7 +11,7 @@ import {
 import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
 
 type XaiPluginConfig = NonNullable<
-  NonNullable<OpenClawConfig["plugins"]>["entries"]
+  NonNullable<MullusiConfig["plugins"]>["entries"]
 >["xai"] extends {
   config?: infer Config;
 }
@@ -31,7 +31,7 @@ function readCodeExecutionConfigRecord(
   return config && typeof config === "object" ? (config as Record<string, unknown>) : undefined;
 }
 
-function readPluginCodeExecutionConfig(cfg?: OpenClawConfig): CodeExecutionConfig | undefined {
+function readPluginCodeExecutionConfig(cfg?: MullusiConfig): CodeExecutionConfig | undefined {
   const entries = cfg?.plugins?.entries;
   if (!entries || typeof entries !== "object") {
     return undefined;
@@ -52,8 +52,8 @@ function readPluginCodeExecutionConfig(cfg?: OpenClawConfig): CodeExecutionConfi
 }
 
 function resolveCodeExecutionEnabled(params: {
-  sourceConfig?: OpenClawConfig;
-  runtimeConfig?: OpenClawConfig;
+  sourceConfig?: MullusiConfig;
+  runtimeConfig?: MullusiConfig;
   config?: CodeExecutionConfig;
 }): boolean {
   return isXaiToolEnabled({
@@ -64,8 +64,8 @@ function resolveCodeExecutionEnabled(params: {
 }
 
 export function createCodeExecutionTool(options?: {
-  config?: OpenClawConfig;
-  runtimeConfig?: OpenClawConfig | null;
+  config?: MullusiConfig;
+  runtimeConfig?: MullusiConfig | null;
 }) {
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
   const codeExecutionConfig =
@@ -102,7 +102,7 @@ export function createCodeExecutionTool(options?: {
           error: "missing_xai_api_key",
           message:
             "code_execution needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
-          docs: "https://docs.openclaw.ai/tools/code-execution",
+          docs: "https://docs.mullusi.com/tools/code-execution",
         });
       }
 

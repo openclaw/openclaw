@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/copilot-proxy",
+  "name": "@mullusi/copilot-proxy",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Copilot Proxy provider plugin",
+  "description": "Mullusi Copilot Proxy provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

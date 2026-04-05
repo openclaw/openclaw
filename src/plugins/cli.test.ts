@@ -1,20 +1,20 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
   memoryRegister: vi.fn(),
   otherRegister: vi.fn(),
   memoryListAction: vi.fn(),
-  loadOpenClawPluginCliRegistry: vi.fn(),
-  loadOpenClawPlugins: vi.fn(),
+  loadMullusiPluginCliRegistry: vi.fn(),
+  loadMullusiPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
 }));
 
 vi.mock("./loader.js", () => ({
-  loadOpenClawPluginCliRegistry: (...args: unknown[]) =>
-    mocks.loadOpenClawPluginCliRegistry(...args),
-  loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
+  loadMullusiPluginCliRegistry: (...args: unknown[]) =>
+    mocks.loadMullusiPluginCliRegistry(...args),
+  loadMullusiPlugins: (...args: unknown[]) => mocks.loadMullusiPlugins(...args),
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -76,7 +76,7 @@ function createAutoEnabledCliFixture() {
   const rawConfig = {
     plugins: {},
     channels: { demo: { enabled: true } },
-  } as OpenClawConfig;
+  } as MullusiConfig;
   const autoEnabledConfig = {
     ...rawConfig,
     plugins: {
@@ -84,20 +84,20 @@ function createAutoEnabledCliFixture() {
         demo: { enabled: true },
       },
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
   return { rawConfig, autoEnabledConfig };
 }
 
 function expectAutoEnabledCliLoad(params: {
-  rawConfig: OpenClawConfig;
-  autoEnabledConfig: OpenClawConfig;
+  rawConfig: MullusiConfig;
+  autoEnabledConfig: MullusiConfig;
   autoEnabledReasons?: Record<string, string[]>;
 }) {
   expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
     config: params.rawConfig,
     env: process.env,
   });
-  expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+  expect(mocks.loadMullusiPlugins).toHaveBeenCalledWith(
     expect.objectContaining({
       config: params.autoEnabledConfig,
       activationSourceConfig: params.rawConfig,
@@ -118,10 +118,10 @@ describe("registerPluginCliCommands", () => {
       program.command("other").description("Other commands");
     });
     mocks.memoryListAction.mockReset();
-    mocks.loadOpenClawPluginCliRegistry.mockReset();
-    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue(createCliRegistry());
-    mocks.loadOpenClawPlugins.mockReset();
-    mocks.loadOpenClawPlugins.mockReturnValue({
+    mocks.loadMullusiPluginCliRegistry.mockReset();
+    mocks.loadMullusiPluginCliRegistry.mockResolvedValue(createCliRegistry());
+    mocks.loadMullusiPlugins.mockReset();
+    mocks.loadMullusiPlugins.mockReturnValue({
       ...createCliRegistry(),
       diagnostics: [],
     });
@@ -136,18 +136,18 @@ describe("registerPluginCliCommands", () => {
   it("skips plugin CLI registrars when commands already exist", async () => {
     const program = createProgram("memory");
 
-    await registerPluginCliCommands(program, {} as OpenClawConfig);
+    await registerPluginCliCommands(program, {} as MullusiConfig);
 
     expect(mocks.memoryRegister).not.toHaveBeenCalled();
     expect(mocks.otherRegister).toHaveBeenCalledTimes(1);
   });
 
   it("forwards an explicit env to plugin loading", async () => {
-    const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
+    const env = { MULLUSI_HOME: "/srv/mullusi-home" } as NodeJS.ProcessEnv;
 
-    await registerPluginCliCommands(createProgram(), {} as OpenClawConfig, env);
+    await registerPluginCliCommands(createProgram(), {} as MullusiConfig, env);
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+    expect(mocks.loadMullusiPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         env,
       }),
@@ -189,7 +189,7 @@ describe("registerPluginCliCommands", () => {
         demo: ["demo configured"],
       },
     });
-    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue({
+    mocks.loadMullusiPluginCliRegistry.mockResolvedValue({
       cliRegistrars: [
         {
           pluginId: "matrix",
@@ -227,7 +227,7 @@ describe("registerPluginCliCommands", () => {
         hasSubcommands: true,
       },
     ]);
-    expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledWith(
+    expect(mocks.loadMullusiPluginCliRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
         activationSourceConfig: rawConfig,
@@ -247,7 +247,7 @@ describe("registerPluginCliCommands", () => {
         demo: ["demo configured"],
       },
     });
-    mocks.loadOpenClawPlugins.mockReturnValue(
+    mocks.loadMullusiPlugins.mockReturnValue(
       createCliRegistry({
         memoryCommands: ["legacy-channel"],
         memoryDescriptors: [
@@ -264,7 +264,7 @@ describe("registerPluginCliCommands", () => {
       mode: "lazy",
     });
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+    expect(mocks.loadMullusiPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
         activationSourceConfig: rawConfig,
@@ -273,7 +273,7 @@ describe("registerPluginCliCommands", () => {
         },
       }),
     );
-    expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
+    expect(mocks.loadMullusiPluginCliRegistry).not.toHaveBeenCalled();
   });
 
   it("falls back to awaited CLI metadata collection when runtime loading ignored async registration", async () => {
@@ -281,7 +281,7 @@ describe("registerPluginCliCommands", () => {
       const asyncCommand = program.command("async-cli").description("Async CLI");
       asyncCommand.command("run").action(mocks.memoryListAction);
     });
-    mocks.loadOpenClawPlugins.mockReturnValue(
+    mocks.loadMullusiPlugins.mockReturnValue(
       createEmptyCliRegistry({
         diagnostics: [
           {
@@ -290,7 +290,7 @@ describe("registerPluginCliCommands", () => {
         ],
       }),
     );
-    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue({
+    mocks.loadMullusiPluginCliRegistry.mockResolvedValue({
       cliRegistrars: [
         {
           pluginId: "async-plugin",
@@ -311,11 +311,11 @@ describe("registerPluginCliCommands", () => {
     const program = createProgram();
     program.exitOverride();
 
-    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
+    await registerPluginCliCommands(program, {} as MullusiConfig, undefined, undefined, {
       mode: "lazy",
     });
 
-    expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.loadMullusiPluginCliRegistry).toHaveBeenCalledTimes(1);
     await program.parseAsync(["async-cli", "run"], { from: "user" });
     expect(asyncRegistrar).toHaveBeenCalledTimes(1);
     expect(mocks.memoryListAction).toHaveBeenCalledTimes(1);
@@ -325,7 +325,7 @@ describe("registerPluginCliCommands", () => {
     const program = createProgram();
     program.exitOverride();
 
-    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
+    await registerPluginCliCommands(program, {} as MullusiConfig, undefined, undefined, {
       mode: "lazy",
     });
 
@@ -340,7 +340,7 @@ describe("registerPluginCliCommands", () => {
   });
 
   it("falls back to eager registration when descriptors do not cover every command root", async () => {
-    mocks.loadOpenClawPlugins.mockReturnValue(
+    mocks.loadMullusiPlugins.mockReturnValue(
       createCliRegistry({
         memoryCommands: ["memory", "memory-admin"],
         memoryDescriptors: [
@@ -357,7 +357,7 @@ describe("registerPluginCliCommands", () => {
       program.command("memory-admin");
     });
 
-    await registerPluginCliCommands(createProgram(), {} as OpenClawConfig, undefined, undefined, {
+    await registerPluginCliCommands(createProgram(), {} as MullusiConfig, undefined, undefined, {
       mode: "lazy",
     });
 
@@ -368,7 +368,7 @@ describe("registerPluginCliCommands", () => {
     const program = createProgram();
     program.exitOverride();
 
-    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
+    await registerPluginCliCommands(program, {} as MullusiConfig, undefined, undefined, {
       mode: "lazy",
       primary: "memory",
     });

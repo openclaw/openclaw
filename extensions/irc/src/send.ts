@@ -1,5 +1,5 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { resolveMarkdownTableMode } from "mullusi/plugin-sdk/config-runtime";
+import { convertMarkdownTables } from "mullusi/plugin-sdk/text-runtime";
 import { resolveIrcAccount } from "./accounts.js";
 import type { IrcClient } from "./client.js";
 import { connectIrcClient } from "./client.js";

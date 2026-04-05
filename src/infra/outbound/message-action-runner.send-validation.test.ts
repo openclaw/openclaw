@@ -5,7 +5,7 @@ import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -20,10 +20,10 @@ const slackConfig = {
       appToken: "xapp-test",
     },
   },
-} as OpenClawConfig;
+} as MullusiConfig;
 
 const runDrySend = (params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
 }) =>
@@ -62,7 +62,7 @@ function normalizeSlackTarget(raw: string): string {
 
 function createConfiguredTestPlugin(params: {
   id: "slack" | "telegram";
-  isConfigured: (cfg: OpenClawConfig) => boolean;
+  isConfigured: (cfg: MullusiConfig) => boolean;
   normalizeTarget: (raw: string) => string | undefined;
   resolveTarget: (input: string) => ResolvedTestTarget | null;
 }): ChannelPlugin {
@@ -169,7 +169,7 @@ describe("runMessageAction send validation", () => {
             botToken: "telegram-test",
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       actionParams: {
         channel: "telegram",
         target: "123456",

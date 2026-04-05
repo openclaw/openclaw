@@ -16,7 +16,7 @@ describe("sandbox fs bridge shell compatibility", () => {
   installFsBridgeTestHarness();
 
   it("uses POSIX-safe shell prologue in all bridge commands", async () => {
-    await withTempDir("openclaw-fs-bridge-shell-", async (stateDir) => {
+    await withTempDir("mullusi-fs-bridge-shell-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "a.txt"), "hello");
@@ -60,7 +60,7 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("reads inbound media-style filenames with triple-dash ids", async () => {
-    await withTempDir("openclaw-fs-bridge-read-", async (stateDir) => {
+    await withTempDir("mullusi-fs-bridge-read-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       const inboundPath = "media/inbound/file_1095---f00a04a2-99a0-4d98-99b0-dfe61c5a4198.ogg";
       await fs.mkdir(path.join(workspaceDir, "media", "inbound"), { recursive: true });
@@ -81,7 +81,7 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("resolves dash-leading basenames into absolute container paths", async () => {
-    await withTempDir("openclaw-fs-bridge-read-", async (stateDir) => {
+    await withTempDir("mullusi-fs-bridge-read-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "--leading.txt"), "dash");
@@ -101,7 +101,7 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("resolves bind-mounted absolute container paths for reads", async () => {
-    await withTempDir("openclaw-fs-bridge-bind-read-", async (stateDir) => {
+    await withTempDir("mullusi-fs-bridge-bind-read-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       const bindRoot = path.join(stateDir, "workspace-two");
       await fs.mkdir(workspaceDir, { recursive: true });
@@ -141,7 +141,7 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("routes mkdirp, remove, and rename through the pinned mutation helper", async () => {
-    await withTempDir("openclaw-fs-bridge-shell-write-", async (stateDir) => {
+    await withTempDir("mullusi-fs-bridge-shell-write-", async (stateDir) => {
       const { bridge } = await createSeededSandboxFsBridge(stateDir, {
         rootFileName: "a.txt",
       });

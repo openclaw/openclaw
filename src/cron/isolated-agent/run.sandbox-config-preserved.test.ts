@@ -88,10 +88,10 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
     const runCfg = buildRunCfg("specialist", {
       sandbox: {
         docker: {
-          image: "ghcr.io/openclaw/sandbox:custom",
+          image: "ghcr.io/mullusi/sandbox:custom",
         },
         browser: {
-          image: "ghcr.io/openclaw/browser:custom",
+          image: "ghcr.io/mullusi/browser:custom",
         },
         prune: {
           idleHours: 1,
@@ -104,14 +104,14 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
     expect(resolvedSandbox.mode).toBe("all");
     expect(resolvedSandbox.workspaceAccess).toBe("rw");
     expect(resolvedSandbox.docker).toMatchObject({
-      image: "ghcr.io/openclaw/sandbox:custom",
+      image: "ghcr.io/mullusi/sandbox:custom",
       network: "none",
       dangerouslyAllowContainerNamespaceJoin: true,
       dangerouslyAllowExternalBindSources: true,
     });
     expect(resolvedSandbox.browser).toMatchObject({
       enabled: true,
-      image: "ghcr.io/openclaw/browser:custom",
+      image: "ghcr.io/mullusi/browser:custom",
       autoStart: false,
     });
     expect(resolvedSandbox.prune).toMatchObject({

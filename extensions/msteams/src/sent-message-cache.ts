@@ -1,5 +1,5 @@
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const MSTEAMS_SENT_MESSAGES_KEY = Symbol.for("openclaw.msteamsSentMessages");
+const MSTEAMS_SENT_MESSAGES_KEY = Symbol.for("mullusi.msteamsSentMessages");
 
 let sentMessageCache: Map<string, Map<string, number>> | undefined;
 

@@ -28,7 +28,7 @@ function mkSessionsSpawnToolCall(content: string): AgentMessage {
 }
 
 describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
-  it("replaces attachments[].content with __OPENCLAW_REDACTED__", () => {
+  it("replaces attachments[].content with __MULLUSI_REDACTED__", () => {
     const secret = "SUPER_SECRET_SHOULD_NOT_PERSIST"; // pragma: allowlist secret
     const input = [mkSessionsSpawnToolCall(secret)];
     const out = sanitizeToolCallInputs(input);
@@ -39,7 +39,7 @@ describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
       arguments?: { attachments?: Array<{ content?: string }> };
     } | null;
     expect(tool?.name).toBe("sessions_spawn");
-    expect(tool?.arguments?.attachments?.[0]?.content).toBe("__OPENCLAW_REDACTED__");
+    expect(tool?.arguments?.attachments?.[0]?.content).toBe("__MULLUSI_REDACTED__");
     expect(JSON.stringify(out)).not.toContain(secret);
   });
 
@@ -71,7 +71,7 @@ describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
     } | null;
     expect(
       tool?.input?.attachments?.[0]?.content || tool?.arguments?.attachments?.[0]?.content,
-    ).toBe("__OPENCLAW_REDACTED__");
+    ).toBe("__MULLUSI_REDACTED__");
     expect(JSON.stringify(out)).not.toContain(secret);
   });
 });

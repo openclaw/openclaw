@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/diagnostics-otel";
+export * from "mullusi/plugin-sdk/diagnostics-otel";

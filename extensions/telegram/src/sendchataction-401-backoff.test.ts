@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // Mock the runtime-exported backoff sleep that the handler actually imports.
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+vi.mock("mullusi/plugin-sdk/runtime-env", () => ({
   computeBackoff: vi.fn((_policy, attempt: number) => attempt * 1000),
   sleepWithAbort: mocks.sleepWithAbort,
 }));

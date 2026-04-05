@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
@@ -6,8 +6,8 @@ import {
   readCache,
   resolveCacheTtlMs,
   writeCache,
-} from "openclaw/plugin-sdk/provider-web-search";
-import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
+} from "mullusi/plugin-sdk/provider-web-search";
+import { wrapExternalContent, wrapWebContent } from "mullusi/plugin-sdk/security-runtime";
 import {
   DEFAULT_TAVILY_BASE_URL,
   resolveTavilyApiKey,
@@ -27,7 +27,7 @@ const EXTRACT_CACHE = new Map<
 const DEFAULT_SEARCH_COUNT = 5;
 
 export type TavilySearchParams = {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   query: string;
   searchDepth?: string;
   topic?: string;
@@ -40,7 +40,7 @@ export type TavilySearchParams = {
 };
 
 export type TavilyExtractParams = {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   urls: string[];
   query?: string;
   extractDepth?: string;
@@ -119,7 +119,7 @@ export async function runTavilySearch(
       apiKey,
       body,
       errorLabel: "Tavily Search",
-      extraHeaders: { "X-Client-Source": "openclaw" },
+      extraHeaders: { "X-Client-Source": "mullusi" },
     },
     async (response) => (await response.json()) as Record<string, unknown>,
   );
@@ -201,7 +201,7 @@ export async function runTavilyExtract(
       apiKey,
       body,
       errorLabel: "Tavily Extract",
-      extraHeaders: { "X-Client-Source": "openclaw" },
+      extraHeaders: { "X-Client-Source": "mullusi" },
     },
     async (response) => (await response.json()) as Record<string, unknown>,
   );

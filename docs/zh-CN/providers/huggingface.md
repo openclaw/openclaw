@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 你想将 Hugging Face Inference 与 OpenClaw 一起使用
+  - 你想将 Hugging Face Inference 与 Mullusi 一起使用
   - 你需要 HF token 环境变量或 CLI 认证选项
 summary: Hugging Face Inference 设置（认证 + 模型选择）
 title: Hugging Face（Inference）
@@ -15,7 +15,7 @@ x-i18n:
 
 # Hugging Face（Inference）
 
-[Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers) 通过单一路由器 API 提供与 OpenAI 兼容的 chat completions。你只需一个 token，即可访问许多模型（DeepSeek、Llama 等）。OpenClaw 使用 **OpenAI 兼容端点**（仅 chat completions）；如果要使用 text-to-image、embeddings 或 speech，请直接使用 [HF inference clients](https://huggingface.co/docs/api-inference/quicktour)。
+[Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers) 通过单一路由器 API 提供与 OpenAI 兼容的 chat completions。你只需一个 token，即可访问许多模型（DeepSeek、Llama 等）。Mullusi 使用 **OpenAI 兼容端点**（仅 chat completions）；如果要使用 text-to-image、embeddings 或 speech，请直接使用 [HF inference clients](https://huggingface.co/docs/api-inference/quicktour)。
 
 - 提供商：`huggingface`
 - 认证：`HUGGINGFACE_HUB_TOKEN` 或 `HF_TOKEN`（带有 **Make calls to Inference Providers** 权限的细粒度 token）
@@ -28,7 +28,7 @@ x-i18n:
 2. 运行新手引导，并在提供商下拉菜单中选择 **Hugging Face**，然后在提示时输入你的 API key：
 
 ```bash
-openclaw onboard --auth-choice huggingface-api-key
+mullusi onboard --auth-choice huggingface-api-key
 ```
 
 3. 在 **Default Hugging Face model** 下拉菜单中，选择你想使用的模型（当你有有效 token 时，列表会从 Inference API 加载；否则会显示内置列表）。你的选择会保存为默认模型。
@@ -47,7 +47,7 @@ openclaw onboard --auth-choice huggingface-api-key
 ## 非交互式示例
 
 ```bash
-openclaw onboard --non-interactive \
+mullusi onboard --non-interactive \
   --mode local \
   --auth-choice huggingface-api-key \
   --huggingface-api-key "$HF_TOKEN"
@@ -58,12 +58,12 @@ openclaw onboard --non-interactive \
 ## 环境说明
 
 如果 Gateway 网关作为守护进程运行（launchd/systemd），请确保 `HUGGINGFACE_HUB_TOKEN` 或 `HF_TOKEN`
-对此进程可用（例如放在 `~/.openclaw/.env` 中，或通过
+对此进程可用（例如放在 `~/.mullusi/.env` 中，或通过
 `env.shellEnv` 提供）。
 
 ## 模型发现和新手引导下拉菜单
 
-OpenClaw 通过直接调用 **Inference 端点** 来发现模型：
+Mullusi 通过直接调用 **Inference 端点** 来发现模型：
 
 ```bash
 GET https://router.huggingface.co/v1/models
@@ -71,7 +71,7 @@ GET https://router.huggingface.co/v1/models
 
 （可选：发送 `Authorization: Bearer $HUGGINGFACE_HUB_TOKEN` 或 `$HF_TOKEN` 以获取完整列表；某些端点在未认证时只返回子集。）响应采用 OpenAI 风格：`{ "object": "list", "data": [ { "id": "Qwen/Qwen3-8B", "owned_by": "Qwen", ... }, ... ] }`。
 
-当你配置 Hugging Face API key 时（通过新手引导、`HUGGINGFACE_HUB_TOKEN` 或 `HF_TOKEN`），OpenClaw 会使用这个 GET 请求来发现可用的 chat-completion 模型。在**交互式设置**期间，你输入 token 后会看到一个 **Default Hugging Face model** 下拉菜单，其内容来自该列表（如果请求失败，则使用内置目录）。在运行时（例如 Gateway 网关启动时），只要存在 key，OpenClaw 就会再次调用 **GET** `https://router.huggingface.co/v1/models` 来刷新目录。该列表会与内置目录合并（以补充上下文窗口和成本等元数据）。如果请求失败或未设置 key，则只使用内置目录。
+当你配置 Hugging Face API key 时（通过新手引导、`HUGGINGFACE_HUB_TOKEN` 或 `HF_TOKEN`），Mullusi 会使用这个 GET 请求来发现可用的 chat-completion 模型。在**交互式设置**期间，你输入 token 后会看到一个 **Default Hugging Face model** 下拉菜单，其内容来自该列表（如果请求失败，则使用内置目录）。在运行时（例如 Gateway 网关启动时），只要存在 key，Mullusi 就会再次调用 **GET** `https://router.huggingface.co/v1/models` 来刷新目录。该列表会与内置目录合并（以补充上下文窗口和成本等元数据）。如果请求失败或未设置 key，则只使用内置目录。
 
 ## 模型名称和可编辑选项
 

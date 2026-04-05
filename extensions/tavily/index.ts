@@ -1,4 +1,4 @@
-import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry, type AnyAgentTool } from "mullusi/plugin-sdk/plugin-entry";
 import { createTavilyExtractTool } from "./src/tavily-extract-tool.js";
 import { createTavilyWebSearchProvider } from "./src/tavily-search-provider.js";
 import { createTavilySearchTool } from "./src/tavily-search-tool.js";

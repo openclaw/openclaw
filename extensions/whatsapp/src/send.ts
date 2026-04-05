@@ -1,11 +1,11 @@
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { generateSecureUuid } from "openclaw/plugin-sdk/core";
-import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
-import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { loadConfig, type MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "mullusi/plugin-sdk/config-runtime";
+import { generateSecureUuid } from "mullusi/plugin-sdk/core";
+import { normalizePollInput, type PollInput } from "mullusi/plugin-sdk/media-runtime";
+import { createSubsystemLogger } from "mullusi/plugin-sdk/runtime-env";
+import { getChildLogger } from "mullusi/plugin-sdk/text-runtime";
+import { redactIdentifier } from "mullusi/plugin-sdk/text-runtime";
+import { convertMarkdownTables } from "mullusi/plugin-sdk/text-runtime";
 import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
@@ -18,7 +18,7 @@ import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
 function resolveOutboundWhatsAppAccountId(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string;
 }): string | undefined {
   const explicitAccountId = params.accountId?.trim();
@@ -33,7 +33,7 @@ export async function sendMessageWhatsApp(
   body: string,
   options: {
     verbose: boolean;
-    cfg?: OpenClawConfig;
+    cfg?: MullusiConfig;
     mediaUrl?: string;
     mediaAccess?: {
       localRoots?: readonly string[];
@@ -189,7 +189,7 @@ export async function sendReactionWhatsApp(
 export async function sendPollWhatsApp(
   to: string,
   poll: PollInput,
-  options: { verbose: boolean; accountId?: string; cfg?: OpenClawConfig },
+  options: { verbose: boolean; accountId?: string; cfg?: MullusiConfig },
 ): Promise<{ messageId: string; toJid: string }> {
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();

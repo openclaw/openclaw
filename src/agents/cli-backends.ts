@@ -2,7 +2,7 @@ import {
   CLAUDE_CLI_BACKEND_ID,
   normalizeClaudeBackendConfig,
 } from "../../extensions/anthropic/cli-backend-api.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -97,7 +97,7 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
   };
 }
 
-export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
+export function resolveCliBackendIds(cfg?: MullusiConfig): Set<string> {
   const ids = new Set<string>();
   for (const backend of resolveRuntimeCliBackends()) {
     ids.add(normalizeBackendKey(backend.id));
@@ -111,7 +111,7 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
 
 export function resolveCliBackendConfig(
   provider: string,
-  cfg?: OpenClawConfig,
+  cfg?: MullusiConfig,
 ): ResolvedCliBackend | null {
   const normalized = normalizeBackendKey(provider);
   const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CliDeps } from "../../cli/deps.js";
-import { loadConfig, type OpenClawConfig } from "../../config/config.js";
+import { loadConfig, type MullusiConfig } from "../../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
 import type { CronJob } from "../../cron/types.js";
@@ -12,7 +12,7 @@ import { createHooksRequestHandler, type HookClientIpConfig } from "../server-ht
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
-export function resolveHookClientIpConfig(cfg: OpenClawConfig): HookClientIpConfig {
+export function resolveHookClientIpConfig(cfg: MullusiConfig): HookClientIpConfig {
   return {
     trustedProxies: cfg.gateway?.trustedProxies,
     allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,

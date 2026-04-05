@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { OpenClawSchema } from "./zod-schema.js";
+import { MullusiSchema } from "./zod-schema.js";
 
 describe("skills entries config schema", () => {
   it("accepts custom fields under config", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = MullusiSchema.safeParse({
       skills: {
         entries: {
           "custom-skill": {
@@ -21,7 +21,7 @@ describe("skills entries config schema", () => {
   });
 
   it("rejects unknown top-level fields", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = MullusiSchema.safeParse({
       skills: {
         entries: {
           "custom-skill": {
@@ -46,7 +46,7 @@ describe("skills entries config schema", () => {
   });
 
   it("accepts agents.defaults.skills", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = MullusiSchema.safeParse({
       agents: {
         defaults: {
           skills: ["github", "weather"],
@@ -58,7 +58,7 @@ describe("skills entries config schema", () => {
   });
 
   it("accepts agents.list[].skills as explicit replacements", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = MullusiSchema.safeParse({
       agents: {
         defaults: {
           skills: ["github", "weather"],
@@ -71,7 +71,7 @@ describe("skills entries config schema", () => {
   });
 
   it("accepts explicit empty skills arrays for defaults and agents", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = MullusiSchema.safeParse({
       agents: {
         defaults: {
           skills: [],
@@ -84,7 +84,7 @@ describe("skills entries config schema", () => {
   });
 
   it("rejects legacy skills.policy config", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = MullusiSchema.safeParse({
       skills: {
         policy: {
           globalEnabled: ["github"],

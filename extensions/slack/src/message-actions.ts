@@ -1,11 +1,11 @@
-import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
-import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ChannelToolSend } from "openclaw/plugin-sdk/tool-send";
+import { createActionGate } from "mullusi/plugin-sdk/channel-actions";
+import type { ChannelMessageActionName } from "mullusi/plugin-sdk/channel-contract";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { ChannelToolSend } from "mullusi/plugin-sdk/tool-send";
 import { listEnabledSlackAccounts, resolveSlackAccount } from "./accounts.js";
 
 export function listSlackMessageActions(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId?: string | null,
 ): ChannelMessageActionName[] {
   const accounts = (

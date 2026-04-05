@@ -21,7 +21,7 @@ type CoreToolDefinition = {
   description: string;
   sectionId: string;
   profiles: ToolProfileId[];
-  includeInOpenClawGroup?: boolean;
+  includeInMullusiGroup?: boolean;
 };
 
 const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
@@ -87,7 +87,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Run sandboxed remote analysis",
     sectionId: "runtime",
     profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "web_search",
@@ -95,7 +95,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Search the web",
     sectionId: "web",
     profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "web_fetch",
@@ -103,7 +103,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Fetch web content",
     sectionId: "web",
     profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "x_search",
@@ -111,7 +111,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Search X posts",
     sectionId: "web",
     profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "memory_search",
@@ -119,7 +119,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Semantic search",
     sectionId: "memory",
     profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "memory_get",
@@ -127,7 +127,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Read memory files",
     sectionId: "memory",
     profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "sessions_list",
@@ -135,7 +135,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "List sessions",
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "sessions_history",
@@ -143,7 +143,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Session history",
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "sessions_send",
@@ -151,7 +151,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Send to session",
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "sessions_spawn",
@@ -159,7 +159,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Spawn sub-agent",
     sectionId: "sessions",
     profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "sessions_yield",
@@ -167,7 +167,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "End turn to receive sub-agent results",
     sectionId: "sessions",
     profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "subagents",
@@ -175,7 +175,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Manage sub-agents",
     sectionId: "sessions",
     profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "session_status",
@@ -183,7 +183,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Session status",
     sectionId: "sessions",
     profiles: ["minimal", "coding", "messaging"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "browser",
@@ -191,7 +191,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Control web browser",
     sectionId: "ui",
     profiles: [],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "canvas",
@@ -199,7 +199,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Control canvases",
     sectionId: "ui",
     profiles: [],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "message",
@@ -207,7 +207,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Send messages",
     sectionId: "messaging",
     profiles: ["messaging"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "cron",
@@ -215,7 +215,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Schedule tasks",
     sectionId: "automation",
     profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "gateway",
@@ -223,7 +223,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Gateway control",
     sectionId: "automation",
     profiles: [],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "nodes",
@@ -231,7 +231,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Nodes + devices",
     sectionId: "nodes",
     profiles: [],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "agents_list",
@@ -239,7 +239,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "List agents",
     sectionId: "agents",
     profiles: [],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "image",
@@ -247,7 +247,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Image understanding",
     sectionId: "media",
     profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "image_generate",
@@ -255,7 +255,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Image generation",
     sectionId: "media",
     profiles: ["coding"],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
   {
     id: "tts",
@@ -263,7 +263,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Text-to-speech conversion",
     sectionId: "media",
     profiles: [],
-    includeInOpenClawGroup: true,
+    includeInMullusiGroup: true,
   },
 ];
 
@@ -298,11 +298,11 @@ function buildCoreToolGroupMap() {
     list.push(tool.id);
     sectionToolMap.set(groupId, list);
   }
-  const openclawTools = CORE_TOOL_DEFINITIONS.filter((tool) => tool.includeInOpenClawGroup).map(
+  const mullusiTools = CORE_TOOL_DEFINITIONS.filter((tool) => tool.includeInMullusiGroup).map(
     (tool) => tool.id,
   );
   return {
-    "group:openclaw": openclawTools,
+    "group:mullusi": mullusiTools,
     ...Object.fromEntries(sectionToolMap.entries()),
   };
 }

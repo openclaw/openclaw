@@ -3,7 +3,7 @@ with open('src/infra/heartbeat-runner.ts', 'r') as f:
 
 # Fix 1: Add heartbeatFileContent param to resolveHeartbeatRunPrompt
 old_sig = """function resolveHeartbeatRunPrompt(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
@@ -12,7 +12,7 @@ old_sig = """function resolveHeartbeatRunPrompt(params: {
 }): HeartbeatPromptResolution {"""
 
 new_sig = """function resolveHeartbeatRunPrompt(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;

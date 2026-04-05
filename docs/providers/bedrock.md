@@ -1,14 +1,14 @@
 ---
-summary: "Use Amazon Bedrock (Converse API) models with OpenClaw"
+summary: "Use Amazon Bedrock (Converse API) models with Mullusi"
 read_when:
-  - You want to use Amazon Bedrock models with OpenClaw
+  - You want to use Amazon Bedrock models with Mullusi
   - You need AWS credential/region setup for model calls
 title: "Amazon Bedrock"
 ---
 
 # Amazon Bedrock
 
-OpenClaw can use **Amazon Bedrock** models via pi‑ai’s **Bedrock Converse**
+Mullusi can use **Amazon Bedrock** models via pi‑ai’s **Bedrock Converse**
 streaming provider. Bedrock auth uses the **AWS SDK default credential chain**,
 not an API key.
 
@@ -21,15 +21,15 @@ not an API key.
 
 ## Automatic model discovery
 
-OpenClaw can automatically discover Bedrock models that support **streaming**
+Mullusi can automatically discover Bedrock models that support **streaming**
 and **text output**. Discovery uses `bedrock:ListFoundationModels` and is
 cached (default: 1 hour).
 
 How the implicit provider is enabled:
 
-- If `models.bedrockDiscovery.enabled` is `true`, OpenClaw will try discovery
+- If `models.bedrockDiscovery.enabled` is `true`, Mullusi will try discovery
   even when no AWS env marker is present.
-- If `models.bedrockDiscovery.enabled` is unset, OpenClaw only auto-adds the
+- If `models.bedrockDiscovery.enabled` is unset, Mullusi only auto-adds the
   implicit Bedrock provider when it sees one of these AWS auth markers:
   `AWS_BEARER_TOKEN_BEDROCK`, `AWS_ACCESS_KEY_ID` +
   `AWS_SECRET_ACCESS_KEY`, or `AWS_PROFILE`.
@@ -56,14 +56,14 @@ Config options live under `models.bedrockDiscovery`:
 
 Notes:
 
-- `enabled` defaults to auto mode. In auto mode, OpenClaw only enables the
+- `enabled` defaults to auto mode. In auto mode, Mullusi only enables the
   implicit Bedrock provider when it sees a supported AWS env marker.
 - `region` defaults to `AWS_REGION` or `AWS_DEFAULT_REGION`, then `us-east-1`.
 - `providerFilter` matches Bedrock provider names (for example `anthropic`).
 - `refreshInterval` is seconds; set to `0` to disable caching.
 - `defaultContextWindow` (default: `32000`) and `defaultMaxTokens` (default: `4096`)
   are used for discovered models (override if you know your model limits).
-- For explicit `models.providers["amazon-bedrock"]` entries, OpenClaw can still
+- For explicit `models.providers["amazon-bedrock"]` entries, Mullusi can still
   resolve Bedrock env-marker auth early from AWS env markers such as
   `AWS_BEARER_TOKEN_BEDROCK` without forcing full runtime auth loading. The
   actual model-call auth path still uses the AWS SDK default chain.
@@ -117,9 +117,9 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 
 ## EC2 Instance Roles
 
-When running OpenClaw on an EC2 instance with an IAM role attached, the AWS SDK
+When running Mullusi on an EC2 instance with an IAM role attached, the AWS SDK
 can use the instance metadata service (IMDS) for authentication. For Bedrock
-model discovery, OpenClaw only auto-enables the implicit provider from AWS env
+model discovery, Mullusi only auto-enables the implicit provider from AWS env
 markers unless you explicitly set `models.bedrockDiscovery.enabled: true`.
 
 Recommended setup for IMDS-backed hosts:
@@ -132,8 +132,8 @@ Recommended setup for IMDS-backed hosts:
 
 ```bash
 # Recommended: explicit discovery enable + region
-openclaw config set models.bedrockDiscovery.enabled true
-openclaw config set models.bedrockDiscovery.region us-east-1
+mullusi config set models.bedrockDiscovery.enabled true
+mullusi config set models.bedrockDiscovery.region us-east-1
 
 # Optional: add an env marker if you want auto mode without explicit enable
 export AWS_PROFILE=default
@@ -176,8 +176,8 @@ aws ec2 associate-iam-instance-profile \
   --iam-instance-profile Name=EC2-Bedrock-Access
 
 # 3. On the EC2 instance, enable discovery explicitly
-openclaw config set models.bedrockDiscovery.enabled true
-openclaw config set models.bedrockDiscovery.region us-east-1
+mullusi config set models.bedrockDiscovery.enabled true
+mullusi config set models.bedrockDiscovery.region us-east-1
 
 # 4. Optional: add an env marker if you want auto mode without explicit enable
 echo 'export AWS_PROFILE=default' >> ~/.bashrc
@@ -185,7 +185,7 @@ echo 'export AWS_REGION=us-east-1' >> ~/.bashrc
 source ~/.bashrc
 
 # 5. Verify models are discovered
-openclaw models list
+mullusi models list
 ```
 
 ## Notes
@@ -195,7 +195,7 @@ openclaw models list
 - If you rely on auto mode, set one of the supported AWS auth env markers on the
   gateway host. If you prefer IMDS/shared-config auth without env markers, set
   `models.bedrockDiscovery.enabled: true`.
-- OpenClaw surfaces the credential source in this order: `AWS_BEARER_TOKEN_BEDROCK`,
+- Mullusi surfaces the credential source in this order: `AWS_BEARER_TOKEN_BEDROCK`,
   then `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, then `AWS_PROFILE`, then the
   default AWS SDK chain.
 - Reasoning support depends on the model; check the Bedrock model card for

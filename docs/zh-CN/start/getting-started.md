@@ -2,7 +2,7 @@
 read_when:
   - 从零开始进行首次设置
   - 你想用最快的路径开始可用聊天
-summary: 在几分钟内安装 OpenClaw 并开始你的第一次聊天。
+summary: 在几分钟内安装 Mullusi 并开始你的第一次聊天。
 title: 入门指南
 x-i18n:
   generated_at: "2026-03-16T06:27:55Z"
@@ -18,10 +18,10 @@ x-i18n:
 目标：以最少的设置，从零开始到完成第一次可用聊天。
 
 <Info>
-最快的聊天方式：打开 Control UI（无需设置渠道）。运行 `openclaw dashboard`
+最快的聊天方式：打开 Control UI（无需设置渠道）。运行 `mullusi dashboard`
 并在浏览器中聊天，或在
-<Tooltip headline="Gateway host" tip="运行 OpenClaw Gateway 网关服务的机器。">网关主机</Tooltip>
-上打开 `http://127.0.0.1:18789/`。
+<Tooltip headline="Gateway host" tip="运行 Mullusi Gateway 网关服务的机器。">网关主机</Tooltip>
+上打开 `http://127.0.0.1:18790/`。
 文档：[Dashboard](/web/dashboard) 和 [Control UI](/web/control-ui)。
 </Info>
 
@@ -36,11 +36,11 @@ x-i18n:
 ## 快速设置（CLI）
 
 <Steps>
-  <Step title="安装 OpenClaw（推荐）">
+  <Step title="安装 Mullusi（推荐）">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
-        curl -fsSL https://openclaw.ai/install.sh | bash
+        curl -fsSL https://mullusi.com/install.sh | bash
         ```
         <img
   src="/assets/install-script.svg"
@@ -50,7 +50,7 @@ x-i18n:
       </Tab>
       <Tab title="Windows（PowerShell）">
         ```powershell
-        iwr -useb https://openclaw.ai/install.ps1 | iex
+        iwr -useb https://mullusi.com/install.ps1 | iex
         ```
       </Tab>
     </Tabs>
@@ -62,7 +62,7 @@ x-i18n:
   </Step>
   <Step title="运行新手引导">
     ```bash
-    openclaw onboard --install-daemon
+    mullusi onboard --install-daemon
     ```
 
     新手引导会配置认证、Gateway 网关设置和可选渠道。
@@ -73,13 +73,13 @@ x-i18n:
     如果你已安装服务，它应该已经在运行：
 
     ```bash
-    openclaw gateway status
+    mullusi gateway status
     ```
 
   </Step>
   <Step title="打开 Control UI">
     ```bash
-    openclaw dashboard
+    mullusi dashboard
     ```
   </Step>
 </Steps>
@@ -95,7 +95,7 @@ x-i18n:
     适合快速测试或故障排除。
 
     ```bash
-    openclaw gateway --port 18789
+    mullusi gateway --port 18790
     ```
 
   </Accordion>
@@ -103,7 +103,7 @@ x-i18n:
     需要已配置的渠道。
 
     ```bash
-    openclaw message send --target +15555550123 --message "Hello from OpenClaw"
+    mullusi message send --target +15555550123 --message "Hello from Mullusi"
     ```
 
   </Accordion>
@@ -111,11 +111,11 @@ x-i18n:
 
 ## 常用环境变量
 
-如果你将 OpenClaw 作为服务账户运行，或想使用自定义配置/状态位置：
+如果你将 Mullusi 作为服务账户运行，或想使用自定义配置/状态位置：
 
-- `OPENCLAW_HOME` 设置用于内部路径解析的主目录。
-- `OPENCLAW_STATE_DIR` 覆盖状态目录。
-- `OPENCLAW_CONFIG_PATH` 覆盖配置文件路径。
+- `MULLUSI_HOME` 设置用于内部路径解析的主目录。
+- `MULLUSI_STATE_DIR` 覆盖状态目录。
+- `MULLUSI_CONFIG_PATH` 覆盖配置文件路径。
 
 完整的环境变量参考： [环境变量](/help/environment)。
 

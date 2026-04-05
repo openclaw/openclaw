@@ -65,7 +65,7 @@ describe("matrix doctor", () => {
   });
 
   it("warns on stale custom Matrix plugin paths and cleans them", async () => {
-    const missingPath = path.join(tmpdir(), `openclaw-matrix-missing-${Date.now()}`);
+    const missingPath = path.join(tmpdir(), `mullusi-matrix-missing-${Date.now()}`);
     await fs.rm(missingPath, { recursive: true, force: true });
 
     const warnings = await collectMatrixInstallPathWarnings({

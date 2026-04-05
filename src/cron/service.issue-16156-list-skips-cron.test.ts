@@ -8,7 +8,7 @@ import {
 } from "./service.test-harness.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
-  prefix: "openclaw-cron-16156-",
+  prefix: "mullusi-cron-16156-",
   baseTimeIso: "2025-12-13T00:00:00.000Z",
 });
 

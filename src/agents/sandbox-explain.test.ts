@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
 import { formatSandboxToolPolicyBlockedMessage } from "./sandbox/runtime-status.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 
 describe("sandbox explain helpers", () => {
   it("prefers agent overrides > global > defaults (sandbox tool policy)", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
@@ -14,7 +14,7 @@ describe("sandbox explain helpers", () => {
         list: [
           {
             id: "work",
-            workspace: "~/openclaw-work",
+            workspace: "~/mullusi-work",
             tools: { sandbox: { tools: { allow: ["write"] } } },
           },
         ],
@@ -34,7 +34,7 @@ describe("sandbox explain helpers", () => {
   });
 
   it("expands group tool shorthands inside sandbox tool policy", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
@@ -42,7 +42,7 @@ describe("sandbox explain helpers", () => {
         list: [
           {
             id: "work",
-            workspace: "~/openclaw-work",
+            workspace: "~/mullusi-work",
             tools: {
               sandbox: { tools: { allow: ["group:memory", "group:fs"] } },
             },
@@ -64,7 +64,7 @@ describe("sandbox explain helpers", () => {
   });
 
   it("denies still win after group expansion", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
@@ -87,7 +87,7 @@ describe("sandbox explain helpers", () => {
   });
 
   it("includes config key paths + main-session hint for non-main mode", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         defaults: {
           sandbox: { mode: "non-main", scope: "agent" },

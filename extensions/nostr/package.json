@@ -1,23 +1,23 @@
 {
-  "name": "@openclaw/nostr",
+  "name": "@mullusi/nostr",
   "version": "2026.4.4",
-  "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
+  "description": "Mullusi Nostr channel plugin for NIP-04 encrypted DMs",
   "type": "module",
   "dependencies": {
     "nostr-tools": "^2.23.3"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "mullusi": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.4"
+    "mullusi": ">=2026.4.4"
   },
   "peerDependenciesMeta": {
-    "openclaw": {
+    "mullusi": {
       "optional": true
     }
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],
@@ -33,7 +33,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/nostr",
+      "npmSpec": "@mullusi/nostr",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.4"
     },
@@ -41,7 +41,7 @@
       "pluginApi": ">=2026.4.4"
     },
     "build": {
-      "openclawVersion": "2026.4.4"
+      "mullusiVersion": "2026.4.4"
     },
     "release": {
       "publishToClawHub": true,

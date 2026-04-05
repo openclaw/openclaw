@@ -1,4 +1,4 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "mullusi/plugin-sdk/core";
 import { matrixPlugin } from "./src/channel.js";
 import { registerMatrixCliMetadata } from "./src/cli-metadata.js";
 import { setMatrixRuntime } from "./src/runtime.js";

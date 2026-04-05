@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ANDROID_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 RESULTS_DIR="$ANDROID_DIR/benchmark/results"
 
-PACKAGE="ai.openclaw.app"
+PACKAGE="ai.mullusi.app"
 ACTIVITY=".MainActivity"
 DEVICE_SERIAL=""
 INSTALL_APP="1"
@@ -27,7 +27,7 @@ Assumes the app can reach a live gateway and will show "Connected" in the UI.
 
 Options:
   --device <serial>          adb device serial
-  --package <pkg>            package name (default: ai.openclaw.app)
+  --package <pkg>            package name (default: ai.mullusi.app)
   --activity <activity>      launch activity (default: .MainActivity)
   --skip-install             skip :app:installDebug
   --launch-runs <n>          launch-to-connected runs (default: 4)

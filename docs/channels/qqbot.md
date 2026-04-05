@@ -1,7 +1,7 @@
 ---
 summary: "QQ Bot setup, config, and usage"
 read_when:
-  - You want to connect OpenClaw to QQ
+  - You want to connect Mullusi to QQ
   - You need QQ Bot credential setup
   - You want QQ Bot group or private chat support
 title: QQ Bot
@@ -9,7 +9,7 @@ title: QQ Bot
 
 # QQ Bot
 
-QQ Bot connects to OpenClaw via the official QQ Bot API (WebSocket gateway). The
+QQ Bot connects to Mullusi via the official QQ Bot API (WebSocket gateway). The
 plugin supports C2C private chat, group @messages, and guild channel messages with
 rich media (images, voice, video, files).
 
@@ -18,8 +18,8 @@ media are supported. Reactions and threads are not supported.
 
 ## Bundled plugin
 
-Current OpenClaw releases bundle QQ Bot, so normal packaged builds do not need
-a separate `openclaw plugins install` step.
+Current Mullusi releases bundle QQ Bot, so normal packaged builds do not need
+a separate `mullusi plugins install` step.
 
 ## Setup
 
@@ -34,7 +34,7 @@ a separate `openclaw plugins install` step.
 4. Add the channel:
 
 ```bash
-openclaw channels add --channel qqbot --token "AppID:AppSecret"
+mullusi channels add --channel qqbot --token "AppID:AppSecret"
 ```
 
 5. Restart the Gateway.
@@ -42,8 +42,8 @@ openclaw channels add --channel qqbot --token "AppID:AppSecret"
 Interactive setup paths:
 
 ```bash
-openclaw channels add
-openclaw configure --section channels
+mullusi channels add
+mullusi configure --section channels
 ```
 
 ## Configure
@@ -84,13 +84,13 @@ File-backed AppSecret:
 Notes:
 
 - Env fallback applies to the default QQ Bot account only.
-- `openclaw channels add --channel qqbot --token-file ...` provides the
+- `mullusi channels add --channel qqbot --token-file ...` provides the
   AppSecret only; the AppID must already be set in config or `QQBOT_APP_ID`.
 - `clientSecret` also accepts SecretRef input, not just a plaintext string.
 
 ### Multi-account setup
 
-Run multiple QQ bots under a single OpenClaw instance:
+Run multiple QQ bots under a single Mullusi instance:
 
 ```json5
 {
@@ -117,7 +117,7 @@ token cache (isolated by `appId`).
 Add a second bot via CLI:
 
 ```bash
-openclaw channels add --channel qqbot --account bot2 --token "222222222:secret-of-bot-2"
+mullusi channels add --channel qqbot --account bot2 --token "222222222:secret-of-bot-2"
 ```
 
 ### Voice (STT / TTS)
@@ -174,7 +174,7 @@ Built-in commands intercepted before the AI queue:
 | Command        | Description                          |
 | -------------- | ------------------------------------ |
 | `/bot-ping`    | Latency test                         |
-| `/bot-version` | Show the OpenClaw framework version  |
+| `/bot-version` | Show the Mullusi framework version  |
 | `/bot-help`    | List all commands                    |
 | `/bot-upgrade` | Show the QQBot upgrade guide link    |
 | `/bot-logs`    | Export recent gateway logs as a file |

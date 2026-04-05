@@ -210,10 +210,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llm-task/**"
-"extensions: lobster":
+"extensions: mullusi":
   - changed-files:
       - any-glob-to-any-file:
-          - "extensions/lobster/**"
+          - "extensions/mullusi/**"
 "extensions: memory-core":
   - changed-files:
       - any-glob-to-any-file:

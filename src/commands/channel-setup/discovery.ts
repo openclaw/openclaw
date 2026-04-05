@@ -5,7 +5,7 @@ import {
 } from "../../channels/plugins/catalog.js";
 import type { ChannelMeta, ChannelPlugin } from "../../channels/plugins/types.js";
 import { listChatChannels } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { ChannelChoice } from "../onboard-types.js";
@@ -23,12 +23,12 @@ export type ResolvedChannelSetupEntries = {
   installableCatalogById: Map<ChannelChoice, ChannelPluginCatalogEntry>;
 };
 
-function resolveWorkspaceDir(cfg: OpenClawConfig, workspaceDir?: string): string | undefined {
+function resolveWorkspaceDir(cfg: MullusiConfig, workspaceDir?: string): string | undefined {
   return workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
 }
 
 export function listManifestInstalledChannelIds(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Set<ChannelChoice> {
@@ -47,7 +47,7 @@ export function listManifestInstalledChannelIds(params: {
 }
 
 export function isCatalogChannelInstalled(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   entry: ChannelPluginCatalogEntry;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -56,7 +56,7 @@ export function isCatalogChannelInstalled(params: {
 }
 
 export function resolveChannelSetupEntries(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   installedPlugins: ChannelPlugin[];
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;

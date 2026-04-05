@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>OpenClaw</string>
+	<string>Mullusi</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -17,11 +17,11 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>$(OPENCLAW_MARKETING_VERSION)</string>
+	<string>$(MULLUSI_MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>$(OPENCLAW_BUILD_VERSION)</string>
+	<string>$(MULLUSI_BUILD_VERSION)</string>
 	<key>WKCompanionAppBundleIdentifier</key>
-	<string>$(OPENCLAW_APP_BUNDLE_ID)</string>
+	<string>$(MULLUSI_APP_BUNDLE_ID)</string>
 	<key>WKWatchKitApp</key>
 	<true/>
 </dict>

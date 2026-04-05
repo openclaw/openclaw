@@ -14,7 +14,7 @@ describe("formatAuthDoctorHint", () => {
       provider: "qwen-portal",
     });
 
-    expect(hint).toContain("openclaw onboard --auth-choice qwen-api-key");
+    expect(hint).toContain("mullusi onboard --auth-choice qwen-api-key");
     expect(hint).toContain("qwen-api-key-cn");
     expect(hint).not.toContain("--provider qwen");
   });

@@ -2,7 +2,7 @@ import {
   createAllowFromSection,
   createStandardChannelSetupStatus,
   mergeAllowFromEntries,
-} from "openclaw/plugin-sdk/setup";
+} from "mullusi/plugin-sdk/setup";
 import { resolveDefaultLineAccountId } from "./accounts.js";
 import {
   isLineConfigured,

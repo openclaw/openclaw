@@ -1,6 +1,6 @@
 import type { Mock } from "vitest";
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.js";
+import type { MullusiConfig } from "../config/types.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type ResolveConfigPathMock = Mock<() => string>;
@@ -23,7 +23,7 @@ export type StatusScanSharedMocks = {
 
 export function createStatusScanSharedMocks(configPathLabel: string): StatusScanSharedMocks {
   return {
-    resolveConfigPath: vi.fn(() => `/tmp/openclaw-${configPathLabel}-missing-${process.pid}.json`),
+    resolveConfigPath: vi.fn(() => `/tmp/mullusi-${configPathLabel}-missing-${process.pid}.json`),
     hasPotentialConfiguredChannels: vi.fn(),
     readBestEffortConfig: vi.fn(),
     resolveCommandSecretRefsViaGateway: vi.fn(),
@@ -233,14 +233,14 @@ export async function loadStatusScanModuleForTest(
   return await import("./status.scan.js");
 }
 
-export function createStatusScanConfig<T extends object = OpenClawConfig>(
+export function createStatusScanConfig<T extends object = MullusiConfig>(
   overrides: T = {} as T,
-): OpenClawConfig & T {
+): MullusiConfig & T {
   return {
     session: {},
     gateway: {},
     ...overrides,
-  } as OpenClawConfig & T;
+  } as MullusiConfig & T;
 }
 
 export function createStatusSummary(
@@ -301,7 +301,7 @@ export function createStatusAgentLocalStatuses() {
 
 export function createStatusGatewayConnection() {
   return {
-    url: "ws://127.0.0.1:18789",
+    url: "ws://127.0.0.1:18790",
     urlSource: "default",
   };
 }
@@ -309,7 +309,7 @@ export function createStatusGatewayConnection() {
 export function createStatusGatewayProbeFailure() {
   return {
     ok: false,
-    url: "ws://127.0.0.1:18789",
+    url: "ws://127.0.0.1:18790",
     connectLatencyMs: null,
     error: "timeout",
     close: null,
@@ -320,7 +320,7 @@ export function createStatusGatewayProbeFailure() {
   };
 }
 
-export function createStatusMemorySearchConfig(): OpenClawConfig {
+export function createStatusMemorySearchConfig(): MullusiConfig {
   return createStatusScanConfig({
     agents: {
       defaults: {
@@ -348,8 +348,8 @@ export function applyStatusScanDefaults(
   mocks: StatusScanSharedMocks,
   options: {
     hasConfiguredChannels?: boolean;
-    sourceConfig?: OpenClawConfig;
-    resolvedConfig?: OpenClawConfig;
+    sourceConfig?: MullusiConfig;
+    resolvedConfig?: MullusiConfig;
     summary?: ReturnType<typeof createStatusSummary>;
     update?: ReturnType<typeof createStatusUpdateResult> | false;
     gatewayProbe?: ReturnType<typeof createStatusGatewayProbeFailure> | false;

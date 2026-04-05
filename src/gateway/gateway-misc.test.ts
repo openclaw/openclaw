@@ -72,7 +72,7 @@ describe("GatewayClient", () => {
     params: { faviconSvg?: string; indexHtml?: string },
     run: (tmp: string) => Promise<void>,
   ) {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-ui-"));
     try {
       await fs.writeFile(path.join(tmp, "index.html"), params.indexHtml ?? "<html></html>\n");
       if (typeof params.faviconSvg === "string") {

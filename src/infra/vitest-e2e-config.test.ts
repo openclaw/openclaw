@@ -16,6 +16,6 @@ describe("e2e vitest config", () => {
     expect(e2eConfig.test?.pool).toBe("threads");
     expect(e2eConfig.test?.isolate).toBe(false);
     expect(e2eConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
-    expect(e2eConfig.test?.setupFiles).toContain("test/setup-openclaw-runtime.ts");
+    expect(e2eConfig.test?.setupFiles).toContain("test/setup-mullusi-runtime.ts");
   });
 });

@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { installModelsConfigTestHooks, withModelsTempHome } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureMullusiModelsJson } from "./models-config.js";
 
-function createGoogleModelsConfig(models: ModelDefinitionConfig[]): OpenClawConfig {
+function createGoogleModelsConfig(models: ModelDefinitionConfig[]): MullusiConfig {
   return {
     models: {
       providers: {
@@ -68,7 +68,7 @@ describe("models-config", () => {
         },
       ]);
 
-      const { agentDir } = await ensureOpenClawModelsJson(cfg);
+      const { agentDir } = await ensureMullusiModelsJson(cfg);
       await expectGeneratedProvider(agentDir, "google", {
         ids: ["gemini-3-pro-preview", "gemini-3-flash-preview"],
       });
@@ -90,7 +90,7 @@ describe("models-config", () => {
         },
       ]);
 
-      const { agentDir } = await ensureOpenClawModelsJson(cfg);
+      const { agentDir } = await ensureMullusiModelsJson(cfg);
       await expectGeneratedProvider(agentDir, "google", {
         ids: ["gemini-3-flash-preview"],
       });
@@ -121,9 +121,9 @@ describe("models-config", () => {
             },
           },
         },
-      } satisfies OpenClawConfig;
+      } satisfies MullusiConfig;
 
-      const { agentDir } = await ensureOpenClawModelsJson(cfg);
+      const { agentDir } = await ensureMullusiModelsJson(cfg);
       await expectGeneratedProvider(agentDir, "google-paid", {
         ids: ["gemini-3-pro-preview"],
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
@@ -154,9 +154,9 @@ describe("models-config", () => {
             },
           },
         },
-      } satisfies OpenClawConfig;
+      } satisfies MullusiConfig;
 
-      const { agentDir } = await ensureOpenClawModelsJson(cfg);
+      const { agentDir } = await ensureMullusiModelsJson(cfg);
       await expectGeneratedProvider(agentDir, "google", {
         ids: ["gemini-3-flash-preview"],
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",

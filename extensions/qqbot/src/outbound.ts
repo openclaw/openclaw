@@ -1363,7 +1363,7 @@ function isVideoFile(filePath: string, mimeType?: string): boolean {
 }
 
 /**
- * Send a message emitted by an OpenClaw cron task.
+ * Send a message emitted by an Mullusi cron task.
  *
  * Cron output may be either:
  * 1. A `QQBOT_CRON:{base64}` structured payload that includes target metadata.

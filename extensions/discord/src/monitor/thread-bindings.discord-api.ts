@@ -1,6 +1,6 @@
 import { ChannelType, Routes } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { logVerbose } from "mullusi/plugin-sdk/runtime-env";
 import { createDiscordRestClient } from "../client.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
@@ -123,7 +123,7 @@ export function isDiscordThreadGoneError(err: unknown): boolean {
 }
 
 export async function maybeSendBindingMessage(params: {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   record: ThreadBindingRecord;
   text: string;
   preferWebhook?: boolean;
@@ -159,7 +159,7 @@ export async function maybeSendBindingMessage(params: {
 }
 
 export async function createWebhookForChannel(params: {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   accountId: string;
   token?: string;
   channelId: string;
@@ -174,7 +174,7 @@ export async function createWebhookForChannel(params: {
     ).rest;
     const created = (await rest.post(Routes.channelWebhooks(params.channelId), {
       body: {
-        name: "OpenClaw Agents",
+        name: "Mullusi Agents",
       },
     })) as { id?: string; token?: string };
     const webhookId = typeof created?.id === "string" ? created.id.trim() : "";
@@ -226,7 +226,7 @@ export function findReusableWebhook(params: { accountId: string; channelId: stri
 }
 
 export async function resolveChannelIdForBinding(params: {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   accountId: string;
   token?: string;
   threadId: string;
@@ -273,7 +273,7 @@ export async function resolveChannelIdForBinding(params: {
 }
 
 export async function createThreadForBinding(params: {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   accountId: string;
   token?: string;
   channelId: string;

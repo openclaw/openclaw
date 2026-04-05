@@ -1,10 +1,10 @@
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 
 export function resolveProfileOverride(params: {
   rawProfile?: string;
   provider: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentDir?: string;
 }): { profileId?: string; error?: string } {
   const raw = params.rawProfile?.trim();

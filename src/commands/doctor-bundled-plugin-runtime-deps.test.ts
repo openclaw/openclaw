@@ -11,7 +11,7 @@ function writeJson(filePath: string, value: unknown) {
 
 describe("doctor bundled plugin runtime deps", () => {
   it("skips source checkouts", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-doctor-bundled-"));
     fs.mkdirSync(path.join(root, ".git"));
     fs.mkdirSync(path.join(root, "src"));
     fs.mkdirSync(path.join(root, "extensions"));
@@ -27,8 +27,8 @@ describe("doctor bundled plugin runtime deps", () => {
   });
 
   it("reports missing deps and conflicts", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
-    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "mullusi" });
 
     writeJson(path.join(root, "dist", "extensions", "alpha", "package.json"), {
       dependencies: {

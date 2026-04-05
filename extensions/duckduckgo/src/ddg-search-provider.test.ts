@@ -50,7 +50,7 @@ describe("duckduckgo web search provider", () => {
     }
 
     const result = await tool.execute({
-      query: "openclaw docs",
+      query: "mullusi docs",
       count: 4,
       region: "us-en",
       safeSearch: "off",
@@ -58,14 +58,14 @@ describe("duckduckgo web search provider", () => {
 
     expect(runDuckDuckGoSearch).toHaveBeenCalledWith({
       config: { test: true },
-      query: "openclaw docs",
+      query: "mullusi docs",
       count: 4,
       region: "us-en",
       safeSearch: "off",
     });
     expect(result).toEqual({
       config: { test: true },
-      query: "openclaw docs",
+      query: "mullusi docs",
       count: 4,
       region: "us-en",
       safeSearch: "off",

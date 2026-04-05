@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { createAsyncLock, readJsonFile, writeJsonAtomic, writeTextAtomic } from "./json-files.js";
 
 async function withTempBase<T>(run: (base: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-json-files-"));
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-json-files-"));
   return run(base);
 }
 

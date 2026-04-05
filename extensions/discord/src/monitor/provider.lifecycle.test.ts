@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "mullusi/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";

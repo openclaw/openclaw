@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { writeJsonFileAtomically as writeJsonFileAtomicallyImpl } from "openclaw/plugin-sdk/json-store";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { writeJsonFileAtomically as writeJsonFileAtomicallyImpl } from "mullusi/plugin-sdk/json-store";
+import { resolveStateDir } from "mullusi/plugin-sdk/state-paths";
 import { resolveConfiguredMatrixAccountIds } from "./account-selection.js";
 import {
   resolveLegacyMatrixFlatStoreTarget,
@@ -127,7 +127,7 @@ function detectLegacyBotSdkCryptoStore(cryptoRootDir: string): {
         detected: false,
         warning:
           `Legacy Matrix encrypted state path exists but is not a directory: ${cryptoRootDir}. ` +
-          "OpenClaw skipped automatic crypto migration for that path.",
+          "Mullusi skipped automatic crypto migration for that path.",
       };
     }
   } catch (err) {
@@ -135,7 +135,7 @@ function detectLegacyBotSdkCryptoStore(cryptoRootDir: string): {
       detected: false,
       warning:
         `Failed reading legacy Matrix encrypted state path (${cryptoRootDir}): ${String(err)}. ` +
-        "OpenClaw skipped automatic crypto migration for that path.",
+        "Mullusi skipped automatic crypto migration for that path.",
     };
   }
 
@@ -157,17 +157,17 @@ function detectLegacyBotSdkCryptoStore(cryptoRootDir: string): {
       detected: false,
       warning:
         `Failed scanning legacy Matrix encrypted state path (${cryptoRootDir}): ${String(err)}. ` +
-        "OpenClaw skipped automatic crypto migration for that path.",
+        "Mullusi skipped automatic crypto migration for that path.",
     };
   }
 }
 
-function resolveMatrixAccountIds(cfg: OpenClawConfig): string[] {
+function resolveMatrixAccountIds(cfg: MullusiConfig): string[] {
   return resolveConfiguredMatrixAccountIds(cfg);
 }
 
 function resolveLegacyMatrixFlatStorePlan(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   env: NodeJS.ProcessEnv;
 }): MatrixLegacyCryptoPlan | { warning: string } | null {
   const legacy = resolveMatrixLegacyFlatStoragePaths(resolveStateDir(params.env, os.homedir));
@@ -226,7 +226,7 @@ function loadLegacyBotSdkMetadata(cryptoRootDir: string): MatrixLegacyBotSdkMeta
 }
 
 function resolveMatrixLegacyCryptoPlans(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   env: NodeJS.ProcessEnv;
 }): MatrixLegacyCryptoDetection {
   const warnings: string[] = [];
@@ -319,7 +319,7 @@ async function persistLegacyMigrationState(params: {
 }
 
 export function detectLegacyMatrixCrypto(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   env?: NodeJS.ProcessEnv;
 }): MatrixLegacyCryptoDetection {
   const detection = resolveMatrixLegacyCryptoPlans({
@@ -336,7 +336,7 @@ export function detectLegacyMatrixCrypto(params: {
 }
 
 export async function autoPrepareLegacyMatrixCrypto(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   env?: NodeJS.ProcessEnv;
   log?: { info?: (message: string) => void; warn?: (message: string) => void };
   deps?: Partial<MatrixLegacyCryptoPrepareDeps>;
@@ -399,7 +399,7 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
     if (!plan.deviceId) {
       warnings.push(
         `Legacy Matrix encrypted state detected at ${plan.legacyCryptoPath}, but no device ID was found for account "${plan.accountId}". ` +
-          `OpenClaw will continue, but old encrypted history cannot be recovered automatically.`,
+          `Mullusi will continue, but old encrypted history cannot be recovered automatically.`,
       );
       continue;
     }
@@ -465,7 +465,7 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
     if (!summary.decryptionKeyBase64 && (summary.roomKeyCounts?.backedUp ?? 0) > 0) {
       warnings.push(
         `Legacy Matrix encrypted state for account "${plan.accountId}" has backed-up room keys, but no local backup decryption key was found. ` +
-          `Ask the operator to run "openclaw matrix verify backup restore --recovery-key <key>" after upgrade if they have the recovery key.`,
+          `Ask the operator to run "mullusi matrix verify backup restore --recovery-key <key>" after upgrade if they have the recovery key.`,
       );
     }
     if (!summary.decryptionKeyBase64 && (summary.roomKeyCounts?.total ?? 0) > 0) {

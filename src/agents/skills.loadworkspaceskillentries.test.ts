@@ -10,7 +10,7 @@ import { writePluginWithSkill } from "./test-helpers/skill-plugin-fixtures.js";
 const tempDirs: string[] = [];
 
 async function createTempWorkspaceDir() {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-"));
   tempDirs.push(workspaceDir);
   return workspaceDir;
 }
@@ -25,7 +25,7 @@ async function setupWorkspaceWithProsePlugin() {
   const workspaceDir = await createTempWorkspaceDir();
   const managedDir = path.join(workspaceDir, ".managed");
   const bundledDir = path.join(workspaceDir, ".bundled");
-  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "open-prose");
+  const pluginRoot = path.join(workspaceDir, ".mullusi", "extensions", "open-prose");
 
   await writePluginWithSkill({
     pluginRoot,
@@ -41,7 +41,7 @@ async function setupWorkspaceWithDiffsPlugin() {
   const workspaceDir = await createTempWorkspaceDir();
   const managedDir = path.join(workspaceDir, ".managed");
   const bundledDir = path.join(workspaceDir, ".bundled");
-  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "diffs");
+  const pluginRoot = path.join(workspaceDir, ".mullusi", "extensions", "diffs");
 
   await writePluginWithSkill({
     pluginRoot,
@@ -235,7 +235,7 @@ describe("loadWorkspaceSkillEntries", () => {
       dir: path.join(workspaceDir, "skills", "remote-only"),
       name: "remote-only",
       description: "Needs a remote bin",
-      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
+      metadata: '{"mullusi":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
     });
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, {

@@ -11,7 +11,7 @@ import { mergeTransportHeaders, sanitizeTransportPayloadText } from "../transpor
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
 
-const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
+const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "mullusi.google-prompt-cache";
 const GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS = 10 * 60_000;
 const GOOGLE_PROMPT_CACHE_SHORT_REFRESH_WINDOW_MS = 30_000;
 const GOOGLE_PROMPT_CACHE_LONG_REFRESH_WINDOW_MS = 5 * 60_000;
@@ -385,5 +385,5 @@ export async function prepareGooglePromptCacheStreamFn(
     inner(model, buildManagedContextWithoutSystemPrompt(context), {
       ...options,
       cachedContent,
-    });
+    } as any);
 }

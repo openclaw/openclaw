@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { MullusiConfig } from "../../../src/config/config.js";
 import type { VideoGenerationProvider } from "../api.js";
 import { generateVideo, listRuntimeVideoGenerationProviders } from "./runtime.js";
 
@@ -10,10 +10,10 @@ const mocks = vi.hoisted(() => {
     describeFailoverError: vi.fn(),
     getProviderEnvVars: vi.fn<(providerId: string) => string[]>(() => []),
     getVideoGenerationProvider: vi.fn<
-      (providerId: string, config?: OpenClawConfig) => VideoGenerationProvider | undefined
+      (providerId: string, config?: MullusiConfig) => VideoGenerationProvider | undefined
     >(() => undefined),
     isFailoverError: vi.fn<(err: unknown) => boolean>(() => false),
-    listVideoGenerationProviders: vi.fn<(config?: OpenClawConfig) => VideoGenerationProvider[]>(
+    listVideoGenerationProviders: vi.fn<(config?: MullusiConfig) => VideoGenerationProvider[]>(
       () => [],
     ),
     parseVideoGenerationModelRef: vi.fn<
@@ -99,7 +99,7 @@ describe("video-generation runtime", () => {
             videoGenerationModel: { primary: "video-plugin/vid-v1" },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       prompt: "animate a cat",
       agentDir: "/tmp/agent",
       authStore,
@@ -134,10 +134,10 @@ describe("video-generation runtime", () => {
     ];
     mocks.listVideoGenerationProviders.mockReturnValue(providers);
 
-    expect(listRuntimeVideoGenerationProviders({ config: {} as OpenClawConfig })).toEqual(
+    expect(listRuntimeVideoGenerationProviders({ config: {} as MullusiConfig })).toEqual(
       providers,
     );
-    expect(mocks.listVideoGenerationProviders).toHaveBeenCalledWith({} as OpenClawConfig);
+    expect(mocks.listVideoGenerationProviders).toHaveBeenCalledWith({} as MullusiConfig);
   });
 
   it("explains native video-generation config and provider auth when no model is configured", async () => {
@@ -153,7 +153,7 @@ describe("video-generation runtime", () => {
     ]);
     mocks.getProviderEnvVars.mockReturnValue(["QWEN_API_KEY"]);
 
-    const promise = generateVideo({ cfg: {} as OpenClawConfig, prompt: "animate a cat" });
+    const promise = generateVideo({ cfg: {} as MullusiConfig, prompt: "animate a cat" });
 
     await expect(promise).rejects.toThrow("No video-generation model configured.");
     await expect(promise).rejects.toThrow(

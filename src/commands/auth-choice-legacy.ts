@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   resolveManifestDeprecatedProviderAuthChoice,
   resolveManifestProviderAuthChoices,
@@ -8,7 +8,7 @@ import type { AuthChoice } from "./onboard-types.js";
 function resolveLegacyCliBackendChoice(
   choice: string,
   params?: {
-    config?: OpenClawConfig;
+    config?: MullusiConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
   },
@@ -24,7 +24,7 @@ function resolveReplacementLabel(choiceLabel: string): string {
 }
 
 export function resolveLegacyAuthChoiceAliasesForCli(params?: {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ReadonlyArray<AuthChoice> {
@@ -38,7 +38,7 @@ export function resolveLegacyAuthChoiceAliasesForCli(params?: {
 export function normalizeLegacyOnboardAuthChoice(
   authChoice: AuthChoice | undefined,
   params?: {
-    config?: OpenClawConfig;
+    config?: MullusiConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
   },
@@ -58,7 +58,7 @@ export function normalizeLegacyOnboardAuthChoice(
 export function isDeprecatedAuthChoice(
   authChoice: AuthChoice | undefined,
   params?: {
-    config?: OpenClawConfig;
+    config?: MullusiConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
   },
@@ -71,7 +71,7 @@ export function isDeprecatedAuthChoice(
 export function resolveDeprecatedAuthChoiceReplacement(
   authChoice: AuthChoice,
   params?: {
-    config?: OpenClawConfig;
+    config?: MullusiConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
   },
@@ -98,7 +98,7 @@ export function resolveDeprecatedAuthChoiceReplacement(
 export function formatDeprecatedNonInteractiveAuthChoiceError(
   authChoice: AuthChoice,
   params?: {
-    config?: OpenClawConfig;
+    config?: MullusiConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
   },

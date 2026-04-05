@@ -3,7 +3,7 @@ import {
   normalizeAccountId,
   prepareScopedSetupConfig,
   type ChannelSetupAdapter,
-} from "openclaw/plugin-sdk/setup";
+} from "mullusi/plugin-sdk/setup";
 import { applyMatrixSetupAccountConfig, validateMatrixSetupInput } from "./setup-config.js";
 import type { CoreConfig } from "./types.js";
 

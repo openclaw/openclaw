@@ -4,7 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   resolveAgentDeliveryPlan,
@@ -67,7 +67,7 @@ function logNestedOutput(
 }
 
 export function normalizeAgentCommandReplyPayloads(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   opts: AgentCommandOpts;
   outboundSession: OutboundSessionContext | undefined;
   payloads: RunResult["payloads"];
@@ -138,7 +138,7 @@ export function normalizeAgentCommandReplyPayloads(params: {
 }
 
 export async function deliverAgentCommandResult(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   deps: CliDeps;
   runtime: RuntimeEnv;
   opts: AgentCommandOpts;

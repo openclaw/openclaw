@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
@@ -18,7 +18,7 @@ vi.mock("./monitor.js", () => ({
   monitorTelegramProvider: monitorTelegramProviderMock,
 }));
 
-function createCfg(): OpenClawConfig {
+function createCfg(): MullusiConfig {
   return {
     channels: {
       telegram: {
@@ -30,21 +30,21 @@ function createCfg(): OpenClawConfig {
         },
       },
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
 }
 
-function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegramAccount {
+function resolveAccount(cfg: MullusiConfig, accountId: string): ResolvedTelegramAccount {
   return telegramPlugin.config.resolveAccount(cfg, accountId) as ResolvedTelegramAccount;
 }
 
-function createStartTelegramContext(cfg: OpenClawConfig, accountId: string) {
+function createStartTelegramContext(cfg: MullusiConfig, accountId: string) {
   return createStartAccountContext({
     account: resolveAccount(cfg, accountId),
     cfg,
   });
 }
 
-function startTelegramAccount(cfg: OpenClawConfig, accountId: string) {
+function startTelegramAccount(cfg: MullusiConfig, accountId: string) {
   return telegramGateway.startAccount(createStartTelegramContext(cfg, accountId));
 }
 

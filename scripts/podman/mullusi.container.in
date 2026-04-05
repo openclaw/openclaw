@@ -1,0 +1,32 @@
+# Mullusi gateway — Podman Quadlet (rootless)
+# Installed by scripts/podman/setup.sh into the current user's ~/.config/containers/systemd/
+# {{MULLUSI_HOME}}, {{MULLUSI_CONFIG_DIR}}, {{MULLUSI_WORKSPACE_DIR}},
+# {{IMAGE_NAME}}, and {{CONTAINER_NAME}} are replaced at install time.
+
+[Unit]
+Description=Mullusi gateway (rootless Podman)
+
+[Container]
+Image={{IMAGE_NAME}}
+ContainerName={{CONTAINER_NAME}}
+UserNS=keep-id
+# Keep container UID/GID aligned with the invoking user so mounted config is readable.
+User=%U:%G
+Volume={{MULLUSI_CONFIG_DIR}}:/home/node/.mullusi:Z
+Volume={{MULLUSI_WORKSPACE_DIR}}:/home/node/.mullusi/workspace:Z
+EnvironmentFile={{MULLUSI_CONFIG_DIR}}/.env
+Environment=HOME=/home/node
+Environment=TERM=xterm-256color
+Environment=NPM_CONFIG_CACHE=/home/node/.mullusi/.npm
+Environment=MULLUSI_NO_RESPAWN=1
+PublishPort=127.0.0.1:18790:18790
+PublishPort=127.0.0.1:18790:18790
+Pull=never
+Exec=node dist/index.js gateway --bind lan --port 18790
+
+[Service]
+TimeoutStartSec=300
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

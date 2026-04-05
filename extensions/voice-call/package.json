@@ -1,7 +1,7 @@
 {
-  "name": "@openclaw/voice-call",
+  "name": "@mullusi/voice-call",
   "version": "2026.4.4",
-  "description": "OpenClaw voice-call plugin",
+  "description": "Mullusi voice-call plugin",
   "type": "module",
   "dependencies": {
     "@sinclair/typebox": "0.34.49",
@@ -9,17 +9,17 @@
     "ws": "^8.20.0"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "mullusi": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.4"
+    "mullusi": ">=2026.4.4"
   },
   "peerDependenciesMeta": {
-    "openclaw": {
+    "mullusi": {
       "optional": true
     }
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],
@@ -30,7 +30,7 @@
       "pluginApi": ">=2026.4.4"
     },
     "build": {
-      "openclawVersion": "2026.4.4"
+      "mullusiVersion": "2026.4.4"
     },
     "release": {
       "publishToClawHub": true,

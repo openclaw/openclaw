@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MatrixExecApprovalHandler } from "./exec-approvals-handler.js";
 
@@ -17,7 +17,7 @@ const baseRequest = {
   expiresAtMs: 61_000,
 };
 
-function createHandler(cfg: OpenClawConfig, accountId = "default") {
+function createHandler(cfg: MullusiConfig, accountId = "default") {
   const client = {} as never;
   const sendMessage = vi
     .fn()
@@ -64,7 +64,7 @@ describe("MatrixExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, sendMessage } = createHandler(cfg);
 
     await handler.handleRequested(baseRequest);
@@ -93,7 +93,7 @@ describe("MatrixExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { client, handler, sendMessage, repairDirectRooms } = createHandler(cfg);
 
     await handler.handleRequested({
@@ -149,7 +149,7 @@ describe("MatrixExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const defaultHandler = createHandler(cfg, "default");
     const opsHandler = createHandler(cfg, "ops");
     const request = {
@@ -187,7 +187,7 @@ describe("MatrixExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, sendMessage } = createHandler(cfg);
 
     await handler.handleRequested({
@@ -224,7 +224,7 @@ describe("MatrixExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, editMessage } = createHandler(cfg);
 
     await handler.handleRequested(baseRequest);
@@ -260,7 +260,7 @@ describe("MatrixExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, deleteMessage } = createHandler(cfg);
 
     await handler.handleRequested(baseRequest);
@@ -290,7 +290,7 @@ describe("MatrixExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, sendMessage } = createHandler(cfg);
 
     await handler.handleRequested({

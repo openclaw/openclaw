@@ -83,9 +83,9 @@ describe("entry root version fast path", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     originalArgv = [...process.argv];
-    originalGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.argv = ["node", "openclaw", "--version"];
+    originalGatewayToken = process.env.MULLUSI_GATEWAY_TOKEN;
+    delete process.env.MULLUSI_GATEWAY_TOKEN;
+    process.argv = ["node", "mullusi", "--version"];
     exitSpy = vi
       .spyOn(process, "exit")
       .mockImplementation(((_code?: number) => undefined) as typeof process.exit);
@@ -94,9 +94,9 @@ describe("entry root version fast path", () => {
   afterEach(() => {
     process.argv = originalArgv;
     if (originalGatewayToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.MULLUSI_GATEWAY_TOKEN;
     } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = originalGatewayToken;
+      process.env.MULLUSI_GATEWAY_TOKEN = originalGatewayToken;
     }
     exitSpy.mockRestore();
   });
@@ -106,7 +106,7 @@ describe("entry root version fast path", () => {
 
     await importEntry("commit-tagged");
     await vi.waitFor(() => {
-      expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test (abc1234)");
+      expect(logSpy).toHaveBeenCalledWith("Mullusi 9.9.9-test (abc1234)");
       expect(exitSpy).toHaveBeenCalledWith(0);
     });
 
@@ -119,7 +119,7 @@ describe("entry root version fast path", () => {
 
     await importEntry("plain-version");
     await vi.waitFor(() => {
-      expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test");
+      expect(logSpy).toHaveBeenCalledWith("Mullusi 9.9.9-test");
       expect(exitSpy).toHaveBeenCalledWith(0);
     });
 
@@ -132,7 +132,7 @@ describe("entry root version fast path", () => {
 
     await importEntry("container-target");
     await vi.waitFor(() => {
-      expect(runCliMock).toHaveBeenCalledWith(["node", "openclaw", "--version"]);
+      expect(runCliMock).toHaveBeenCalledWith(["node", "mullusi", "--version"]);
     });
     expect(logSpy).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
@@ -142,12 +142,12 @@ describe("entry root version fast path", () => {
 
   it("allows root version container mode when gateway override env vars are set", async () => {
     resolveCliContainerTargetMock.mockReturnValue("demo");
-    process.env.OPENCLAW_GATEWAY_TOKEN = "demo-token";
+    process.env.MULLUSI_GATEWAY_TOKEN = "demo-token";
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await importEntry("gateway-override");
     await vi.waitFor(() => {
-      expect(runCliMock).toHaveBeenCalledWith(["node", "openclaw", "--version"]);
+      expect(runCliMock).toHaveBeenCalledWith(["node", "mullusi", "--version"]);
     });
     expect(errorSpy).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();

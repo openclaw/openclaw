@@ -2,7 +2,7 @@ import {
   describeImageWithModel,
   describeImagesWithModel,
   type MediaUnderstandingProvider,
-} from "openclaw/plugin-sdk/media-understanding";
+} from "mullusi/plugin-sdk/media-understanding";
 
 export const zaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "zai",

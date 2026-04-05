@@ -1,8 +1,8 @@
 ---
 read_when:
   - 你想用一个 API 密钥访问多种 LLM
-  - 你想在 OpenClaw 中通过 Kilo Gateway 运行模型
-summary: 使用 Kilo Gateway 的统一 API 在 OpenClaw 中访问多种模型
+  - 你想在 Mullusi 中通过 Kilo Gateway 运行模型
+summary: 使用 Kilo Gateway 的统一 API 在 Mullusi 中访问多种模型
 x-i18n:
   generated_at: "2026-03-16T06:25:35Z"
   model: gpt-5.4
@@ -26,7 +26,7 @@ Kilo Gateway 提供一个**统一 API**，可通过单一
 ## CLI 设置
 
 ```bash
-openclaw onboard --kilocode-api-key <key>
+mullusi onboard --kilocode-api-key <key>
 ```
 
 或者设置环境变量：
@@ -58,7 +58,7 @@ export KILOCODE_API_KEY="<your-kilocode-api-key>" # pragma: allowlist secret
 
 ## 可用模型
 
-OpenClaw 会在启动时从 Kilo Gateway 动态发现可用模型。使用
+Mullusi 会在启动时从 Kilo Gateway 动态发现可用模型。使用
 `/models kilocode` 查看你的账户可用的完整模型列表。
 
 Gateway 网关上任何可用的模型都可以使用 `kilocode/` 前缀：

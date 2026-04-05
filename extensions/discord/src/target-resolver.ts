@@ -1,5 +1,5 @@
-import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
-import { buildMessagingTarget, type MessagingTarget } from "openclaw/plugin-sdk/messaging-targets";
+import type { DirectoryConfigParams } from "mullusi/plugin-sdk/directory-runtime";
+import { buildMessagingTarget, type MessagingTarget } from "mullusi/plugin-sdk/messaging-targets";
 import { resolveDiscordAccount } from "./accounts.js";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";

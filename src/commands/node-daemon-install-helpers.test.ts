@@ -41,19 +41,19 @@ describe("buildNodeInstallPlan", () => {
     });
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
+      MULLUSI_SERVICE_VERSION: "2026.3.22",
     });
 
     const plan = await buildNodeInstallPlan({
       env: {},
       host: "127.0.0.1",
-      port: 18789,
+      port: 18790,
       runtime: "node",
       nodePath: "/custom/node/bin/node",
     });
 
     expect(plan.environment).toEqual({
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
+      MULLUSI_SERVICE_VERSION: "2026.3.22",
     });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
@@ -74,13 +74,13 @@ describe("buildNodeInstallPlan", () => {
     });
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
+      MULLUSI_SERVICE_VERSION: "2026.3.22",
     });
 
     await buildNodeInstallPlan({
       env: {},
       host: "127.0.0.1",
-      port: 18789,
+      port: 18790,
       runtime: "node",
       nodePath: "node",
     });

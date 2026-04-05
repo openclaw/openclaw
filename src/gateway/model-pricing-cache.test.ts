@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { modelKey } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
   __resetGatewayModelPricingCacheForTest,
@@ -65,7 +65,7 @@ describe("model-pricing-cache", () => {
           summaryModel: "openai/gpt-5.4",
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
 
     const refs = collectConfiguredModelPricingRefs(config).map((ref) =>
       modelKey(ref.provider, ref.model),
@@ -107,7 +107,7 @@ describe("model-pricing-cache", () => {
       tools: {
         subagents: { model: { primary: "zai/glm-5" } },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
 
     const fetchImpl = withFetchPreconnect(
       async () =>
@@ -209,7 +209,7 @@ describe("model-pricing-cache", () => {
           model: { primary: "openrouter/auto" },
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
 
     const fetchImpl = withFetchPreconnect(
       async () =>

@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolvePreferredMullusiTmpDir } from "../infra/tmp-mullusi-dir.js";
 import {
   createManagedRun,
   mockSuccessfulCliRun,
@@ -120,7 +120,7 @@ describe("runCliAgent spawn path", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       prompt: "hi",
       provider: "claude-cli",
       model: "claude-sonnet-4-6",
@@ -345,7 +345,7 @@ describe("runCliAgent spawn path", () => {
             bootstrapTotalMaxChars: 50,
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       prompt: "hi",
       provider: "codex-cli",
       model: "gpt-5.4",
@@ -381,7 +381,7 @@ describe("runCliAgent spawn path", () => {
     );
 
     const tempDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-"),
+      path.join(resolvePreferredMullusiTmpDir(), "mullusi-cli-prompt-image-"),
     );
     const sourceImage = path.join(tempDir, "bb-image.png");
     await fs.writeFile(sourceImage, Buffer.from(SMALL_PNG_BASE64, "base64"));
@@ -405,7 +405,7 @@ describe("runCliAgent spawn path", () => {
     const argv = input.argv ?? [];
     const imageArgIndex = argv.indexOf("--image");
     expect(imageArgIndex).toBeGreaterThanOrEqual(0);
-    expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images-");
+    expect(argv[imageArgIndex + 1]).toContain("mullusi-cli-images-");
     expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
   });
 
@@ -425,7 +425,7 @@ describe("runCliAgent spawn path", () => {
     );
 
     const tempDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-generic-"),
+      path.join(resolvePreferredMullusiTmpDir(), "mullusi-cli-prompt-image-generic-"),
     );
     const sourceImage = path.join(tempDir, "claude-image.png");
     await fs.writeFile(sourceImage, Buffer.from(SMALL_PNG_BASE64, "base64"));
@@ -451,7 +451,7 @@ describe("runCliAgent spawn path", () => {
     const promptCarrier = [input.input ?? "", ...argv].join("\n");
     const appendedPath = promptCarrier
       .split("\n")
-      .find((value) => value.includes("openclaw-cli-images-"));
+      .find((value) => value.includes("mullusi-cli-images-"));
     expect(appendedPath).toBeDefined();
     expect(appendedPath).not.toBe(sourceImage);
     expect(promptCarrier).toContain(appendedPath ?? "");
@@ -473,7 +473,7 @@ describe("runCliAgent spawn path", () => {
     );
 
     const tempDir = await fs.mkdtemp(
-      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-explicit-images-"),
+      path.join(resolvePreferredMullusiTmpDir(), "mullusi-cli-explicit-images-"),
     );
     const sourceImage = path.join(tempDir, "ignored-prompt-image.png");
     await fs.writeFile(sourceImage, Buffer.from(SMALL_PNG_BASE64, "base64"));
@@ -502,7 +502,7 @@ describe("runCliAgent spawn path", () => {
   it("falls back to per-agent workspace when workspaceDir is missing", async () => {
     const runCliAgent = await setupCliRunnerTestModule();
     const tempDir = await fs.mkdtemp(
-      path.join(process.env.TMPDIR ?? "/tmp", "openclaw-cli-runner-"),
+      path.join(process.env.TMPDIR ?? "/tmp", "mullusi-cli-runner-"),
     );
     const fallbackWorkspace = path.join(tempDir, "workspace-main");
     await fs.mkdir(fallbackWorkspace, { recursive: true });
@@ -512,7 +512,7 @@ describe("runCliAgent spawn path", () => {
           workspace: fallbackWorkspace,
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies MullusiConfig;
 
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({

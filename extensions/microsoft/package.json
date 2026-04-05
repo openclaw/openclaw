@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/microsoft-speech",
+  "name": "@mullusi/microsoft-speech",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Microsoft speech plugin",
+  "description": "Mullusi Microsoft speech plugin",
   "type": "module",
   "dependencies": {
     "node-edge-tts": "^1.2.10"
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

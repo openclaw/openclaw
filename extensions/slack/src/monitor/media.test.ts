@@ -1,8 +1,8 @@
-import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
-import * as mediaFetch from "openclaw/plugin-sdk/media-runtime";
-import type { SavedMedia } from "openclaw/plugin-sdk/media-runtime";
-import * as mediaStore from "openclaw/plugin-sdk/media-runtime";
-import { type FetchMock, withFetchPreconnect } from "openclaw/plugin-sdk/testing";
+import * as ssrf from "mullusi/plugin-sdk/infra-runtime";
+import * as mediaFetch from "mullusi/plugin-sdk/media-runtime";
+import type { SavedMedia } from "mullusi/plugin-sdk/media-runtime";
+import * as mediaStore from "mullusi/plugin-sdk/media-runtime";
+import { type FetchMock, withFetchPreconnect } from "mullusi/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockPinnedHostnameResolution } from "../../../../src/test-helpers/ssrf.js";
 import {

@@ -16,7 +16,7 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
 const GUARD_TRUNCATION_SUFFIX =
   "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
   "Use offset/limit parameters or request specific sections for large content.]";
-const RAW_APPEND_MESSAGE = Symbol("openclaw.session.rawAppendMessage");
+const RAW_APPEND_MESSAGE = Symbol("mullusi.session.rawAppendMessage");
 
 type SessionManagerWithRawAppend = SessionManager & {
   [RAW_APPEND_MESSAGE]?: SessionManager["appendMessage"];

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
+import type { MullusiConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import { setMSTeamsRuntime } from "../runtime.js";
@@ -63,7 +63,7 @@ vi.mock("../reply-dispatcher.js", () => ({
 }));
 
 describe("msteams monitor handler authz", () => {
-  function createDeps(cfg: OpenClawConfig) {
+  function createDeps(cfg: MullusiConfig) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
     const upsertPairingRequest = vi.fn(async () => null);
     const recordInboundSession = vi.fn(async () => undefined);
@@ -150,7 +150,7 @@ describe("msteams monitor handler authz", () => {
           groupAllowFrom: [],
         },
       },
-    } as OpenClawConfig);
+    } as MullusiConfig);
 
     const handler = createMSTeamsMessageHandler(deps);
     await handler({
@@ -201,7 +201,7 @@ describe("msteams monitor handler authz", () => {
           },
         },
       },
-    } as OpenClawConfig);
+    } as MullusiConfig);
 
     const handler = createMSTeamsMessageHandler(deps);
     await handler({
@@ -242,7 +242,7 @@ describe("msteams monitor handler authz", () => {
           allowFrom: [],
         },
       },
-    } as OpenClawConfig);
+    } as MullusiConfig);
 
     const handler = createMSTeamsMessageHandler(deps);
     await handler({
@@ -322,7 +322,7 @@ describe("msteams monitor handler authz", () => {
           allowFrom: ["trusted-aad"],
         },
       },
-    } as OpenClawConfig);
+    } as MullusiConfig);
 
     const handler = createMSTeamsMessageHandler(deps);
     await handler({
@@ -369,7 +369,7 @@ describe("msteams monitor handler authz", () => {
           groupAllowFrom: [],
         },
       },
-    } as OpenClawConfig);
+    } as MullusiConfig);
 
     const handler = createMSTeamsMessageHandler(deps);
     await handler({
@@ -447,7 +447,7 @@ describe("msteams monitor handler authz", () => {
           },
         },
       },
-    } as OpenClawConfig);
+    } as MullusiConfig);
 
     const handler = createMSTeamsMessageHandler(deps);
     await handler({
@@ -532,7 +532,7 @@ describe("msteams monitor handler authz", () => {
           },
         },
       },
-    } as OpenClawConfig);
+    } as MullusiConfig);
 
     const handler = createMSTeamsMessageHandler(deps);
     await handler({
@@ -603,7 +603,7 @@ describe("msteams monitor handler authz", () => {
           },
         },
       },
-    } as OpenClawConfig);
+    } as MullusiConfig);
 
     const handler = createMSTeamsMessageHandler(deps);
     await handler({
@@ -680,7 +680,7 @@ describe("msteams monitor handler authz", () => {
           },
         },
       },
-    } as OpenClawConfig);
+    } as MullusiConfig);
 
     const handler = createMSTeamsMessageHandler(deps);
     await handler({

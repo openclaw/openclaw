@@ -1,5 +1,5 @@
 import Foundation
-import OpenClawKit
+import MullusiKit
 import OSLog
 @preconcurrency import WatchConnectivity
 
@@ -15,14 +15,14 @@ enum WatchMessagingError: LocalizedError {
         case .notPaired:
             "WATCH_UNAVAILABLE: no paired Apple Watch"
         case .watchAppNotInstalled:
-            "WATCH_UNAVAILABLE: OpenClaw watch companion app is not installed"
+            "WATCH_UNAVAILABLE: Mullusi watch companion app is not installed"
         }
     }
 }
 
 @MainActor
 final class WatchMessagingService: NSObject, @preconcurrency WatchMessagingServicing {
-    nonisolated private static let logger = Logger(subsystem: "ai.openclaw", category: "watch.messaging")
+    nonisolated private static let logger = Logger(subsystem: "ai.mullusi", category: "watch.messaging")
     private let session: WCSession?
     private var pendingActivationContinuations: [CheckedContinuation<Void, Never>] = []
     private var replyHandler: (@Sendable (WatchQuickReplyEvent) -> Void)?
@@ -76,7 +76,7 @@ final class WatchMessagingService: NSObject, @preconcurrency WatchMessagingServi
 
     func sendNotification(
         id: String,
-        params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult
+        params: MullusiWatchNotifyParams) async throws -> WatchNotificationSendResult
     {
         await self.ensureActivated()
         guard let session = self.session else {
@@ -92,7 +92,7 @@ final class WatchMessagingService: NSObject, @preconcurrency WatchMessagingServi
             "id": id,
             "title": params.title,
             "body": params.body,
-            "priority": params.priority?.rawValue ?? OpenClawNotificationPriority.active.rawValue,
+            "priority": params.priority?.rawValue ?? MullusiNotificationPriority.active.rawValue,
             "sentAtMs": Int(Date().timeIntervalSince1970 * 1000),
         ]
         if let promptId = Self.nonEmpty(params.promptId) {

@@ -38,7 +38,7 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
   it("forwards memory trigger metadata into tool creation so append-only guards activate", async () => {
     vi.resetModules();
 
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-memory-flush-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-attempt-memory-flush-"));
     const stop = new Error("stop after tool creation");
     const capturedOptions: Array<Record<string, unknown> | undefined> = [];
 
@@ -48,7 +48,7 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
           await vi.importActual<typeof import("../../pi-tools.js")>("../../pi-tools.js");
         return {
           ...actual,
-          createOpenClawCodingTools: vi.fn((options) => {
+          createMullusiCodingTools: vi.fn((options) => {
             capturedOptions.push(options as Record<string, unknown> | undefined);
             throw stop;
           }),
@@ -71,7 +71,7 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
   });
 
   it("activates the memory flush append-only write wrapper", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-memory-flush-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-attempt-memory-flush-"));
     const memoryFile = path.join(workspaceDir, MEMORY_RELATIVE_PATH);
 
     try {

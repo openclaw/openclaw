@@ -44,7 +44,7 @@ function buildNoVncBootstrapHtml(params: ResolvedNoVncObserver): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="referrer" content="no-referrer" />
-  <title>OpenClaw noVNC Observer</title>
+  <title>Mullusi noVNC Observer</title>
 </head>
 <body>
   <p>Opening sandbox observer...</p>

@@ -18,24 +18,24 @@ describe("syncPluginVersions", () => {
     }
   });
 
-  it("preserves workspace openclaw devDependencies while bumping plugin host constraints", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sync-plugin-versions-"));
+  it("preserves workspace mullusi devDependencies while bumping plugin host constraints", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-sync-plugin-versions-"));
     tempDirs.push(rootDir);
 
     writeJson(path.join(rootDir, "package.json"), {
-      name: "openclaw",
+      name: "mullusi",
       version: "2026.4.1",
     });
     writeJson(path.join(rootDir, "extensions/bluebubbles/package.json"), {
-      name: "@openclaw/bluebubbles",
+      name: "@mullusi/bluebubbles",
       version: "2026.3.30",
       devDependencies: {
-        openclaw: "workspace:*",
+        mullusi: "workspace:*",
       },
       peerDependencies: {
-        openclaw: ">=2026.3.30",
+        mullusi: ">=2026.3.30",
       },
-      openclaw: {
+      mullusi: {
         install: {
           minHostVersion: ">=2026.3.30",
         },
@@ -43,7 +43,7 @@ describe("syncPluginVersions", () => {
           pluginApi: ">=2026.3.30",
         },
         build: {
-          openclawVersion: "2026.3.30",
+          mullusiVersion: "2026.3.30",
         },
       },
     });
@@ -55,7 +55,7 @@ describe("syncPluginVersions", () => {
       version?: string;
       devDependencies?: Record<string, string>;
       peerDependencies?: Record<string, string>;
-      openclaw?: {
+      mullusi?: {
         install?: {
           minHostVersion?: string;
         };
@@ -63,17 +63,17 @@ describe("syncPluginVersions", () => {
           pluginApi?: string;
         };
         build?: {
-          openclawVersion?: string;
+          mullusiVersion?: string;
         };
       };
     };
 
-    expect(summary.updated).toContain("@openclaw/bluebubbles");
+    expect(summary.updated).toContain("@mullusi/bluebubbles");
     expect(updatedPackage.version).toBe("2026.4.1");
-    expect(updatedPackage.devDependencies?.openclaw).toBe("workspace:*");
-    expect(updatedPackage.peerDependencies?.openclaw).toBe(">=2026.4.1");
-    expect(updatedPackage.openclaw?.install?.minHostVersion).toBe(">=2026.4.1");
-    expect(updatedPackage.openclaw?.compat?.pluginApi).toBe(">=2026.4.1");
-    expect(updatedPackage.openclaw?.build?.openclawVersion).toBe("2026.4.1");
+    expect(updatedPackage.devDependencies?.mullusi).toBe("workspace:*");
+    expect(updatedPackage.peerDependencies?.mullusi).toBe(">=2026.4.1");
+    expect(updatedPackage.mullusi?.install?.minHostVersion).toBe(">=2026.4.1");
+    expect(updatedPackage.mullusi?.compat?.pluginApi).toBe(">=2026.4.1");
+    expect(updatedPackage.mullusi?.build?.mullusiVersion).toBe("2026.4.1");
   });
 });

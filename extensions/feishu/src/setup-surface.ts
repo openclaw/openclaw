@@ -9,9 +9,9 @@ import {
   splitSetupEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-  type OpenClawConfig,
+  type MullusiConfig,
   type SecretInput,
-} from "openclaw/plugin-sdk/setup";
+} from "mullusi/plugin-sdk/setup";
 import {
   inspectFeishuCredentials,
   listFeishuAccountIds,
@@ -34,7 +34,7 @@ function normalizeString(value: unknown): string | undefined {
 
 type ScopedFeishuConfig = Partial<FeishuConfig> & Partial<FeishuAccountConfig>;
 
-function getScopedFeishuConfig(cfg: OpenClawConfig, accountId: string): ScopedFeishuConfig {
+function getScopedFeishuConfig(cfg: MullusiConfig, accountId: string): ScopedFeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return feishuCfg ?? {};
@@ -43,10 +43,10 @@ function getScopedFeishuConfig(cfg: OpenClawConfig, accountId: string): ScopedFe
 }
 
 function patchFeishuConfig(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId: string,
   patch: Record<string, unknown>,
-): OpenClawConfig {
+): MullusiConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return patchTopLevelChannelConfigSection({
@@ -75,30 +75,30 @@ function patchFeishuConfig(
 }
 
 function setFeishuAllowFrom(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId: string,
   allowFrom: string[],
-): OpenClawConfig {
+): MullusiConfig {
   return patchFeishuConfig(cfg, accountId, { allowFrom });
 }
 
 function setFeishuGroupPolicy(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId: string,
   groupPolicy: "open" | "allowlist" | "disabled",
-): OpenClawConfig {
+): MullusiConfig {
   return patchFeishuConfig(cfg, accountId, { groupPolicy });
 }
 
 function setFeishuGroupAllowFrom(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId: string,
   groupAllowFrom: string[],
-): OpenClawConfig {
+): MullusiConfig {
   return patchFeishuConfig(cfg, accountId, { groupAllowFrom });
 }
 
-function isFeishuConfigured(cfg: OpenClawConfig, accountId?: string | null): boolean {
+function isFeishuConfigured(cfg: MullusiConfig, accountId?: string | null): boolean {
   const feishuCfg = ((cfg.channels?.feishu as FeishuConfig | undefined) ?? {}) as FeishuConfig;
   const resolvedAccountId = normalizeString(accountId) ?? resolveDefaultFeishuAccountId(cfg);
 
@@ -145,10 +145,10 @@ function isFeishuConfigured(cfg: OpenClawConfig, accountId?: string | null): boo
 }
 
 async function promptFeishuAllowFrom(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
   prompter: Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0]["prompter"];
-}): Promise<OpenClawConfig> {
+}): Promise<MullusiConfig> {
   const existingAllowFrom =
     resolveFeishuAccount({
       cfg: params.cfg,

@@ -1,6 +1,6 @@
-import { generateSecureUuid } from "openclaw/plugin-sdk/core";
-import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
-import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
+import { generateSecureUuid } from "mullusi/plugin-sdk/core";
+import { resolveFetch } from "mullusi/plugin-sdk/fetch-runtime";
+import { fetchWithTimeout } from "mullusi/plugin-sdk/text-runtime";
 
 export type SignalRpcOptions = {
   baseUrl: string;

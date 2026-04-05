@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { MullusiConfig } from "../../../src/config/config.js";
 import type { ImageGenerationProvider } from "../api.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "./runtime.js";
 
@@ -9,11 +9,11 @@ const mocks = vi.hoisted(() => {
     createSubsystemLogger: vi.fn(() => ({ debug })),
     describeFailoverError: vi.fn(),
     getImageGenerationProvider: vi.fn<
-      (providerId: string, config?: OpenClawConfig) => ImageGenerationProvider | undefined
+      (providerId: string, config?: MullusiConfig) => ImageGenerationProvider | undefined
     >(() => undefined),
     getProviderEnvVars: vi.fn<(providerId: string) => string[]>(() => []),
     isFailoverError: vi.fn<(err: unknown) => boolean>(() => false),
-    listImageGenerationProviders: vi.fn<(config?: OpenClawConfig) => ImageGenerationProvider[]>(
+    listImageGenerationProviders: vi.fn<(config?: MullusiConfig) => ImageGenerationProvider[]>(
       () => [],
     ),
     parseImageGenerationModelRef: vi.fn<
@@ -102,7 +102,7 @@ describe("image-generation runtime", () => {
             imageGenerationModel: { primary: "image-plugin/img-v1" },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       prompt: "draw a cat",
       agentDir: "/tmp/agent",
       authStore,
@@ -146,10 +146,10 @@ describe("image-generation runtime", () => {
     ];
     mocks.listImageGenerationProviders.mockReturnValue(providers);
 
-    expect(listRuntimeImageGenerationProviders({ config: {} as OpenClawConfig })).toEqual(
+    expect(listRuntimeImageGenerationProviders({ config: {} as MullusiConfig })).toEqual(
       providers,
     );
-    expect(mocks.listImageGenerationProviders).toHaveBeenCalledWith({} as OpenClawConfig);
+    expect(mocks.listImageGenerationProviders).toHaveBeenCalledWith({} as MullusiConfig);
   });
 
   it("explains native image-generation config and provider auth when no model is configured", async () => {
@@ -187,7 +187,7 @@ describe("image-generation runtime", () => {
       return [];
     });
 
-    const promise = generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" });
+    const promise = generateImage({ cfg: {} as MullusiConfig, prompt: "draw a cat" });
 
     await expect(promise).rejects.toThrow("No image-generation model configured.");
     await expect(promise).rejects.toThrow(
@@ -213,7 +213,7 @@ describe("image-generation runtime", () => {
     ]);
 
     await expect(
-      generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
+      generateImage({ cfg: {} as MullusiConfig, prompt: "draw a cat" }),
     ).rejects.toThrow("No image-generation model configured.");
   });
 });

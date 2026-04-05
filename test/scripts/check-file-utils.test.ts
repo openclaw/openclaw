@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-check-file-utils-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-check-file-utils-"));
   tempDirs.push(dir);
   return dir;
 }

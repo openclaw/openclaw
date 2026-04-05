@@ -4,7 +4,7 @@ import {
   matrixSetupWizard,
 } from "../../test/helpers/channels/matrix-setup-contract.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -51,7 +51,7 @@ function createUnexpectedPromptGuards() {
 type SetupChannelsOptions = Parameters<typeof setupChannels>[3];
 
 function runSetupChannels(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   prompter: WizardPrompter,
   options?: SetupChannelsOptions,
 ) {
@@ -88,7 +88,7 @@ function createUnexpectedQuickstartPrompter(select: WizardPrompter["select"]) {
   };
 }
 
-function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig {
+function createTelegramCfg(botToken: string, enabled?: boolean): MullusiConfig {
   return {
     channels: {
       telegram: {
@@ -96,13 +96,13 @@ function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig 
         ...(typeof enabled === "boolean" ? { enabled } : {}),
       },
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
 }
 
 function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
   return {
     id: "msteams",
-    pluginId: "@openclaw/msteams-plugin",
+    pluginId: "@mullusi/msteams-plugin",
     meta: {
       id: "msteams",
       label: "Microsoft Teams",
@@ -111,7 +111,7 @@ function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
       blurb: "teams channel",
     },
     install: {
-      npmSpec: "@openclaw/msteams",
+      npmSpec: "@mullusi/msteams",
     },
   };
 }
@@ -193,7 +193,7 @@ function createMatrixQuickstartPrompter(notes: string[]): WizardPrompter {
       return "matrix-token";
     }
     if (message === "Matrix device name (optional)") {
-      return "OpenClaw Gateway";
+      return "Mullusi Gateway";
     }
     throw new Error(`unexpected text prompt: ${message}`);
   });
@@ -241,7 +241,7 @@ function setMinimalOnboardingRegistryForTests(): void {
               cfg,
               input,
             }: {
-              cfg: OpenClawConfig;
+              cfg: MullusiConfig;
               input: { token?: string };
             }) =>
               ({
@@ -253,14 +253,14 @@ function setMinimalOnboardingRegistryForTests(): void {
                     ...(input.token ? { botToken: input.token } : {}),
                   },
                 },
-              }) as OpenClawConfig,
+              }) as MullusiConfig,
           },
           setupWizard: {
             channel: "telegram",
             status: {
               configuredLabel: "configured",
               unconfiguredLabel: "not configured",
-              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
+              resolveConfigured: ({ cfg }: { cfg: MullusiConfig }) =>
                 Boolean(cfg.channels?.telegram?.botToken),
             },
             credentials: [
@@ -271,7 +271,7 @@ function setMinimalOnboardingRegistryForTests(): void {
                 envPrompt: "Use TELEGRAM_BOT_TOKEN from env?",
                 keepPrompt: "Keep current Telegram bot token?",
                 inputPrompt: "Enter Telegram bot token",
-                inspect: ({ cfg }: { cfg: OpenClawConfig }) => ({
+                inspect: ({ cfg }: { cfg: MullusiConfig }) => ({
                   accountConfigured: Boolean(cfg.channels?.telegram?.botToken),
                   hasConfiguredValue: Boolean(cfg.channels?.telegram?.botToken),
                 }),
@@ -294,7 +294,7 @@ function setMinimalOnboardingRegistryForTests(): void {
               cfg,
               input,
             }: {
-              cfg: OpenClawConfig;
+              cfg: MullusiConfig;
               input: { account?: string; name?: string };
             }) =>
               ({
@@ -308,16 +308,16 @@ function setMinimalOnboardingRegistryForTests(): void {
                     linked: false,
                   },
                 },
-              }) as OpenClawConfig,
+              }) as MullusiConfig,
           },
           setupWizard: {
             channel: "whatsapp",
             status: {
               configuredLabel: "configured",
               unconfiguredLabel: "not linked",
-              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
+              resolveConfigured: ({ cfg }: { cfg: MullusiConfig }) =>
                 Boolean((cfg.channels?.whatsapp as { account?: string } | undefined)?.account),
-              resolveSelectionHint: async ({ cfg }: { cfg: OpenClawConfig }) =>
+              resolveSelectionHint: async ({ cfg }: { cfg: MullusiConfig }) =>
                 (cfg.channels?.whatsapp as { account?: string } | undefined)?.account
                   ? "configured"
                   : "not linked",
@@ -328,7 +328,7 @@ function setMinimalOnboardingRegistryForTests(): void {
                 inputKey: "account",
                 message: "Your personal WhatsApp number",
                 required: true,
-                applySet: ({ cfg, value }: { cfg: OpenClawConfig; value: string }) =>
+                applySet: ({ cfg, value }: { cfg: MullusiConfig; value: string }) =>
                   ({
                     ...cfg,
                     channels: {
@@ -338,7 +338,7 @@ function setMinimalOnboardingRegistryForTests(): void {
                         account: value,
                       },
                     },
-                  }) as OpenClawConfig,
+                  }) as MullusiConfig,
               },
             ],
           },
@@ -369,7 +369,7 @@ type PatchedSetupAdapterFields = {
 
 function createMSTeamsPluginRegistryEntry(params?: { includeSetupWizard?: boolean }) {
   return {
-    pluginId: "@openclaw/msteams-plugin",
+    pluginId: "@mullusi/msteams-plugin",
     source: "test",
     plugin: {
       id: "msteams",
@@ -425,7 +425,7 @@ function patchTelegramAdapter(overrides: ChannelSetupWizardAdapterPatch) {
     ...overrides,
     getStatus:
       overrides.getStatus ??
-      vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+      vi.fn(async ({ cfg }: { cfg: MullusiConfig }) => ({
         channel: "telegram",
         configured: Boolean(cfg.channels?.telegram?.botToken),
         statusLines: [],
@@ -494,10 +494,10 @@ async function expectQuickstartPickerSkipsWithoutRuntime() {
   });
 
   await expect(
-    runSetupChannels({} as OpenClawConfig, prompter, {
+    runSetupChannels({} as MullusiConfig, prompter, {
       quickstartDefaults: true,
     }),
-  ).resolves.toEqual({} as OpenClawConfig);
+  ).resolves.toEqual({} as MullusiConfig);
 
   expect(select).toHaveBeenCalledWith(
     expect.objectContaining({ message: "Select channel (QuickStart)" }),
@@ -555,7 +555,7 @@ async function runQuickstartTelegramSetupWithInteractive(params: {
   );
 
   try {
-    const cfg = await runSetupChannels({} as OpenClawConfig, prompter, {
+    const cfg = await runSetupChannels({} as MullusiConfig, prompter, {
       quickstartDefaults: true,
       onSelection: selection,
       onAccountId,
@@ -617,7 +617,7 @@ vi.mock("./channel-setup/plugin-install.js", async () => {
   const actual = await vi.importActual("./channel-setup/plugin-install.js");
   return {
     ...(actual as Record<string, unknown>),
-    ensureChannelSetupPluginInstalled: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+    ensureChannelSetupPluginInstalled: vi.fn(async ({ cfg }: { cfg: MullusiConfig }) => ({
       cfg,
       installed: true,
     })),
@@ -665,7 +665,7 @@ describe("setupChannels", () => {
       text: text as unknown as WizardPrompter["text"],
     });
 
-    await runSetupChannels({} as OpenClawConfig, prompter, {
+    await runSetupChannels({} as MullusiConfig, prompter, {
       quickstartDefaults: true,
       forceAllowFromChannels: ["whatsapp"],
     });
@@ -686,7 +686,7 @@ describe("setupChannels", () => {
 
       const notes: string[] = [];
       const prompter = createMatrixQuickstartPrompter(notes);
-      const cfg = await runSetupChannels({} as OpenClawConfig, prompter, {
+      const cfg = await runSetupChannels({} as MullusiConfig, prompter, {
         quickstartDefaults: true,
       });
 
@@ -694,7 +694,7 @@ describe("setupChannels", () => {
         enabled: true,
         homeserver: "https://matrix.example.org",
         accessToken: "matrix-token",
-        deviceName: "OpenClaw Gateway",
+        deviceName: "Mullusi Gateway",
         encryption: false,
       });
       expect(notes.join("\n")).not.toContain("matrix does not support guided setup yet.");
@@ -726,7 +726,7 @@ describe("setupChannels", () => {
       text: text as unknown as WizardPrompter["text"],
     });
 
-    await runSetupChannels({} as OpenClawConfig, prompter, {
+    await runSetupChannels({} as MullusiConfig, prompter, {
       quickstartDefaults: true,
     });
 
@@ -760,7 +760,7 @@ describe("setupChannels", () => {
       text,
     });
 
-    await runSetupChannels({} as OpenClawConfig, prompter);
+    await runSetupChannels({} as MullusiConfig, prompter);
 
     const sawPrimer = note.mock.calls.some(
       ([message, title]) =>
@@ -802,17 +802,17 @@ describe("setupChannels", () => {
         },
         plugins: {
           entries: {
-            "@openclaw/msteams-plugin": { enabled: true },
+            "@mullusi/msteams-plugin": { enabled: true },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       prompter,
     );
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "msteams",
-        pluginId: "@openclaw/msteams-plugin",
+        pluginId: "@mullusi/msteams-plugin",
       }),
     );
     expect(multiselect).not.toHaveBeenCalled();
@@ -824,7 +824,7 @@ describe("setupChannels", () => {
     manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
-          id: "@openclaw/msteams-plugin",
+          id: "@mullusi/msteams-plugin",
           channels: ["msteams"],
         } as never,
       ],
@@ -847,13 +847,13 @@ describe("setupChannels", () => {
       text,
     });
 
-    await runSetupChannels({} as OpenClawConfig, prompter);
+    await runSetupChannels({} as MullusiConfig, prompter);
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "msteams",
-        pluginId: "@openclaw/msteams-plugin",
+        pluginId: "@mullusi/msteams-plugin",
       }),
     );
     expect(multiselect).not.toHaveBeenCalled();
@@ -867,7 +867,7 @@ describe("setupChannels", () => {
         accountId,
         enabled,
       }: {
-        cfg: OpenClawConfig;
+        cfg: MullusiConfig;
         accountId: string;
         enabled: boolean;
       }) => ({
@@ -912,12 +912,12 @@ describe("setupChannels", () => {
               },
               capabilities: { chatTypes: ["direct"] },
               config: {
-                listAccountIds: (cfg: OpenClawConfig) =>
+                listAccountIds: (cfg: MullusiConfig) =>
                   Object.keys(
                     (cfg.channels?.msteams as { accounts?: Record<string, unknown> } | undefined)
                       ?.accounts ?? {},
                   ),
-                resolveAccount: (cfg: OpenClawConfig, accountId: string) =>
+                resolveAccount: (cfg: MullusiConfig, accountId: string) =>
                   (
                     cfg.channels?.msteams as
                       | {
@@ -932,7 +932,7 @@ describe("setupChannels", () => {
                 status: {
                   configuredLabel: "configured",
                   unconfiguredLabel: "needs setup",
-                  resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
+                  resolveConfigured: ({ cfg }: { cfg: MullusiConfig }) =>
                     Boolean((cfg.channels?.msteams as { tenantId?: string } | undefined)?.tenantId),
                   resolveStatusLines: async () => [],
                   resolveSelectionHint: async () => "configured",
@@ -986,7 +986,7 @@ describe("setupChannels", () => {
             msteams: { enabled: true },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       prompter,
       { allowDisable: true },
     );
@@ -1081,14 +1081,14 @@ describe("setupChannels", () => {
   });
 
   it("applies configureInteractive result cfg/account updates", async () => {
-    const configureInteractive = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+    const configureInteractive = vi.fn(async ({ cfg }: { cfg: MullusiConfig }) => ({
       cfg: {
         ...cfg,
         channels: {
           ...cfg.channels,
           telegram: { ...cfg.channels?.telegram, botToken: "new-token" },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       accountId: "acct-1",
     }));
     const configure = createUnexpectedConfigureCall(
@@ -1107,14 +1107,14 @@ describe("setupChannels", () => {
   });
 
   it("uses configureWhenConfigured when channel is already configured", async () => {
-    const configureWhenConfigured = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+    const configureWhenConfigured = vi.fn(async ({ cfg }: { cfg: MullusiConfig }) => ({
       cfg: {
         ...cfg,
         channels: {
           ...cfg.channels,
           telegram: { ...cfg.channels?.telegram, botToken: "updated-token" },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       accountId: "acct-2",
     }));
     const { cfg, selection, onAccountId, configure } = await runConfiguredTelegramSetup({

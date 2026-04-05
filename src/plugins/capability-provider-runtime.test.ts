@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 
 type MockManifestRegistry = {
@@ -46,7 +46,7 @@ function expectNoResolvedCapabilityProviders(providers: Array<{ id: string }>) {
 }
 
 function expectBundledCompatLoadPath(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   enablementCompat: {
     plugins: {
       allow?: string[];
@@ -73,7 +73,7 @@ function expectBundledCompatLoadPath(params: {
 }
 
 function createCompatChainConfig() {
-  const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
+  const cfg = { plugins: { allow: ["custom-plugin"] } } as MullusiConfig;
   const enablementCompat = {
     plugins: {
       allow: ["custom-plugin"],
@@ -109,7 +109,7 @@ function expectCompatChainApplied(params: {
     | "mediaUnderstandingProviders"
     | "imageGenerationProviders";
   contractKey: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   enablementCompat: {
     plugins: {
       allow?: string[];
@@ -194,7 +194,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
     const providers = resolvePluginCapabilityProviders({
       key: "speechProviders",
-      cfg: { messages: { tts: { provider: "edge" } } } as OpenClawConfig,
+      cfg: { messages: { tts: { provider: "edge" } } } as MullusiConfig,
     });
 
     expectResolvedCapabilityProviderIds(providers, ["microsoft"]);
@@ -221,7 +221,7 @@ describe("resolvePluginCapabilityProviders", () => {
   });
 
   it("does not re-add bundled capability plugins excluded by an explicit allowlist", () => {
-    const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
+    const cfg = { plugins: { allow: ["custom-plugin"] } } as MullusiConfig;
     const enablementCompat = {
       plugins: {
         allow: ["custom-plugin"],
@@ -257,7 +257,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
     const providers = resolvePluginCapabilityProviders({
       key: "mediaUnderstandingProviders",
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
     });
 
     expectNoResolvedCapabilityProviders(providers);
@@ -273,7 +273,7 @@ describe("resolvePluginCapabilityProviders", () => {
         allow: ["google"],
         entries: { google: { enabled: true } },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const loaded = createEmptyPluginRegistry();
     loaded.mediaUnderstandingProviders.push({
       pluginId: "google",

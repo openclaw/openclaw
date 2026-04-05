@@ -10,7 +10,7 @@ import {
 let tempRoot: string | null = null;
 
 async function makeTempRoot() {
-  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-state-dir-"));
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "mullusi-state-dir-"));
   tempRoot = root;
   return root;
 }
@@ -27,7 +27,7 @@ afterEach(async () => {
 describe("legacy state dir auto-migration", () => {
   it("skips a legacy symlinked state dir when it points outside supported legacy roots", async () => {
     const root = await makeTempRoot();
-    const legacySymlink = path.join(root, ".clawdbot");
+    const legacySymlink = path.join(root, ".mullusi");
     const legacyDir = path.join(root, "legacy-state-source");
 
     fs.mkdirSync(legacyDir, { recursive: true });
@@ -48,16 +48,16 @@ describe("legacy state dir auto-migration", () => {
     expect(fs.readFileSync(path.join(root, "legacy-state-source", "marker.txt"), "utf-8")).toBe(
       "ok",
     );
-    expect(fs.readFileSync(path.join(root, ".clawdbot", "marker.txt"), "utf-8")).toBe("ok");
+    expect(fs.readFileSync(path.join(root, ".mullusi", "marker.txt"), "utf-8")).toBe("ok");
   });
 
-  it("skips state-dir migration when OPENCLAW_STATE_DIR is explicitly set", async () => {
+  it("skips state-dir migration when MULLUSI_STATE_DIR is explicitly set", async () => {
     const root = await makeTempRoot();
-    const legacyDir = path.join(root, ".clawdbot");
+    const legacyDir = path.join(root, ".mullusi");
     fs.mkdirSync(legacyDir, { recursive: true });
 
     const result = await autoMigrateLegacyStateDir({
-      env: { OPENCLAW_STATE_DIR: path.join(root, "custom-state") } as NodeJS.ProcessEnv,
+      env: { MULLUSI_STATE_DIR: path.join(root, "custom-state") } as NodeJS.ProcessEnv,
       homedir: () => root,
     });
 
@@ -72,7 +72,7 @@ describe("legacy state dir auto-migration", () => {
 
   it("only runs once per process until reset", async () => {
     const root = await makeTempRoot();
-    const legacyDir = path.join(root, ".clawdbot");
+    const legacyDir = path.join(root, ".mullusi");
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(path.join(legacyDir, "marker.txt"), "ok", "utf-8");
 

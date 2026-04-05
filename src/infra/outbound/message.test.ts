@@ -25,7 +25,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
     const match = sessionKey?.match(/^agent:([^:]+)/i);
     return match?.[1] ?? "main";
   },
-  resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
+  resolveAgentWorkspaceDir: () => "/tmp/mullusi-test-workspace",
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({

@@ -13,7 +13,7 @@ const (
 	translateMaxAttempts     = 3
 	translateBaseDelay       = 15 * time.Second
 	defaultPromptTimeout     = 2 * time.Minute
-	envDocsI18nPromptTimeout = "OPENCLAW_DOCS_I18N_PROMPT_TIMEOUT"
+	envDocsI18nPromptTimeout = "MULLUSI_DOCS_I18N_PROMPT_TIMEOUT"
 )
 
 var errEmptyTranslation = errors.New("empty translation")

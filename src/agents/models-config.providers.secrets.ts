@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveProviderWebSearchPluginConfig } from "../plugin-sdk/provider-web-search.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
@@ -14,7 +14,7 @@ import {
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
 
-type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+type ModelsConfig = NonNullable<MullusiConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 export type SecretDefaults = {
@@ -321,7 +321,7 @@ export function resolveMissingProviderApiKey(params: {
 export function createProviderApiKeyResolver(
   env: NodeJS.ProcessEnv,
   authStore: ReturnType<typeof ensureAuthProfileStore>,
-  config?: OpenClawConfig,
+  config?: MullusiConfig,
 ): ProviderApiKeyResolver {
   return (provider: string): { apiKey: string | undefined; discoveryApiKey?: string } => {
     const envVar = resolveEnvApiKeyVarName(provider, env);
@@ -352,7 +352,7 @@ export function createProviderApiKeyResolver(
 export function createProviderAuthResolver(
   env: NodeJS.ProcessEnv,
   authStore: ReturnType<typeof ensureAuthProfileStore>,
-  config?: OpenClawConfig,
+  config?: MullusiConfig,
 ): ProviderAuthResolver {
   return (provider: string, options?: { oauthMarker?: string }) => {
     const ids = listProfilesForProvider(authStore, provider);
@@ -428,7 +428,7 @@ export function createProviderAuthResolver(
   };
 }
 
-function resolveConfigBackedProviderAuth(params: { provider: string; config?: OpenClawConfig }):
+function resolveConfigBackedProviderAuth(params: { provider: string; config?: MullusiConfig }):
   | {
       apiKey: string;
       discoveryApiKey?: string;
@@ -468,7 +468,7 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
       };
 }
 
-function resolveXaiConfigFallbackAuth(params: { provider: string; config?: OpenClawConfig }):
+function resolveXaiConfigFallbackAuth(params: { provider: string; config?: MullusiConfig }):
   | {
       apiKey: string;
       source: string;

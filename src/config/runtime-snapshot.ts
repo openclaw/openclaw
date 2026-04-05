@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "./types.js";
+import type { MullusiConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshParams = {
-  sourceConfig: OpenClawConfig;
+  sourceConfig: MullusiConfig;
 };
 
 export type RuntimeConfigSnapshotRefreshHandler = {
@@ -9,13 +9,13 @@ export type RuntimeConfigSnapshotRefreshHandler = {
   clearOnRefreshFailure?: () => void;
 };
 
-let runtimeConfigSnapshot: OpenClawConfig | null = null;
-let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
+let runtimeConfigSnapshot: MullusiConfig | null = null;
+let runtimeConfigSourceSnapshot: MullusiConfig | null = null;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 
 export function setRuntimeConfigSnapshot(
-  config: OpenClawConfig,
-  sourceConfig?: OpenClawConfig,
+  config: MullusiConfig,
+  sourceConfig?: MullusiConfig,
 ): void {
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
@@ -30,11 +30,11 @@ export function clearRuntimeConfigSnapshot(): void {
   resetConfigRuntimeState();
 }
 
-export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
+export function getRuntimeConfigSnapshot(): MullusiConfig | null {
   return runtimeConfigSnapshot;
 }
 
-export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
+export function getRuntimeConfigSourceSnapshot(): MullusiConfig | null {
   return runtimeConfigSourceSnapshot;
 }
 

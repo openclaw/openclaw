@@ -25,7 +25,7 @@ function ensureSuiteTempRoot() {
   }
   const bundleTempRoot = path.join(process.cwd(), ".tmp");
   fs.mkdirSync(bundleTempRoot, { recursive: true });
-  suiteTempRoot = fs.mkdtempSync(path.join(bundleTempRoot, "openclaw-plugin-install-path-"));
+  suiteTempRoot = fs.mkdtempSync(path.join(bundleTempRoot, "mullusi-plugin-install-path-"));
   return suiteTempRoot;
 }
 
@@ -113,15 +113,15 @@ function setupDualFormatInstallFixture(params: { bundleFormat: "codex" | "claude
   fs.writeFileSync(
     path.join(pluginDir, "package.json"),
     JSON.stringify({
-      name: "@openclaw/native-dual",
+      name: "@mullusi/native-dual",
       version: "0.0.1",
-      openclaw: { extensions: ["./dist/index.js"] },
+      mullusi: { extensions: ["./dist/index.js"] },
       dependencies: { "left-pad": "1.3.0" },
     }),
     "utf-8",
   );
   fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
+    path.join(pluginDir, "mullusi.plugin.json"),
     JSON.stringify({
       id: "native-dual",
       configSchema: { type: "object", properties: {} },

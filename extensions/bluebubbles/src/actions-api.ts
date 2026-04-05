@@ -2,4 +2,4 @@ export { BLUEBUBBLES_ACTION_NAMES, BLUEBUBBLES_ACTIONS } from "./actions-contrac
 export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-} from "openclaw/plugin-sdk/channel-contract";
+} from "mullusi/plugin-sdk/channel-contract";

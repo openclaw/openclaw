@@ -1,8 +1,8 @@
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { mapAllowFromEntries } from "mullusi/plugin-sdk/channel-config-helpers";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelOutboundTargetMode, ChannelPlugin } from "../../channels/plugins/types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -41,7 +41,7 @@ export function tryResolveLoadedOutboundTarget(params: {
   channel: GatewayMessageChannel;
   to?: string;
   allowFrom?: string[];
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   accountId?: string | null;
   mode?: ChannelOutboundTargetMode;
 }): OutboundTargetResolution | undefined {
@@ -49,7 +49,7 @@ export function tryResolveLoadedOutboundTarget(params: {
     return {
       ok: false,
       error: new Error(
-        `Delivering to WebChat is not supported via \`${formatCliCommand("openclaw agent")}\`; use WhatsApp/Telegram or run with --deliver=false.`,
+        `Delivering to WebChat is not supported via \`${formatCliCommand("mullusi agent")}\`; use WhatsApp/Telegram or run with --deliver=false.`,
       ),
     };
   }

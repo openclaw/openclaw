@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 你想在 OpenClaw 中使用 Z.AI / GLM 模型
+  - 你想在 Mullusi 中使用 Z.AI / GLM 模型
   - 你需要简单的 `ZAI_API_KEY` 设置
-summary: 在 OpenClaw 中使用 Z.AI（GLM 模型）
+summary: 在 Mullusi 中使用 Z.AI（GLM 模型）
 title: Z.AI
 x-i18n:
   generated_at: "2026-03-16T06:27:34Z"
@@ -16,23 +16,23 @@ x-i18n:
 # Z.AI
 
 Z.AI 是 **GLM** 模型的 API 平台。它为 GLM 提供 REST API，并使用 API key
-进行认证。请在 Z.AI 控制台中创建你的 API key。OpenClaw 使用 `zai` 提供商
+进行认证。请在 Z.AI 控制台中创建你的 API key。Mullusi 使用 `zai` 提供商
 配合 Z.AI API key。
 
 ## CLI 设置
 
 ```bash
 # Coding Plan Global，推荐给 Coding Plan 用户
-openclaw onboard --auth-choice zai-coding-global
+mullusi onboard --auth-choice zai-coding-global
 
 # Coding Plan CN（中国区域），推荐给 Coding Plan 用户
-openclaw onboard --auth-choice zai-coding-cn
+mullusi onboard --auth-choice zai-coding-cn
 
 # 通用 API
-openclaw onboard --auth-choice zai-global
+mullusi onboard --auth-choice zai-global
 
 # 通用 API CN（中国区域）
-openclaw onboard --auth-choice zai-cn
+mullusi onboard --auth-choice zai-cn
 ```
 
 ## 配置片段

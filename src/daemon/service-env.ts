@@ -265,20 +265,20 @@ export function buildServiceEnvironment(params: {
     extraPathDirs,
     params.execPath,
   );
-  const profile = env.OPENCLAW_PROFILE;
+  const profile = env.MULLUSI_PROFILE;
   const resolvedLaunchdLabel =
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
-    OPENCLAW_PROFILE: profile,
-    OPENCLAW_GATEWAY_PORT: String(port),
-    OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
-    OPENCLAW_SYSTEMD_UNIT: systemdUnit,
-    OPENCLAW_WINDOWS_TASK_NAME: resolveGatewayWindowsTaskName(profile),
-    OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
-    OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
-    OPENCLAW_SERVICE_VERSION: VERSION,
+    MULLUSI_PROFILE: profile,
+    MULLUSI_GATEWAY_PORT: String(port),
+    MULLUSI_LAUNCHD_LABEL: resolvedLaunchdLabel,
+    MULLUSI_SYSTEMD_UNIT: systemdUnit,
+    MULLUSI_WINDOWS_TASK_NAME: resolveGatewayWindowsTaskName(profile),
+    MULLUSI_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
+    MULLUSI_SERVICE_KIND: GATEWAY_SERVICE_KIND,
+    MULLUSI_SERVICE_VERSION: VERSION,
   };
 }
 
@@ -296,18 +296,18 @@ export function buildNodeServiceEnvironment(params: {
     extraPathDirs,
     params.execPath,
   );
-  const gatewayToken = env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  const gatewayToken = env.MULLUSI_GATEWAY_TOKEN?.trim() || undefined;
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
-    OPENCLAW_GATEWAY_TOKEN: gatewayToken,
-    OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
-    OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
-    OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
-    OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
-    OPENCLAW_LOG_PREFIX: "node",
-    OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,
-    OPENCLAW_SERVICE_KIND: NODE_SERVICE_KIND,
-    OPENCLAW_SERVICE_VERSION: VERSION,
+    MULLUSI_GATEWAY_TOKEN: gatewayToken,
+    MULLUSI_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
+    MULLUSI_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
+    MULLUSI_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
+    MULLUSI_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
+    MULLUSI_LOG_PREFIX: "node",
+    MULLUSI_SERVICE_MARKER: NODE_SERVICE_MARKER,
+    MULLUSI_SERVICE_KIND: NODE_SERVICE_KIND,
+    MULLUSI_SERVICE_VERSION: VERSION,
   };
 }
 
@@ -321,8 +321,8 @@ function buildCommonServiceEnvironment(
     ...sharedEnv.proxyEnv,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
-    OPENCLAW_STATE_DIR: sharedEnv.stateDir,
-    OPENCLAW_CONFIG_PATH: sharedEnv.configPath,
+    MULLUSI_STATE_DIR: sharedEnv.stateDir,
+    MULLUSI_CONFIG_PATH: sharedEnv.configPath,
   };
   if (sharedEnv.minimalPath) {
     serviceEnv.PATH = sharedEnv.minimalPath;
@@ -336,8 +336,8 @@ function resolveSharedServiceEnvironmentFields(
   extraPathDirs: string[] | undefined,
   execPath?: string,
 ): SharedServiceEnvironmentFields {
-  const stateDir = env.OPENCLAW_STATE_DIR;
-  const configPath = env.OPENCLAW_CONFIG_PATH;
+  const stateDir = env.MULLUSI_STATE_DIR;
+  const configPath = env.MULLUSI_CONFIG_PATH;
   // Keep a usable temp directory for supervised services even when the host env omits TMPDIR.
   const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
   const proxyEnv = readServiceProxyEnvironment(env);

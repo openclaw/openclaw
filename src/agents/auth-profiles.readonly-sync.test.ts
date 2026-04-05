@@ -40,7 +40,7 @@ describe("auth profiles read-only external CLI sync", () => {
   });
 
   it("syncs external CLI credentials in-memory without writing auth-profiles.json in read-only mode", () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-readonly-sync-"));
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-auth-readonly-sync-"));
     try {
       const authPath = path.join(agentDir, "auth-profiles.json");
       const baseline: AuthProfileStore = {

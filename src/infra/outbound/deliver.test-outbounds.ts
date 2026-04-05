@@ -1,6 +1,6 @@
 import { chunkMarkdownTextWithMode, chunkText } from "../../auto-reply/chunk.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { sanitizeForPlainText } from "../../plugin-sdk/outbound-runtime.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 
@@ -12,7 +12,7 @@ type SignalSendFn = (
 
 const MB = 1024 * 1024;
 
-function resolveSignalMaxBytes(cfg: OpenClawConfig, accountId?: string): number | undefined {
+function resolveSignalMaxBytes(cfg: MullusiConfig, accountId?: string): number | undefined {
   const signalCfg = cfg.channels?.signal as
     | {
         mediaMaxMb?: number;
@@ -32,7 +32,7 @@ function resolveSignalSender(deps: OutboundSendDeps | undefined): SignalSendFn {
   return sender;
 }
 
-function resolveSignalTextChunkLimit(cfg: OpenClawConfig, accountId?: string | null): number {
+function resolveSignalTextChunkLimit(cfg: MullusiConfig, accountId?: string | null): number {
   const signalCfg = cfg.channels?.signal as
     | {
         textChunkLimit?: number;
@@ -223,7 +223,7 @@ function resolveIMessageSender(deps: OutboundSendDeps | undefined) {
   return sender;
 }
 
-function resolveIMessageMaxBytes(cfg: OpenClawConfig): number | undefined {
+function resolveIMessageMaxBytes(cfg: MullusiConfig): number | undefined {
   const channelMb = (cfg.channels?.imessage as { mediaMaxMb?: number } | undefined)?.mediaMaxMb;
   const agentMb = cfg.agents?.defaults?.mediaMaxMb;
   const mediaMaxMb = channelMb ?? agentMb;

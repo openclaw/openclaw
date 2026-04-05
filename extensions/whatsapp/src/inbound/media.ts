@@ -1,5 +1,5 @@
 import type { proto, WAMessage } from "@whiskeysockets/baileys";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "mullusi/plugin-sdk/runtime-env";
 import type { createWaSocket } from "../session.js";
 import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
 

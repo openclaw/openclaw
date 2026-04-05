@@ -2,12 +2,12 @@ import {
   createChannelApprovalCapability,
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
-} from "openclaw/plugin-sdk/approval-delivery-runtime";
+} from "mullusi/plugin-sdk/approval-delivery-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
-} from "openclaw/plugin-sdk/approval-native-runtime";
-import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+} from "mullusi/plugin-sdk/approval-native-runtime";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "mullusi/plugin-sdk/infra-runtime";
 import { getMatrixApprovalAuthApprovers, matrixApprovalAuth } from "./approval-auth.js";
 import {
   getMatrixExecApprovalApprovers,

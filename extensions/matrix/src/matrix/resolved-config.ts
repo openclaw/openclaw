@@ -1,11 +1,11 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "mullusi/plugin-sdk/account-id";
+import type { PinnedDispatcherPolicy } from "mullusi/plugin-sdk/infra-runtime";
+import { coerceSecretRef } from "mullusi/plugin-sdk/provider-auth";
+import { normalizeResolvedSecretInputString } from "mullusi/plugin-sdk/secret-input";
 import {
   isPrivateNetworkOptInEnabled,
   ssrfPolicyFromAllowPrivateNetwork,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+} from "mullusi/plugin-sdk/ssrf-runtime";
 import { resolveMatrixAccountStringValues } from "../auth-precedence.js";
 import { getMatrixScopedEnvVarNames } from "../env-vars.js";
 import type { CoreConfig } from "../types.js";

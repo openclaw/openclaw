@@ -20,7 +20,7 @@ describe("renderTable", () => {
         { key: "Item", header: "Item", minWidth: 10 },
         { key: "Value", header: "Value", flex: true, minWidth: 24 },
       ],
-      rows: [{ Item: "Dashboard", Value: "http://127.0.0.1:18789/" }],
+      rows: [{ Item: "Dashboard", Value: "http://127.0.0.1:18790/" }],
     });
 
     expect(out).toContain("Dashboard");
@@ -109,7 +109,7 @@ describe("renderTable", () => {
             `\x1b[2mGet current weather and forecasts via wttr.in or Open-Meteo. ` +
             `Use when: user asks about weather, temperature, or forecasts for any location.` +
             `\x1b[0m`,
-          Source: "openclaw-bundled",
+          Source: "mullusi-bundled",
         },
       ],
     });
@@ -156,7 +156,7 @@ describe("renderTable", () => {
           Status: "✗ missing",
           Skill: "📸 peekaboo",
           Description: "Capture screenshots from macOS windows and keep table wrapping stable.",
-          Source: "openclaw-bundled",
+          Source: "mullusi-bundled",
         },
       ],
     });
@@ -260,7 +260,7 @@ describe("wrapNoteMessage", () => {
 
   it("preserves long Windows paths without inserting spaces/newlines", () => {
     // No spaces: wrapNoteMessage splits on whitespace, so a "Program Files" style path would wrap.
-    const input = "C:\\\\State\\\\OpenClaw\\\\bin\\\\openclaw.exe";
+    const input = "C:\\\\State\\\\Mullusi\\\\bin\\\\mullusi.exe";
     const wrapped = wrapNoteMessage(input, { maxWidth: 10, columns: 80 });
     expect(wrapped).toBe(input);
   });

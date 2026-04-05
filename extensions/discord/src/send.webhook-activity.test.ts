@@ -3,9 +3,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 const recordChannelActivityMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ channels: { discord: {} } })));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
+vi.mock("mullusi/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/config-runtime")>(
+    "mullusi/plugin-sdk/config-runtime",
   );
   return {
     ...actual,

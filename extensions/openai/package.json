@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/openai-provider",
+  "name": "@mullusi/openai-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw OpenAI provider plugins",
+  "description": "Mullusi OpenAI provider plugins",
   "type": "module",
   "dependencies": {
     "ws": "^8.20.0"
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

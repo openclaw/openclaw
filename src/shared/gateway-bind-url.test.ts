@@ -9,7 +9,7 @@ describe("shared/gateway-bind-url", () => {
     expect(
       resolveGatewayBindUrl({
         scheme: "ws",
-        port: 18789,
+        port: 18790,
         pickTailnetHost,
         pickLanHost,
       }),
@@ -41,7 +41,7 @@ describe("shared/gateway-bind-url", () => {
         bind: "custom",
         customBindHost: "   ",
         scheme: "ws",
-        port: 18789,
+        port: 18790,
         pickTailnetHost,
         pickLanHost,
       }),
@@ -57,19 +57,19 @@ describe("shared/gateway-bind-url", () => {
       resolveGatewayBindUrl({
         bind: "tailnet",
         scheme: "ws",
-        port: 18789,
+        port: 18790,
         pickTailnetHost: () => "100.64.0.1",
         pickLanHost: vi.fn(),
       }),
     ).toEqual({
-      url: "ws://100.64.0.1:18789",
+      url: "ws://100.64.0.1:18790",
       source: "gateway.bind=tailnet",
     });
     expect(
       resolveGatewayBindUrl({
         bind: "tailnet",
         scheme: "ws",
-        port: 18789,
+        port: 18790,
         pickTailnetHost: () => null,
         pickLanHost: vi.fn(),
       }),
@@ -93,7 +93,7 @@ describe("shared/gateway-bind-url", () => {
       resolveGatewayBindUrl({
         bind: "lan",
         scheme: "ws",
-        port: 18789,
+        port: 18790,
         pickTailnetHost: vi.fn(),
         pickLanHost: () => null,
       }),
@@ -110,7 +110,7 @@ describe("shared/gateway-bind-url", () => {
       resolveGatewayBindUrl({
         bind: "loopbackish",
         scheme: "ws",
-        port: 18789,
+        port: 18790,
         pickTailnetHost,
         pickLanHost,
       }),

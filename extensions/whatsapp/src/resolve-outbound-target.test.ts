@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as normalize from "./normalize-target.js";
 
 vi.mock("./normalize-target.js");
-vi.mock("openclaw/plugin-sdk/channel-feedback", () => ({
+vi.mock("mullusi/plugin-sdk/channel-feedback", () => ({
   missingTargetError: (platform: string, format: string) => new Error(`${platform}: ${format}`),
 }));
 

@@ -94,7 +94,7 @@ function createLifecycleContext(params: {
 
 describe("createEmbeddedPiSessionEventHandler compaction reconciliation", () => {
   it("reconciles sessions.json on routed auto_compaction_end success", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lifecycle-compaction-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-lifecycle-compaction-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     await seedSessionStore({

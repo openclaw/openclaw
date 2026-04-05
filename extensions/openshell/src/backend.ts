@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type {
   CreateSandboxBackendParams,
-  OpenClawConfig,
+  MullusiConfig,
   RemoteShellSandboxHandle,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
@@ -11,14 +11,14 @@ import type {
   SandboxBackendHandle,
   SandboxBackendManager,
   SshSandboxSession,
-} from "openclaw/plugin-sdk/sandbox";
+} from "mullusi/plugin-sdk/sandbox";
 import {
   createRemoteShellSandboxFsBridge,
   disposeSshSandboxSession,
-  resolvePreferredOpenClawTmpDir,
+  resolvePreferredMullusiTmpDir,
   runSshSandboxCommand,
   sanitizeEnvVars,
-} from "openclaw/plugin-sdk/sandbox";
+} from "mullusi/plugin-sdk/sandbox";
 import {
   buildExecRemoteCommand,
   buildRemoteCommand,
@@ -278,7 +278,7 @@ class OpenShellSandboxBackendImpl {
           "/bin/sh",
           "-c",
           params.script,
-          "openclaw-openshell-fs",
+          "mullusi-openshell-fs",
           ...(params.args ?? []),
         ]),
         stdin: params.stdin,
@@ -418,7 +418,7 @@ class OpenShellSandboxBackendImpl {
 
   private async syncWorkspaceFromRemote(): Promise<void> {
     const tmpDir = await fs.mkdtemp(
-      path.join(resolveOpenShellTmpRoot(), "openclaw-openshell-sync-"),
+      path.join(resolveOpenShellTmpRoot(), "mullusi-openshell-sync-"),
     );
     try {
       const result = await runOpenShellCli({
@@ -449,7 +449,7 @@ class OpenShellSandboxBackendImpl {
 
   private async uploadPathToRemote(localPath: string, remotePath: string): Promise<void> {
     const tmpDir = await fs.mkdtemp(
-      path.join(resolveOpenShellTmpRoot(), "openclaw-openshell-upload-"),
+      path.join(resolveOpenShellTmpRoot(), "mullusi-openshell-upload-"),
     );
     try {
       // Stage a symlink-free snapshot so upload never dereferences host paths
@@ -493,7 +493,7 @@ class OpenShellSandboxBackendImpl {
 }
 
 function resolveOpenShellPluginConfigFromConfig(
-  config: OpenClawConfig,
+  config: MullusiConfig,
   fallback: ResolvedOpenShellPluginConfig,
 ): ResolvedOpenShellPluginConfig {
   const pluginConfig = config.plugins?.entries?.openshell?.config;
@@ -514,9 +514,9 @@ function buildOpenShellSandboxName(scopeKey: string): string {
     (acc, char) => ((acc * 33) ^ char.charCodeAt(0)) >>> 0,
     5381,
   );
-  return `openclaw-${safe || "session"}-${hash.toString(16).slice(0, 8)}`;
+  return `mullusi-${safe || "session"}-${hash.toString(16).slice(0, 8)}`;
 }
 
 function resolveOpenShellTmpRoot(): string {
-  return path.resolve(resolvePreferredOpenClawTmpDir() ?? os.tmpdir());
+  return path.resolve(resolvePreferredMullusiTmpDir() ?? os.tmpdir());
 }

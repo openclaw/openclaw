@@ -4,7 +4,7 @@ import { matchesApprovalRequestFilters } from "../infra/approval-request-filters
 import { getExecApprovalReplyMetadata } from "../infra/exec-approval-reply.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
-import type { OpenClawConfig } from "./config-runtime.js";
+import type { MullusiConfig } from "./config-runtime.js";
 import { normalizeAccountId } from "./routing.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
@@ -19,7 +19,7 @@ type ChannelApprovalConfig = {
 };
 
 type ApprovalProfileParams = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
 };
 
@@ -28,7 +28,7 @@ function defaultNormalizeSenderId(value: string): string | undefined {
   return trimmed || undefined;
 }
 
-function isApprovalTargetsMode(cfg: OpenClawConfig): boolean {
+function isApprovalTargetsMode(cfg: MullusiConfig): boolean {
   const execApprovals = cfg.approvals?.exec;
   if (!execApprovals?.enabled) {
     return false;
@@ -49,7 +49,7 @@ export function isChannelExecApprovalClientEnabledFromConfig(params: {
 }
 
 export function isChannelExecApprovalTargetRecipient(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   senderId?: string | null;
   accountId?: string | null;
   channel: string;

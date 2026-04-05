@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -19,7 +19,7 @@ vi.mock("./audit.js", () => ({
   auditTelegramGroupMembership: auditTelegramGroupMembershipMock,
 }));
 
-function createCfg(): OpenClawConfig {
+function createCfg(): MullusiConfig {
   return {
     channels: {
       telegram: {
@@ -31,10 +31,10 @@ function createCfg(): OpenClawConfig {
         },
       },
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
 }
 
-function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegramAccount {
+function resolveAccount(cfg: MullusiConfig, accountId: string): ResolvedTelegramAccount {
   return telegramPlugin.config.resolveAccount(cfg, accountId) as ResolvedTelegramAccount;
 }
 

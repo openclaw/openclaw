@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-ZIP=${1:?"Usage: $0 OpenClaw-<ver>.zip"}
-FEED_URL=${2:-"https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml"}
+ZIP=${1:?"Usage: $0 Mullusi-<ver>.zip"}
+FEED_URL=${2:-"https://raw.githubusercontent.com/mullusi/mullusi/main/appcast.xml"}
 PRIVATE_KEY_FILE=${SPARKLE_PRIVATE_KEY_FILE:-}
 
 find_generate_appcast() {
@@ -30,7 +30,7 @@ ZIP_BASE="${ZIP_NAME%.zip}"
 VERSION=${SPARKLE_RELEASE_VERSION:-}
 if [[ -z "$VERSION" ]]; then
   # Accept legacy calver suffixes like -1 and prerelease forms like -beta.1 / .beta.1.
-  if [[ "$ZIP_NAME" =~ ^OpenClaw-([0-9]+(\.[0-9]+){1,2}([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?)\.zip$ ]]; then
+  if [[ "$ZIP_NAME" =~ ^Mullusi-([0-9]+(\.[0-9]+){1,2}([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?)\.zip$ ]]; then
     VERSION="${BASH_REMATCH[1]}"
   else
     echo "Could not infer version from $ZIP_NAME; set SPARKLE_RELEASE_VERSION." >&2
@@ -60,7 +60,7 @@ else
 fi
 cp -f "$NOTES_HTML" "$TMP_DIR/${ZIP_BASE}.html"
 
-DOWNLOAD_URL_PREFIX=${SPARKLE_DOWNLOAD_URL_PREFIX:-"https://github.com/openclaw/openclaw/releases/download/v${VERSION}/"}
+DOWNLOAD_URL_PREFIX=${SPARKLE_DOWNLOAD_URL_PREFIX:-"https://github.com/mullusi/mullusi/releases/download/v${VERSION}/"}
 
 GENERATE_APPCAST="$(find_generate_appcast)"
 if [[ -z "$GENERATE_APPCAST" ]]; then

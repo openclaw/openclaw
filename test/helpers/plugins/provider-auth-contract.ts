@@ -11,15 +11,15 @@ import type {
 } from "../../../src/wizard/prompts.js";
 
 type LoginOpenAICodexOAuth =
-  (typeof import("openclaw/plugin-sdk/provider-auth-login"))["loginOpenAICodexOAuth"];
+  (typeof import("mullusi/plugin-sdk/provider-auth-login"))["loginOpenAICodexOAuth"];
 type GithubCopilotLoginCommand =
-  (typeof import("openclaw/plugin-sdk/provider-auth-login"))["githubCopilotLoginCommand"];
+  (typeof import("mullusi/plugin-sdk/provider-auth-login"))["githubCopilotLoginCommand"];
 type CreateVpsAwareHandlers =
   (typeof import("../../../src/plugins/provider-oauth-flow.js"))["createVpsAwareOAuthHandlers"];
 type EnsureAuthProfileStore =
-  typeof import("openclaw/plugin-sdk/provider-auth").ensureAuthProfileStore;
+  typeof import("mullusi/plugin-sdk/provider-auth").ensureAuthProfileStore;
 type ListProfilesForProvider =
-  typeof import("openclaw/plugin-sdk/provider-auth").listProfilesForProvider;
+  typeof import("mullusi/plugin-sdk/provider-auth").listProfilesForProvider;
 
 const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn<LoginOpenAICodexOAuth>());
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn<GithubCopilotLoginCommand>());
@@ -33,9 +33,9 @@ const providerAuthContractModules = vi.hoisted(() => ({
   openAIIndexModuleUrl: new URL("../../../extensions/openai/index.ts", import.meta.url).href,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth-login", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth-login")>(
-    "openclaw/plugin-sdk/provider-auth-login",
+vi.mock("mullusi/plugin-sdk/provider-auth-login", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/provider-auth-login")>(
+    "mullusi/plugin-sdk/provider-auth-login",
   );
   return {
     ...actual,
@@ -44,9 +44,9 @@ vi.mock("openclaw/plugin-sdk/provider-auth-login", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth")>(
-    "openclaw/plugin-sdk/provider-auth",
+vi.mock("mullusi/plugin-sdk/provider-auth", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/provider-auth")>(
+    "mullusi/plugin-sdk/provider-auth",
   );
   return {
     ...actual,

@@ -62,7 +62,7 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedBindHost: "127.0.0.1",
       },
     ])("allows $name", async ({ cfg, expectedBindHost }) => {
-      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18790 });
       expect(result.authMode).toBe("trusted-proxy");
       expect(result.bindHost).toBe(expectedBindHost);
     });
@@ -90,7 +90,7 @@ describe("resolveGatewayRuntimeConfig", () => {
           "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
       },
     ])("rejects $name", async ({ cfg, expectedMessage }) => {
-      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789 })).rejects.toThrow(
+      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18790 })).rejects.toThrow(
         expectedMessage,
       );
     });
@@ -104,7 +104,7 @@ describe("resolveGatewayRuntimeConfig", () => {
             trustedProxies: ["10.0.0.1"],
           },
         },
-        port: 18789,
+        port: 18790,
       });
 
       expect(result.authMode).toBe("trusted-proxy");
@@ -116,15 +116,15 @@ describe("resolveGatewayRuntimeConfig", () => {
     let originalToken: string | undefined;
 
     beforeEach(() => {
-      originalToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      originalToken = process.env.MULLUSI_GATEWAY_TOKEN;
+      delete process.env.MULLUSI_GATEWAY_TOKEN;
     });
 
     afterEach(() => {
       if (originalToken !== undefined) {
-        process.env.OPENCLAW_GATEWAY_TOKEN = originalToken;
+        process.env.MULLUSI_GATEWAY_TOKEN = originalToken;
       } else {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+        delete process.env.MULLUSI_GATEWAY_TOKEN;
       }
     });
 
@@ -148,7 +148,7 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedBindHost: "127.0.0.1",
       },
     ])("allows $name", async ({ cfg, expectedAuthMode, expectedBindHost }) => {
-      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18790 });
       expect(result.authMode).toBe(expectedAuthMode);
       expect(result.bindHost).toBe(expectedBindHost);
     });
@@ -158,7 +158,7 @@ describe("resolveGatewayRuntimeConfig", () => {
         name: "token mode without token",
         cfg: { gateway: { bind: "lan" as const, auth: { mode: "token" as const } } },
         expectedMessage:
-          "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+          "gateway auth mode is token, but no token was configured (set gateway.auth.token or MULLUSI_GATEWAY_TOKEN)",
       },
       {
         name: "lan binding with explicit none auth",
@@ -200,7 +200,7 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedMessage: "gateway bind=custom requested 192.168.1.100 but resolved 0.0.0.0",
       },
     ])("rejects $name", async ({ cfg, host, expectedMessage }) => {
-      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789, host })).rejects.toThrow(
+      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18790, host })).rejects.toThrow(
         expectedMessage,
       );
     });
@@ -244,12 +244,12 @@ describe("resolveGatewayRuntimeConfig", () => {
       },
     ])("$name", async ({ cfg, expectedError, expectedBindHost }) => {
       if (expectedError) {
-        await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789 })).rejects.toThrow(
+        await expect(resolveGatewayRuntimeConfig({ cfg, port: 18790 })).rejects.toThrow(
           expectedError,
         );
         return;
       }
-      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18790 });
       expect(result.bindHost).toBe(expectedBindHost);
     });
   });
@@ -290,7 +290,7 @@ describe("resolveGatewayRuntimeConfig", () => {
             },
           },
         },
-        port: 18789,
+        port: 18790,
       });
 
       expect(result.strictTransportSecurityHeader).toBe(expected);

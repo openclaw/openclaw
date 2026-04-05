@@ -1,13 +1,13 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
+import { safeEqualSecret } from "mullusi/plugin-sdk/browser-support";
 import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
-import { isTrustedProxyAddress, resolveClientIp, type OpenClawConfig } from "./runtime-api.js";
+import { isTrustedProxyAddress, resolveClientIp, type MullusiConfig } from "./runtime-api.js";
 
 const INTERACTION_MAX_BODY_BYTES = 64 * 1024;
 const INTERACTION_BODY_TIMEOUT_MS = 10_000;
-const SIGNED_CHANNEL_ID_CONTEXT_KEY = "__openclaw_channel_id";
+const SIGNED_CHANNEL_ID_CONTEXT_KEY = "__mullusi_channel_id";
 
 /**
  * Mattermost interactive message callback payload.
@@ -60,7 +60,7 @@ export function getInteractionCallbackUrl(accountId: string): string | undefined
   return callbackUrls.get(accountId);
 }
 
-type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & {
+type InteractionCallbackConfig = Pick<MullusiConfig, "gateway" | "channels"> & {
   interactions?: {
     callbackBaseUrl?: string;
   };
@@ -126,13 +126,13 @@ export function computeInteractionCallbackUrl(
   if (callbackBaseUrl) {
     return `${normalizeCallbackBaseUrl(callbackBaseUrl)}${path}`;
   }
-  const port = typeof cfg?.gateway?.port === "number" ? cfg.gateway.port : 18789;
+  const port = typeof cfg?.gateway?.port === "number" ? cfg.gateway.port : 18790;
   let host =
     cfg?.gateway?.customBindHost && !isWildcardBindHost(cfg.gateway.customBindHost)
       ? cfg.gateway.customBindHost.trim()
       : "localhost";
 
-  // Bracket IPv6 literals so the URL is valid: http://[::1]:18789/...
+  // Bracket IPv6 literals so the URL is valid: http://[::1]:18790/...
   if (host.includes(":") && !(host.startsWith("[") && host.endsWith("]"))) {
     host = `[${host}]`;
   }
@@ -163,7 +163,7 @@ const interactionSecrets = new Map<string, string>();
 let defaultInteractionSecret: string | undefined;
 
 function deriveInteractionSecret(botToken: string): string {
-  return createHmac("sha256", "openclaw-mattermost-interactions").update(botToken).digest("hex");
+  return createHmac("sha256", "mullusi-mattermost-interactions").update(botToken).digest("hex");
 }
 
 export function setInteractionSecret(accountIdOrBotToken: string, botToken?: string): void {

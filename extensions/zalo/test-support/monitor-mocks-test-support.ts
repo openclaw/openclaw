@@ -5,7 +5,7 @@ import {
 } from "../../../test/helpers/plugins/plugin-registry.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+import type { MullusiConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../src/types.js";
 
 type MonitorModule = typeof import("../src/monitor.js");
@@ -120,7 +120,7 @@ export async function loadLifecycleMonitorModule(): Promise<MonitorModule> {
 
 export async function startWebhookLifecycleMonitor(params: {
   account: ResolvedZaloAccount;
-  config: OpenClawConfig;
+  config: MullusiConfig;
   token?: string;
   webhookUrl?: string;
   webhookSecret?: string;

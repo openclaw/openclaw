@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/signal",
+  "name": "@mullusi/signal",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Signal channel plugin",
+  "description": "Mullusi Signal channel plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],

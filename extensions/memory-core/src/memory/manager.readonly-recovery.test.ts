@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { MullusiConfig } from "mullusi/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openMemoryDatabaseAtPath } from "./manager-sync-ops.js";
 import { runMemorySyncWithReadonlyRecovery } from "./manager.js";
@@ -36,7 +36,7 @@ describe("memory manager readonly recovery", () => {
   let workspaceDir = "";
   let indexPath = "";
 
-  function createMemoryConfig(): OpenClawConfig {
+  function createMemoryConfig(): MullusiConfig {
     return {
       agents: {
         defaults: {
@@ -52,7 +52,7 @@ describe("memory manager readonly recovery", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
   }
 
   function createReadonlyRecoveryHarness() {
@@ -140,7 +140,7 @@ describe("memory manager readonly recovery", () => {
   }
 
   beforeEach(async () => {
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-readonly-"));
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-mem-readonly-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");

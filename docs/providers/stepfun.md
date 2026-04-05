@@ -1,14 +1,14 @@
 ---
-summary: "Use StepFun models with OpenClaw"
+summary: "Use StepFun models with Mullusi"
 read_when:
-  - You want StepFun models in OpenClaw
+  - You want StepFun models in Mullusi
   - You need StepFun setup guidance
 title: "StepFun"
 ---
 
 # StepFun
 
-OpenClaw includes a bundled StepFun provider plugin with two provider ids:
+Mullusi includes a bundled StepFun provider plugin with two provider ids:
 
 - `stepfun` for the standard endpoint
 - `stepfun-plan` for the Step Plan endpoint
@@ -34,7 +34,7 @@ endpoints.
 Interactive setup:
 
 ```bash
-openclaw onboard
+mullusi onboard
 ```
 
 Choose one of these auth choices:
@@ -47,8 +47,8 @@ Choose one of these auth choices:
 Non-interactive examples:
 
 ```bash
-openclaw onboard --auth-choice stepfun-standard-api-key-intl --stepfun-api-key "$STEPFUN_API_KEY"
-openclaw onboard --auth-choice stepfun-plan-api-key-intl --stepfun-api-key "$STEPFUN_API_KEY"
+mullusi onboard --auth-choice stepfun-standard-api-key-intl --stepfun-api-key "$STEPFUN_API_KEY"
+mullusi onboard --auth-choice stepfun-plan-api-key-intl --stepfun-api-key "$STEPFUN_API_KEY"
 ```
 
 ## Model refs
@@ -145,8 +145,8 @@ Step Plan provider:
 
 ## Notes
 
-- The provider is bundled with OpenClaw, so there is no separate plugin install step.
+- The provider is bundled with Mullusi, so there is no separate plugin install step.
 - `step-3.5-flash-2603` is currently exposed only on `stepfun-plan`.
 - A single auth flow writes region-matched profiles for both `stepfun` and `stepfun-plan`, so both surfaces can be discovered together.
-- Use `openclaw models list` and `openclaw models set <provider/model>` to inspect or switch models.
+- Use `mullusi models list` and `mullusi models set <provider/model>` to inspect or switch models.
 - For the broader provider overview, see [Model providers](/concepts/model-providers).

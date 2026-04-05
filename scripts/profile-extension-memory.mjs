@@ -9,7 +9,7 @@ const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_COMBINED_TIMEOUT_MS = 180_000;
 const DEFAULT_TOP = 10;
-const RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+const RSS_MARKER = "__MULLUSI_MAX_RSS_KB__=";
 
 function printHelp() {
   console.log(`Usage: node scripts/profile-extension-memory.mjs [options]
@@ -201,9 +201,9 @@ async function main() {
     throw new Error("No extensions selected for profiling");
   }
 
-  const tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-memory-"));
+  const tmpHome = mkdtempSync(path.join(os.tmpdir(), "mullusi-extension-memory-"));
   const hookPath = path.join(tmpHome, "measure-rss.mjs");
-  const jsonPath = options.jsonPath ?? path.join(os.tmpdir(), "openclaw-extension-memory.json");
+  const jsonPath = options.jsonPath ?? path.join(os.tmpdir(), "mullusi-extension-memory.json");
 
   writeFileSync(
     hookPath,
@@ -225,7 +225,7 @@ async function main() {
     XDG_DATA_HOME: path.join(tmpHome, ".local", "share"),
     XDG_CACHE_HOME: path.join(tmpHome, ".cache"),
     NODE_DISABLE_COMPILE_CACHE: "1",
-    OPENCLAW_NO_RESPAWN: "1",
+    MULLUSI_NO_RESPAWN: "1",
     TERM: process.env.TERM ?? "dumb",
     LANG: process.env.LANG ?? "C.UTF-8",
   };

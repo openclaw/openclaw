@@ -5,9 +5,9 @@ import {
   estimateUtf8Bytes,
   hasNonTextEmbeddingParts,
   type EmbeddingInput,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { type SessionFileEntry } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+} from "mullusi/plugin-sdk/memory-core-host-engine-embeddings";
+import { createSubsystemLogger } from "mullusi/plugin-sdk/memory-core-host-engine-foundation";
+import { type SessionFileEntry } from "mullusi/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
@@ -17,7 +17,7 @@ import {
   type MemoryChunk,
   type MemoryFileEntry,
   type MemorySource,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+} from "mullusi/plugin-sdk/memory-core-host-engine-storage";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 const VECTOR_TABLE = "chunks_vec";

@@ -61,9 +61,9 @@ describe("doctor command update-mode repairs", () => {
 
     serviceIsLoaded.mockResolvedValueOnce(false);
     serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["node", "cli", "gateway", "--port", "18789"],
+      programArguments: ["node", "cli", "gateway", "--port", "18790"],
       environment: {
-        OPENCLAW_GATEWAY_TOKEN: "stale-token",
+        MULLUSI_GATEWAY_TOKEN: "stale-token",
       },
     });
     auditGatewayServiceConfig.mockResolvedValueOnce({
@@ -71,13 +71,13 @@ describe("doctor command update-mode repairs", () => {
       issues: [
         {
           code: "gateway-token-mismatch",
-          message: "Gateway service OPENCLAW_GATEWAY_TOKEN does not match gateway.auth.token",
+          message: "Gateway service MULLUSI_GATEWAY_TOKEN does not match gateway.auth.token",
           level: "recommended",
         },
       ],
     });
     buildGatewayInstallPlan.mockResolvedValue({
-      programArguments: ["node", "cli", "gateway", "--port", "18789"],
+      programArguments: ["node", "cli", "gateway", "--port", "18790"],
       workingDirectory: "/tmp",
       environment: {},
     });

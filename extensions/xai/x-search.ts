@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { getRuntimeConfigSnapshot } from "mullusi/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/plugin-entry";
 import {
   jsonResult,
   readCache,
@@ -9,7 +9,7 @@ import {
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
   writeCache,
-} from "openclaw/plugin-sdk/provider-web-search";
+} from "mullusi/plugin-sdk/provider-web-search";
 import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
 import {
   resolveEffectiveXSearchConfig,
@@ -31,7 +31,7 @@ class PluginToolInputError extends Error {
   }
 }
 
-const X_SEARCH_CACHE_KEY = Symbol.for("openclaw.xai.x-search.cache");
+const X_SEARCH_CACHE_KEY = Symbol.for("mullusi.xai.x-search.cache");
 
 type XSearchCacheEntry = {
   expiresAt: number;
@@ -52,14 +52,14 @@ function getSharedXSearchCache(): Map<string, XSearchCacheEntry> {
 
 const X_SEARCH_CACHE = getSharedXSearchCache();
 
-function resolveXSearchConfig(cfg?: OpenClawConfig): Record<string, unknown> | undefined {
+function resolveXSearchConfig(cfg?: MullusiConfig): Record<string, unknown> | undefined {
   return resolveEffectiveXSearchConfig(cfg);
 }
 
 function resolveXSearchEnabled(params: {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   config?: Record<string, unknown>;
-  runtimeConfig?: OpenClawConfig;
+  runtimeConfig?: MullusiConfig;
 }): boolean {
   return isXaiToolEnabled({
     enabled: params.config?.enabled as boolean | undefined,
@@ -69,8 +69,8 @@ function resolveXSearchEnabled(params: {
 }
 
 function resolveXSearchApiKey(params: {
-  sourceConfig?: OpenClawConfig;
-  runtimeConfig?: OpenClawConfig;
+  sourceConfig?: MullusiConfig;
+  runtimeConfig?: MullusiConfig;
 }): string | undefined {
   return resolveXaiToolApiKey(params);
 }
@@ -121,8 +121,8 @@ function buildXSearchCacheKey(params: {
 }
 
 export function createXSearchTool(options?: {
-  config?: OpenClawConfig;
-  runtimeConfig?: OpenClawConfig | null;
+  config?: MullusiConfig;
+  runtimeConfig?: MullusiConfig | null;
 }) {
   const xSearchConfig = resolveXSearchConfig(options?.config);
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
@@ -176,7 +176,7 @@ export function createXSearchTool(options?: {
           error: "missing_xai_api_key",
           message:
             "x_search needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
-          docs: "https://docs.openclaw.ai/tools/web",
+          docs: "https://docs.mullusi.com/tools/web",
         });
       }
 

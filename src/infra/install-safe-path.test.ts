@@ -13,7 +13,7 @@ import {
 
 describe("unscopedPackageName", () => {
   it.each([
-    { value: "@openclaw/matrix", expected: "matrix" },
+    { value: "@mullusi/matrix", expected: "matrix" },
     { value: " matrix ", expected: "matrix" },
     { value: "", expected: "" },
   ])("normalizes package names for %j", ({ value, expected }) => {
@@ -23,11 +23,11 @@ describe("unscopedPackageName", () => {
 
 describe("packageNameMatchesId", () => {
   it.each([
-    { packageName: "@openclaw/matrix", id: "matrix", expected: true },
-    { packageName: "@openclaw/matrix", id: "@openclaw/matrix", expected: true },
-    { packageName: "@openclaw/matrix", id: "signal", expected: false },
+    { packageName: "@mullusi/matrix", id: "matrix", expected: true },
+    { packageName: "@mullusi/matrix", id: "@mullusi/matrix", expected: true },
+    { packageName: "@mullusi/matrix", id: "signal", expected: false },
     { packageName: " ", id: "matrix", expected: false },
-    { packageName: "@openclaw/matrix", id: " ", expected: false },
+    { packageName: "@mullusi/matrix", id: " ", expected: false },
   ])("matches ids for %j", ({ packageName, id, expected }) => {
     expect(packageNameMatchesId(packageName, id)).toBe(expected);
   });
@@ -74,12 +74,12 @@ describe("resolveSafeInstallDir", () => {
     expect(
       resolveSafeInstallDir({
         baseDir: "/tmp/plugins",
-        id: "@openclaw/matrix",
+        id: "@mullusi/matrix",
         invalidNameMessage: "invalid plugin name",
       }),
     ).toEqual({
       ok: true,
-      path: path.join("/tmp/plugins", "@openclaw__matrix"),
+      path: path.join("/tmp/plugins", "@mullusi__matrix"),
     });
   });
 
@@ -99,7 +99,7 @@ describe("resolveSafeInstallDir", () => {
 
 describe("assertCanonicalPathWithinBase", () => {
   it("accepts in-base directories", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-safe-"));
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-install-safe-"));
     try {
       const candidate = path.join(baseDir, "tools");
       await fs.mkdir(candidate, { recursive: true });
@@ -116,7 +116,7 @@ describe("assertCanonicalPathWithinBase", () => {
   });
 
   it("accepts missing candidate paths when their parent stays in base", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-safe-"));
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-install-safe-"));
     try {
       const candidate = path.join(baseDir, "tools", "plugin");
       await fs.mkdir(path.dirname(candidate), { recursive: true });
@@ -133,7 +133,7 @@ describe("assertCanonicalPathWithinBase", () => {
   });
 
   it("rejects non-directory base paths", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-safe-"));
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-install-safe-"));
     const baseFile = path.join(baseDir, "not-a-dir");
     await fs.writeFile(baseFile, "nope", "utf-8");
     try {
@@ -150,7 +150,7 @@ describe("assertCanonicalPathWithinBase", () => {
   });
 
   it("rejects non-directory candidate paths inside the base", async () => {
-    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-safe-"));
+    const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-install-safe-"));
     const candidate = path.join(baseDir, "file.txt");
     await fs.writeFile(candidate, "nope", "utf-8");
     try {
@@ -169,8 +169,8 @@ describe("assertCanonicalPathWithinBase", () => {
   it.runIf(process.platform !== "win32")(
     "rejects symlinked candidate directories that escape the base",
     async () => {
-      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-safe-"));
-      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-safe-outside-"));
+      const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-install-safe-"));
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-install-safe-outside-"));
       try {
         const linkDir = path.join(baseDir, "alias");
         await fs.symlink(outsideDir, linkDir);
@@ -189,7 +189,7 @@ describe("assertCanonicalPathWithinBase", () => {
   );
 
   it.runIf(process.platform !== "win32")("rejects symlinked base directories", async () => {
-    const parentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-safe-"));
+    const parentDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-install-safe-"));
     const realBaseDir = path.join(parentDir, "real-base");
     const symlinkBaseDir = path.join(parentDir, "base-link");
     await fs.mkdir(realBaseDir, { recursive: true });

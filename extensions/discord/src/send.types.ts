@@ -1,6 +1,6 @@
 import type { RequestClient } from "@buape/carbon";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { RetryConfig } from "mullusi/plugin-sdk/retry-runtime";
 
 export class DiscordSendError extends Error {
   kind?: "missing-permissions" | "dm-blocked";
@@ -29,12 +29,12 @@ export type DiscordSendResult = {
 };
 
 export type DiscordRuntimeAccountContext = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
 };
 
 export type DiscordReactOpts = {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   accountId?: string;
   token?: string;
   rest?: RequestClient;

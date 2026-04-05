@@ -1,5 +1,5 @@
-import type { WebFetchProviderPlugin } from "openclaw/plugin-sdk/provider-web-fetch";
-import { enablePluginInConfig } from "openclaw/plugin-sdk/provider-web-fetch";
+import type { WebFetchProviderPlugin } from "mullusi/plugin-sdk/provider-web-fetch";
+import { enablePluginInConfig } from "mullusi/plugin-sdk/provider-web-fetch";
 import { runFirecrawlScrape } from "./firecrawl-client.js";
 
 export function createFirecrawlWebFetchProvider(): WebFetchProviderPlugin {

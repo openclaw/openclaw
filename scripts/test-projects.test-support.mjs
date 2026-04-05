@@ -67,7 +67,7 @@ const TUI_VITEST_CONFIG = "vitest.tui.config.ts";
 const UI_VITEST_CONFIG = "vitest.ui.config.ts";
 const UTILS_VITEST_CONFIG = "vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "vitest.wizard.config.ts";
-const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
+const INCLUDE_FILE_ENV_KEY = "MULLUSI_VITEST_INCLUDE_FILE";
 
 function normalizePathPattern(value) {
   return value.replaceAll("\\", "/");
@@ -524,7 +524,7 @@ export function createVitestRunSpecs(args, params = {}) {
     const includeFilePath = plan.includePatterns
       ? path.join(
           params.tempDir ?? os.tmpdir(),
-          `openclaw-vitest-include-${process.pid}-${Date.now()}-${index}.json`,
+          `mullusi-vitest-include-${process.pid}-${Date.now()}-${index}.json`,
         )
       : null;
     return {

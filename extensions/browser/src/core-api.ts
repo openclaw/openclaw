@@ -98,13 +98,13 @@ export {
   theme,
   withTimeout,
   wrapExternalContent,
-} from "openclaw/plugin-sdk/browser-support";
+} from "mullusi/plugin-sdk/browser-support";
 export type {
   AnyAgentTool,
   GatewayRequestHandlers,
   GatewayRpcOpts,
   NodeListNode,
   NodeSession,
-  OpenClawConfig,
-  OpenClawPluginService,
-} from "openclaw/plugin-sdk/browser-support";
+  MullusiConfig,
+  MullusiPluginService,
+} from "mullusi/plugin-sdk/browser-support";

@@ -235,16 +235,16 @@ describe("OpenAIWebSocketManager", () => {
       await connectPromise;
     });
 
-    it("adds OpenClaw attribution headers on the native OpenAI websocket", async () => {
+    it("adds Mullusi attribution headers on the native OpenAI websocket", async () => {
       const manager = buildManager();
       const connectPromise = manager.connect("sk-test-key");
 
       const sock = lastSocket();
       expect(sock.options).toMatchObject({
         headers: expect.objectContaining({
-          originator: "openclaw",
+          originator: "mullusi",
           version: expect.any(String),
-          "User-Agent": expect.stringMatching(/^openclaw\//),
+          "User-Agent": expect.stringMatching(/^mullusi\//),
         }),
       });
 
@@ -256,7 +256,7 @@ describe("OpenAIWebSocketManager", () => {
       const manager = buildManager({
         headers: {
           "x-client-request-id": "session-123",
-          "x-openclaw-session-id": "session-123",
+          "x-mullusi-session-id": "session-123",
         },
       });
       const connectPromise = manager.connect("sk-test-key");
@@ -265,7 +265,7 @@ describe("OpenAIWebSocketManager", () => {
       expect(sock.options).toMatchObject({
         headers: expect.objectContaining({
           "x-client-request-id": "session-123",
-          "x-openclaw-session-id": "session-123",
+          "x-mullusi-session-id": "session-123",
         }),
       });
 

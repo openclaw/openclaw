@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
+import type { MullusiConfig } from "mullusi/plugin-sdk/provider-onboard";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
@@ -25,7 +25,7 @@ import {
   withTrustedWebSearchEndpoint,
   wrapWebContent,
   writeCachedSearchPayload,
-} from "openclaw/plugin-sdk/provider-web-search";
+} from "mullusi/plugin-sdk/provider-web-search";
 import {
   isNativeMoonshotBaseUrl,
   MOONSHOT_BASE_URL,
@@ -100,7 +100,7 @@ function trimTrailingSlashes(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
-function resolveKimiBaseUrl(kimi?: KimiConfig, openClawConfig?: OpenClawConfig): string {
+function resolveKimiBaseUrl(kimi?: KimiConfig, openClawConfig?: MullusiConfig): string {
   const explicitBaseUrl = typeof kimi?.baseUrl === "string" ? kimi.baseUrl.trim() : "";
   if (explicitBaseUrl) {
     return trimTrailingSlashes(explicitBaseUrl) || DEFAULT_KIMI_BASE_URL;
@@ -277,7 +277,7 @@ function createKimiSchema() {
 
 function createKimiToolDefinition(
   searchConfig: SearchConfigRecord | undefined,
-  openClawConfig: OpenClawConfig | undefined,
+  openClawConfig: MullusiConfig | undefined,
 ): WebSearchProviderToolDefinition {
   return {
     description:
@@ -297,7 +297,7 @@ function createKimiToolDefinition(
           error: "missing_kimi_api_key",
           message:
             "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure tools.web.search.kimi.apiKey.",
-          docs: "https://docs.openclaw.ai/tools/web",
+          docs: "https://docs.mullusi.com/tools/web",
         };
       }
 
@@ -443,7 +443,7 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
     envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
     placeholder: "sk-...",
     signupUrl: "https://platform.moonshot.cn/",
-    docsUrl: "https://docs.openclaw.ai/tools/web",
+    docsUrl: "https://docs.mullusi.com/tools/web",
     autoDetectOrder: 40,
     credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.moonshot.config.webSearch.apiKey"],

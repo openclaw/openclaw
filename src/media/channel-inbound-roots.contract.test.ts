@@ -4,7 +4,7 @@ import {
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "../../test/helpers/channels/channel-media-roots-contract.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 
 describe("channel-inbound-roots contract", () => {
   function expectResolvedRootsCase(resolve: () => string[], expected: readonly string[]) {
@@ -24,7 +24,7 @@ describe("channel-inbound-roots contract", () => {
         },
       },
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
 
   it("resolves configured attachment roots with account overrides", () => {
     expectResolvedRootsCase(
@@ -56,7 +56,7 @@ describe("channel-inbound-roots contract", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     expectResolvedRootsCase(
       () => resolveIMessageAttachmentRoots({ cfg, accountId: "work" }),
@@ -66,14 +66,14 @@ describe("channel-inbound-roots contract", () => {
 
   it("falls back to default iMessage attachment roots", () => {
     expectResolvedRootsCase(
-      () => resolveIMessageAttachmentRoots({ cfg: {} as OpenClawConfig }),
+      () => resolveIMessageAttachmentRoots({ cfg: {} as MullusiConfig }),
       [...DEFAULT_IMESSAGE_ATTACHMENT_ROOTS],
     );
   });
 
   it("falls back to default iMessage remote attachment roots", () => {
     expectResolvedRootsCase(
-      () => resolveIMessageRemoteAttachmentRoots({ cfg: {} as OpenClawConfig }),
+      () => resolveIMessageRemoteAttachmentRoots({ cfg: {} as MullusiConfig }),
       [...DEFAULT_IMESSAGE_ATTACHMENT_ROOTS],
     );
   });

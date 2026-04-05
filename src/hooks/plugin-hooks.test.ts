@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -19,23 +19,23 @@ describe("bundle plugin hooks", () => {
   let previousBundledHooksDir: string | undefined;
 
   beforeAll(async () => {
-    fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-hooks-"));
+    fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "mullusi-plugin-hooks-"));
   });
 
   beforeEach(async () => {
     clearInternalHooks();
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fsp.mkdir(workspaceDir, { recursive: true });
-    previousBundledHooksDir = process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
-    process.env.OPENCLAW_BUNDLED_HOOKS_DIR = "/nonexistent/bundled/hooks";
+    previousBundledHooksDir = process.env.MULLUSI_BUNDLED_HOOKS_DIR;
+    process.env.MULLUSI_BUNDLED_HOOKS_DIR = "/nonexistent/bundled/hooks";
   });
 
   afterEach(() => {
     clearInternalHooks();
     if (previousBundledHooksDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
+      delete process.env.MULLUSI_BUNDLED_HOOKS_DIR;
     } else {
-      process.env.OPENCLAW_BUNDLED_HOOKS_DIR = previousBundledHooksDir;
+      process.env.MULLUSI_BUNDLED_HOOKS_DIR = previousBundledHooksDir;
     }
   });
 
@@ -44,7 +44,7 @@ describe("bundle plugin hooks", () => {
   });
 
   async function writeBundleHookFixture(): Promise<string> {
-    const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "sample-bundle");
+    const bundleRoot = path.join(workspaceDir, ".mullusi", "extensions", "sample-bundle");
     const hookDir = path.join(bundleRoot, "hooks", "bundle-hook");
     await fsp.mkdir(path.join(bundleRoot, ".codex-plugin"), { recursive: true });
     await fsp.mkdir(hookDir, { recursive: true });
@@ -62,7 +62,7 @@ describe("bundle plugin hooks", () => {
         "---",
         "name: bundle-hook",
         'description: "Bundle hook"',
-        'metadata: {"openclaw":{"events":["command:new"]}}',
+        'metadata: {"mullusi":{"events":["command:new"]}}',
         "---",
         "",
         "# Bundle hook",
@@ -78,7 +78,7 @@ describe("bundle plugin hooks", () => {
     return bundleRoot;
   }
 
-  function createConfig(enabled: boolean): OpenClawConfig {
+  function createConfig(enabled: boolean): MullusiConfig {
     return {
       hooks: {
         internal: {
@@ -104,7 +104,7 @@ describe("bundle plugin hooks", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.hook.name).toBe("bundle-hook");
-    expect(entries[0]?.hook.source).toBe("openclaw-plugin");
+    expect(entries[0]?.hook.source).toBe("mullusi-plugin");
     expect(entries[0]?.hook.pluginId).toBe("sample-bundle");
     expect(entries[0]?.hook.baseDir).toBe(
       fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
@@ -132,8 +132,8 @@ describe("bundle plugin hooks", () => {
     expect(entries).toHaveLength(0);
   });
 
-  it("does not treat Claude hooks.json bundles as OpenClaw hook packs", async () => {
-    const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "claude-bundle");
+  it("does not treat Claude hooks.json bundles as Mullusi hook packs", async () => {
+    const bundleRoot = path.join(workspaceDir, ".mullusi", "extensions", "claude-bundle");
     await fsp.mkdir(path.join(bundleRoot, ".claude-plugin"), { recursive: true });
     await fsp.mkdir(path.join(bundleRoot, "hooks"), { recursive: true });
     await fsp.writeFile(

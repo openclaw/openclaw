@@ -15,7 +15,7 @@ import { GatewayClient } from "./client.js";
 import { startGatewayServer } from "./server.js";
 
 const LIVE = isLiveTestEnabled();
-const ACP_BIND_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_ACP_BIND);
+const ACP_BIND_LIVE = isTruthyEnvValue(process.env.MULLUSI_LIVE_ACP_BIND);
 const describeLive = LIVE && ACP_BIND_LIVE ? describe : describe.skip;
 
 const CONNECT_TIMEOUT_MS = 90_000;
@@ -310,20 +310,20 @@ describeLive("gateway live (ACP bind)", () => {
     "binds a synthetic Slack DM conversation to a live ACP session and reroutes the next turn",
     async () => {
       const previous = {
-        configPath: process.env.OPENCLAW_CONFIG_PATH,
-        stateDir: process.env.OPENCLAW_STATE_DIR,
-        token: process.env.OPENCLAW_GATEWAY_TOKEN,
-        port: process.env.OPENCLAW_GATEWAY_PORT,
-        skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-        skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-        skipCron: process.env.OPENCLAW_SKIP_CRON,
-        skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
+        configPath: process.env.MULLUSI_CONFIG_PATH,
+        stateDir: process.env.MULLUSI_STATE_DIR,
+        token: process.env.MULLUSI_GATEWAY_TOKEN,
+        port: process.env.MULLUSI_GATEWAY_PORT,
+        skipChannels: process.env.MULLUSI_SKIP_CHANNELS,
+        skipGmail: process.env.MULLUSI_SKIP_GMAIL_WATCHER,
+        skipCron: process.env.MULLUSI_SKIP_CRON,
+        skipCanvas: process.env.MULLUSI_SKIP_CANVAS_HOST,
       };
-      const liveAgent = normalizeAcpAgent(process.env.OPENCLAW_LIVE_ACP_BIND_AGENT);
-      const acpxCommand = process.env.OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND?.trim() || undefined;
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-acp-bind-"));
+      const liveAgent = normalizeAcpAgent(process.env.MULLUSI_LIVE_ACP_BIND_AGENT);
+      const acpxCommand = process.env.MULLUSI_LIVE_ACP_BIND_ACPX_COMMAND?.trim() || undefined;
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-live-acp-bind-"));
       const tempStateDir = path.join(tempRoot, "state");
-      const tempConfigPath = path.join(tempRoot, "openclaw.json");
+      const tempConfigPath = path.join(tempRoot, "mullusi.json");
       const port = await getFreeGatewayPort();
       const token = `test-${randomUUID()}`;
       const originalSessionKey = "main";
@@ -333,13 +333,13 @@ describeLive("gateway live (ACP bind)", () => {
       const followupNonce = randomBytes(4).toString("hex").toUpperCase();
 
       clearRuntimeConfigSnapshot();
-      process.env.OPENCLAW_STATE_DIR = tempStateDir;
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
-      process.env.OPENCLAW_GATEWAY_PORT = String(port);
+      process.env.MULLUSI_STATE_DIR = tempStateDir;
+      process.env.MULLUSI_SKIP_CHANNELS = "1";
+      process.env.MULLUSI_SKIP_GMAIL_WATCHER = "1";
+      process.env.MULLUSI_SKIP_CRON = "1";
+      process.env.MULLUSI_SKIP_CANVAS_HOST = "1";
+      process.env.MULLUSI_GATEWAY_TOKEN = token;
+      process.env.MULLUSI_GATEWAY_PORT = String(port);
 
       const cfg = loadConfig();
       const acpxEntry = cfg.plugins?.entries?.acpx;
@@ -385,7 +385,7 @@ describeLive("gateway live (ACP bind)", () => {
         },
       };
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
-      process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+      process.env.MULLUSI_CONFIG_PATH = tempConfigPath;
 
       logLiveStep(`starting gateway on port ${String(port)}`);
       const server = await startGatewayServer(port, {
@@ -441,44 +441,44 @@ describeLive("gateway live (ACP bind)", () => {
         await server.close();
         await fs.rm(tempRoot, { recursive: true, force: true });
         if (previous.configPath === undefined) {
-          delete process.env.OPENCLAW_CONFIG_PATH;
+          delete process.env.MULLUSI_CONFIG_PATH;
         } else {
-          process.env.OPENCLAW_CONFIG_PATH = previous.configPath;
+          process.env.MULLUSI_CONFIG_PATH = previous.configPath;
         }
         if (previous.stateDir === undefined) {
-          delete process.env.OPENCLAW_STATE_DIR;
+          delete process.env.MULLUSI_STATE_DIR;
         } else {
-          process.env.OPENCLAW_STATE_DIR = previous.stateDir;
+          process.env.MULLUSI_STATE_DIR = previous.stateDir;
         }
         if (previous.token === undefined) {
-          delete process.env.OPENCLAW_GATEWAY_TOKEN;
+          delete process.env.MULLUSI_GATEWAY_TOKEN;
         } else {
-          process.env.OPENCLAW_GATEWAY_TOKEN = previous.token;
+          process.env.MULLUSI_GATEWAY_TOKEN = previous.token;
         }
         if (previous.port === undefined) {
-          delete process.env.OPENCLAW_GATEWAY_PORT;
+          delete process.env.MULLUSI_GATEWAY_PORT;
         } else {
-          process.env.OPENCLAW_GATEWAY_PORT = previous.port;
+          process.env.MULLUSI_GATEWAY_PORT = previous.port;
         }
         if (previous.skipChannels === undefined) {
-          delete process.env.OPENCLAW_SKIP_CHANNELS;
+          delete process.env.MULLUSI_SKIP_CHANNELS;
         } else {
-          process.env.OPENCLAW_SKIP_CHANNELS = previous.skipChannels;
+          process.env.MULLUSI_SKIP_CHANNELS = previous.skipChannels;
         }
         if (previous.skipGmail === undefined) {
-          delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
+          delete process.env.MULLUSI_SKIP_GMAIL_WATCHER;
         } else {
-          process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previous.skipGmail;
+          process.env.MULLUSI_SKIP_GMAIL_WATCHER = previous.skipGmail;
         }
         if (previous.skipCron === undefined) {
-          delete process.env.OPENCLAW_SKIP_CRON;
+          delete process.env.MULLUSI_SKIP_CRON;
         } else {
-          process.env.OPENCLAW_SKIP_CRON = previous.skipCron;
+          process.env.MULLUSI_SKIP_CRON = previous.skipCron;
         }
         if (previous.skipCanvas === undefined) {
-          delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
+          delete process.env.MULLUSI_SKIP_CANVAS_HOST;
         } else {
-          process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
+          process.env.MULLUSI_SKIP_CANVAS_HOST = previous.skipCanvas;
         }
       }
     },

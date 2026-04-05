@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { AnyAgentTool, OpenClawPluginToolContext } from "../runtime-api.js";
+import type { AnyAgentTool, MullusiPluginToolContext } from "../runtime-api.js";
 import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
 import { parseZalouserOutboundTarget } from "./session-route.js";
 import {
@@ -50,7 +50,7 @@ type ToolParams = {
   url?: string;
 };
 
-type ZalouserToolContext = Pick<OpenClawPluginToolContext, "deliveryContext">;
+type ZalouserToolContext = Pick<MullusiPluginToolContext, "deliveryContext">;
 
 function json(payload: unknown): AgentToolResult {
   return {

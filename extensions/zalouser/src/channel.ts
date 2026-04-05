@@ -1,18 +1,18 @@
-import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
+import { createScopedDmSecurityResolver } from "mullusi/plugin-sdk/channel-config-helpers";
+import { createAccountStatusSink } from "mullusi/plugin-sdk/channel-lifecycle";
+import { createPairingPrefixStripper } from "mullusi/plugin-sdk/channel-pairing";
 import {
   createEmptyChannelResult,
   createRawChannelSendResultAdapter,
-} from "openclaw/plugin-sdk/channel-send-result";
-import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
-import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+} from "mullusi/plugin-sdk/channel-send-result";
+import { createStaticReplyToModeResolver } from "mullusi/plugin-sdk/conversation-runtime";
+import { createChatChannelPlugin } from "mullusi/plugin-sdk/core";
+import { buildPassiveProbedChannelStatusSummary } from "mullusi/plugin-sdk/extension-shared";
+import { createLazyRuntimeModule } from "mullusi/plugin-sdk/lazy-runtime";
 import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
-} from "openclaw/plugin-sdk/status-helpers";
+} from "mullusi/plugin-sdk/status-helpers";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -26,7 +26,7 @@ import type {
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelPlugin,
-  OpenClawConfig,
+  MullusiConfig,
   GroupToolPolicyConfig,
 } from "./channel-api.js";
 import {
@@ -95,11 +95,11 @@ function resolveZalouserQrProfile(accountId?: string | null): string {
   return normalized;
 }
 
-function resolveZalouserOutboundChunkMode(cfg: OpenClawConfig, accountId?: string) {
+function resolveZalouserOutboundChunkMode(cfg: MullusiConfig, accountId?: string) {
   return getZalouserRuntime().channel.text.resolveChunkMode(cfg, "zalouser", accountId);
 }
 
-function resolveZalouserOutboundTextChunkLimit(cfg: OpenClawConfig, accountId?: string) {
+function resolveZalouserOutboundTextChunkLimit(cfg: MullusiConfig, accountId?: string) {
   return getZalouserRuntime().channel.text.resolveTextChunkLimit(cfg, "zalouser", accountId, {
     fallbackLimit: ZALOUSER_TEXT_CHUNK_LIMIT,
   });

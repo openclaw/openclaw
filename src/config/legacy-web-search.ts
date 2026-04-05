@@ -1,5 +1,5 @@
 import { BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS } from "../plugins/bundled-capability-metadata.js";
-import type { OpenClawConfig } from "./config.js";
+import type { MullusiConfig } from "./config.js";
 import { mergeMissing } from "./legacy.shared.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -251,7 +251,7 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
 }
 
 export function resolvePluginWebSearchConfig(
-  config: OpenClawConfig | undefined,
+  config: MullusiConfig | undefined,
   pluginId: string,
 ): Record<string, unknown> | undefined {
   const pluginConfig = config?.plugins?.entries?.[pluginId]?.config;

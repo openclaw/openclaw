@@ -6,12 +6,12 @@ import { isTruthyEnvValue } from "../infra/env.js";
 let rawStreamReady = false;
 
 function isRawStreamEnabled(): boolean {
-  return isTruthyEnvValue(process.env.OPENCLAW_RAW_STREAM);
+  return isTruthyEnvValue(process.env.MULLUSI_RAW_STREAM);
 }
 
 function resolveRawStreamPath(): string {
   return (
-    process.env.OPENCLAW_RAW_STREAM_PATH?.trim() ||
+    process.env.MULLUSI_RAW_STREAM_PATH?.trim() ||
     path.join(resolveStateDir(), "logs", "raw-stream.jsonl")
   );
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import {
   generateImage,
@@ -38,7 +38,7 @@ describe("image-generation runtime facade", () => {
             imageGenerationModel: { primary: "image-plugin/img-v1" },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       prompt: "draw a cat",
       agentDir: "/tmp/agent",
       authStore: { version: 1, profiles: {} },
@@ -64,7 +64,7 @@ describe("image-generation runtime facade", () => {
       },
     ];
     mocks.listRuntimeImageGenerationProviders.mockReturnValue(providers);
-    const params = { config: {} as OpenClawConfig };
+    const params = { config: {} as MullusiConfig };
 
     expect(listRuntimeImageGenerationProviders(params)).toBe(providers);
     expect(mocks.listRuntimeImageGenerationProviders).toHaveBeenCalledWith(params);

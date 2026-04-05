@@ -180,7 +180,7 @@ describe("AcpxRuntime", () => {
     const prompt = logs.find((entry) => entry.kind === "prompt");
     expect(ensure).toBeDefined();
     expect(prompt).toBeDefined();
-    expect(prompt?.openclawShell).toBe("acp");
+    expect(prompt?.mullusiShell).toBe("acp");
     expect(Array.isArray(prompt?.args)).toBe(true);
     const promptArgs = (prompt?.args as string[]) ?? [];
     expect(promptArgs).toContain("--ttl");
@@ -780,14 +780,14 @@ describe("AcpxRuntime", () => {
         command: "npx custom-codex-acp",
       },
     });
-    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acpx-plugin-tools-"));
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-acpx-plugin-tools-"));
     const pluginRoot = path.join(repoRoot, "extensions", "acpx");
     const distEntry = path.join(repoRoot, "dist", "mcp", "plugin-tools-serve.js");
     try {
       fs.mkdirSync(path.join(pluginRoot, "src"), { recursive: true });
       fs.mkdirSync(path.dirname(distEntry), { recursive: true });
       fs.writeFileSync(path.join(pluginRoot, "package.json"), "{}\n", "utf8");
-      fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "{}\n", "utf8");
+      fs.writeFileSync(path.join(pluginRoot, "mullusi.plugin.json"), "{}\n", "utf8");
       fs.writeFileSync(path.join(pluginRoot, "src", "config.ts"), "// test\n", "utf8");
       fs.writeFileSync(distEntry, "// built entry\n", "utf8");
 
@@ -828,7 +828,7 @@ describe("AcpxRuntime", () => {
       expect(payload.mcpServers).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            name: "openclaw-plugin-tools",
+            name: "mullusi-plugin-tools",
             command: process.execPath,
             args: [distEntry],
           }),
@@ -893,7 +893,7 @@ describe("AcpxRuntime", () => {
 
   it("does not mark backend unhealthy when a per-session cwd is missing", async () => {
     const { runtime } = await createMockRuntimeFixture();
-    const missingCwd = path.join(os.tmpdir(), "openclaw-acpx-runtime-test-missing-cwd");
+    const missingCwd = path.join(os.tmpdir(), "mullusi-acpx-runtime-test-missing-cwd");
 
     await runtime.probeAvailability();
     expect(runtime.isHealthy()).toBe(true);

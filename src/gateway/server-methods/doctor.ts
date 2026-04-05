@@ -11,7 +11,7 @@ const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
 const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DREAMING_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
-const DREAMING_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
+const DREAMING_SYSTEM_EVENT_TEXT = "__mullusi_memory_core_short_term_promotion_dream__";
 
 type DreamingMode = "off" | "core" | "rem" | "deep";
 type DreamingPreset = Exclude<DreamingMode, "off">;

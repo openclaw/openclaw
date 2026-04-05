@@ -4,7 +4,7 @@ import {
 } from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
 import { normalizeChannelId as normalizeBuiltInChannelId } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -38,7 +38,7 @@ function resolveReplyToModeChannelKey(channel?: OriginatingChannelType): string 
 }
 
 export function resolveConfiguredReplyToMode(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   channel?: OriginatingChannelType,
   chatType?: string | null,
 ): ReplyToMode {
@@ -66,7 +66,7 @@ export function resolveConfiguredReplyToMode(
 }
 
 export function resolveReplyToModeWithThreading(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   threading: ChannelThreadingAdapter | undefined,
   params: {
     channel?: OriginatingChannelType;
@@ -83,7 +83,7 @@ export function resolveReplyToModeWithThreading(
 }
 
 export function resolveReplyToMode(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   channel?: OriginatingChannelType,
   accountId?: string | null,
   chatType?: string | null,

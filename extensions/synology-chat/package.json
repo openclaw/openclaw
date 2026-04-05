@@ -1,9 +1,9 @@
 {
-  "name": "@openclaw/synology-chat",
+  "name": "@mullusi/synology-chat",
   "version": "2026.4.4",
-  "description": "Synology Chat channel plugin for OpenClaw",
+  "description": "Synology Chat channel plugin for Mullusi",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],
@@ -14,11 +14,11 @@
       "selectionLabel": "Synology Chat (Webhook)",
       "docsPath": "/channels/synology-chat",
       "docsLabel": "synology-chat",
-      "blurb": "Connect your Synology NAS Chat to OpenClaw with full agent capabilities.",
+      "blurb": "Connect your Synology NAS Chat to Mullusi with full agent capabilities.",
       "order": 90
     },
     "install": {
-      "npmSpec": "@openclaw/synology-chat",
+      "npmSpec": "@mullusi/synology-chat",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.4"
     }

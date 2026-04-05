@@ -5,13 +5,13 @@ import {
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "mullusi/plugin-sdk/security-runtime";
 
 export const secretTargetRegistryEntries = [
   {
     id: "channels.zalo.accounts.*.botToken",
     targetType: "channels.zalo.accounts.*.botToken",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.zalo.accounts.*.botToken",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -22,7 +22,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.zalo.accounts.*.webhookSecret",
     targetType: "channels.zalo.accounts.*.webhookSecret",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.zalo.accounts.*.webhookSecret",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -33,7 +33,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.zalo.botToken",
     targetType: "channels.zalo.botToken",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.zalo.botToken",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -44,7 +44,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.zalo.webhookSecret",
     targetType: "channels.zalo.webhookSecret",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.zalo.webhookSecret",
     secretShape: "secret_input",
     expectedResolvedValue: "string",

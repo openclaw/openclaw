@@ -1,5 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../../logging.js";
@@ -7,7 +7,7 @@ import {
   resolveChannelPluginIds,
   resolveConfiguredChannelPluginIds,
 } from "../channel-plugin-ids.js";
-import { loadOpenClawPlugins } from "../loader.js";
+import { loadMullusiPlugins } from "../loader.js";
 import { getActivePluginRegistry } from "../runtime.js";
 import type { PluginLogger } from "../types.js";
 
@@ -52,8 +52,8 @@ function activeRegistrySatisfiesScope(
 
 export function ensurePluginRegistryLoaded(options?: {
   scope?: PluginRegistryScope;
-  config?: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
+  config?: MullusiConfig;
+  activationSourceConfig?: MullusiConfig;
   env?: NodeJS.ProcessEnv;
 }): void {
   const scope = options?.scope ?? "all";
@@ -96,7 +96,7 @@ export function ensurePluginRegistryLoaded(options?: {
     error: (msg) => log.error(msg),
     debug: (msg) => log.debug(msg),
   };
-  loadOpenClawPlugins({
+  loadMullusiPlugins({
     config: resolvedConfig,
     activationSourceConfig: options?.activationSourceConfig ?? baseConfig,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,

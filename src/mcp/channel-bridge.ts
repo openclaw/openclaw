@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
@@ -38,7 +38,7 @@ type ServerNotification = {
 const CLAUDE_PERMISSION_REPLY_RE = /^(yes|no)\s+([a-km-z]{5})$/i;
 const QUEUE_LIMIT = 1_000;
 
-export class OpenClawChannelBridge {
+export class MullusiChannelBridge {
   private gateway: GatewayClient | null = null;
   private readonly verbose: boolean;
   private readonly claudeChannelMode: ClaudeChannelMode;
@@ -57,7 +57,7 @@ export class OpenClawChannelBridge {
   private readySettled = false;
 
   constructor(
-    private readonly cfg: OpenClawConfig,
+    private readonly cfg: MullusiConfig,
     private readonly params: {
       gatewayUrl?: string;
       gatewayToken?: string;
@@ -91,7 +91,7 @@ export class OpenClawChannelBridge {
     const gatewayUrlOverrideSource =
       connection.urlSource === "cli --url"
         ? "cli"
-        : connection.urlSource === "env OPENCLAW_GATEWAY_URL"
+        : connection.urlSource === "env MULLUSI_GATEWAY_URL"
           ? "env"
           : undefined;
     const creds = await resolveGatewayConnectionAuth({
@@ -114,7 +114,7 @@ export class OpenClawChannelBridge {
       token: creds.token,
       password: creds.password,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: "OpenClaw MCP",
+      clientDisplayName: "Mullusi MCP",
       clientVersion: VERSION,
       mode: GATEWAY_CLIENT_MODES.CLI,
       scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
@@ -296,7 +296,7 @@ export class OpenClawChannelBridge {
       inputPreview: params.inputPreview,
     });
     if (this.verbose) {
-      process.stderr.write(`openclaw mcp: pending Claude permission ${params.requestId}\n`);
+      process.stderr.write(`mullusi mcp: pending Claude permission ${params.requestId}\n`);
     }
   }
 
@@ -319,7 +319,7 @@ export class OpenClawChannelBridge {
     } catch (error) {
       if (this.verbose && !this.closed) {
         process.stderr.write(
-          `openclaw mcp: notification ${notification.method} failed: ${String(error)}\n`,
+          `mullusi mcp: notification ${notification.method} failed: ${String(error)}\n`,
         );
       }
     }

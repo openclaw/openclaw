@@ -1,5 +1,5 @@
 ---
-summary: "How OpenClaw summarizes long conversations to stay within model limits"
+summary: "How Mullusi summarizes long conversations to stay within model limits"
 read_when:
   - You want to understand auto-compaction and /compact
   - You are debugging long sessions hitting context limits
@@ -9,7 +9,7 @@ title: "Compaction"
 # Compaction
 
 Every model has a context window -- the maximum number of tokens it can process.
-When a conversation approaches that limit, OpenClaw **compacts** older messages
+When a conversation approaches that limit, Mullusi **compacts** older messages
 into a summary so the chat can continue.
 
 ## How it works
@@ -18,9 +18,9 @@ into a summary so the chat can continue.
 2. The summary is saved in the session transcript.
 3. Recent messages are kept intact.
 
-When OpenClaw splits history into compaction chunks, it keeps assistant tool
+When Mullusi splits history into compaction chunks, it keeps assistant tool
 calls paired with their matching `toolResult` entries. If a split point lands
-inside a tool block, OpenClaw moves the boundary so the pair stays together and
+inside a tool block, Mullusi moves the boundary so the pair stays together and
 the current unsummarized tail is preserved.
 
 The full conversation history stays on disk. Compaction only changes what the
@@ -30,14 +30,14 @@ model sees on the next turn.
 
 Auto-compaction is on by default. It runs when the session nears the context
 limit, or when the model returns a context-overflow error (in which case
-OpenClaw compacts and retries). Typical overflow signatures include
+Mullusi compacts and retries). Typical overflow signatures include
 `request_too_large`, `context length exceeded`, `input exceeds the maximum
 number of tokens`, `input token count exceeds the maximum number of input
 tokens`, `input is too long for the model`, and `ollama error: context length
 exceeded`.
 
 <Info>
-Before compacting, OpenClaw automatically reminds the agent to save important
+Before compacting, Mullusi automatically reminds the agent to save important
 notes to [memory](/concepts/memory) files. This prevents context loss.
 </Info>
 

@@ -1,7 +1,7 @@
 import { formatTerminalLink } from "./terminal-link.js";
 
 export function resolveDocsRoot(): string {
-  return "https://docs.openclaw.ai";
+  return "https://docs.mullusi.com";
 }
 
 export const DOCS_ROOT = resolveDocsRoot();

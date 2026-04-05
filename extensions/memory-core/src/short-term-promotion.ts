@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import type { MemorySearchResult } from "mullusi/plugin-sdk/memory-core-host-runtime-files";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,

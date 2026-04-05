@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -372,9 +372,9 @@ const baseCfg = {
       },
     },
   },
-} satisfies OpenClawConfig;
+} satisfies MullusiConfig;
 
-function createDiscordParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+function createDiscordParams(commandBody: string, cfg: MullusiConfig = baseCfg) {
   const params = buildCommandTestParams(commandBody, cfg, {
     Provider: "discord",
     Surface: "discord",
@@ -505,7 +505,7 @@ function mockBoundThreadSession(options?: {
   );
 }
 
-function createThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+function createThreadParams(commandBody: string, cfg: MullusiConfig = baseCfg) {
   const params = createDiscordParams(commandBody, cfg);
   params.ctx.MessageThreadId = defaultThreadId;
   return params;
@@ -524,7 +524,7 @@ type ConversationCommandFixture = {
 function createConversationParams(
   commandBody: string,
   fixture: ConversationCommandFixture,
-  cfg: OpenClawConfig = baseCfg,
+  cfg: MullusiConfig = baseCfg,
 ) {
   const params = buildCommandTestParams(commandBody, cfg, {
     Provider: fixture.channel,
@@ -541,15 +541,15 @@ function createConversationParams(
   return params;
 }
 
-async function runDiscordAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runDiscordAcpCommand(commandBody: string, cfg: MullusiConfig = baseCfg) {
   return handleAcpCommand(createDiscordParams(commandBody, cfg), true);
 }
 
-async function runThreadAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runThreadAcpCommand(commandBody: string, cfg: MullusiConfig = baseCfg) {
   return handleAcpCommand(createThreadParams(commandBody, cfg), true);
 }
 
-async function runTelegramAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runTelegramAcpCommand(commandBody: string, cfg: MullusiConfig = baseCfg) {
   return handleAcpCommand(
     createConversationParams(
       commandBody,
@@ -564,7 +564,7 @@ async function runTelegramAcpCommand(commandBody: string, cfg: OpenClawConfig = 
   );
 }
 
-async function runTelegramDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runTelegramDmAcpCommand(commandBody: string, cfg: MullusiConfig = baseCfg) {
   return handleAcpCommand(
     createConversationParams(
       commandBody,
@@ -578,7 +578,7 @@ async function runTelegramDmAcpCommand(commandBody: string, cfg: OpenClawConfig 
   );
 }
 
-async function runSlackDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runSlackDmAcpCommand(commandBody: string, cfg: MullusiConfig = baseCfg) {
   return handleAcpCommand(
     createConversationParams(
       commandBody,
@@ -593,7 +593,7 @@ async function runSlackDmAcpCommand(commandBody: string, cfg: OpenClawConfig = b
   );
 }
 
-function createMatrixThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+function createMatrixThreadParams(commandBody: string, cfg: MullusiConfig = baseCfg) {
   const params = createConversationParams(
     commandBody,
     {
@@ -606,7 +606,7 @@ function createMatrixThreadParams(commandBody: string, cfg: OpenClawConfig = bas
   return params;
 }
 
-async function runMatrixAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runMatrixAcpCommand(commandBody: string, cfg: MullusiConfig = baseCfg) {
   return handleAcpCommand(
     createConversationParams(
       commandBody,
@@ -620,11 +620,11 @@ async function runMatrixAcpCommand(commandBody: string, cfg: OpenClawConfig = ba
   );
 }
 
-async function runMatrixThreadAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runMatrixThreadAcpCommand(commandBody: string, cfg: MullusiConfig = baseCfg) {
   return handleAcpCommand(createMatrixThreadParams(commandBody, cfg), true);
 }
 
-async function runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runFeishuDmAcpCommand(commandBody: string, cfg: MullusiConfig = baseCfg) {
   return handleAcpCommand(
     createConversationParams(
       commandBody,
@@ -639,7 +639,7 @@ async function runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = 
   );
 }
 
-async function runLineDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runLineDmAcpCommand(commandBody: string, cfg: MullusiConfig = baseCfg) {
   return handleAcpCommand(
     createConversationParams(
       commandBody,
@@ -654,7 +654,7 @@ async function runLineDmAcpCommand(commandBody: string, cfg: OpenClawConfig = ba
   );
 }
 
-async function runBlueBubblesDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runBlueBubblesDmAcpCommand(commandBody: string, cfg: MullusiConfig = baseCfg) {
   return handleAcpCommand(
     createConversationParams(
       commandBody,
@@ -668,7 +668,7 @@ async function runBlueBubblesDmAcpCommand(commandBody: string, cfg: OpenClawConf
   );
 }
 
-async function runIMessageDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+async function runIMessageDmAcpCommand(commandBody: string, cfg: MullusiConfig = baseCfg) {
   return handleAcpCommand(
     createConversationParams(
       commandBody,
@@ -685,7 +685,7 @@ async function runIMessageDmAcpCommand(commandBody: string, cfg: OpenClawConfig 
 async function runInternalAcpCommand(params: {
   commandBody: string;
   scopes: string[];
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
 }) {
   const commandParams = buildCommandTestParams(params.commandBody, params.cfg ?? baseCfg, {
     Provider: INTERNAL_MESSAGE_CHANNEL,
@@ -946,7 +946,7 @@ describe("/acp command", () => {
       backendSessionId: "acpx-1",
     });
 
-    const result = await runDiscordAcpCommand("/acp spawn codex --cwd /home/bob/clawd");
+    const result = await runDiscordAcpCommand("/acp spawn codex --cwd /home/bob/mullusi");
 
     expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
     expect(result?.reply?.text).toContain("Created thread thread-created and bound it");
@@ -955,7 +955,7 @@ describe("/acp command", () => {
       expect.objectContaining({
         agent: "codex",
         mode: "persistent",
-        cwd: "/home/bob/clawd",
+        cwd: "/home/bob/mullusi",
       }),
     );
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
@@ -963,7 +963,7 @@ describe("/acp command", () => {
         targetKind: "session",
         placement: "child",
         metadata: expect.objectContaining({
-          introText: expect.stringContaining("cwd: /home/bob/clawd"),
+          introText: expect.stringContaining("cwd: /home/bob/mullusi"),
         }),
       }),
     );
@@ -1007,7 +1007,7 @@ describe("/acp command", () => {
 
   it("accepts unicode dash option prefixes in /acp spawn args", async () => {
     const result = await runThreadAcpCommand(
-      "/acp spawn codex \u2014mode oneshot \u2014thread here \u2014cwd /home/bob/clawd \u2014label jeerreview",
+      "/acp spawn codex \u2014mode oneshot \u2014thread here \u2014cwd /home/bob/mullusi \u2014label jeerreview",
     );
 
     expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
@@ -1016,7 +1016,7 @@ describe("/acp command", () => {
       expect.objectContaining({
         agent: "codex",
         mode: "oneshot",
-        cwd: "/home/bob/clawd",
+        cwd: "/home/bob/mullusi",
       }),
     );
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
@@ -1040,7 +1040,7 @@ describe("/acp command", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies MullusiConfig;
 
     const result = await runDiscordAcpCommand("/acp spawn codex --bind here", cfg);
 
@@ -1152,7 +1152,7 @@ describe("/acp command", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies MullusiConfig;
 
     const result = await runMatrixAcpCommand("/acp spawn codex --bind here", cfg);
 
@@ -1180,7 +1180,7 @@ describe("/acp command", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies MullusiConfig;
 
     const result = await runMatrixAcpCommand("/acp spawn codex", cfg);
 
@@ -1208,7 +1208,7 @@ describe("/acp command", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies MullusiConfig;
 
     const result = await runMatrixThreadAcpCommand("/acp spawn codex --thread here", cfg);
 
@@ -1286,7 +1286,7 @@ describe("/acp command", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies MullusiConfig;
 
     const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
 
@@ -1310,7 +1310,7 @@ describe("/acp command", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies MullusiConfig;
 
     const result = await runMatrixAcpCommand("/acp spawn codex", cfg);
 
@@ -1326,7 +1326,7 @@ describe("/acp command", () => {
           sandbox: { mode: "all" },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies MullusiConfig;
 
     const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
 
@@ -1421,7 +1421,7 @@ describe("/acp command", () => {
           defaultAccount: "work",
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies MullusiConfig;
     hoisted.sessionBindingResolveByConversationMock.mockImplementation(
       (ref: {
         channel?: string;
@@ -1470,7 +1470,7 @@ describe("/acp command", () => {
         ...baseCfg.acp,
         dispatch: { enabled: false },
       },
-    } satisfies OpenClawConfig;
+    } satisfies MullusiConfig;
     const result = await runDiscordAcpCommand("/acp steer tighten logging", cfg);
     expect(result?.reply?.text).toContain("ACP dispatch is disabled by policy");
     expect(hoisted.runTurnMock).not.toHaveBeenCalled();
@@ -1588,7 +1588,7 @@ describe("/acp command", () => {
           lastUpdatedAt: Date.now(),
         },
         lastError: [
-          "OpenClaw runtime context (internal):",
+          "Mullusi runtime context (internal):",
           "This context is runtime-generated, not user-authored. Keep internal details private.",
           "",
           "[Internal task completion event]",
@@ -1598,7 +1598,7 @@ describe("/acp command", () => {
     });
     hoisted.getStatusMock.mockResolvedValue({
       summary: [
-        "OpenClaw runtime context (internal):",
+        "Mullusi runtime context (internal):",
         "This context is runtime-generated, not user-authored. Keep internal details private.",
         "",
         "[Internal task completion event]",
@@ -1606,7 +1606,7 @@ describe("/acp command", () => {
       ].join("\n"),
       details: {
         payload: [
-          "OpenClaw runtime context (internal):",
+          "Mullusi runtime context (internal):",
           "This context is runtime-generated, not user-authored. Keep internal details private.",
           "",
           "[Internal task completion event]",
@@ -1627,7 +1627,7 @@ describe("/acp command", () => {
       runId: "acp-run-1",
       endedAt: Date.now(),
       error: [
-        "OpenClaw runtime context (internal):",
+        "Mullusi runtime context (internal):",
         "This context is runtime-generated, not user-authored. Keep internal details private.",
         "",
         "[Internal task completion event]",
@@ -1640,7 +1640,7 @@ describe("/acp command", () => {
 
     expect(result?.reply?.text).toContain("ACP status:");
     expect(result?.reply?.text).toContain("taskSummary: Needs approval to continue.");
-    expect(result?.reply?.text).not.toContain("OpenClaw runtime context (internal):");
+    expect(result?.reply?.text).not.toContain("Mullusi runtime context (internal):");
     expect(result?.reply?.text).not.toContain("Internal task completion event");
   });
 

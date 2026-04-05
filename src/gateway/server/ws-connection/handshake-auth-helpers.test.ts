@@ -161,7 +161,7 @@ describe("handshake auth helpers", () => {
       resolvePairingLocality({
         connectParams,
         isLocalClient: false,
-        requestHost: "172.17.0.2:18789",
+        requestHost: "172.17.0.2:18790",
         remoteAddress: "127.0.0.1",
         hasProxyHeaders: false,
         hasBrowserOriginHeader: false,
@@ -173,7 +173,7 @@ describe("handshake auth helpers", () => {
       resolvePairingLocality({
         connectParams,
         isLocalClient: false,
-        requestHost: "172.17.0.2:18789",
+        requestHost: "172.17.0.2:18790",
         remoteAddress: "127.0.0.1",
         hasProxyHeaders: true,
         hasBrowserOriginHeader: false,
@@ -197,7 +197,7 @@ describe("handshake auth helpers", () => {
       resolvePairingLocality({
         connectParams,
         isLocalClient: false,
-        requestHost: "172.17.0.2:18789",
+        requestHost: "172.17.0.2:18790",
         remoteAddress: "127.0.0.1",
         hasProxyHeaders: false,
         hasBrowserOriginHeader: false,
@@ -218,7 +218,7 @@ describe("handshake auth helpers", () => {
       resolvePairingLocality({
         connectParams,
         isLocalClient: false,
-        requestHost: "172.17.0.2:18789",
+        requestHost: "172.17.0.2:18790",
         remoteAddress: "127.0.0.1",
         hasProxyHeaders: false,
         hasBrowserOriginHeader: false,

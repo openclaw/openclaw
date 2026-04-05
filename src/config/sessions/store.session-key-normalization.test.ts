@@ -30,7 +30,7 @@ describe("session store key normalization", () => {
   let storePath = "";
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-key-normalize-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-session-key-normalize-"));
     storePath = path.join(tempDir, "sessions.json");
     await fs.writeFile(storePath, "{}", "utf-8");
   });

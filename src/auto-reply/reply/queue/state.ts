@@ -23,7 +23,7 @@ export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
  * Share followup queues across bundled chunks so busy-session enqueue/drain
  * logic observes one queue registry per process.
  */
-const FOLLOWUP_QUEUES_KEY = Symbol.for("openclaw.followupQueues");
+const FOLLOWUP_QUEUES_KEY = Symbol.for("mullusi.followupQueues");
 
 export const FOLLOWUP_QUEUES = resolveGlobalMap<string, FollowupQueueState>(FOLLOWUP_QUEUES_KEY);
 

@@ -51,7 +51,7 @@ function createCommandWithTimeoutResult() {
 
 function createLegacyConfigSnapshot() {
   return {
-    path: "/tmp/openclaw.json",
+    path: "/tmp/mullusi.json",
     exists: false,
     raw: null,
     parsed: {},
@@ -67,7 +67,7 @@ export const confirm = vi.fn().mockResolvedValue(true) as unknown as MockFn;
 export const select = vi.fn().mockResolvedValue("node") as unknown as MockFn;
 export const note = vi.fn() as unknown as MockFn;
 export const writeConfigFile = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
-export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
+export const resolveMullusiPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
 export const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
@@ -106,7 +106,7 @@ export const auditGatewayServiceConfig = vi
   .mockResolvedValue({ ok: true, issues: [] }) as unknown as MockFn;
 export const buildGatewayInstallPlan = vi.mocked(
   vi.fn().mockResolvedValue({
-    programArguments: ["node", "cli", "gateway", "--port", "18789"],
+    programArguments: ["node", "cli", "gateway", "--port", "18790"],
     workingDirectory: "/tmp",
     environment: {},
   }),
@@ -115,7 +115,7 @@ export const resolveGatewayAuthTokenForService = vi
   .fn()
   .mockResolvedValue({ token: undefined }) as unknown as MockFn;
 export const resolveGatewayProgramArguments = vi.fn().mockResolvedValue({
-  programArguments: ["node", "cli", "gateway", "--port", "18789"],
+  programArguments: ["node", "cli", "gateway", "--port", "18790"],
 }) as unknown as MockFn;
 export const serviceInstall = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
 export const serviceIsLoaded = vi.fn().mockResolvedValue(false) as unknown as MockFn;
@@ -178,7 +178,7 @@ export const runLegacyStateMigrations = vi.fn().mockResolvedValue({
 }) as unknown as MockFn;
 
 const DEFAULT_CONFIG_SNAPSHOT = {
-  path: "/tmp/openclaw.json",
+  path: "/tmp/mullusi.json",
   exists: true,
   raw: "{}",
   parsed: {},
@@ -201,14 +201,14 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  loadOpenClawPlugins: () => createEmptyPluginRegistry(),
+  loadMullusiPlugins: () => createEmptyPluginRegistry(),
 }));
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    CONFIG_PATH: "/tmp/openclaw.json",
+    CONFIG_PATH: "/tmp/mullusi.json",
     createConfigIO,
     readConfigFileSnapshot,
     writeConfigFile,
@@ -259,8 +259,8 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout,
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot,
+vi.mock("../infra/mullusi-root.js", () => ({
+  resolveMullusiPackageRoot,
 }));
 
 vi.mock("../infra/update-runner.js", () => ({
@@ -410,7 +410,7 @@ beforeEach(() => {
 
   readConfigFileSnapshot.mockReset();
   writeConfigFile.mockReset().mockResolvedValue(undefined);
-  resolveOpenClawPackageRoot.mockReset().mockResolvedValue(null);
+  resolveMullusiPackageRoot.mockReset().mockResolvedValue(null);
   runGatewayUpdate.mockReset().mockResolvedValue(createGatewayUpdateResult());
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue(createLegacyConfigSnapshot());
   createConfigIO.mockReset().mockImplementation(() => ({
@@ -429,13 +429,13 @@ beforeEach(() => {
   renderGatewayServiceCleanupHints.mockReset().mockReturnValue(["cleanup"]);
   auditGatewayServiceConfig.mockReset().mockResolvedValue({ ok: true, issues: [] });
   buildGatewayInstallPlan.mockReset().mockResolvedValue({
-    programArguments: ["node", "cli", "gateway", "--port", "18789"],
+    programArguments: ["node", "cli", "gateway", "--port", "18790"],
     workingDirectory: "/tmp",
     environment: {},
   });
   resolveGatewayAuthTokenForService.mockReset().mockResolvedValue({ token: undefined });
   resolveGatewayProgramArguments.mockReset().mockResolvedValue({
-    programArguments: ["node", "cli", "gateway", "--port", "18789"],
+    programArguments: ["node", "cli", "gateway", "--port", "18790"],
   });
   serviceInstall.mockReset().mockResolvedValue(undefined);
   serviceIsLoaded.mockReset().mockResolvedValue(false);
@@ -448,11 +448,11 @@ beforeEach(() => {
 
   originalIsTTY = process.stdin.isTTY;
   setStdinTty(true);
-  originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-"));
-  process.env.OPENCLAW_STATE_DIR = tempStateDir;
+  originalStateDir = process.env.MULLUSI_STATE_DIR;
+  originalUpdateInProgress = process.env.MULLUSI_UPDATE_IN_PROGRESS;
+  process.env.MULLUSI_UPDATE_IN_PROGRESS = "1";
+  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-doctor-state-"));
+  process.env.MULLUSI_STATE_DIR = tempStateDir;
   fs.mkdirSync(path.join(tempStateDir, "agents", "main", "sessions"), {
     recursive: true,
   });
@@ -462,14 +462,14 @@ beforeEach(() => {
 afterEach(() => {
   setStdinTty(originalIsTTY);
   if (originalStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
+    delete process.env.MULLUSI_STATE_DIR;
   } else {
-    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    process.env.MULLUSI_STATE_DIR = originalStateDir;
   }
   if (originalUpdateInProgress === undefined) {
-    delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    delete process.env.MULLUSI_UPDATE_IN_PROGRESS;
   } else {
-    process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalUpdateInProgress;
+    process.env.MULLUSI_UPDATE_IN_PROGRESS = originalUpdateInProgress;
   }
   if (tempStateDir) {
     fs.rmSync(tempStateDir, { recursive: true, force: true });

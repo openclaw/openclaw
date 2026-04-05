@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/huggingface-provider",
+  "name": "@mullusi/huggingface-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Hugging Face provider plugin",
+  "description": "Mullusi Hugging Face provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

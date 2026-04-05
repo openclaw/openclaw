@@ -31,11 +31,11 @@ describe("resolveLocalVitestMaxWorkers", () => {
     ).toBe(2);
   });
 
-  it("lets OPENCLAW_VITEST_MAX_WORKERS override the inferred cap", () => {
+  it("lets MULLUSI_VITEST_MAX_WORKERS override the inferred cap", () => {
     expect(
       resolveLocalVitestMaxWorkers(
         {
-          OPENCLAW_VITEST_MAX_WORKERS: "2",
+          MULLUSI_VITEST_MAX_WORKERS: "2",
         },
         {
           cpuCount: 10,
@@ -48,11 +48,11 @@ describe("resolveLocalVitestMaxWorkers", () => {
     ).toBe(2);
   });
 
-  it("respects the legacy OPENCLAW_TEST_WORKERS override too", () => {
+  it("respects the legacy MULLUSI_TEST_WORKERS override too", () => {
     expect(
       resolveLocalVitestMaxWorkers(
         {
-          OPENCLAW_TEST_WORKERS: "3",
+          MULLUSI_TEST_WORKERS: "3",
         },
         {
           cpuCount: 16,
@@ -177,7 +177,7 @@ describe("resolveLocalVitestScheduling", () => {
     expect(
       resolveLocalVitestScheduling(
         {
-          OPENCLAW_VITEST_DISABLE_SYSTEM_THROTTLE: "1",
+          MULLUSI_VITEST_DISABLE_SYSTEM_THROTTLE: "1",
         },
         {
           cpuCount: 16,
@@ -245,7 +245,7 @@ describe("test scripts", () => {
     };
 
     expect(pkg.scripts?.["test:serial"]).toBe(
-      "OPENCLAW_VITEST_MAX_WORKERS=1 vitest run --config vitest.config.ts",
+      "MULLUSI_VITEST_MAX_WORKERS=1 vitest run --config vitest.config.ts",
     );
     expect(pkg.scripts?.["test:fast"]).toBe(
       "node scripts/run-vitest.mjs run --config vitest.unit.config.ts",

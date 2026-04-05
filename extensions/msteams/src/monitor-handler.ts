@@ -1,4 +1,4 @@
-import { type OpenClawConfig, type RuntimeEnv } from "../runtime-api.js";
+import { type MullusiConfig, type RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
@@ -36,7 +36,7 @@ export type MSTeamsActivityHandler = {
 };
 
 export type MSTeamsMessageHandlerDeps = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   runtime: RuntimeEnv;
   appId: string;
   adapter: MSTeamsAdapter;

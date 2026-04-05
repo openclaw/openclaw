@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "mullusi/plugin-sdk/account-id";
 
 export function sanitizeMatrixPathSegment(value: string): string {
   const cleaned = value

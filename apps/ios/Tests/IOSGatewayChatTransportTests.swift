@@ -1,6 +1,6 @@
-import OpenClawKit
+import MullusiKit
 import Testing
-@testable import OpenClaw
+@testable import Mullusi
 
 @Suite struct IOSGatewayChatTransportTests {
     @Test func requestsFailFastWhenGatewayNotConnected() async {

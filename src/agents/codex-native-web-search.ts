@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 
@@ -91,7 +91,7 @@ function normalizeUserLocation(value: unknown): CodexNativeSearchUserLocation | 
 }
 
 export function resolveCodexNativeWebSearchConfig(
-  config: OpenClawConfig | undefined,
+  config: MullusiConfig | undefined,
 ): ResolvedCodexNativeWebSearchConfig {
   const nativeConfig = config?.tools?.web?.search?.openaiCodex;
   return {
@@ -120,7 +120,7 @@ export function hasCodexNativeWebSearchTool(tools: unknown): boolean {
 }
 
 export function hasAvailableCodexAuth(params: {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   agentDir?: string;
 }): boolean {
   if (params.agentDir) {
@@ -141,7 +141,7 @@ export function hasAvailableCodexAuth(params: {
 }
 
 export function resolveCodexNativeSearchActivation(params: {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   modelProvider?: string;
   modelApi?: string;
   agentDir?: string;
@@ -210,7 +210,7 @@ export function resolveCodexNativeSearchActivation(params: {
 }
 
 export function buildCodexNativeWebSearchTool(
-  config: OpenClawConfig | undefined,
+  config: MullusiConfig | undefined,
 ): Record<string, unknown> {
   const nativeConfig = resolveCodexNativeWebSearchConfig(config);
   const tool: Record<string, unknown> = {
@@ -240,7 +240,7 @@ export function buildCodexNativeWebSearchTool(
 
 export function patchCodexNativeWebSearchPayload(params: {
   payload: unknown;
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
 }): CodexNativeSearchPayloadPatchResult {
   if (!isRecord(params.payload)) {
     return { status: "payload_not_object" };
@@ -258,7 +258,7 @@ export function patchCodexNativeWebSearchPayload(params: {
 }
 
 export function shouldSuppressManagedWebSearchTool(params: {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   modelProvider?: string;
   modelApi?: string;
   agentDir?: string;
@@ -267,7 +267,7 @@ export function shouldSuppressManagedWebSearchTool(params: {
 }
 
 export function isCodexNativeWebSearchRelevant(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   agentId?: string;
   agentDir?: string;
 }): boolean {
@@ -293,7 +293,7 @@ export function isCodexNativeWebSearchRelevant(params: {
 }
 
 export function describeCodexNativeWebSearch(
-  config: OpenClawConfig | undefined,
+  config: MullusiConfig | undefined,
 ): string | undefined {
   if (config?.tools?.web?.search?.enabled === false) {
     return undefined;

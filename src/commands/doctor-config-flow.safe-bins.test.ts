@@ -85,7 +85,7 @@ describe("doctor config flow safe bins", () => {
       "Doctor warnings",
     );
     expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw doctor --fix"),
+      expect.stringContaining("mullusi doctor --fix"),
       "Doctor warnings",
     );
   });
@@ -94,7 +94,7 @@ describe("doctor config flow safe bins", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-safe-bins-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-doctor-safe-bins-"));
     const binPath = path.join(dir, "mydoctorbin");
     try {
       await fs.writeFile(binPath, "#!/bin/sh\necho ok\n", "utf-8");

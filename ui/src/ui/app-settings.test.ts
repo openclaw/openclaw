@@ -276,7 +276,7 @@ describe("applySettingsFromUrl", () => {
   it("hydrates query token params and strips them from the URL", () => {
     setTestWindowUrl("https://control.example/ui/overview?token=abc123");
     const host = createHost("overview");
-    host.settings.gatewayUrl = "wss://control.example/openclaw";
+    host.settings.gatewayUrl = "wss://control.example/mullusi";
 
     applySettingsFromUrl(host);
 
@@ -286,15 +286,15 @@ describe("applySettingsFromUrl", () => {
 
   it("keeps query token params pending when a gatewayUrl confirmation is required", () => {
     setTestWindowUrl(
-      "https://control.example/ui/overview?gatewayUrl=wss://other-gateway.example/openclaw&token=abc123",
+      "https://control.example/ui/overview?gatewayUrl=wss://other-gateway.example/mullusi&token=abc123",
     );
     const host = createHost("overview");
-    host.settings.gatewayUrl = "wss://control.example/openclaw";
+    host.settings.gatewayUrl = "wss://control.example/mullusi";
 
     applySettingsFromUrl(host);
 
     expect(host.settings.token).toBe("");
-    expect(host.pendingGatewayUrl).toBe("wss://other-gateway.example/openclaw");
+    expect(host.pendingGatewayUrl).toBe("wss://other-gateway.example/mullusi");
     expect(host.pendingGatewayToken).toBe("abc123");
     expect(window.location.search).toBe("");
   });
@@ -302,7 +302,7 @@ describe("applySettingsFromUrl", () => {
   it("prefers fragment tokens over legacy query tokens when both are present", () => {
     setTestWindowUrl("https://control.example/ui/overview?token=query-token#token=hash-token");
     const host = createHost("overview");
-    host.settings.gatewayUrl = "wss://control.example/openclaw";
+    host.settings.gatewayUrl = "wss://control.example/mullusi";
 
     applySettingsFromUrl(host);
 
@@ -316,7 +316,7 @@ describe("applySettingsFromUrl", () => {
     const host = createHost("chat");
     host.settings = {
       ...host.settings,
-      gatewayUrl: "ws://localhost:18789",
+      gatewayUrl: "ws://localhost:18790",
       token: "",
       sessionKey: "agent:test_old:main",
       lastActiveSessionKey: "agent:test_old:main",
@@ -337,7 +337,7 @@ describe("applySettingsFromUrl", () => {
     const host = createHost("chat");
     host.settings = {
       ...host.settings,
-      gatewayUrl: "ws://localhost:18789",
+      gatewayUrl: "ws://localhost:18790",
       token: "",
       sessionKey: "agent:test_old:main",
       lastActiveSessionKey: "agent:test_old:main",
@@ -353,12 +353,12 @@ describe("applySettingsFromUrl", () => {
 
   it("does not reset the current gateway session when a different gateway is pending confirmation", () => {
     setTestWindowUrl(
-      "https://control.example/chat?gatewayUrl=ws%3A%2F%2Fgateway-b.example%3A18789#token=test-token",
+      "https://control.example/chat?gatewayUrl=ws%3A%2F%2Fgateway-b.example%3A18790#token=test-token",
     );
     const host = createHost("chat");
     host.settings = {
       ...host.settings,
-      gatewayUrl: "ws://gateway-a.example:18789",
+      gatewayUrl: "ws://gateway-a.example:18790",
       token: "",
       sessionKey: "agent:test_old:main",
       lastActiveSessionKey: "agent:test_old:main",
@@ -370,7 +370,7 @@ describe("applySettingsFromUrl", () => {
     expect(host.sessionKey).toBe("agent:test_old:main");
     expect(host.settings.sessionKey).toBe("agent:test_old:main");
     expect(host.settings.lastActiveSessionKey).toBe("agent:test_old:main");
-    expect(host.pendingGatewayUrl).toBe("ws://gateway-b.example:18789");
+    expect(host.pendingGatewayUrl).toBe("ws://gateway-b.example:18790");
     expect(host.pendingGatewayToken).toBe("test-token");
   });
 });

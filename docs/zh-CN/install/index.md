@@ -3,7 +3,7 @@ read_when:
   - 你需要一种不同于“入门指南”快速开始的安装方式
   - 你想部署到云平台
   - 你需要更新、迁移或卸载
-summary: 安装 OpenClaw —— 安装脚本、npm/pnpm、从源码、Docker 等
+summary: 安装 Mullusi —— 安装脚本、npm/pnpm、从源码、Docker 等
 title: 安装
 x-i18n:
   generated_at: "2026-03-16T06:23:36Z"
@@ -25,17 +25,17 @@ x-i18n:
 - 仅当你从源码构建时需要 `pnpm`
 
 <Note>
-在 Windows 上，我们强烈建议你在 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) 下运行 OpenClaw。
+在 Windows 上，我们强烈建议你在 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) 下运行 Mullusi。
 </Note>
 
 ## 安装方法
 
 <Tip>
-**安装脚本** 是安装 OpenClaw 的推荐方式。它会一步完成 Node 检测、安装和新手引导。
+**安装脚本** 是安装 Mullusi 的推荐方式。它会一步完成 Node 检测、安装和新手引导。
 </Tip>
 
 <Warning>
-对于 VPS/云主机，尽量避免使用第三方“一键式”市场镜像。优先选择干净的基础 OS 镜像（例如 Ubuntu LTS），然后使用安装脚本自行安装 OpenClaw。
+对于 VPS/云主机，尽量避免使用第三方“一键式”市场镜像。优先选择干净的基础 OS 镜像（例如 Ubuntu LTS），然后使用安装脚本自行安装 Mullusi。
 </Warning>
 
 <AccordionGroup>
@@ -45,12 +45,12 @@ x-i18n:
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
-        curl -fsSL https://openclaw.ai/install.sh | bash
+        curl -fsSL https://mullusi.com/install.sh | bash
         ```
       </Tab>
       <Tab title="Windows (PowerShell)">
         ```powershell
-        iwr -useb https://openclaw.ai/install.ps1 | iex
+        iwr -useb https://mullusi.com/install.ps1 | iex
         ```
       </Tab>
     </Tabs>
@@ -62,12 +62,12 @@ x-i18n:
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
-        curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
+        curl -fsSL https://mullusi.com/install.sh | bash -s -- --no-onboard
         ```
       </Tab>
       <Tab title="Windows (PowerShell)">
         ```powershell
-        & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -NoOnboard
+        & ([scriptblock]::Create((iwr -useb https://mullusi.com/install.ps1))) -NoOnboard
         ```
       </Tab>
     </Tabs>
@@ -77,20 +77,20 @@ x-i18n:
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
-    如果你已经自行管理 Node，我们推荐使用 Node 24。出于兼容性考虑，OpenClaw 仍支持 Node 22 LTS，目前为 `22.16+`：
+    如果你已经自行管理 Node，我们推荐使用 Node 24。出于兼容性考虑，Mullusi 仍支持 Node 22 LTS，目前为 `22.16+`：
 
     <Tabs>
       <Tab title="npm">
         ```bash
-        npm install -g openclaw@latest
-        openclaw onboard --install-daemon
+        npm install -g mullusi@latest
+        mullusi onboard --install-daemon
         ```
 
         <Accordion title="sharp 构建错误？">
           如果你全局安装了 libvips（在 macOS 上通过 Homebrew 很常见），并且 `sharp` 失败，请强制使用预构建二进制文件：
 
           ```bash
-          SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
+          SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g mullusi@latest
           ```
 
           如果你看到 `sharp: Please add node-gyp to your dependencies`，请安装构建工具链（macOS：Xcode CLT + `npm install -g node-gyp`），或者使用上面的环境变量。
@@ -98,9 +98,9 @@ x-i18n:
       </Tab>
       <Tab title="pnpm">
         ```bash
-        pnpm add -g openclaw@latest
-        pnpm approve-builds -g        # 批准 openclaw、node-llama-cpp、sharp 等
-        openclaw onboard --install-daemon
+        pnpm add -g mullusi@latest
+        pnpm approve-builds -g        # 批准 mullusi、node-llama-cpp、sharp 等
+        mullusi onboard --install-daemon
         ```
 
         <Note>
@@ -112,11 +112,11 @@ x-i18n:
     想通过包管理器安装当前 GitHub `main` 分支最新版本？
 
     ```bash
-    npm install -g github:openclaw/openclaw#main
+    npm install -g github:mullusi/mullusi#main
     ```
 
     ```bash
-    pnpm add -g github:openclaw/openclaw#main
+    pnpm add -g github:mullusi/mullusi#main
     ```
 
   </Accordion>
@@ -126,28 +126,28 @@ x-i18n:
 
     <Steps>
       <Step title="克隆并构建">
-        克隆 [OpenClaw 仓库](https://github.com/openclaw/openclaw) 并构建：
+        克隆 [Mullusi 仓库](https://github.com/mullusi/mullusi) 并构建：
 
         ```bash
-        git clone https://github.com/openclaw/openclaw.git
-        cd openclaw
+        git clone https://github.com/mullusi/mullusi.git
+        cd mullusi
         pnpm install
         pnpm ui:build
         pnpm build
         ```
       </Step>
       <Step title="链接 CLI">
-        让 `openclaw` 命令在全局可用：
+        让 `mullusi` 命令在全局可用：
 
         ```bash
         pnpm link --global
         ```
 
-        或者，你也可以跳过链接，直接在仓库内通过 `pnpm openclaw ...` 运行命令。
+        或者，你也可以跳过链接，直接在仓库内通过 `pnpm mullusi ...` 运行命令。
       </Step>
       <Step title="运行新手引导">
         ```bash
-        openclaw onboard --install-daemon
+        mullusi onboard --install-daemon
         ```
       </Step>
     </Steps>
@@ -182,20 +182,20 @@ x-i18n:
 验证一切是否正常工作：
 
 ```bash
-openclaw doctor         # 检查配置问题
-openclaw status         # Gateway 网关状态
-openclaw dashboard      # 打开浏览器 UI
+mullusi doctor         # 检查配置问题
+mullusi status         # Gateway 网关状态
+mullusi dashboard      # 打开浏览器 UI
 ```
 
 如果你需要自定义运行时路径，请使用：
 
-- `OPENCLAW_HOME` 用于基于主目录的内部路径
-- `OPENCLAW_STATE_DIR` 用于可变状态位置
-- `OPENCLAW_CONFIG_PATH` 用于配置文件位置
+- `MULLUSI_HOME` 用于基于主目录的内部路径
+- `MULLUSI_STATE_DIR` 用于可变状态位置
+- `MULLUSI_CONFIG_PATH` 用于配置文件位置
 
 有关优先级和完整细节，请参阅 [Environment vars](/help/environment)。
 
-## 故障排除：找不到 `openclaw`
+## 故障排除：找不到 `mullusi`
 
 <Accordion title="PATH 诊断与修复">
   快速诊断：
@@ -207,7 +207,7 @@ npm prefix -g
 echo "$PATH"
 ```
 
-如果 `$(npm prefix -g)/bin`（macOS/Linux）或 `$(npm prefix -g)`（Windows）**不在**你的 `$PATH` 中，那么你的 shell 就找不到全局 npm 二进制文件（包括 `openclaw`）。
+如果 `$(npm prefix -g)/bin`（macOS/Linux）或 `$(npm prefix -g)`（Windows）**不在**你的 `$PATH` 中，那么你的 shell 就找不到全局 npm 二进制文件（包括 `mullusi`）。
 
 修复方法 —— 将其添加到你的 shell 启动文件（`~/.zshrc` 或 `~/.bashrc`）中：
 
@@ -224,12 +224,12 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 
 <CardGroup cols={3}>
   <Card title="更新" href="/install/updating" icon="refresh-cw">
-    让 OpenClaw 保持最新。
+    让 Mullusi 保持最新。
   </Card>
   <Card title="迁移" href="/install/migrating" icon="arrow-right">
     迁移到新机器。
   </Card>
   <Card title="卸载" href="/install/uninstall" icon="trash-2">
-    完全移除 OpenClaw。
+    完全移除 Mullusi。
   </Card>
 </CardGroup>

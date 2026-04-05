@@ -1,16 +1,16 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: openclaw-config
+  name: mullusi-config
   labels:
-    app: openclaw
+    app: mullusi
 data:
-  openclaw.json: |
+  mullusi.json: |
     {
       "gateway": {
         "mode": "local",
         "bind": "loopback",
-        "port": 18789,
+        "port": 18790,
         "auth": {
           "mode": "token"
         },
@@ -20,19 +20,19 @@ data:
       },
       "agents": {
         "defaults": {
-          "workspace": "~/.openclaw/workspace"
+          "workspace": "~/.mullusi/workspace"
         },
         "list": [
           {
             "id": "default",
-            "name": "OpenClaw Assistant",
-            "workspace": "~/.openclaw/workspace"
+            "name": "Mullusi Assistant",
+            "workspace": "~/.mullusi/workspace"
           }
         ]
       },
       "cron": { "enabled": false }
     }
   AGENTS.md: |
-    # OpenClaw Assistant
+    # Mullusi Assistant
 
     You are a helpful AI assistant running in Kubernetes.

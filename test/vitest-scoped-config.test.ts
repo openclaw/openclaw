@@ -56,9 +56,9 @@ describe("resolveVitestIsolation", () => {
   });
 
   it("ignores the legacy isolation escape hatches", () => {
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_ISOLATE: "1" })).toBe(false);
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "0" })).toBe(false);
-    expect(resolveVitestIsolation({ OPENCLAW_TEST_NO_ISOLATE: "false" })).toBe(false);
+    expect(resolveVitestIsolation({ MULLUSI_TEST_ISOLATE: "1" })).toBe(false);
+    expect(resolveVitestIsolation({ MULLUSI_TEST_NO_ISOLATE: "0" })).toBe(false);
+    expect(resolveVitestIsolation({ MULLUSI_TEST_NO_ISOLATE: "false" })).toBe(false);
   });
 });
 
@@ -67,7 +67,7 @@ describe("createScopedVitestConfig", () => {
     const config = createScopedVitestConfig(["src/example.test.ts"], { env: {} });
     expect(config.test?.isolate).toBe(false);
     expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
-    expect(config.test?.setupFiles).toEqual(["test/setup.ts", "test/setup-openclaw-runtime.ts"]);
+    expect(config.test?.setupFiles).toEqual(["test/setup.ts", "test/setup-mullusi-runtime.ts"]);
   });
 
   it("passes through a scoped root dir when provided", () => {
@@ -110,7 +110,7 @@ describe("createScopedVitestConfig", () => {
     expect(config.test?.setupFiles).toEqual([
       "test/setup.ts",
       "test/setup.extensions.ts",
-      "test/setup-openclaw-runtime.ts",
+      "test/setup-mullusi-runtime.ts",
     ]);
   });
 });
@@ -190,8 +190,8 @@ describe("scoped vitest configs", () => {
     expect(defaultChannelsConfig.test?.include).toEqual(["src/channels/**/*.test.ts"]);
   });
 
-  it("loads channel include overrides from OPENCLAW_VITEST_INCLUDE_FILE", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-channels-"));
+  it("loads channel include overrides from MULLUSI_VITEST_INCLUDE_FILE", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-vitest-channels-"));
     try {
       const includeFile = path.join(tempDir, "include.json");
       fs.writeFileSync(
@@ -206,7 +206,7 @@ describe("scoped vitest configs", () => {
       );
 
       const config = createChannelsVitestConfig({
-        OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+        MULLUSI_VITEST_INCLUDE_FILE: includeFile,
       });
 
       expect(config.test?.include).toEqual([
@@ -341,12 +341,12 @@ describe("scoped vitest configs", () => {
     expect(defaultExtensionsConfig.test?.setupFiles).toEqual([
       "test/setup.ts",
       "test/setup.extensions.ts",
-      "test/setup-openclaw-runtime.ts",
+      "test/setup-mullusi-runtime.ts",
     ]);
     expect(defaultExtensionTelegramConfig.test?.setupFiles).toEqual([
       "test/setup.ts",
       "test/setup.extensions.ts",
-      "test/setup-openclaw-runtime.ts",
+      "test/setup-mullusi-runtime.ts",
     ]);
   });
 

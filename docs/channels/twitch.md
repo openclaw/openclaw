@@ -1,17 +1,17 @@
 ---
 summary: "Twitch chat bot configuration and setup"
 read_when:
-  - Setting up Twitch chat integration for OpenClaw
+  - Setting up Twitch chat integration for Mullusi
 title: "Twitch"
 ---
 
 # Twitch
 
-Twitch chat support via IRC connection. OpenClaw connects as a Twitch user (bot account) to receive and send messages in channels.
+Twitch chat support via IRC connection. Mullusi connects as a Twitch user (bot account) to receive and send messages in channels.
 
 ## Bundled plugin
 
-Twitch ships as a bundled plugin in current OpenClaw releases, so normal
+Twitch ships as a bundled plugin in current Mullusi releases, so normal
 packaged builds do not need a separate install.
 
 If you are on an older build or a custom install that excludes Twitch, install
@@ -20,13 +20,13 @@ it manually:
 Install via CLI (npm registry):
 
 ```bash
-openclaw plugins install @openclaw/twitch
+mullusi plugins install @mullusi/twitch
 ```
 
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./path/to/local/twitch-plugin
+mullusi plugins install ./path/to/local/twitch-plugin
 ```
 
 Details: [Plugins](/tools/plugin)
@@ -34,7 +34,7 @@ Details: [Plugins](/tools/plugin)
 ## Quick setup (beginner)
 
 1. Ensure the Twitch plugin is available.
-   - Current packaged OpenClaw releases already bundle it.
+   - Current packaged Mullusi releases already bundle it.
    - Older/custom installs can add it manually with the commands above.
 2. Create a dedicated Twitch account for the bot (or use an existing account).
 3. Generate credentials: [Twitch Token Generator](https://twitchtokengenerator.com/)
@@ -43,7 +43,7 @@ Details: [Plugins](/tools/plugin)
    - Copy the **Client ID** and **Access Token**
 4. Find your Twitch user ID: [https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/)
 5. Configure the token:
-   - Env: `OPENCLAW_TWITCH_ACCESS_TOKEN=...` (default account only)
+   - Env: `MULLUSI_TWITCH_ACCESS_TOKEN=...` (default account only)
    - Or config: `channels.twitch.accessToken`
    - If both are set, config takes precedence (env fallback is default-account only).
 6. Start the gateway.
@@ -57,8 +57,8 @@ Minimal config:
   channels: {
     twitch: {
       enabled: true,
-      username: "openclaw", // Bot's Twitch account
-      accessToken: "oauth:abc123...", // OAuth Access Token (or use OPENCLAW_TWITCH_ACCESS_TOKEN env var)
+      username: "mullusi", // Bot's Twitch account
+      accessToken: "oauth:abc123...", // OAuth Access Token (or use MULLUSI_TWITCH_ACCESS_TOKEN env var)
       clientId: "xyz789...", // Client ID from Token Generator
       channel: "vevisk", // Which Twitch channel's chat to join (required)
       allowFrom: ["123456789"], // (recommended) Your Twitch user ID only - get it from https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/
@@ -91,7 +91,7 @@ No manual app registration needed. Tokens expire after several hours.
 **Env var (default account only):**
 
 ```bash
-OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
+MULLUSI_TWITCH_ACCESS_TOKEN=oauth:abc123...
 ```
 
 **Or config:**
@@ -101,7 +101,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
   channels: {
     twitch: {
       enabled: true,
-      username: "openclaw",
+      username: "mullusi",
       accessToken: "oauth:abc123...",
       clientId: "xyz789...",
       channel: "vevisk",
@@ -163,13 +163,13 @@ Example (one bot account in two channels):
     twitch: {
       accounts: {
         channel1: {
-          username: "openclaw",
+          username: "mullusi",
           accessToken: "oauth:abc123...",
           clientId: "xyz789...",
           channel: "vevisk",
         },
         channel2: {
-          username: "openclaw",
+          username: "mullusi",
           accessToken: "oauth:def456...",
           clientId: "uvw012...",
           channel: "secondchannel",
@@ -258,8 +258,8 @@ By default, `requireMention` is `true`. To disable and respond to all messages:
 First, run diagnostic commands:
 
 ```bash
-openclaw doctor
-openclaw channels status --probe
+mullusi doctor
+mullusi channels status --probe
 ```
 
 ### Bot does not respond to messages
@@ -324,7 +324,7 @@ Full example:
   channels: {
     twitch: {
       enabled: true,
-      username: "openclaw",
+      username: "mullusi",
       accessToken: "oauth:abc123...",
       clientId: "xyz789...",
       channel: "vevisk",

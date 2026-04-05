@@ -1,4 +1,4 @@
-import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
+import { redactIdentifier } from "mullusi/plugin-sdk/logging-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { sendMessageWhatsApp } from "../send.js";
 import type { getReplyFromConfig } from "./heartbeat-runner.runtime.js";

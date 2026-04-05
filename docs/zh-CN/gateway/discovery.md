@@ -16,19 +16,19 @@ x-i18n:
 
 # 设备发现 & 传输协议
 
-OpenClaw 有两个表面上看起来相似的不同问题：
+Mullusi 有两个表面上看起来相似的不同问题：
 
 1. **操作员远程控制**：macOS 菜单栏应用控制运行在其他地方的 Gateway 网关。
 2. **节点配对**：iOS/Android（以及未来的节点）发现 Gateway 网关并安全配对。
 
-设计目标是将所有网络发现/广播保留在 **Node Gateway 网关**（`openclaw gateway`）中，并让客户端（mac 应用、iOS）作为消费者。
+设计目标是将所有网络发现/广播保留在 **Node Gateway 网关**（`mullusi gateway`）中，并让客户端（mac 应用、iOS）作为消费者。
 
 ## 术语
 
 - **Gateway 网关**：一个长期运行的 Gateway 网关进程，拥有状态（会话、配对、节点注册表）并运行渠道。大多数设置每台主机使用一个；也可以进行隔离的多 Gateway 网关设置。
-- **Gateway 网关 WS（控制平面）**：默认在 `127.0.0.1:18789` 上的 WebSocket 端点；可通过 `gateway.bind` 绑定到 LAN/tailnet。
+- **Gateway 网关 WS（控制平面）**：默认在 `127.0.0.1:18790` 上的 WebSocket 端点；可通过 `gateway.bind` 绑定到 LAN/tailnet。
 - **直连 WS 传输**：面向 LAN/tailnet 的 Gateway 网关 WS 端点（无 SSH）。
-- **SSH 传输（回退）**：通过 SSH 转发 `127.0.0.1:18789` 进行远程控制。
+- **SSH 传输（回退）**：通过 SSH 转发 `127.0.0.1:18790` 进行远程控制。
 - **旧版 TCP 桥接（已弃用/移除）**：旧的节点传输（参见 [桥接协议](/gateway/bridge-protocol)）；不再用于发现广播。
 
 协议详情：
@@ -63,25 +63,25 @@ Bonjour 是尽力而为的，不会跨网络。它仅用于"同一 LAN"的便利
 #### 服务信标详情
 
 - 服务类型：
-  - `_openclaw-gw._tcp`（Gateway 网关传输信标）
+  - `_mullusi-gw._tcp`（Gateway 网关传输信标）
 - TXT 键（非机密）：
   - `role=gateway`
   - `lanHost=<hostname>.local`
   - `sshPort=22`（或广播的端口）
-  - `gatewayPort=18789`（Gateway 网关 WS + HTTP）
+  - `gatewayPort=18790`（Gateway 网关 WS + HTTP）
   - `gatewayTls=1`（仅当启用 TLS 时）
   - `gatewayTlsSha256=<sha256>`（仅当启用 TLS 且指纹可用时）
-  - `canvasPort=18793`（默认画布主机端口；服务于 `/__openclaw__/canvas/`）
-  - `cliPath=<path>`（可选；可运行的 `openclaw` 入口点或二进制文件的绝对路径）
+  - `canvasPort=18793`（默认画布主机端口；服务于 `/__mullusi__/canvas/`）
+  - `cliPath=<path>`（可选；可运行的 `mullusi` 入口点或二进制文件的绝对路径）
   - `tailnetDns=<magicdns>`（可选提示；当 Tailscale 可用时自动检测）
 
 禁用/覆盖：
 
-- `OPENCLAW_DISABLE_BONJOUR=1` 禁用广播。
-- `~/.openclaw/openclaw.json` 中的 `gateway.bind` 控制 Gateway 网关绑定模式。
-- `OPENCLAW_SSH_PORT` 覆盖 TXT 中广播的 SSH 端口（默认为 22）。
-- `OPENCLAW_TAILNET_DNS` 发布 `tailnetDns` 提示（MagicDNS）。
-- `OPENCLAW_CLI_PATH` 覆盖广播的 CLI 路径。
+- `MULLUSI_DISABLE_BONJOUR=1` 禁用广播。
+- `~/.mullusi/mullusi.json` 中的 `gateway.bind` 控制 Gateway 网关绑定模式。
+- `MULLUSI_SSH_PORT` 覆盖 TXT 中广播的 SSH 端口（默认为 22）。
+- `MULLUSI_TAILNET_DNS` 发布 `tailnetDns` 提示（MagicDNS）。
+- `MULLUSI_CLI_PATH` 覆盖广播的 CLI 路径。
 
 ### 2）Tailnet（跨网络）
 

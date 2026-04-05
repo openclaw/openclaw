@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/vercel-ai-gateway-provider",
+  "name": "@mullusi/vercel-ai-gateway-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Vercel AI Gateway provider plugin",
+  "description": "Mullusi Vercel AI Gateway provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

@@ -3,7 +3,7 @@ read_when:
   - 你想从自己的 GPU 主机提供模型服务
   - 你正在接入 LM Studio 或兼容 OpenAI 的代理
   - 你需要最安全的本地模型指南
-summary: 在本地 LLM 上运行 OpenClaw（LM Studio、vLLM、LiteLLM、自定义 OpenAI 端点）
+summary: 在本地 LLM 上运行 Mullusi（LM Studio、vLLM、LiteLLM、自定义 OpenAI 端点）
 title: 本地模型
 x-i18n:
   generated_at: "2026-03-16T06:22:54Z"
@@ -16,9 +16,9 @@ x-i18n:
 
 # 本地模型
 
-本地部署是可行的，但 OpenClaw 需要大上下文和对提示注入的强防御能力。小显卡会截断上下文并削弱安全性。目标要高：**至少 2 台满配 Mac Studio 或同等 GPU 设备（约 3 万美元以上）**。单张 **24 GB** GPU 仅适用于较轻的提示，且延迟更高。请使用**你能运行的最大 / 完整尺寸模型变体**；激进量化或“small”检查点会提高提示注入风险（见 [安全](/gateway/security)）。
+本地部署是可行的，但 Mullusi 需要大上下文和对提示注入的强防御能力。小显卡会截断上下文并削弱安全性。目标要高：**至少 2 台满配 Mac Studio 或同等 GPU 设备（约 3 万美元以上）**。单张 **24 GB** GPU 仅适用于较轻的提示，且延迟更高。请使用**你能运行的最大 / 完整尺寸模型变体**；激进量化或“small”检查点会提高提示注入风险（见 [安全](/gateway/security)）。
 
-如果你想要摩擦最小的本地设置，请从 [Ollama](/providers/ollama) 和 `openclaw onboard` 开始。本页是面向更高端本地栈和自定义兼容 OpenAI 的本地服务器的偏好型指南。
+如果你想要摩擦最小的本地设置，请从 [Ollama](/providers/ollama) 和 `mullusi onboard` 开始。本页是面向更高端本地栈和自定义兼容 OpenAI 的本地服务器的偏好型指南。
 
 ## 推荐：LM Studio + MiniMax M2.5（Responses API，完整尺寸）
 

@@ -1,12 +1,12 @@
 ---
-summary: "CLI reference for `openclaw plugins` (list, install, marketplace, uninstall, enable/disable, doctor)"
+summary: "CLI reference for `mullusi plugins` (list, install, marketplace, uninstall, enable/disable, doctor)"
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to debug plugin load failures
 title: "plugins"
 ---
 
-# `openclaw plugins`
+# `mullusi plugins`
 
 Manage Gateway plugins/extensions, hook packs, and compatible bundles.
 
@@ -20,58 +20,58 @@ Related:
 ## Commands
 
 ```bash
-openclaw plugins list
-openclaw plugins list --enabled
-openclaw plugins list --verbose
-openclaw plugins list --json
-openclaw plugins install <path-or-spec>
-openclaw plugins inspect <id>
-openclaw plugins inspect <id> --json
-openclaw plugins inspect --all
-openclaw plugins info <id>
-openclaw plugins enable <id>
-openclaw plugins disable <id>
-openclaw plugins uninstall <id>
-openclaw plugins doctor
-openclaw plugins update <id>
-openclaw plugins update --all
-openclaw plugins marketplace list <marketplace>
-openclaw plugins marketplace list <marketplace> --json
+mullusi plugins list
+mullusi plugins list --enabled
+mullusi plugins list --verbose
+mullusi plugins list --json
+mullusi plugins install <path-or-spec>
+mullusi plugins inspect <id>
+mullusi plugins inspect <id> --json
+mullusi plugins inspect --all
+mullusi plugins info <id>
+mullusi plugins enable <id>
+mullusi plugins disable <id>
+mullusi plugins uninstall <id>
+mullusi plugins doctor
+mullusi plugins update <id>
+mullusi plugins update --all
+mullusi plugins marketplace list <marketplace>
+mullusi plugins marketplace list <marketplace> --json
 ```
 
-Bundled plugins ship with OpenClaw. Some are enabled by default (for example
+Bundled plugins ship with Mullusi. Some are enabled by default (for example
 bundled model providers, bundled speech providers, and the bundled browser
 plugin); others require `plugins enable`.
 
-Native OpenClaw plugins must ship `openclaw.plugin.json` with an inline JSON
+Native Mullusi plugins must ship `mullusi.plugin.json` with an inline JSON
 Schema (`configSchema`, even if empty). Compatible bundles use their own bundle
 manifests instead.
 
-`plugins list` shows `Format: openclaw` or `Format: bundle`. Verbose list/info
+`plugins list` shows `Format: mullusi` or `Format: bundle`. Verbose list/info
 output also shows the bundle subtype (`codex`, `claude`, or `cursor`) plus detected bundle
 capabilities.
 
 ### Install
 
 ```bash
-openclaw plugins install <package>                      # ClawHub first, then npm
-openclaw plugins install clawhub:<package>              # ClawHub only
-openclaw plugins install <package> --force              # overwrite existing install
-openclaw plugins install <package> --pin                # pin version
-openclaw plugins install <package> --dangerously-force-unsafe-install
-openclaw plugins install <path>                         # local path
-openclaw plugins install <plugin>@<marketplace>         # marketplace
-openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
-openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo>
+mullusi plugins install <package>                      # ClawHub first, then npm
+mullusi plugins install clawhub:<package>              # ClawHub only
+mullusi plugins install <package> --force              # overwrite existing install
+mullusi plugins install <package> --pin                # pin version
+mullusi plugins install <package> --dangerously-force-unsafe-install
+mullusi plugins install <path>                         # local path
+mullusi plugins install <plugin>@<marketplace>         # marketplace
+mullusi plugins install <plugin> --marketplace <name>  # marketplace (explicit)
+mullusi plugins install <plugin> --marketplace https://github.com/<owner>/<repo>
 ```
 
 Bare package names are checked against ClawHub first, then npm. Security note:
 treat plugin installs like running code. Prefer pinned versions.
 
 If config is invalid, `plugins install` normally fails closed and tells you to
-run `openclaw doctor --fix` first. The only documented exception is a narrow
+run `mullusi doctor --fix` first. The only documented exception is a narrow
 bundled-plugin recovery path for plugins that explicitly opt into
-`openclaw.install.allowInvalidConfigRecovery`.
+`mullusi.install.allowInvalidConfigRecovery`.
 
 `--force` reuses the existing install target and overwrites an already-installed
 plugin or hook pack in place. Use it when you are intentionally reinstalling
@@ -89,11 +89,11 @@ failures.
 
 This CLI flag applies to plugin install/update flows. Gateway-backed skill
 dependency installs use the matching `dangerouslyForceUnsafeInstall` request
-override, while `openclaw skills install` remains a separate ClawHub skill
+override, while `mullusi skills install` remains a separate ClawHub skill
 download/install flow.
 
 `plugins install` is also the install surface for hook packs that expose
-`openclaw.hooks` in `package.json`. Use `openclaw hooks` for filtered hook
+`mullusi.hooks` in `package.json`. Use `mullusi hooks` for filtered hook
 visibility and per-hook enablement, not package installation.
 
 Npm specs are **registry-only** (package name + optional **exact version** or
@@ -101,11 +101,11 @@ Npm specs are **registry-only** (package name + optional **exact version** or
 installs run with `--ignore-scripts` for safety.
 
 Bare specs and `@latest` stay on the stable track. If npm resolves either of
-those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
+those to a prerelease, Mullusi stops and asks you to opt in explicitly with a
 prerelease tag such as `@beta`/`@rc` or an exact prerelease version such as
 `@1.2.3-beta.4`.
 
-If a bare install spec matches a bundled plugin id (for example `diffs`), OpenClaw
+If a bare install spec matches a bundled plugin id (for example `diffs`), Mullusi
 installs the bundled plugin directly. To install an npm package with the same
 name, use an explicit scoped spec (for example `@scope/diffs`).
 
@@ -116,18 +116,18 @@ Claude marketplace installs are also supported.
 ClawHub installs use an explicit `clawhub:<package>` locator:
 
 ```bash
-openclaw plugins install clawhub:openclaw-codex-app-server
-openclaw plugins install clawhub:openclaw-codex-app-server@1.2.3
+mullusi plugins install clawhub:mullusi-codex-app-server
+mullusi plugins install clawhub:mullusi-codex-app-server@1.2.3
 ```
 
-OpenClaw now also prefers ClawHub for bare npm-safe plugin specs. It only falls
+Mullusi now also prefers ClawHub for bare npm-safe plugin specs. It only falls
 back to npm if ClawHub does not have that package or version:
 
 ```bash
-openclaw plugins install openclaw-codex-app-server
+mullusi plugins install mullusi-codex-app-server
 ```
 
-OpenClaw downloads the package archive from ClawHub, checks the advertised
+Mullusi downloads the package archive from ClawHub, checks the advertised
 plugin API / minimum gateway compatibility, then installs it through the normal
 archive path. Recorded installs keep their ClawHub source metadata for later
 updates.
@@ -136,17 +136,17 @@ Use `plugin@marketplace` shorthand when the marketplace name exists in Claude's
 local registry cache at `~/.claude/plugins/known_marketplaces.json`:
 
 ```bash
-openclaw plugins marketplace list <marketplace-name>
-openclaw plugins install <plugin-name>@<marketplace-name>
+mullusi plugins marketplace list <marketplace-name>
+mullusi plugins install <plugin-name>@<marketplace-name>
 ```
 
 Use `--marketplace` when you want to pass the marketplace source explicitly:
 
 ```bash
-openclaw plugins install <plugin-name> --marketplace <marketplace-name>
-openclaw plugins install <plugin-name> --marketplace <owner/repo>
-openclaw plugins install <plugin-name> --marketplace https://github.com/<owner>/<repo>
-openclaw plugins install <plugin-name> --marketplace ./my-marketplace
+mullusi plugins install <plugin-name> --marketplace <marketplace-name>
+mullusi plugins install <plugin-name> --marketplace <owner/repo>
+mullusi plugins install <plugin-name> --marketplace https://github.com/<owner>/<repo>
+mullusi plugins install <plugin-name> --marketplace ./my-marketplace
 ```
 
 Marketplace sources can be:
@@ -158,13 +158,13 @@ Marketplace sources can be:
 - a git URL
 
 For remote marketplaces loaded from GitHub or git, plugin entries must stay
-inside the cloned marketplace repo. OpenClaw accepts relative path sources from
+inside the cloned marketplace repo. Mullusi accepts relative path sources from
 that repo and rejects HTTP(S), absolute-path, git, GitHub, and other non-path
 plugin sources from remote manifests.
 
-For local paths and archives, OpenClaw auto-detects:
+For local paths and archives, Mullusi auto-detects:
 
-- native OpenClaw plugins (`openclaw.plugin.json`)
+- native Mullusi plugins (`mullusi.plugin.json`)
 - Codex-compatible bundles (`.codex-plugin/plugin.json`)
 - Claude-compatible bundles (`.claude-plugin/plugin.json` or the default Claude
   component layout)
@@ -180,10 +180,10 @@ shown in diagnostics/info but are not yet wired into runtime execution.
 ### List
 
 ```bash
-openclaw plugins list
-openclaw plugins list --enabled
-openclaw plugins list --verbose
-openclaw plugins list --json
+mullusi plugins list
+mullusi plugins list --enabled
+mullusi plugins list --verbose
+mullusi plugins list --json
 ```
 
 Use `--enabled` to show only loaded plugins. Use `--verbose` to switch from the
@@ -194,7 +194,7 @@ diagnostics.
 Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 
 ```bash
-openclaw plugins install -l ./my-plugin
+mullusi plugins install -l ./my-plugin
 ```
 
 `--force` is not supported with `--link` because linked installs reuse the
@@ -206,9 +206,9 @@ Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
 ### Uninstall
 
 ```bash
-openclaw plugins uninstall <id>
-openclaw plugins uninstall <id> --dry-run
-openclaw plugins uninstall <id> --keep-files
+mullusi plugins uninstall <id>
+mullusi plugins uninstall <id> --dry-run
+mullusi plugins uninstall <id> --keep-files
 ```
 
 `uninstall` removes plugin records from `plugins.entries`, `plugins.installs`,
@@ -224,27 +224,27 @@ state-dir plugin root. Use
 ### Update
 
 ```bash
-openclaw plugins update <id-or-npm-spec>
-openclaw plugins update --all
-openclaw plugins update <id-or-npm-spec> --dry-run
-openclaw plugins update @openclaw/voice-call@beta
-openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
+mullusi plugins update <id-or-npm-spec>
+mullusi plugins update --all
+mullusi plugins update <id-or-npm-spec> --dry-run
+mullusi plugins update @mullusi/voice-call@beta
+mullusi plugins update mullusi-codex-app-server --dangerously-force-unsafe-install
 ```
 
 Updates apply to tracked installs in `plugins.installs` and tracked hook-pack
 installs in `hooks.internal.installs`.
 
-When you pass a plugin id, OpenClaw reuses the recorded install spec for that
+When you pass a plugin id, Mullusi reuses the recorded install spec for that
 plugin. That means previously stored dist-tags such as `@beta` and exact pinned
 versions continue to be used on later `update <id>` runs.
 
 For npm installs, you can also pass an explicit npm package spec with a dist-tag
-or exact version. OpenClaw resolves that package name back to the tracked plugin
+or exact version. Mullusi resolves that package name back to the tracked plugin
 record, updates that installed plugin, and records the new npm spec for future
 id-based updates.
 
 When a stored integrity hash exists and the fetched artifact hash changes,
-OpenClaw prints a warning and asks for confirmation before proceeding. Use
+Mullusi prints a warning and asks for confirmation before proceeding. Use
 global `--yes` to bypass prompts in CI/non-interactive runs.
 
 `--dangerously-force-unsafe-install` is also available on `plugins update` as a
@@ -256,8 +256,8 @@ updates.
 ### Inspect
 
 ```bash
-openclaw plugins inspect <id>
-openclaw plugins inspect <id> --json
+mullusi plugins inspect <id>
+mullusi plugins inspect <id> --json
 ```
 
 Deep introspection for a single plugin. Shows identity, load status, source,
@@ -285,7 +285,7 @@ compatibility notices, bundle capabilities, and hook summary columns.
 ### Doctor
 
 ```bash
-openclaw plugins doctor
+mullusi plugins doctor
 ```
 
 `doctor` reports plugin load errors, manifest/discovery diagnostics, and
@@ -295,8 +295,8 @@ detected.`
 ### Marketplace
 
 ```bash
-openclaw plugins marketplace list <source>
-openclaw plugins marketplace list <source> --json
+mullusi plugins marketplace list <source>
+mullusi plugins marketplace list <source> --json
 ```
 
 Marketplace list accepts a local marketplace path, a `marketplace.json` path, a

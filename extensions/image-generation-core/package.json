@@ -1,7 +1,7 @@
 {
-  "name": "@openclaw/image-generation-core",
+  "name": "@mullusi/image-generation-core",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw image generation runtime package",
+  "description": "Mullusi image generation runtime package",
   "type": "module"
 }

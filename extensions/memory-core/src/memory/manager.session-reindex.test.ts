@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { MullusiConfig } from "mullusi/plugin-sdk/memory-core-host-engine-foundation";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { MemoryIndexManager } from "./index.js";
 import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
@@ -14,7 +14,7 @@ describe("memory manager session reindex gating", () => {
   let manager: MemoryIndexManager | null = null;
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-session-reindex-"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-mem-session-reindex-"));
   });
 
   beforeEach(async () => {
@@ -57,7 +57,7 @@ describe("memory manager session reindex gating", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     manager = await getRequiredMemoryIndexManager({ cfg, agentId: "main" });
 

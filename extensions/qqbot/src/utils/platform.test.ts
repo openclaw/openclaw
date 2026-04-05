@@ -20,14 +20,14 @@ describe("qqbot local media path remapping", () => {
 
   it("remaps missing workspace media paths to the real media directory", () => {
     const actualHome = getHomeDir();
-    const openclawDir = path.join(actualHome, ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
+    const mullusiDir = path.join(actualHome, ".mullusi");
+    fs.mkdirSync(mullusiDir, { recursive: true });
+    const testRoot = fs.mkdtempSync(path.join(mullusiDir, "qqbot-platform-test-"));
     createdPaths.push(testRoot);
 
     const mediaFile = path.join(
       actualHome,
-      ".openclaw",
+      ".mullusi",
       "media",
       "qqbot",
       "downloads",
@@ -40,7 +40,7 @@ describe("qqbot local media path remapping", () => {
 
     const missingWorkspacePath = path.join(
       actualHome,
-      ".openclaw",
+      ".mullusi",
       "workspace",
       "qqbot",
       "downloads",
@@ -53,14 +53,14 @@ describe("qqbot local media path remapping", () => {
 
   it("leaves existing media paths unchanged", () => {
     const actualHome = getHomeDir();
-    const openclawDir = path.join(actualHome, ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
+    const mullusiDir = path.join(actualHome, ".mullusi");
+    fs.mkdirSync(mullusiDir, { recursive: true });
+    const testRoot = fs.mkdtempSync(path.join(mullusiDir, "qqbot-platform-test-"));
     createdPaths.push(testRoot);
 
     const mediaFile = path.join(
       actualHome,
-      ".openclaw",
+      ".mullusi",
       "media",
       "qqbot",
       "downloads",
@@ -87,7 +87,7 @@ describe("qqbot local media path remapping", () => {
   it("blocks structured payload paths that escape QQ Bot media via '..'", () => {
     const escapedPath = path.join(
       getHomeDir(),
-      ".openclaw",
+      ".mullusi",
       "media",
       "qqbot",
       "..",
@@ -100,14 +100,14 @@ describe("qqbot local media path remapping", () => {
 
   it("allows structured payload files inside the QQ Bot media directory", () => {
     const actualHome = getHomeDir();
-    const openclawDir = path.join(actualHome, ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
+    const mullusiDir = path.join(actualHome, ".mullusi");
+    fs.mkdirSync(mullusiDir, { recursive: true });
+    const testRoot = fs.mkdtempSync(path.join(mullusiDir, "qqbot-platform-test-"));
     createdPaths.push(testRoot);
 
     const mediaFile = path.join(
       actualHome,
-      ".openclaw",
+      ".mullusi",
       "media",
       "qqbot",
       "downloads",
@@ -123,14 +123,14 @@ describe("qqbot local media path remapping", () => {
 
   it("blocks structured payload files inside the QQ Bot data directory", () => {
     const actualHome = getHomeDir();
-    const openclawDir = path.join(actualHome, ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
+    const mullusiDir = path.join(actualHome, ".mullusi");
+    fs.mkdirSync(mullusiDir, { recursive: true });
+    const testRoot = fs.mkdtempSync(path.join(mullusiDir, "qqbot-platform-test-"));
     createdPaths.push(testRoot);
 
     const dataFile = path.join(
       actualHome,
-      ".openclaw",
+      ".mullusi",
       "qqbot",
       "sessions",
       path.basename(testRoot),
@@ -145,14 +145,14 @@ describe("qqbot local media path remapping", () => {
 
   it("allows legacy workspace paths when they remap into QQ Bot media storage", () => {
     const actualHome = getHomeDir();
-    const openclawDir = path.join(actualHome, ".openclaw");
-    fs.mkdirSync(openclawDir, { recursive: true });
-    const testRoot = fs.mkdtempSync(path.join(openclawDir, "qqbot-platform-test-"));
+    const mullusiDir = path.join(actualHome, ".mullusi");
+    fs.mkdirSync(mullusiDir, { recursive: true });
+    const testRoot = fs.mkdtempSync(path.join(mullusiDir, "qqbot-platform-test-"));
     createdPaths.push(testRoot);
 
     const mediaFile = path.join(
       actualHome,
-      ".openclaw",
+      ".mullusi",
       "media",
       "qqbot",
       "downloads",
@@ -165,7 +165,7 @@ describe("qqbot local media path remapping", () => {
 
     const missingWorkspacePath = path.join(
       actualHome,
-      ".openclaw",
+      ".mullusi",
       "workspace",
       "qqbot",
       "downloads",

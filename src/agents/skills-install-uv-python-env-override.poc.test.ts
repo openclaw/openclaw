@@ -17,7 +17,7 @@ describe("workspace .env UV_PYTHON handling for uv skill installs", () => {
   it.runIf(process.platform !== "win32")(
     "does not propagate UV_PYTHON from workspace dotenv into uv tool install execution",
     async () => {
-      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-poc-uv-python-"));
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-poc-uv-python-"));
       const cwdDir = path.join(base, "cwd");
       const binDir = path.join(base, "bin");
       const markerPath = path.join(base, "uv-python-marker.txt");
@@ -33,7 +33,7 @@ describe("workspace .env UV_PYTHON handling for uv skill installs", () => {
             "---",
             "name: uv-skill",
             "description: uv install PoC",
-            'metadata: {"openclaw":{"install":[{"id":"deps","kind":"uv","package":"httpie==3.2.2"}]}}',
+            'metadata: {"mullusi":{"install":[{"id":"deps","kind":"uv","package":"httpie==3.2.2"}]}}',
             "---",
             "",
             "# uv-skill",
@@ -46,7 +46,7 @@ describe("workspace .env UV_PYTHON handling for uv skill installs", () => {
           fakeUvPath,
           [
             "#!/bin/sh",
-            'printf "%s\\n" "$UV_PYTHON" > "$OPENCLAW_POC_MARKER_PATH"',
+            'printf "%s\\n" "$UV_PYTHON" > "$MULLUSI_POC_MARKER_PATH"',
             "exit 0",
             "",
           ].join("\n"),
@@ -57,9 +57,9 @@ describe("workspace .env UV_PYTHON handling for uv skill installs", () => {
         const attackerPython = path.join(base, "attacker-python");
         await fs.writeFile(path.join(cwdDir, ".env"), `UV_PYTHON=${attackerPython}\n`, "utf8");
 
-        envSnapshot = captureEnv(["PATH", "UV_PYTHON", "OPENCLAW_POC_MARKER_PATH"]);
+        envSnapshot = captureEnv(["PATH", "UV_PYTHON", "MULLUSI_POC_MARKER_PATH"]);
         delete process.env.UV_PYTHON;
-        process.env.OPENCLAW_POC_MARKER_PATH = markerPath;
+        process.env.MULLUSI_POC_MARKER_PATH = markerPath;
         process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ""}`;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });

@@ -40,14 +40,14 @@ afterEach(() => {
 
 describe("loadChannelConfigSurfaceModule", () => {
   it("falls back to Jiti when bun is unavailable", async () => {
-    const repoRoot = makeTempRoot("openclaw-config-surface-");
+    const repoRoot = makeTempRoot("mullusi-config-surface-");
     const packageRoot = path.join(repoRoot, "extensions", "demo");
     const modulePath = path.join(packageRoot, "src", "config-schema.js");
 
     fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
     fs.writeFileSync(
       path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "@openclaw/demo", type: "module" }, null, 2),
+      JSON.stringify({ name: "@mullusi/demo", type: "module" }, null, 2),
       "utf8",
     );
     fs.writeFileSync(
@@ -79,14 +79,14 @@ describe("loadChannelConfigSurfaceModule", () => {
   });
 
   it("retries from an isolated package copy when extension-local node_modules is broken", async () => {
-    const repoRoot = makeTempRoot("openclaw-config-surface-");
+    const repoRoot = makeTempRoot("mullusi-config-surface-");
     const packageRoot = path.join(repoRoot, "extensions", "demo");
     const modulePath = path.join(packageRoot, "src", "config-schema.js");
 
     fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
     fs.writeFileSync(
       path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "@openclaw/demo", type: "module" }, null, 2),
+      JSON.stringify({ name: "@mullusi/demo", type: "module" }, null, 2),
       "utf8",
     );
     fs.writeFileSync(

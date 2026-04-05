@@ -15,14 +15,14 @@ describe("doctor config mutation state", () => {
         changes: ["enabled signal"],
       },
       shouldRepair: false,
-      fixHint: 'Run "openclaw doctor --fix" to apply these changes.',
+      fixHint: 'Run "mullusi doctor --fix" to apply these changes.',
     });
 
     expect(next).toEqual({
       cfg: { channels: {} },
       candidate: { channels: { signal: { enabled: true } } },
       pendingChanges: true,
-      fixHints: ['Run "openclaw doctor --fix" to apply these changes.'],
+      fixHints: ['Run "mullusi doctor --fix" to apply these changes.'],
     });
   });
 
@@ -39,7 +39,7 @@ describe("doctor config mutation state", () => {
         changes: ["enabled signal"],
       },
       shouldRepair: true,
-      fixHint: 'Run "openclaw doctor --fix" to apply these changes.',
+      fixHint: 'Run "mullusi doctor --fix" to apply these changes.',
     });
 
     expect(next).toEqual({

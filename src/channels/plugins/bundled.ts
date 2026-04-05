@@ -3,7 +3,7 @@ import path from "node:path";
 import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { discoverOpenClawPlugins } from "../../plugins/discovery.js";
+import { discoverMullusiPlugins } from "../../plugins/discovery.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import {
@@ -194,7 +194,7 @@ function resolvePreferredBundledChannelSource(
 }
 
 function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelEntry[] {
-  const discovery = discoverOpenClawPlugins({ cache: false });
+  const discovery = discoverMullusiPlugins({ cache: false });
   const manifestRegistry = loadPluginManifestRegistry({
     cache: false,
     config: {},

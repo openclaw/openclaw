@@ -4,7 +4,7 @@ type CronActiveJobState = {
   activeJobIds: Set<string>;
 };
 
-const CRON_ACTIVE_JOB_STATE_KEY = Symbol.for("openclaw.cron.activeJobs");
+const CRON_ACTIVE_JOB_STATE_KEY = Symbol.for("mullusi.cron.activeJobs");
 
 function getCronActiveJobState(): CronActiveJobState {
   return resolveGlobalSingleton<CronActiveJobState>(CRON_ACTIVE_JOB_STATE_KEY, () => ({

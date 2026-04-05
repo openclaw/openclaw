@@ -75,7 +75,7 @@ describe("resolveZaloToken", () => {
   });
 
   it.runIf(process.platform !== "win32")("rejects symlinked token files", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-zalo-token-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-zalo-token-"));
     const tokenFile = path.join(dir, "token.txt");
     const tokenLink = path.join(dir, "token-link.txt");
     fs.writeFileSync(tokenFile, "file-token\n", "utf8");

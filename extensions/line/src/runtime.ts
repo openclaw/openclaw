@@ -1,4 +1,4 @@
-import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
+import { createPluginRuntimeStore } from "mullusi/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "../api.js";
 
 type LineChannelRuntime = {

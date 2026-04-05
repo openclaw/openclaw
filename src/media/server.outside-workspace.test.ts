@@ -56,7 +56,7 @@ describe("media server outside-workspace mapping", () => {
     const require = createRequire(import.meta.url);
     ({ startMediaServer } = await import("./server.js"));
     ({ fetch: realFetch } = require("undici") as typeof import("undici"));
-    mediaDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-outside-workspace-"));
+    mediaDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-media-outside-workspace-"));
     try {
       server = await startMediaServer(0, 1_000);
     } catch (error) {

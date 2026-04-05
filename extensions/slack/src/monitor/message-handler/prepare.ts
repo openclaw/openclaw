@@ -1,8 +1,8 @@
-import { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAckReaction } from "mullusi/plugin-sdk/agent-runtime";
 import {
   shouldAckReaction as shouldAckReactionGate,
   type AckReactionScope,
-} from "openclaw/plugin-sdk/channel-feedback";
+} from "mullusi/plugin-sdk/channel-feedback";
 import {
   buildMentionRegexes,
   formatInboundEnvelope,
@@ -10,20 +10,20 @@ import {
   matchesMentionWithExplicit,
   resolveEnvelopeFormatOptions,
   resolveMentionGatingWithBypass,
-} from "openclaw/plugin-sdk/channel-inbound";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
-import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-auth";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+} from "mullusi/plugin-sdk/channel-inbound";
+import { resolveControlCommandGate } from "mullusi/plugin-sdk/command-auth";
+import { hasControlCommand } from "mullusi/plugin-sdk/command-auth";
+import { shouldHandleTextCommands } from "mullusi/plugin-sdk/command-auth";
+import { enqueueSystemEvent } from "mullusi/plugin-sdk/infra-runtime";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
-} from "openclaw/plugin-sdk/reply-history";
-import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+} from "mullusi/plugin-sdk/reply-history";
+import type { FinalizedMsgContext } from "mullusi/plugin-sdk/reply-runtime";
+import { resolveAgentRoute } from "mullusi/plugin-sdk/routing";
+import { resolveThreadSessionKeys } from "mullusi/plugin-sdk/routing";
+import { logVerbose, shouldLogVerbose } from "mullusi/plugin-sdk/runtime-env";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "mullusi/plugin-sdk/security-runtime";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";

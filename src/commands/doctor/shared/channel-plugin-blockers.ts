@@ -1,5 +1,5 @@
 import { listPotentialConfiguredChannelIds } from "../../../channels/config-presence.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { MullusiConfig } from "../../../config/config.js";
 import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
@@ -14,7 +14,7 @@ export type ChannelPluginBlockerHit = {
 };
 
 export function scanConfiguredChannelPluginBlockers(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): ChannelPluginBlockerHit[] {
   const configuredChannelIds = new Set(

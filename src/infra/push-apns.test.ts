@@ -17,7 +17,7 @@ function createDirectApnsSendFixture(params: {
       nodeId: params.nodeId,
       transport: "direct" as const,
       token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-      topic: "ai.openclaw.ios",
+      topic: "ai.mullusi.ios",
       environment: params.environment,
       updatedAtMs: 1,
     },
@@ -50,14 +50,14 @@ function createRelayApnsSendFixture(params: {
       relayHandle: params.relayHandle ?? "relay-handle-12345678",
       sendGrant: "send-grant-123",
       installationId: "install-123",
-      topic: "ai.openclaw.ios",
+      topic: "ai.mullusi.ios",
       environment: "production" as const,
       distribution: "official" as const,
       updatedAtMs: 1,
       tokenDebugSuffix: params.tokenDebugSuffix,
     },
     relayConfig: {
-      baseUrl: "https://relay.openclaw.test",
+      baseUrl: "https://relay.mullusi.test",
       timeoutMs: 2_500,
     },
     gatewayIdentity: {
@@ -101,7 +101,7 @@ describe("push APNs send semantics", () => {
         alert: { title: "Wake", body: "Ping" },
         sound: "default",
       },
-      openclaw: {
+      mullusi: {
         kind: "push.test",
         nodeId: "ios-node-alert",
       },
@@ -138,7 +138,7 @@ describe("push APNs send semantics", () => {
       aps: {
         "content-available": 1,
       },
-      openclaw: {
+      mullusi: {
         kind: "node.wake",
         reason: "node.invoke",
         nodeId: "ios-node-wake",
@@ -230,7 +230,7 @@ describe("push APNs send semantics", () => {
 
     const sent = send.mock.calls[0]?.[0];
     expect(sent?.payload).toMatchObject({
-      openclaw: {
+      mullusi: {
         kind: "node.wake",
         reason: "node.invoke",
         nodeId: "ios-node-wake-default-reason",
@@ -319,7 +319,7 @@ describe("push APNs send semantics", () => {
       priority: "5",
       payload: {
         aps: { "content-available": 1 },
-        openclaw: {
+        mullusi: {
           kind: "node.wake",
           reason: "queue.retry",
           nodeId: "ios-node-relay-wake",

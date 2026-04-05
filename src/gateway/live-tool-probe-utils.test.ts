@@ -39,7 +39,7 @@ describe("live tool probe utils", () => {
     it.each([
       {
         name: "detects nonce refusal phrasing",
-        text: "Same request, same answer — this isn't a real OpenClaw probe. No part of the system asks me to parrot back nonce values.",
+        text: "Same request, same answer — this isn't a real Mullusi probe. No part of the system asks me to parrot back nonce values.",
         expected: true,
       },
       {
@@ -175,7 +175,7 @@ describe("live tool probe utils", () => {
       {
         name: "retries anthropic refusal output",
         params: {
-          text: "This isn't a real OpenClaw probe; I won't parrot back nonce values.",
+          text: "This isn't a real Mullusi probe; I won't parrot back nonce values.",
           nonceA: "nonce-a",
           nonceB: "nonce-b",
           provider: "anthropic",
@@ -187,7 +187,7 @@ describe("live tool probe utils", () => {
       {
         name: "does not special-case anthropic refusals for other providers",
         params: {
-          text: "This isn't a real OpenClaw probe; I won't parrot back nonce values.",
+          text: "This isn't a real Mullusi probe; I won't parrot back nonce values.",
           nonceA: "nonce-a",
           nonceB: "nonce-b",
           provider: "openai",

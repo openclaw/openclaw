@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/diffs",
+  "name": "@mullusi/diffs",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw diff viewer plugin",
+  "description": "Mullusi diff viewer plugin",
   "type": "module",
   "scripts": {
     "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js"
@@ -13,7 +13,7 @@
     "@sinclair/typebox": "0.34.49",
     "playwright-core": "1.59.1"
   },
-  "openclaw": {
+  "mullusi": {
     "bundle": {
       "stageRuntimeDependencies": true
     },

@@ -172,9 +172,9 @@ describe("generateInteractionToken / verifyInteractionToken", () => {
 
 describe("callback URL registry", () => {
   it("stores and retrieves callback URLs", () => {
-    setInteractionCallbackUrl("acct1", "http://localhost:18789/mattermost/interactions/acct1");
+    setInteractionCallbackUrl("acct1", "http://localhost:18790/mattermost/interactions/acct1");
     expect(getInteractionCallbackUrl("acct1")).toBe(
-      "http://localhost:18789/mattermost/interactions/acct1",
+      "http://localhost:18790/mattermost/interactions/acct1",
     );
   });
 
@@ -208,12 +208,12 @@ describe("resolveInteractionCallbackUrl", () => {
       channels: {
         mattermost: {
           interactions: {
-            callbackBaseUrl: "https://gateway.example.com/openclaw",
+            callbackBaseUrl: "https://gateway.example.com/mullusi",
           },
         },
       },
     });
-    expect(url).toBe("https://gateway.example.com/openclaw/mattermost/interactions/default");
+    expect(url).toBe("https://gateway.example.com/mullusi/mattermost/interactions/default");
   });
 
   it("trims trailing slashes from callbackBaseUrl", () => {
@@ -279,9 +279,9 @@ describe("resolveInteractionCallbackUrl", () => {
     expect(url).toBe("http://[::1]:9999/mattermost/interactions/acct");
   });
 
-  it("uses default port 18789 when no config provided", () => {
+  it("uses default port 18790 when no config provided", () => {
     const url = resolveInteractionCallbackUrl("myaccount");
-    expect(url).toBe("http://localhost:18789/mattermost/interactions/myaccount");
+    expect(url).toBe("http://localhost:18790/mattermost/interactions/myaccount");
   });
 });
 
@@ -300,7 +300,7 @@ describe("buildButtonAttachments", () => {
 
   it("returns an array with one attachment containing all buttons", () => {
     const result = buildButtonAttachments({
-      callbackUrl: "http://localhost:18789/mattermost/interactions/default",
+      callbackUrl: "http://localhost:18790/mattermost/interactions/default",
       buttons: [
         { id: "btn1", name: "Click Me" },
         { id: "btn2", name: "Skip", style: "danger" },
@@ -313,7 +313,7 @@ describe("buildButtonAttachments", () => {
 
   it("sets type to 'button' on every action", () => {
     const result = buildButtonAttachments({
-      callbackUrl: "http://localhost:18789/cb",
+      callbackUrl: "http://localhost:18790/cb",
       buttons: [{ id: "a", name: "A" }],
     });
 
@@ -322,7 +322,7 @@ describe("buildButtonAttachments", () => {
 
   it("includes HMAC _token in integration context", () => {
     const result = buildButtonAttachments({
-      callbackUrl: "http://localhost:18789/cb",
+      callbackUrl: "http://localhost:18790/cb",
       buttons: [{ id: "test", name: "Test" }],
     });
 
@@ -332,7 +332,7 @@ describe("buildButtonAttachments", () => {
 
   it("includes sanitized action_id in integration context", () => {
     const result = buildButtonAttachments({
-      callbackUrl: "http://localhost:18789/cb",
+      callbackUrl: "http://localhost:18790/cb",
       buttons: [{ id: "my_action", name: "Do It" }],
     });
 
@@ -344,7 +344,7 @@ describe("buildButtonAttachments", () => {
 
   it("merges custom context into integration context", () => {
     const result = buildButtonAttachments({
-      callbackUrl: "http://localhost:18789/cb",
+      callbackUrl: "http://localhost:18790/cb",
       buttons: [{ id: "btn", name: "Go", context: { tweet_id: "123", batch: true } }],
     });
 
@@ -356,7 +356,7 @@ describe("buildButtonAttachments", () => {
   });
 
   it("passes callback URL to each button integration", () => {
-    const url = "http://localhost:18789/mattermost/interactions/default";
+    const url = "http://localhost:18790/mattermost/interactions/default";
     const result = buildButtonAttachments({
       callbackUrl: url,
       buttons: [
@@ -526,7 +526,7 @@ describe("createMattermostInteractionHandler", () => {
   }
 
   function createActionContext(actionId = "approve", channelId = "chan-1") {
-    const context = { action_id: actionId, __openclaw_channel_id: channelId };
+    const context = { action_id: actionId, __mullusi_channel_id: channelId };
     return { context, token: generateInteractionToken(context, "acct") };
   }
 

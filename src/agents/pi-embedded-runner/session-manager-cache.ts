@@ -12,7 +12,7 @@ const MAX_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS = 30_000;
 
 function getSessionManagerTtl(): number {
   return resolveCacheTtlMs({
-    envValue: process.env.OPENCLAW_SESSION_MANAGER_CACHE_TTL_MS,
+    envValue: process.env.MULLUSI_SESSION_MANAGER_CACHE_TTL_MS,
     defaultTtlMs: DEFAULT_SESSION_MANAGER_TTL_MS,
   });
 }

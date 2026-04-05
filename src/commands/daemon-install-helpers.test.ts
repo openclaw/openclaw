@@ -43,11 +43,11 @@ afterEach(() => {
 
 describe("resolveGatewayDevMode", () => {
   it("detects dev mode for src ts entrypoints", () => {
-    expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/src/cli/index.ts"])).toBe(true);
-    expect(resolveGatewayDevMode(["node", "C:\\Users\\me\\openclaw\\src\\cli\\index.ts"])).toBe(
+    expect(resolveGatewayDevMode(["node", "/Users/me/mullusi/src/cli/index.ts"])).toBe(true);
+    expect(resolveGatewayDevMode(["node", "C:\\Users\\me\\mullusi\\src\\cli\\index.ts"])).toBe(
       true,
     );
-    expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/dist/cli/index.js"])).toBe(false);
+    expect(resolveGatewayDevMode(["node", "/Users/me/mullusi/dist/cli/index.js"])).toBe(false);
   });
 });
 
@@ -65,7 +65,7 @@ function mockNodeGatewayPlanFixture(
     version = "22.0.0",
     supported = true,
     warning,
-    serviceEnvironment = { OPENCLAW_PORT: "3000" },
+    serviceEnvironment = { MULLUSI_PORT: "3000" },
   } = params;
   mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
   mocks.resolveGatewayProgramArguments.mockResolvedValue({
@@ -86,7 +86,7 @@ function mockNodeGatewayPlanFixture(
 }
 
 describe("buildGatewayInstallPlan", () => {
-  // Prevent tests from reading the developer's real ~/.openclaw/.env when
+  // Prevent tests from reading the developer's real ~/.mullusi/.env when
   // passing `env: {}` (which falls back to os.homedir for state-dir resolution).
   let isolatedHome: string;
   beforeEach(() => {
@@ -108,7 +108,7 @@ describe("buildGatewayInstallPlan", () => {
 
     expect(plan.programArguments).toEqual(["node", "gateway"]);
     expect(plan.workingDirectory).toBe("/Users/me");
-    expect(plan.environment).toEqual({ OPENCLAW_PORT: "3000" });
+    expect(plan.environment).toEqual({ MULLUSI_PORT: "3000" });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -160,7 +160,7 @@ describe("buildGatewayInstallPlan", () => {
   it("merges config env vars into the environment", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
+        MULLUSI_PORT: "3000",
         HOME: "/Users/me",
       },
     });
@@ -183,14 +183,14 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.GOOGLE_API_KEY).toBe("test-key");
     expect(plan.environment.CUSTOM_VAR).toBe("custom-value");
     // Service environment vars should take precedence
-    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+    expect(plan.environment.MULLUSI_PORT).toBe("3000");
     expect(plan.environment.HOME).toBe("/Users/me");
   });
 
   it("drops dangerous config env vars before service merge", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
+        MULLUSI_PORT: "3000",
       },
     });
 
@@ -258,7 +258,7 @@ describe("buildGatewayInstallPlan", () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         HOME: "/Users/service",
-        OPENCLAW_PORT: "3000",
+        MULLUSI_PORT: "3000",
       },
     });
 
@@ -270,20 +270,20 @@ describe("buildGatewayInstallPlan", () => {
         env: {
           HOME: "/Users/config",
           vars: {
-            OPENCLAW_PORT: "9999",
+            MULLUSI_PORT: "9999",
           },
         },
       },
     });
 
     expect(plan.environment.HOME).toBe("/Users/service");
-    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+    expect(plan.environment.MULLUSI_PORT).toBe("3000");
   });
 
   it("merges env-backed auth-profile refs into the service environment", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
+        MULLUSI_PORT: "3000",
       },
     });
     mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
@@ -318,7 +318,7 @@ describe("buildGatewayInstallPlan", () => {
   it("blocks dangerous auth-profile env refs from the service environment", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
+        MULLUSI_PORT: "3000",
       },
     });
     mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
@@ -364,7 +364,7 @@ describe("buildGatewayInstallPlan", () => {
   it("skips non-portable auth-profile env ref keys", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
+        MULLUSI_PORT: "3000",
       },
     });
     mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
@@ -392,7 +392,7 @@ describe("buildGatewayInstallPlan", () => {
   it("skips unresolved auth-profile env refs", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
+        MULLUSI_PORT: "3000",
       },
     });
     mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
@@ -429,9 +429,9 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
 
   it("merges .env file vars into the install plan", async () => {
     await writeStateDirDotEnv("BRAVE_API_KEY=BSA-from-env\nOPENROUTER_API_KEY=or-key\n", {
-      stateDir: path.join(tmpDir, ".openclaw"),
+      stateDir: path.join(tmpDir, ".mullusi"),
     });
-    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+    mockNodeGatewayPlanFixture({ serviceEnvironment: { MULLUSI_PORT: "3000" } });
 
     const plan = await buildGatewayInstallPlan({
       env: { HOME: tmpDir },
@@ -441,12 +441,12 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
 
     expect(plan.environment.BRAVE_API_KEY).toBe("BSA-from-env");
     expect(plan.environment.OPENROUTER_API_KEY).toBe("or-key");
-    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+    expect(plan.environment.MULLUSI_PORT).toBe("3000");
   });
 
   it("config env vars override .env file vars", async () => {
     await writeStateDirDotEnv("MY_KEY=from-dotenv\n", {
-      stateDir: path.join(tmpDir, ".openclaw"),
+      stateDir: path.join(tmpDir, ".mullusi"),
     });
     mockNodeGatewayPlanFixture({ serviceEnvironment: {} });
 
@@ -468,7 +468,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
 
   it("service env overrides .env file vars", async () => {
     await writeStateDirDotEnv("HOME=/from-dotenv\n", {
-      stateDir: path.join(tmpDir, ".openclaw"),
+      stateDir: path.join(tmpDir, ".mullusi"),
     });
     mockNodeGatewayPlanFixture({
       serviceEnvironment: { HOME: "/from-service" },
@@ -484,7 +484,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
   });
 
   it("works when .env file does not exist", async () => {
-    mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+    mockNodeGatewayPlanFixture({ serviceEnvironment: { MULLUSI_PORT: "3000" } });
 
     const plan = await buildGatewayInstallPlan({
       env: { HOME: tmpDir },
@@ -492,7 +492,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       runtime: "node",
     });
 
-    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+    expect(plan.environment.MULLUSI_PORT).toBe("3000");
   });
 });
 
@@ -501,7 +501,7 @@ describe("gatewayInstallErrorHint", () => {
     expect(gatewayInstallErrorHint("win32")).toContain("Startup-folder login item");
     expect(gatewayInstallErrorHint("win32")).toContain("elevated PowerShell");
     expect(gatewayInstallErrorHint("linux")).toMatch(
-      /(?:openclaw|openclaw)( --profile isolated)? gateway install/,
+      /(?:mullusi|mullusi)( --profile isolated)? gateway install/,
     );
   });
 });

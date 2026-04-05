@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
-import type { OpenClawConfig } from "../src/config/config.js";
+import type { MullusiConfig } from "../src/config/config.js";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -83,7 +83,7 @@ export function readBundledChannelCatalog(
       const raw = readFileSync(packageJsonPath, "utf8");
       signature.update(`${dirEntry.name}\0${raw}\0`);
       const parsed = JSON.parse(raw) as {
-        openclaw?: {
+        mullusi?: {
           channel?: {
             id?: unknown;
             order?: unknown;
@@ -91,12 +91,12 @@ export function readBundledChannelCatalog(
           };
         };
       };
-      const id = parsed.openclaw?.channel?.id;
+      const id = parsed.mullusi?.channel?.id;
       if (typeof id !== "string" || !id.trim()) {
         continue;
       }
-      const orderRaw = parsed.openclaw?.channel?.order;
-      const labelRaw = parsed.openclaw?.channel?.label;
+      const orderRaw = parsed.mullusi?.channel?.order;
+      const labelRaw = parsed.mullusi?.channel?.label;
       entries.push({
         id: id.trim(),
         order: typeof orderRaw === "number" ? orderRaw : 999,
@@ -125,28 +125,28 @@ export function readBundledChannelCatalogIds(
 function createIsolatedRootHelpRenderContext(
   bundledPluginsDir: string = extensionsDir,
 ): RootHelpRenderContext {
-  const stateDir = path.join(rootDir, ".openclaw-build-root-help");
+  const stateDir = path.join(rootDir, ".mullusi-build-root-help");
   const workspaceDir = path.join(stateDir, "workspace");
   const homeDir = path.join(stateDir, "home");
   const env: NodeJS.ProcessEnv = {
     HOME: homeDir,
-    LOGNAME: process.env.LOGNAME ?? process.env.USER ?? "openclaw-build",
-    USER: process.env.USER ?? process.env.LOGNAME ?? "openclaw-build",
+    LOGNAME: process.env.LOGNAME ?? process.env.USER ?? "mullusi-build",
+    USER: process.env.USER ?? process.env.LOGNAME ?? "mullusi-build",
     PATH: process.env.PATH ?? "",
     TMPDIR: process.env.TMPDIR ?? "/tmp",
     LANG: process.env.LANG ?? "C.UTF-8",
     LC_ALL: process.env.LC_ALL ?? "C.UTF-8",
     TERM: process.env.TERM ?? "dumb",
     NO_COLOR: "1",
-    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "",
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
-    OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "0",
-    OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "0",
-    OPENCLAW_STATE_DIR: stateDir,
+    MULLUSI_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+    MULLUSI_DISABLE_BUNDLED_PLUGINS: "",
+    MULLUSI_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+    MULLUSI_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+    MULLUSI_PLUGIN_DISCOVERY_CACHE_MS: "0",
+    MULLUSI_PLUGIN_MANIFEST_CACHE_MS: "0",
+    MULLUSI_STATE_DIR: stateDir,
   };
-  const config: OpenClawConfig = {
+  const config: MullusiConfig = {
     agents: {
       defaults: {
         workspace: workspaceDir,

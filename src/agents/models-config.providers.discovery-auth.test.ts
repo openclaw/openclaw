@@ -50,7 +50,7 @@ describe("provider discovery auth marker guardrails", () => {
   }
 
   async function createAgentDirWithAuthProfiles(profiles: AuthProfilesFile["profiles"]) {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     await writeFile(
       join(agentDir, "auth-profiles.json"),
       JSON.stringify({ version: 1, profiles } satisfies AuthProfilesFile, null, 2),

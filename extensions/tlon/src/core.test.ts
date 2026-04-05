@@ -6,7 +6,7 @@ import {
   runSetupWizardConfigure,
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../api.js";
+import type { MullusiConfig } from "../api.js";
 import { tlonPlugin } from "./channel.js";
 import { TlonAuthorizationSchema, TlonConfigSchema } from "./config-schema.js";
 import { resolveTlonOutboundTarget } from "./targets.js";
@@ -19,7 +19,7 @@ describe("tlon core", () => {
   it("formats dm allowlist entries through the shared hybrid adapter", () => {
     expect(
       tlonPlugin.config.formatAllowFrom?.({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         allowFrom: ["zod", " ~nec "],
       }),
     ).toEqual(["~zod", "~nec"]);
@@ -37,7 +37,7 @@ describe("tlon core", () => {
               dmAllowlist: ["~zod"],
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         accountId: "default",
       }),
     ).toEqual(["~zod"]);
@@ -106,7 +106,7 @@ describe("tlon core", () => {
 
     const result = await runSetupWizardConfigure({
       configure: tlonConfigure,
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       prompter,
       options: {},
     });
@@ -159,7 +159,7 @@ describe("tlon core", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     expect(listTlonAccountIds(cfg)).toEqual(["alerts", "default", "work"]);
   });
@@ -185,7 +185,7 @@ describe("tlon core", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       "work",
     );
 
@@ -216,7 +216,7 @@ describe("tlon core", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       "default",
     );
 
@@ -237,7 +237,7 @@ describe("tlon core", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       accountOverrides: { tlon: "work" },
     });
 

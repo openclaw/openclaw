@@ -65,13 +65,13 @@ describe("scripts/test-report-utils collectVitestFileDurations", () => {
 
 describe("scripts/test-report-utils tryReadJsonFile", () => {
   it("returns the fallback when the file is missing", () => {
-    const missingPath = path.join(os.tmpdir(), `openclaw-missing-${Date.now()}.json`);
+    const missingPath = path.join(os.tmpdir(), `mullusi-missing-${Date.now()}.json`);
 
     expect(tryReadJsonFile(missingPath, { ok: true })).toEqual({ ok: true });
   });
 
   it("reads valid JSON files", () => {
-    const tempPath = path.join(os.tmpdir(), `openclaw-json-${Date.now()}.json`);
+    const tempPath = path.join(os.tmpdir(), `mullusi-json-${Date.now()}.json`);
     fs.writeFileSync(tempPath, JSON.stringify({ ok: true }));
 
     try {
@@ -90,7 +90,7 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
 
   it("launches Vitest through pnpm exec", async () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
-    const reportPath = path.join(os.tmpdir(), `openclaw-vitest-json-${Date.now()}.json`);
+    const reportPath = path.join(os.tmpdir(), `mullusi-vitest-json-${Date.now()}.json`);
     const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mjs");
 
     expect(

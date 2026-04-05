@@ -2,13 +2,13 @@ import type { ExecApprovalSessionTarget } from "../infra/exec-approval-session-t
 import { resolveApprovalRequestOriginTarget } from "../infra/exec-approval-session-target.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
-import type { OpenClawConfig } from "./config-runtime.js";
+import type { MullusiConfig } from "./config-runtime.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalKind = "exec" | "plugin";
 
 type ApprovalResolverParams = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   approvalKind?: ApprovalKind;
   request: ApprovalRequest;
@@ -54,7 +54,7 @@ export function createChannelApproverDmTargetResolver<
 >(params: {
   shouldHandleRequest?: (params: ApprovalResolverParams) => boolean;
   resolveApprovers: (params: {
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     accountId?: string | null;
   }) => readonly TApprover[];
   mapApprover: (approver: TApprover, params: ApprovalResolverParams) => TTarget | null | undefined;

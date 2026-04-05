@@ -1,15 +1,15 @@
 ---
-summary: "CLI reference for `openclaw browser` (lifecycle, profiles, tabs, actions, state, and debugging)"
+summary: "CLI reference for `mullusi browser` (lifecycle, profiles, tabs, actions, state, and debugging)"
 read_when:
-  - You use `openclaw browser` and want examples for common tasks
+  - You use `mullusi browser` and want examples for common tasks
   - You want to control a browser running on another machine via a node host
   - You want to attach to your local signed-in Chrome via Chrome MCP
 title: "browser"
 ---
 
-# `openclaw browser`
+# `mullusi browser`
 
-Manage OpenClaw's browser control surface and run browser actions (lifecycle, profiles, tabs, snapshots, screenshots, navigation, input, state emulation, and debugging).
+Manage Mullusi's browser control surface and run browser actions (lifecycle, profiles, tabs, snapshots, screenshots, navigation, input, state emulation, and debugging).
 
 Related:
 
@@ -27,33 +27,33 @@ Related:
 ## Quick start (local)
 
 ```bash
-openclaw browser profiles
-openclaw browser --browser-profile openclaw start
-openclaw browser --browser-profile openclaw open https://example.com
-openclaw browser --browser-profile openclaw snapshot
+mullusi browser profiles
+mullusi browser --browser-profile mullusi start
+mullusi browser --browser-profile mullusi open https://example.com
+mullusi browser --browser-profile mullusi snapshot
 ```
 
 ## Lifecycle
 
 ```bash
-openclaw browser status
-openclaw browser start
-openclaw browser stop
-openclaw browser --browser-profile openclaw reset-profile
+mullusi browser status
+mullusi browser start
+mullusi browser stop
+mullusi browser --browser-profile mullusi reset-profile
 ```
 
 Notes:
 
-- For `attachOnly` and remote CDP profiles, `openclaw browser stop` closes the
+- For `attachOnly` and remote CDP profiles, `mullusi browser stop` closes the
   active control session and clears temporary emulation overrides even when
-  OpenClaw did not launch the browser process itself.
-- For local managed profiles, `openclaw browser stop` stops the spawned browser
+  Mullusi did not launch the browser process itself.
+- For local managed profiles, `mullusi browser stop` stops the spawned browser
   process.
 
 ## If the command is missing
 
-If `openclaw browser` is an unknown command, check `plugins.allow` in
-`~/.openclaw/openclaw.json`.
+If `mullusi browser` is an unknown command, check `plugins.allow` in
+`~/.mullusi/mullusi.json`.
 
 When `plugins.allow` is present, the bundled browser plugin must be listed
 explicitly:
@@ -75,34 +75,34 @@ Related: [Browser tool](/tools/browser#missing-browser-command-or-tool)
 
 Profiles are named browser routing configs. In practice:
 
-- `openclaw`: launches or attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
+- `mullusi`: launches or attaches to a dedicated Mullusi-managed Chrome instance (isolated user data dir).
 - `user`: controls your existing signed-in Chrome session via Chrome DevTools MCP.
 - custom CDP profiles: point at a local or remote CDP endpoint.
 
 ```bash
-openclaw browser profiles
-openclaw browser create-profile --name work --color "#FF5A36"
-openclaw browser create-profile --name chrome-live --driver existing-session
-openclaw browser create-profile --name remote --cdp-url https://browser-host.example.com
-openclaw browser delete-profile --name work
+mullusi browser profiles
+mullusi browser create-profile --name work --color "#FF5A36"
+mullusi browser create-profile --name chrome-live --driver existing-session
+mullusi browser create-profile --name remote --cdp-url https://browser-host.example.com
+mullusi browser delete-profile --name work
 ```
 
 Use a specific profile:
 
 ```bash
-openclaw browser --browser-profile work tabs
+mullusi browser --browser-profile work tabs
 ```
 
 ## Tabs
 
 ```bash
-openclaw browser tabs
-openclaw browser tab new
-openclaw browser tab select 2
-openclaw browser tab close 2
-openclaw browser open https://docs.openclaw.ai
-openclaw browser focus <targetId>
-openclaw browser close <targetId>
+mullusi browser tabs
+mullusi browser tab new
+mullusi browser tab select 2
+mullusi browser tab close 2
+mullusi browser open https://docs.mullusi.com
+mullusi browser focus <targetId>
+mullusi browser close <targetId>
 ```
 
 ## Snapshot / screenshot / actions
@@ -110,15 +110,15 @@ openclaw browser close <targetId>
 Snapshot:
 
 ```bash
-openclaw browser snapshot
+mullusi browser snapshot
 ```
 
 Screenshot:
 
 ```bash
-openclaw browser screenshot
-openclaw browser screenshot --full-page
-openclaw browser screenshot --ref e12
+mullusi browser screenshot
+mullusi browser screenshot --full-page
+mullusi browser screenshot --ref e12
 ```
 
 Notes:
@@ -131,26 +131,26 @@ Notes:
 Navigate/click/type (ref-based UI automation):
 
 ```bash
-openclaw browser navigate https://example.com
-openclaw browser click <ref>
-openclaw browser type <ref> "hello"
-openclaw browser press Enter
-openclaw browser hover <ref>
-openclaw browser scrollintoview <ref>
-openclaw browser drag <startRef> <endRef>
-openclaw browser select <ref> OptionA OptionB
-openclaw browser fill --fields '[{"ref":"1","value":"Ada"}]'
-openclaw browser wait --text "Done"
-openclaw browser evaluate --fn '(el) => el.textContent' --ref <ref>
+mullusi browser navigate https://example.com
+mullusi browser click <ref>
+mullusi browser type <ref> "hello"
+mullusi browser press Enter
+mullusi browser hover <ref>
+mullusi browser scrollintoview <ref>
+mullusi browser drag <startRef> <endRef>
+mullusi browser select <ref> OptionA OptionB
+mullusi browser fill --fields '[{"ref":"1","value":"Ada"}]'
+mullusi browser wait --text "Done"
+mullusi browser evaluate --fn '(el) => el.textContent' --ref <ref>
 ```
 
 File + dialog helpers:
 
 ```bash
-openclaw browser upload /tmp/openclaw/uploads/file.pdf --ref <ref>
-openclaw browser waitfordownload
-openclaw browser download <ref> report.pdf
-openclaw browser dialog --accept
+mullusi browser upload /tmp/mullusi/uploads/file.pdf --ref <ref>
+mullusi browser waitfordownload
+mullusi browser download <ref> report.pdf
+mullusi browser dialog --accept
 ```
 
 ## State and storage
@@ -158,40 +158,40 @@ openclaw browser dialog --accept
 Viewport + emulation:
 
 ```bash
-openclaw browser resize 1280 720
-openclaw browser set viewport 1280 720
-openclaw browser set offline on
-openclaw browser set media dark
-openclaw browser set timezone Europe/London
-openclaw browser set locale en-GB
-openclaw browser set geo 51.5074 -0.1278 --accuracy 25
-openclaw browser set device "iPhone 14"
-openclaw browser set headers '{"x-test":"1"}'
-openclaw browser set credentials myuser mypass
+mullusi browser resize 1280 720
+mullusi browser set viewport 1280 720
+mullusi browser set offline on
+mullusi browser set media dark
+mullusi browser set timezone Europe/London
+mullusi browser set locale en-GB
+mullusi browser set geo 51.5074 -0.1278 --accuracy 25
+mullusi browser set device "iPhone 14"
+mullusi browser set headers '{"x-test":"1"}'
+mullusi browser set credentials myuser mypass
 ```
 
 Cookies + storage:
 
 ```bash
-openclaw browser cookies
-openclaw browser cookies set session abc123 --url https://example.com
-openclaw browser cookies clear
-openclaw browser storage local get
-openclaw browser storage local set token abc123
-openclaw browser storage session clear
+mullusi browser cookies
+mullusi browser cookies set session abc123 --url https://example.com
+mullusi browser cookies clear
+mullusi browser storage local get
+mullusi browser storage local set token abc123
+mullusi browser storage session clear
 ```
 
 ## Debugging
 
 ```bash
-openclaw browser console --level error
-openclaw browser pdf
-openclaw browser responsebody "**/api"
-openclaw browser highlight <ref>
-openclaw browser errors --clear
-openclaw browser requests --filter api
-openclaw browser trace start
-openclaw browser trace stop --out trace.zip
+mullusi browser console --level error
+mullusi browser pdf
+mullusi browser responsebody "**/api"
+mullusi browser highlight <ref>
+mullusi browser errors --clear
+mullusi browser requests --filter api
+mullusi browser trace start
+mullusi browser trace stop --out trace.zip
 ```
 
 ## Existing Chrome via MCP
@@ -199,10 +199,10 @@ openclaw browser trace stop --out trace.zip
 Use the built-in `user` profile, or create your own `existing-session` profile:
 
 ```bash
-openclaw browser --browser-profile user tabs
-openclaw browser create-profile --name chrome-live --driver existing-session
-openclaw browser create-profile --name brave-live --driver existing-session --user-data-dir "~/Library/Application Support/BraveSoftware/Brave-Browser"
-openclaw browser --browser-profile chrome-live tabs
+mullusi browser --browser-profile user tabs
+mullusi browser create-profile --name chrome-live --driver existing-session
+mullusi browser create-profile --name brave-live --driver existing-session --user-data-dir "~/Library/Application Support/BraveSoftware/Brave-Browser"
+mullusi browser --browser-profile chrome-live tabs
 ```
 
 This path is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.

@@ -126,15 +126,15 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       ?.remoteAddress;
     const preauthBudgetKey = (
       socket as WebSocket & {
-        __openclawPreauthBudgetClaimed?: boolean;
-        __openclawPreauthBudgetKey?: string;
+        __mullusiPreauthBudgetClaimed?: boolean;
+        __mullusiPreauthBudgetKey?: string;
       }
-    ).__openclawPreauthBudgetKey;
+    ).__mullusiPreauthBudgetKey;
     (
       socket as WebSocket & {
-        __openclawPreauthBudgetClaimed?: boolean;
+        __mullusiPreauthBudgetClaimed?: boolean;
       }
-    ).__openclawPreauthBudgetClaimed = true;
+    ).__mullusiPreauthBudgetClaimed = true;
     const headerValue = (value: string | string[] | undefined) =>
       Array.isArray(value) ? value[0] : value;
     const requestHost = headerValue(upgradeReq.headers.host);

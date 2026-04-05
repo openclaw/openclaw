@@ -21,13 +21,13 @@ import { validateConfigObject } from "./validation.js";
 const tempDirs: string[] = [];
 
 function makeTempDir() {
-  return makeTrackedTempDir("openclaw-plugin-auto-enable", tempDirs);
+  return makeTrackedTempDir("mullusi-plugin-auto-enable", tempDirs);
 }
 
 function writePluginManifestFixture(params: { rootDir: string; id: string; channels: string[] }) {
   mkdirSafeDir(params.rootDir);
   fs.writeFileSync(
-    path.join(params.rootDir, "openclaw.plugin.json"),
+    path.join(params.rootDir, "mullusi.plugin.json"),
     JSON.stringify(
       {
         id: params.id,
@@ -68,7 +68,7 @@ function makeRegistry(
       origin: "config" as const,
       rootDir: `/fake/${p.id}`,
       source: `/fake/${p.id}/index.js`,
-      manifestPath: `/fake/${p.id}/openclaw.plugin.json`,
+      manifestPath: `/fake/${p.id}/mullusi.plugin.json`,
     })),
     diagnostics: [],
   };
@@ -194,7 +194,7 @@ describe("applyPluginAutoEnable", () => {
     const result = applyPluginAutoEnable({
       config: {
         browser: {
-          defaultProfile: "openclaw",
+          defaultProfile: "mullusi",
         },
         plugins: {
           allow: ["telegram"],
@@ -453,7 +453,7 @@ describe("applyPluginAutoEnable", () => {
       config: {},
       env: {
         IRC_HOST: "irc.libera.chat",
-        IRC_NICK: "openclaw-bot",
+        IRC_NICK: "mullusi-bot",
       },
     });
 
@@ -476,9 +476,9 @@ describe("applyPluginAutoEnable", () => {
       },
       env: {
         ...process.env,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        MULLUSI_HOME: undefined,
+        MULLUSI_STATE_DIR: stateDir,
+        MULLUSI_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
       },
     });
 
@@ -495,8 +495,8 @@ describe("applyPluginAutoEnable", () => {
       JSON.stringify({
         entries: [
           {
-            name: "@openclaw/env-secondary",
-            openclaw: {
+            name: "@mullusi/env-secondary",
+            mullusi: {
               channel: {
                 id: "env-secondary",
                 label: "Env Secondary",
@@ -506,7 +506,7 @@ describe("applyPluginAutoEnable", () => {
                 preferOver: ["env-primary"],
               },
               install: {
-                npmSpec: "@openclaw/env-secondary",
+                npmSpec: "@mullusi/env-secondary",
               },
             },
           },
@@ -524,7 +524,7 @@ describe("applyPluginAutoEnable", () => {
       },
       env: {
         ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
+        MULLUSI_STATE_DIR: stateDir,
       },
       manifestRegistry: makeRegistry([]),
     });
@@ -727,7 +727,7 @@ describe("applyPluginAutoEnable", () => {
             origin: "config" as const,
             rootDir: "/fake/acme",
             source: "/fake/acme/index.js",
-            manifestPath: "/fake/acme/openclaw.plugin.json",
+            manifestPath: "/fake/acme/mullusi.plugin.json",
             contracts: {
               webSearchProviders: ["acme-search"],
             },
@@ -784,7 +784,7 @@ describe("applyPluginAutoEnable", () => {
 
   describe("third-party channel plugins (pluginId ≠ channelId)", () => {
     it("uses the plugin manifest id, not the channel id, for plugins.entries", () => {
-      // Reproduces: https://github.com/openclaw/openclaw/issues/25261
+      // Reproduces: https://github.com/mullusi/mullusi/issues/25261
       // Plugin "apn-channel" declares channels: ["apn"]. Doctor must write
       // plugins.entries["apn-channel"], not plugins.entries["apn"].
       const result = applyWithApnChannelConfig();
@@ -922,9 +922,9 @@ describe("applyPluginAutoEnable", () => {
         config: makeApnChannelConfig(),
         env: {
           ...process.env,
-          OPENCLAW_HOME: undefined,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+          MULLUSI_HOME: undefined,
+          MULLUSI_STATE_DIR: stateDir,
+          MULLUSI_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
         },
       });
 

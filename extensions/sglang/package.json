@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/sglang-provider",
+  "name": "@mullusi/sglang-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw SGLang provider plugin",
+  "description": "Mullusi SGLang provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

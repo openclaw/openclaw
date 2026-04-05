@@ -101,5 +101,5 @@ export const pluginSdkDocEntrypoints = Object.keys(
 ) as PluginSdkDocEntrypoint[];
 
 export function resolvePluginSdkDocImportSpecifier(entrypoint: PluginSdkDocEntrypoint): string {
-  return entrypoint === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entrypoint}`;
+  return entrypoint === "index" ? "mullusi/plugin-sdk" : `mullusi/plugin-sdk/${entrypoint}`;
 }

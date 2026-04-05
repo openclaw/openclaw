@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MullusiConfig } from "../../config/types.mullusi.js";
 import {
   createConfigHandlerHarness,
   createConfigWriteSnapshot,
@@ -21,7 +21,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    createConfigIO: () => ({ configPath: "/tmp/openclaw.json" }),
+    createConfigIO: () => ({ configPath: "/tmp/mullusi.json" }),
     readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
     validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
     writeConfigFile: writeConfigFileMock,
@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  validateConfigObjectWithPluginsMock.mockImplementation((config: OpenClawConfig) => ({
+  validateConfigObjectWithPluginsMock.mockImplementation((config: MullusiConfig) => ({
     ok: true,
     config,
   }));
@@ -56,7 +56,7 @@ beforeEach(() => {
 
 describe("config shared auth disconnects", () => {
   it("does not disconnect shared-auth clients for config.set auth writes without restart", async () => {
-    const prevConfig: OpenClawConfig = {
+    const prevConfig: MullusiConfig = {
       gateway: {
         auth: {
           mode: "token",
@@ -64,7 +64,7 @@ describe("config shared auth disconnects", () => {
         },
       },
     };
-    const nextConfig: OpenClawConfig = {
+    const nextConfig: MullusiConfig = {
       gateway: {
         auth: {
           mode: "token",
@@ -91,7 +91,7 @@ describe("config shared auth disconnects", () => {
   });
 
   it("disconnects shared-auth clients after config.patch rotates the active token", async () => {
-    const prevConfig: OpenClawConfig = {
+    const prevConfig: MullusiConfig = {
       gateway: {
         auth: {
           mode: "token",
@@ -118,7 +118,7 @@ describe("config shared auth disconnects", () => {
   });
 
   it("does not disconnect shared-auth clients when config.patch changes only inactive password auth", async () => {
-    const prevConfig: OpenClawConfig = {
+    const prevConfig: MullusiConfig = {
       gateway: {
         auth: {
           mode: "token",

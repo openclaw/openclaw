@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { RuntimeEnv } from "mullusi/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as threadBindingTesting,
@@ -50,9 +50,9 @@ vi.mock("../send.shared.js", () => ({
   sendDiscordText: (...args: unknown[]) => sendDiscordTextMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/retry-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/retry-runtime")>(
-    "openclaw/plugin-sdk/retry-runtime",
+vi.mock("mullusi/plugin-sdk/retry-runtime", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/retry-runtime")>(
+    "mullusi/plugin-sdk/retry-runtime",
   );
   return {
     ...actual,
@@ -66,7 +66,7 @@ describe("deliverDiscordReply", () => {
   const runtime = {} as RuntimeEnv;
   const cfg = {
     channels: { discord: { token: "test-token" } },
-  } as OpenClawConfig;
+  } as MullusiConfig;
   const expectBotSendRetrySuccess = async (status: number, message: string) => {
     sendMessageDiscordMock
       .mockRejectedValueOnce(Object.assign(new Error(message), { status }))

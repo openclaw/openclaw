@@ -1,5 +1,5 @@
 import Foundation
-import OpenClawKit
+import MullusiKit
 import os
 import UIKit
 import UniformTypeIdentifiers
@@ -17,7 +17,7 @@ final class ShareViewController: UIViewController {
         var attachments: [ShareAttachment]
     }
 
-    private let logger = Logger(subsystem: "ai.openclaw.ios", category: "ShareExtension")
+    private let logger = Logger(subsystem: "ai.mullusi.ios", category: "ShareExtension")
     private var statusLabel: UILabel?
     private let draftTextView = UITextView()
     private let sendButton = UIButton(type: .system)
@@ -49,7 +49,7 @@ final class ShareViewController: UIViewController {
         self.draftTextView.textContainerInset = UIEdgeInsets(top: 12, left: 10, bottom: 12, right: 10)
 
         self.sendButton.translatesAutoresizingMaskIntoConstraints = false
-        self.sendButton.setTitle("Send to OpenClaw", for: .normal)
+        self.sendButton.setTitle("Send to Mullusi", for: .normal)
         self.sendButton.titleLabel?.font = .preferredFont(forTextStyle: .headline)
         self.sendButton.addTarget(self, action: #selector(self.handleSendTap), for: .touchUpInside)
         self.sendButton.isEnabled = false
@@ -132,13 +132,13 @@ final class ShareViewController: UIViewController {
             self.sendButton.isEnabled = false
             self.cancelButton.isEnabled = false
         }
-        self.showStatus("Sending to OpenClaw gateway…")
+        self.showStatus("Sending to Mullusi gateway…")
         ShareGatewayRelaySettings.saveLastEvent("Sending to gateway…")
         do {
             try await self.sendMessageToGateway(trimmed, attachments: self.pendingAttachments)
             ShareGatewayRelaySettings.saveLastEvent(
                 "Sent to gateway (\(trimmed.count) chars, \(self.pendingAttachments.count) attachment(s)).")
-            self.showStatus("Sent to OpenClaw.")
+            self.showStatus("Sent to Mullusi.")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
                 self.extensionContext?.completeRequest(returningItems: nil)
             }
@@ -157,13 +157,13 @@ final class ShareViewController: UIViewController {
     private func sendMessageToGateway(_ message: String, attachments: [ShareAttachment]) async throws {
         guard let config = ShareGatewayRelaySettings.loadConfig() else {
             throw NSError(
-                domain: "OpenClawShare",
+                domain: "MullusiShare",
                 code: 10,
-                userInfo: [NSLocalizedDescriptionKey: "OpenClaw is not connected to a gateway yet."])
+                userInfo: [NSLocalizedDescriptionKey: "Mullusi is not connected to a gateway yet."])
         }
         guard let url = URL(string: config.gatewayURLString) else {
             throw NSError(
-                domain: "OpenClawShare",
+                domain: "MullusiShare",
                 code: 11,
                 userInfo: [NSLocalizedDescriptionKey: "Invalid saved gateway URL."])
         }
@@ -181,7 +181,7 @@ final class ShareViewController: UIViewController {
                 permissions: [:],
                 clientId: clientId,
                 clientMode: "node",
-                clientDisplayName: "OpenClaw Share",
+                clientDisplayName: "Mullusi Share",
                 includeDeviceIdentity: false)
         }
 
@@ -191,7 +191,7 @@ final class ShareViewController: UIViewController {
                 token: config.token,
                 bootstrapToken: nil,
                 password: config.password,
-                connectOptions: makeOptions("openclaw-ios"),
+                connectOptions: makeOptions("mullusi-ios"),
                 sessionBox: nil,
                 onConnected: {},
                 onDisconnected: { _ in },
@@ -199,7 +199,7 @@ final class ShareViewController: UIViewController {
                     BridgeInvokeResponse(
                         id: req.id,
                         ok: false,
-                        error: OpenClawNodeError(
+                        error: MullusiNodeError(
                             code: .invalidRequest,
                             message: "share extension does not support node invoke"))
                 })
@@ -211,7 +211,7 @@ final class ShareViewController: UIViewController {
                 token: config.token,
                 bootstrapToken: nil,
                 password: config.password,
-                connectOptions: makeOptions("moltbot-ios"),
+                connectOptions: makeOptions("mullusi-ios"),
                 sessionBox: nil,
                 onConnected: {},
                 onDisconnected: { _ in },
@@ -219,7 +219,7 @@ final class ShareViewController: UIViewController {
                     BridgeInvokeResponse(
                         id: req.id,
                         ok: false,
-                        error: OpenClawNodeError(
+                        error: MullusiNodeError(
                             code: .invalidRequest,
                             message: "share extension does not support node invoke"))
                 })
@@ -258,7 +258,7 @@ final class ShareViewController: UIViewController {
         let data = try JSONEncoder().encode(params)
         guard let json = String(data: data, encoding: .utf8) else {
             throw NSError(
-                domain: "OpenClawShare",
+                domain: "MullusiShare",
                 code: 12,
                 userInfo: [NSLocalizedDescriptionKey: "Failed to encode chat payload."])
         }
@@ -269,7 +269,7 @@ final class ShareViewController: UIViewController {
         let eventData = try JSONEncoder().encode(NodeEventParams(event: "agent.request", payloadJSON: json))
         guard let nodeEventParams = String(data: eventData, encoding: .utf8) else {
             throw NSError(
-                domain: "OpenClawShare",
+                domain: "MullusiShare",
                 code: 13,
                 userInfo: [NSLocalizedDescriptionKey: "Failed to encode node event payload."])
         }

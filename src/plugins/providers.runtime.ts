@@ -2,7 +2,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withActivatedPluginIds } from "./activation-context.js";
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
 import {
-  loadOpenClawPlugins,
+  loadMullusiPlugins,
   resolveRuntimePluginRegistry,
   type PluginLoadOptions,
 } from "./loader.js";
@@ -61,7 +61,7 @@ export function resolvePluginProviders(params: {
     if (providerPluginIds.length === 0) {
       return [];
     }
-    const registry = loadOpenClawPlugins({
+    const registry = loadMullusiPlugins({
       config: withActivatedPluginIds({
         config: runtimeConfig,
         pluginIds: providerPluginIds,

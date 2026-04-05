@@ -94,7 +94,7 @@ export function resolveMcpRequestContext(
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     messageProvider:
-      normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
-    accountId: getHeader(req, "x-openclaw-account-id")?.trim() || undefined,
+      normalizeMessageChannel(getHeader(req, "x-mullusi-message-channel")) ?? undefined,
+    accountId: getHeader(req, "x-mullusi-account-id")?.trim() || undefined,
   };
 }

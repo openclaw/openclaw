@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "../api.js";
+import type { MullusiPluginApi } from "../api.js";
 import type { VoiceCallTtsConfig } from "./config.js";
 
 export type CoreConfig = {
@@ -11,4 +11,4 @@ export type CoreConfig = {
   [key: string]: unknown;
 };
 
-export type CoreAgentDeps = OpenClawPluginApi["runtime"]["agent"];
+export type CoreAgentDeps = MullusiPluginApi["runtime"]["agent"];

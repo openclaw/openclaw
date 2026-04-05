@@ -1,24 +1,24 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
+import { DEFAULT_ACCOUNT_ID } from "mullusi/plugin-sdk/account-id";
+import { buildDmGroupAccountAllowlistAdapter } from "mullusi/plugin-sdk/allowlist-config-edit";
+import { createPairingPrefixStripper } from "mullusi/plugin-sdk/channel-pairing";
 import {
   attachChannelToResult,
   attachChannelToResults,
-} from "openclaw/plugin-sdk/channel-send-result";
-import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
-import { chunkText, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
-import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
+} from "mullusi/plugin-sdk/channel-send-result";
+import { PAIRING_APPROVED_MESSAGE } from "mullusi/plugin-sdk/channel-status";
+import { resolveMarkdownTableMode } from "mullusi/plugin-sdk/config-runtime";
+import { createChatChannelPlugin, type ChannelPlugin } from "mullusi/plugin-sdk/core";
+import { resolveChannelMediaMaxBytes } from "mullusi/plugin-sdk/media-runtime";
+import { resolveOutboundSendDep } from "mullusi/plugin-sdk/outbound-runtime";
+import { chunkText, resolveTextChunkLimit } from "mullusi/plugin-sdk/reply-chunking";
+import { buildOutboundBaseSessionKey, type RoutePeer } from "mullusi/plugin-sdk/routing";
 import {
   buildBaseChannelStatusSummary,
   collectStatusIssuesFromLastError,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
-} from "openclaw/plugin-sdk/status-helpers";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+} from "mullusi/plugin-sdk/status-helpers";
+import { normalizeE164 } from "mullusi/plugin-sdk/text-runtime";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { signalApprovalAuth } from "./approval-auth.js";
 import { markdownToSignalTextChunks } from "./format.js";

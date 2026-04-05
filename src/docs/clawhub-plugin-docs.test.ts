@@ -35,7 +35,7 @@ describe("ClawHub plugin docs", () => {
     ) as unknown;
     const pluginManifest = JSON.parse(
       await fs.readFile(
-        path.join(DOCS_ROOT, "snippets", "plugin-publish", "minimal-openclaw.plugin.json"),
+        path.join(DOCS_ROOT, "snippets", "plugin-publish", "minimal-mullusi.plugin.json"),
         "utf8",
       ),
     ) as { id?: unknown; configSchema?: unknown };
@@ -66,6 +66,6 @@ describe("ClawHub plugin docs", () => {
     const sdkSetup = await fs.readFile(path.join(DOCS_ROOT, "plugins", "sdk-setup.md"), "utf8");
 
     expect(extractNamedJsonBlock(buildingPlugins, "package.json")).toEqual(snippet);
-    expect(extractNamedJsonBlock(sdkSetup, "openclaw-clawhub-package.json")).toEqual(snippet);
+    expect(extractNamedJsonBlock(sdkSetup, "mullusi-clawhub-package.json")).toEqual(snippet);
   });
 });

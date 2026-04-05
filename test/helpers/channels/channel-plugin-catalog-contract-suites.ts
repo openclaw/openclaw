@@ -13,7 +13,7 @@ function createCatalogEntry(params: {
 }) {
   return {
     name: params.packageName,
-    openclaw: {
+    mullusi: {
       channel: {
         id: params.channelId,
         label: params.label,
@@ -51,7 +51,7 @@ function writeDiscoveredChannelPlugin(params: {
     path.join(pluginDir, "package.json"),
     JSON.stringify({
       name: params.packageName,
-      openclaw: {
+      mullusi: {
         extensions: ["./index.js"],
         channel: {
           id: "demo-channel",
@@ -68,7 +68,7 @@ function writeDiscoveredChannelPlugin(params: {
     "utf8",
   );
   fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
+    path.join(pluginDir, "mullusi.plugin.json"),
     JSON.stringify({
       id: params.pluginId,
       configSchema: {},
@@ -122,12 +122,12 @@ export function describeChannelPluginCatalogEntriesContract() {
       {
         name: "includes external catalog entries",
         setup: () => {
-          const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-"));
+          const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-catalog-"));
           const catalogPath = path.join(dir, "catalog.json");
           writeCatalogFile(
             catalogPath,
             createCatalogEntry({
-              packageName: "@openclaw/demo-channel",
+              packageName: "@mullusi/demo-channel",
               channelId: "demo-channel",
               label: "Demo Channel",
               blurb: "Demo entry",
@@ -145,7 +145,7 @@ export function describeChannelPluginCatalogEntriesContract() {
         name: "preserves plugin ids when they differ from channel ids",
         setup: () => {
           const stateDir = fs.mkdtempSync(
-            path.join(os.tmpdir(), "openclaw-channel-catalog-state-"),
+            path.join(os.tmpdir(), "mullusi-channel-catalog-state-"),
           );
           writeDiscoveredChannelPlugin({
             stateDir,
@@ -158,8 +158,8 @@ export function describeChannelPluginCatalogEntriesContract() {
             channelId: "demo-channel",
             env: {
               ...process.env,
-              OPENCLAW_STATE_DIR: stateDir,
-              OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+              MULLUSI_STATE_DIR: stateDir,
+              MULLUSI_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
             },
             expected: { pluginId: "@vendor/demo-runtime" },
           };
@@ -168,7 +168,7 @@ export function describeChannelPluginCatalogEntriesContract() {
       {
         name: "keeps discovered plugins ahead of external catalog overrides",
         setup: () => {
-          const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-state-"));
+          const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-catalog-state-"));
           const catalogPath = path.join(stateDir, "catalog.json");
           writeDiscoveredChannelPlugin({
             stateDir,
@@ -191,9 +191,9 @@ export function describeChannelPluginCatalogEntriesContract() {
             catalogPaths: [catalogPath],
             env: {
               ...process.env,
-              OPENCLAW_STATE_DIR: stateDir,
+              MULLUSI_STATE_DIR: stateDir,
               CLAWDBOT_STATE_DIR: undefined,
-              OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+              MULLUSI_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
             },
             expected: {
               install: { npmSpec: "@vendor/demo-channel-plugin" },
@@ -222,12 +222,12 @@ export function describeChannelPluginCatalogPathResolutionContract() {
       {
         name: "uses the provided env for external catalog path resolution",
         setup: () => {
-          const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-home-"));
+          const home = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-catalog-home-"));
           const catalogPath = path.join(home, "catalog.json");
           writeCatalogFile(
             catalogPath,
             createCatalogEntry({
-              packageName: "@openclaw/env-demo-channel",
+              packageName: "@mullusi/env-demo-channel",
               channelId: "env-demo-channel",
               label: "Env Demo Channel",
               blurb: "Env demo entry",
@@ -237,8 +237,8 @@ export function describeChannelPluginCatalogPathResolutionContract() {
           return {
             env: {
               ...process.env,
-              OPENCLAW_PLUGIN_CATALOG_PATHS: "~/catalog.json",
-              OPENCLAW_HOME: home,
+              MULLUSI_PLUGIN_CATALOG_PATHS: "~/catalog.json",
+              MULLUSI_HOME: home,
               HOME: home,
             },
             expectedId: "env-demo-channel",
@@ -248,13 +248,13 @@ export function describeChannelPluginCatalogPathResolutionContract() {
       {
         name: "uses the provided env for default catalog paths",
         setup: () => {
-          const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-state-"));
+          const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-catalog-state-"));
           const catalogPath = path.join(stateDir, "plugins", "catalog.json");
           fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
           writeCatalogFile(
             catalogPath,
             createCatalogEntry({
-              packageName: "@openclaw/default-env-demo",
+              packageName: "@mullusi/default-env-demo",
               channelId: "default-env-demo",
               label: "Default Env Demo",
               blurb: "Default env demo entry",
@@ -263,7 +263,7 @@ export function describeChannelPluginCatalogPathResolutionContract() {
           return {
             env: {
               ...process.env,
-              OPENCLAW_STATE_DIR: stateDir,
+              MULLUSI_STATE_DIR: stateDir,
             },
             expectedId: "default-env-demo",
           };

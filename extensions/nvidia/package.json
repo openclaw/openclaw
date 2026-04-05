@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/nvidia-provider",
+  "name": "@mullusi/nvidia-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw NVIDIA provider plugin",
+  "description": "Mullusi NVIDIA provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

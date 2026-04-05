@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/elevenlabs-speech",
+  "name": "@mullusi/elevenlabs-speech",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw ElevenLabs speech plugin",
+  "description": "Mullusi ElevenLabs speech plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

@@ -5,7 +5,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -588,7 +588,7 @@ describe("compaction-safeguard runtime registry", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     buildEmbeddedExtensionFactories({
       cfg,
@@ -862,7 +862,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("extracts opaque identifiers and audits summary quality", () => {
     const identifiers = extractOpaqueIdentifiers(
-      "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and URL https://example.com/a and /tmp/x.log plus port host.local:18789",
+      "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and URL https://example.com/a and /tmp/x.log plus port host.local:18790",
     );
     expect(identifiers.length).toBeGreaterThan(0);
     expect(identifiers).toContain("A1B2C3D4E5F6"); // pragma: allowlist secret
@@ -911,12 +911,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
   it("filters ordinary short numbers and trims wrapped punctuation", () => {
     const identifiers = extractOpaqueIdentifiers(
-      "Year 2026 count 42 port 18789 ticket 123456 URL https://example.com/a, path /tmp/x.log, and tiny /a with prose on/off.",
+      "Year 2026 count 42 port 18790 ticket 123456 URL https://example.com/a, path /tmp/x.log, and tiny /a with prose on/off.",
     );
 
     expect(identifiers).not.toContain("2026");
     expect(identifiers).not.toContain("42");
-    expect(identifiers).not.toContain("18789");
+    expect(identifiers).not.toContain("18790");
     expect(identifiers).not.toContain("/a");
     expect(identifiers).not.toContain("/off");
     expect(identifiers).toContain("123456");
@@ -1924,7 +1924,7 @@ describe("compaction-safeguard double-compaction guard", () => {
 async function expectWorkspaceSummaryEmptyForAgentsAlias(
   createAlias: (outsidePath: string, agentsPath: string) => void,
 ) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-compaction-summary-"));
   const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
   try {
     const outside = path.join(root, "outside-secret.txt");

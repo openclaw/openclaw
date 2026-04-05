@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
+import type { MullusiConfig } from "mullusi/plugin-sdk/memory-core";
 import { describe, expect, it, vi } from "vitest";
 import plugin, {
   buildMemoryFlushPlan,
@@ -61,7 +61,7 @@ describe("buildMemoryFlushPlan", () => {
         timeFormat: "12",
       },
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
 
   it("replaces YYYY-MM-DD using user timezone and appends current time", () => {
     const plan = buildMemoryFlushPlan({

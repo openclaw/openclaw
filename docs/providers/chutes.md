@@ -2,7 +2,7 @@
 title: "Chutes"
 summary: "Chutes setup (OAuth or API key, model discovery, aliases)"
 read_when:
-  - You want to use Chutes with OpenClaw
+  - You want to use Chutes with Mullusi
   - You need the OAuth or API key setup path
   - You want the default model, aliases, or discovery behavior
 ---
@@ -10,15 +10,15 @@ read_when:
 # Chutes
 
 [Chutes](https://chutes.ai) exposes open-source model catalogs through an
-OpenAI-compatible API. OpenClaw supports both browser OAuth and direct API-key
+OpenAI-compatible API. Mullusi supports both browser OAuth and direct API-key
 auth for the bundled `chutes` provider.
 
 - Provider: `chutes`
 - API: OpenAI-compatible
 - Base URL: `https://llm.chutes.ai/v1`
 - Auth:
-  - OAuth via `openclaw onboard --auth-choice chutes`
-  - API key via `openclaw onboard --auth-choice chutes-api-key`
+  - OAuth via `mullusi onboard --auth-choice chutes`
+  - API key via `mullusi onboard --auth-choice chutes-api-key`
   - Runtime env vars: `CHUTES_API_KEY`, `CHUTES_OAUTH_TOKEN`
 
 ## Quick start
@@ -26,11 +26,11 @@ auth for the bundled `chutes` provider.
 ### OAuth
 
 ```bash
-openclaw onboard --auth-choice chutes
+mullusi onboard --auth-choice chutes
 ```
 
-OpenClaw launches the browser flow locally, or shows a URL + redirect-paste
-flow on remote/headless hosts. OAuth tokens auto-refresh through OpenClaw auth
+Mullusi launches the browser flow locally, or shows a URL + redirect-paste
+flow on remote/headless hosts. OAuth tokens auto-refresh through Mullusi auth
 profiles.
 
 Optional OAuth overrides:
@@ -43,7 +43,7 @@ Optional OAuth overrides:
 ### API key
 
 ```bash
-openclaw onboard --auth-choice chutes-api-key
+mullusi onboard --auth-choice chutes-api-key
 ```
 
 Get your key at
@@ -54,13 +54,13 @@ to `chutes/zai-org/GLM-4.7-TEE`.
 
 ## Discovery behavior
 
-When Chutes auth is available, OpenClaw queries the Chutes catalog with that
-credential and uses the discovered models. If discovery fails, OpenClaw falls
+When Chutes auth is available, Mullusi queries the Chutes catalog with that
+credential and uses the discovered models. If discovery fails, Mullusi falls
 back to a bundled static catalog so onboarding and startup still work.
 
 ## Default aliases
 
-OpenClaw also registers three convenience aliases for the bundled Chutes
+Mullusi also registers three convenience aliases for the bundled Chutes
 catalog:
 
 - `chutes-fast` -> `chutes/zai-org/GLM-4.7-FP8`

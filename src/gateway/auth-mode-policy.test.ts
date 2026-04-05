@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   assertExplicitGatewayAuthModeWhenBothConfigured,
   EXPLICIT_GATEWAY_AUTH_MODE_REQUIRED_ERROR,
@@ -8,7 +8,7 @@ import {
 
 describe("gateway auth mode policy", () => {
   it("does not flag config when auth mode is explicit", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       gateway: {
         auth: {
           mode: "token",
@@ -21,7 +21,7 @@ describe("gateway auth mode policy", () => {
   });
 
   it("does not flag config when only one auth credential is configured", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       gateway: {
         auth: {
           token: "token-value",
@@ -32,7 +32,7 @@ describe("gateway auth mode policy", () => {
   });
 
   it("flags config when both token and password are configured and mode is unset", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       gateway: {
         auth: {
           token: "token-value",
@@ -44,7 +44,7 @@ describe("gateway auth mode policy", () => {
   });
 
   it("flags config when both token/password SecretRefs are configured and mode is unset", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       gateway: {
         auth: {
           token: { source: "env", provider: "default", id: "GW_TOKEN" },
@@ -61,7 +61,7 @@ describe("gateway auth mode policy", () => {
   });
 
   it("throws the shared explicit-mode error for ambiguous dual auth config", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       gateway: {
         auth: {
           token: "token-value",

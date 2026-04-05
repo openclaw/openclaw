@@ -1,5 +1,5 @@
-import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
+import { createAttachedChannelResultAdapter } from "mullusi/plugin-sdk/channel-send-result";
+import { resolveOutboundSendDep } from "mullusi/plugin-sdk/outbound-runtime";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "../runtime-api.js";
 import { createMSTeamsPollStoreFs } from "./polls.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";

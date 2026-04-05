@@ -7,7 +7,7 @@ import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js"
 
 describe("implicit provider plugin allowlist compatibility", () => {
   it("keeps bundled implicit providers discoverable when plugins.allow is set", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["KILOCODE_API_KEY", "MOONSHOT_API_KEY"]);
     process.env.KILOCODE_API_KEY = "test-kilo-key"; // pragma: allowlist secret
     process.env.MOONSHOT_API_KEY = "test-moonshot-key"; // pragma: allowlist secret
@@ -29,7 +29,7 @@ describe("implicit provider plugin allowlist compatibility", () => {
   });
 
   it("still honors explicit plugin denies over compat allowlist injection", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["KILOCODE_API_KEY", "MOONSHOT_API_KEY"]);
     process.env.KILOCODE_API_KEY = "test-kilo-key"; // pragma: allowlist secret
     process.env.MOONSHOT_API_KEY = "test-moonshot-key"; // pragma: allowlist secret

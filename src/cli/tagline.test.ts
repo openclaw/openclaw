@@ -10,10 +10,10 @@ describe("pickTagline", () => {
     expect(pickTagline({ mode: "default" })).toBe(DEFAULT_TAGLINE);
   });
 
-  it("keeps OPENCLAW_TAGLINE_INDEX behavior in random mode", () => {
+  it("keeps MULLUSI_TAGLINE_INDEX behavior in random mode", () => {
     const value = pickTagline({
       mode: "random",
-      env: { OPENCLAW_TAGLINE_INDEX: "0" } as NodeJS.ProcessEnv,
+      env: { MULLUSI_TAGLINE_INDEX: "0" } as NodeJS.ProcessEnv,
     });
     expect(value.length).toBeGreaterThan(0);
     expect(value).not.toBe(DEFAULT_TAGLINE);

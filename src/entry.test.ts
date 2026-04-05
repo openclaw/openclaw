@@ -11,7 +11,7 @@ describe("entry root help fast path", () => {
   it("prefers precomputed root help text when available", async () => {
     outputPrecomputedRootHelpTextMock.mockReturnValueOnce(true);
 
-    const handled = tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+    const handled = tryHandleRootHelpFastPath(["node", "mullusi", "--help"], {
       env: {},
     });
     await vi.dynamicImportSettled();
@@ -23,7 +23,7 @@ describe("entry root help fast path", () => {
   it("renders root help without importing the full program", async () => {
     const outputRootHelpMock = vi.fn();
 
-    const handled = tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+    const handled = tryHandleRootHelpFastPath(["node", "mullusi", "--help"], {
       outputRootHelp: outputRootHelpMock,
       env: {},
     });
@@ -36,7 +36,7 @@ describe("entry root help fast path", () => {
   it("ignores non-root help invocations", () => {
     const outputRootHelpMock = vi.fn();
 
-    const handled = tryHandleRootHelpFastPath(["node", "openclaw", "status", "--help"], {
+    const handled = tryHandleRootHelpFastPath(["node", "mullusi", "status", "--help"], {
       outputRootHelp: outputRootHelpMock,
       env: {},
     });
@@ -49,7 +49,7 @@ describe("entry root help fast path", () => {
     const outputRootHelpMock = vi.fn();
 
     const handled = tryHandleRootHelpFastPath(
-      ["node", "openclaw", "--container", "demo", "--help"],
+      ["node", "mullusi", "--container", "demo", "--help"],
       {
         outputRootHelp: outputRootHelpMock,
         env: {},

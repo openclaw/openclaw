@@ -1,6 +1,6 @@
-import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import { adaptScopedAccountAccessor } from "mullusi/plugin-sdk/channel-config-helpers";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { DEFAULT_ACCOUNT_ID } from "mullusi/plugin-sdk/routing";
 import { describe, expect, it, vi } from "vitest";
 import {
   createSetupWizardAdapter,
@@ -204,7 +204,7 @@ describe("bluebubbles setup surface", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     expect(blueBubblesSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
     expect(blueBubblesSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
@@ -236,7 +236,7 @@ describe("bluebubbles setup surface", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     });
 
     expect(resolved.accountId).toBe("work");
@@ -267,7 +267,7 @@ describe("bluebubbles setup surface", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     });
 
     expect(configured).toBe(false);

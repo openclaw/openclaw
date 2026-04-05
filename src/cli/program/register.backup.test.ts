@@ -91,12 +91,12 @@ describe("registerBackupCommand", () => {
   });
 
   it("runs backup verify with forwarded options", async () => {
-    await runCli(["backup", "verify", "/tmp/openclaw-backup.tar.gz", "--json"]);
+    await runCli(["backup", "verify", "/tmp/mullusi-backup.tar.gz", "--json"]);
 
     expect(backupVerifyCommand).toHaveBeenCalledWith(
       runtime,
       expect.objectContaining({
-        archive: "/tmp/openclaw-backup.tar.gz",
+        archive: "/tmp/mullusi-backup.tar.gz",
         json: true,
       }),
     );

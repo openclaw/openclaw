@@ -1,8 +1,8 @@
 import type {
   BindingTargetKind,
   SessionBindingRecord,
-} from "openclaw/plugin-sdk/thread-bindings-runtime";
-import { resolveThreadBindingLifecycle } from "openclaw/plugin-sdk/thread-bindings-runtime";
+} from "mullusi/plugin-sdk/thread-bindings-runtime";
+import { resolveThreadBindingLifecycle } from "mullusi/plugin-sdk/thread-bindings-runtime";
 
 export type MatrixThreadBindingTargetKind = "subagent" | "acp";
 

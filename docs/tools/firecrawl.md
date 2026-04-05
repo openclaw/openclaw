@@ -10,7 +10,7 @@ title: "Firecrawl"
 
 # Firecrawl
 
-OpenClaw can use **Firecrawl** in three ways:
+Mullusi can use **Firecrawl** in three ways:
 
 - as the `web_search` provider
 - as explicit plugin tools: `firecrawl_search` and `firecrawl_scrape`
@@ -53,7 +53,7 @@ which helps with JS-heavy sites or pages that block plain HTTP fetches.
 
 Notes:
 
-- Choosing Firecrawl in onboarding or `openclaw configure --section web` enables the bundled Firecrawl plugin automatically.
+- Choosing Firecrawl in onboarding or `mullusi configure --section web` enables the bundled Firecrawl plugin automatically.
 - `web_search` with Firecrawl supports `query` and `count`.
 - For Firecrawl-specific controls like `sources`, `categories`, or result scraping, use `firecrawl_search`.
 - `baseUrl` overrides must stay on `https://api.firecrawl.dev`.
@@ -86,7 +86,7 @@ Notes:
 
 - Firecrawl fallback attempts run only when an API key is available (`plugins.entries.firecrawl.config.webFetch.apiKey` or `FIRECRAWL_API_KEY`).
 - `maxAgeMs` controls how old cached results can be (ms). Default is 2 days.
-- Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
+- Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `mullusi doctor --fix`.
 - Firecrawl scrape/base URL overrides are restricted to `https://api.firecrawl.dev`.
 
 `firecrawl_scrape` reuses the same `plugins.entries.firecrawl.config.webFetch.*` settings and env vars.
@@ -124,7 +124,7 @@ Core parameters:
 ## Stealth / bot circumvention
 
 Firecrawl exposes a **proxy mode** parameter for bot circumvention (`basic`, `stealth`, or `auto`).
-OpenClaw always uses `proxy: "auto"` plus `storeInCache: true` for Firecrawl requests.
+Mullusi always uses `proxy: "auto"` plus `storeInCache: true` for Firecrawl requests.
 If proxy is omitted, Firecrawl defaults to `auto`. `auto` retries with stealth proxies if a basic attempt fails, which may use more credits
 than basic-only scraping.
 
@@ -136,7 +136,7 @@ than basic-only scraping.
 2. Firecrawl (if selected or auto-detected as the active web-fetch fallback)
 3. Basic HTML cleanup (last fallback)
 
-The selection knob is `tools.web.fetch.provider`. If you omit it, OpenClaw
+The selection knob is `tools.web.fetch.provider`. If you omit it, Mullusi
 auto-detects the first ready web-fetch provider from available credentials.
 Today the bundled provider is Firecrawl.
 

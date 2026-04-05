@@ -1,16 +1,16 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type {
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
-  OpenClawPluginApi,
-  OpenClawPluginCommandDefinition,
-  OpenClawPluginConfigSchema,
-  OpenClawPluginDefinition,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
-  OpenClawPluginToolContext,
-  OpenClawPluginToolFactory,
+  MullusiPluginApi,
+  MullusiPluginCommandDefinition,
+  MullusiPluginConfigSchema,
+  MullusiPluginDefinition,
+  MullusiPluginService,
+  MullusiPluginServiceContext,
+  MullusiPluginToolContext,
+  MullusiPluginToolFactory,
   PluginLogger,
   ProviderAugmentModelCatalogContext,
   ProviderAuthContext,
@@ -70,11 +70,11 @@ import { createCachedLazyValueGetter } from "./lazy-value.js";
 export type {
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
-  OpenClawPluginApi,
-  OpenClawPluginToolContext,
-  OpenClawPluginToolFactory,
+  MullusiPluginApi,
+  MullusiPluginToolContext,
+  MullusiPluginToolFactory,
   PluginCommandContext,
-  OpenClawPluginConfigSchema,
+  MullusiPluginConfigSchema,
   ProviderDiscoveryContext,
   ProviderCatalogContext,
   ProviderCatalogResult,
@@ -121,18 +121,18 @@ export type {
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
+  MullusiPluginService,
+  MullusiPluginServiceContext,
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthMethod,
   ProviderAuthResult,
-  OpenClawPluginCommandDefinition,
-  OpenClawPluginDefinition,
+  MullusiPluginCommandDefinition,
+  MullusiPluginDefinition,
   PluginLogger,
 };
-export type { OpenClawConfig };
+export type { MullusiConfig };
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 
@@ -141,26 +141,26 @@ type DefinePluginEntryOptions = {
   id: string;
   name: string;
   description: string;
-  kind?: OpenClawPluginDefinition["kind"];
-  configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
-  register: (api: OpenClawPluginApi) => void;
+  kind?: MullusiPluginDefinition["kind"];
+  configSchema?: MullusiPluginConfigSchema | (() => MullusiPluginConfigSchema);
+  register: (api: MullusiPluginApi) => void;
 };
 
-/** Normalized object shape that OpenClaw loads from a plugin entry module. */
+/** Normalized object shape that Mullusi loads from a plugin entry module. */
 type DefinedPluginEntry = {
   id: string;
   name: string;
   description: string;
-  configSchema: OpenClawPluginConfigSchema;
-  register: NonNullable<OpenClawPluginDefinition["register"]>;
-} & Pick<OpenClawPluginDefinition, "kind">;
+  configSchema: MullusiPluginConfigSchema;
+  register: NonNullable<MullusiPluginDefinition["register"]>;
+} & Pick<MullusiPluginDefinition, "kind">;
 
 /**
  * Canonical entry helper for non-channel plugins.
  *
  * Use this for provider, tool, command, service, memory, and context-engine
  * plugins. Channel plugins should use `defineChannelPluginEntry(...)` from
- * `openclaw/plugin-sdk/core` so they inherit the channel capability wiring.
+ * `mullusi/plugin-sdk/core` so they inherit the channel capability wiring.
  */
 export function definePluginEntry({
   id,

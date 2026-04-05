@@ -114,7 +114,7 @@ prepare_validate_commit() {
   local subject
   subject=$(git log -1 --pretty=%s)
 
-  if echo "$subject" | rg -qi "(^|[[:space:]])openclaw#$pr_number([[:space:]]|$)|\\(#$pr_number\\)"; then
+  if echo "$subject" | rg -qi "(^|[[:space:]])mullusi#$pr_number([[:space:]]|$)|\\(#$pr_number\\)"; then
     echo "ERROR: prep commit subject should not include PR number metadata"
     exit 1
   fi

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { MullusiConfig } from "../../../config/config.js";
 import {
   DEFAULT_LLM_IDLE_TIMEOUT_MS,
   resolveLlmIdleTimeoutMs,
@@ -12,41 +12,41 @@ describe("resolveLlmIdleTimeoutMs", () => {
   });
 
   it("returns default when llm config is missing", () => {
-    const cfg = { agents: {} } as OpenClawConfig;
+    const cfg = { agents: {} } as MullusiConfig;
     expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("returns default when idleTimeoutSeconds is not set", () => {
-    const cfg = { agents: { defaults: { llm: {} } } } as OpenClawConfig;
+    const cfg = { agents: { defaults: { llm: {} } } } as MullusiConfig;
     expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("returns 0 when idleTimeoutSeconds is 0 (disabled)", () => {
-    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 0 } } } } as OpenClawConfig;
+    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 0 } } } } as MullusiConfig;
     expect(resolveLlmIdleTimeoutMs(cfg)).toBe(0);
   });
 
   it("returns configured value in milliseconds", () => {
-    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 30 } } } } as OpenClawConfig;
+    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 30 } } } } as MullusiConfig;
     expect(resolveLlmIdleTimeoutMs(cfg)).toBe(30_000);
   });
 
   it("caps at max safe timeout", () => {
     const cfg = {
       agents: { defaults: { llm: { idleTimeoutSeconds: 10_000_000 } } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     expect(resolveLlmIdleTimeoutMs(cfg)).toBe(2_147_000_000);
   });
 
   it("ignores negative values", () => {
-    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: -10 } } } } as OpenClawConfig;
+    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: -10 } } } } as MullusiConfig;
     expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("ignores non-finite values", () => {
     const cfg = {
       agents: { defaults: { llm: { idleTimeoutSeconds: Infinity } } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 });

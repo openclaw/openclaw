@@ -1,1 +1,1 @@
-export { rawDataToString } from "openclaw/plugin-sdk/browser-support";
+export { rawDataToString } from "mullusi/plugin-sdk/browser-support";

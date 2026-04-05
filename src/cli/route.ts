@@ -50,7 +50,7 @@ async function prepareRoutedCommand(params: {
 }
 
 export async function tryRouteCli(argv: string[]): Promise<boolean> {
-  if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_ROUTE_FIRST)) {
+  if (isTruthyEnvValue(process.env.MULLUSI_DISABLE_ROUTE_FIRST)) {
     return false;
   }
   if (hasHelpOrVersion(argv)) {

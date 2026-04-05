@@ -27,7 +27,7 @@ export {
   startLazyPluginServiceModule,
   type LazyPluginServiceHandle,
 } from "../plugins/lazy-service-module.js";
-export type { OpenClawPluginService } from "../plugins/types.js";
+export type { MullusiPluginService } from "../plugins/types.js";
 export { resolveGatewayAuth } from "../gateway/auth.js";
 export { isLoopbackHost } from "../gateway/net.js";
 export { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
@@ -67,7 +67,7 @@ export {
   safeParseJson,
 } from "../gateway/server-methods/nodes.helpers.js";
 export type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
-export type { OpenClawConfig } from "../config/config.js";
+export type { MullusiConfig } from "../config/config.js";
 export { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 export {
   SafeOpenError,
@@ -85,7 +85,7 @@ export {
 export { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 export { ensurePortAvailable } from "../infra/ports.js";
 export { generateSecureToken } from "../infra/secure-random.js";
-export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+export { resolvePreferredMullusiTmpDir } from "../infra/tmp-mullusi-dir.js";
 export { rawDataToString } from "../infra/ws.js";
 export { runExec } from "../process/exec.js";
 export { captureEnv, withEnv, withEnvAsync } from "../test-utils/env.js";

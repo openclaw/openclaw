@@ -1,4 +1,4 @@
-## OpenClaw Android App
+## Mullusi Android App
 
 Status: **extremely alpha**. The app is actively being rebuilt from the ground up.
 
@@ -45,8 +45,8 @@ cd apps/android
 
 `bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds two signed release bundles:
 
-- Play build: `apps/android/build/release-bundles/openclaw-<version>-play-release.aab`
-- Third-party build: `apps/android/build/release-bundles/openclaw-<version>-third-party-release.aab`
+- Play build: `apps/android/build/release-bundles/mullusi-<version>-play-release.aab`
+- Third-party build: `apps/android/build/release-bundles/mullusi-<version>-third-party-release.aab`
 
 Flavor-specific direct Gradle tasks:
 
@@ -135,24 +135,24 @@ If `adb devices -l` shows `unauthorized`, re-plug and accept the trust prompt ag
 
 ### USB-only gateway testing (no LAN dependency)
 
-Use `adb reverse` so Android `localhost:18789` tunnels to your laptop `localhost:18789`.
+Use `adb reverse` so Android `localhost:18790` tunnels to your laptop `localhost:18790`.
 
 Terminal A (gateway):
 
 ```bash
-pnpm openclaw gateway --port 18789 --verbose
+pnpm mullusi gateway --port 18790 --verbose
 ```
 
 Terminal B (USB tunnel):
 
 ```bash
-adb reverse tcp:18789 tcp:18789
+adb reverse tcp:18790 tcp:18790
 ```
 
 Then in app **Connect → Manual**:
 
 - Host: `127.0.0.1`
-- Port: `18789`
+- Port: `18790`
 - TLS: off
 
 ## Hot Reload / Fast Iteration
@@ -162,14 +162,14 @@ This app is native Kotlin + Jetpack Compose.
 - For Compose UI edits: use Android Studio **Live Edit** on a debug build (works on physical devices; project `minSdk=31` already meets API requirement).
 - For many non-structural code/resource changes: use Android Studio **Apply Changes**.
 - For structural/native/manifest/Gradle changes: do full reinstall (`pnpm android:run`).
-- Canvas web content already supports live reload when loaded from Gateway `__openclaw__/canvas/` (see `docs/platforms/android.md`).
+- Canvas web content already supports live reload when loaded from Gateway `__mullusi__/canvas/` (see `docs/platforms/android.md`).
 
 ## Connect / Pair
 
 1) Start the gateway (on your main machine):
 
 ```bash
-pnpm openclaw gateway --port 18789 --verbose
+pnpm mullusi gateway --port 18790 --verbose
 ```
 
 2) In the Android app:
@@ -180,8 +180,8 @@ pnpm openclaw gateway --port 18789 --verbose
 3) Approve pairing (on the gateway machine):
 
 ```bash
-openclaw devices list
-openclaw devices approve <requestId>
+mullusi devices list
+mullusi devices approve <requestId>
 ```
 
 More details: `docs/platforms/android.md`.
@@ -210,7 +210,7 @@ Why these matter:
 - Review usually involves a `Permissions Declaration Form`, policy justification, and demo video evidence in Play Console.
 - If we want a Play-safe build, these should be the first permissions removed behind a dedicated product flavor / variant.
 
-Current OpenClaw Android implication:
+Current Mullusi Android implication:
 
 - APK / sideload build can keep SMS and Call Log features.
 - Google Play build should exclude SMS send/search and Call Log search unless the product is intentionally positioned and approved as a default-handler exception case.
@@ -245,18 +245,18 @@ This suite assumes setup is already done manually. It does **not** install/run/p
 Pre-req checklist:
 
 1) Gateway is running and reachable from the Android app.
-2) Android app is connected to that gateway and `openclaw nodes status` shows it as paired + connected.
+2) Android app is connected to that gateway and `mullusi nodes status` shows it as paired + connected.
 3) App stays unlocked and in foreground for the whole run.
 4) Open the app **Screen** tab and keep it active during the run (canvas/A2UI commands require the canvas WebView attached there).
 5) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
 6) No interactive system dialogs should be pending before test start.
-7) Canvas host is enabled and reachable from the device (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
+7) Canvas host is enabled and reachable from the device (do not run gateway with `MULLUSI_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__mullusi__/`).
 8) Local operator test client pairing is approved. If first run fails with `pairing required`, approve latest pending device pairing request, then rerun:
 9) For A2UI checks, keep the app on **Screen** tab; the node now auto-refreshes canvas capability once on first A2UI reachability failure (TTL-safe retry).
 
 ```bash
-openclaw devices list
-openclaw devices approve --latest
+mullusi devices list
+mullusi devices approve --latest
 ```
 
 Run:
@@ -267,10 +267,10 @@ pnpm android:test:integration
 
 Optional overrides:
 
-- `OPENCLAW_ANDROID_GATEWAY_URL=ws://...` (default: from your local OpenClaw config)
-- `OPENCLAW_ANDROID_GATEWAY_TOKEN=...`
-- `OPENCLAW_ANDROID_GATEWAY_PASSWORD=...`
-- `OPENCLAW_ANDROID_NODE_ID=...` or `OPENCLAW_ANDROID_NODE_NAME=...`
+- `MULLUSI_ANDROID_GATEWAY_URL=ws://...` (default: from your local Mullusi config)
+- `MULLUSI_ANDROID_GATEWAY_TOKEN=...`
+- `MULLUSI_ANDROID_GATEWAY_PASSWORD=...`
+- `MULLUSI_ANDROID_NODE_ID=...` or `MULLUSI_ANDROID_NODE_NAME=...`
 
 What it does:
 
@@ -282,7 +282,7 @@ What it does:
 Common failure quick-fixes:
 
 - `pairing required` before tests start:
-  - approve pending device pairing (`openclaw devices approve --latest`) and rerun.
+  - approve pending device pairing (`mullusi devices approve --latest`) and rerun.
 - `A2UI host not reachable` / `A2UI_HOST_NOT_CONFIGURED`:
   - ensure gateway canvas host is running and reachable, keep the app on the **Screen** tab. The app will auto-refresh canvas capability once; if it still fails, reconnect app and rerun.
 - `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`:

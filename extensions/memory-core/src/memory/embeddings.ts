@@ -11,7 +11,7 @@ import {
   type MemoryEmbeddingProviderAdapter,
   type MemoryEmbeddingProviderCreateOptions,
   type MemoryEmbeddingProviderRuntime,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+} from "mullusi/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   canAutoSelectLocal,
   getBuiltinMemoryEmbeddingProviderAdapter,
@@ -24,7 +24,7 @@ export {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+} from "mullusi/plugin-sdk/memory-core-host-engine-embeddings";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;

@@ -4,8 +4,8 @@ FROM node:24-bookworm-slim@sha256:b4687aef2571c632a1953695ce4d61d6462a7eda471fe6
 
 # Smoke images are pinned and short-lived, so skip distro upgrades here and
 # spend the time budget on installer coverage instead.
-RUN --mount=type=cache,id=openclaw-install-sh-smoke-apt-cache,target=/var/cache/apt,sharing=locked \
-  --mount=type=cache,id=openclaw-install-sh-smoke-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=mullusi-install-sh-smoke-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=mullusi-install-sh-smoke-apt-lists,target=/var/lib/apt,sharing=locked \
   set -eux; \
   for attempt in 1 2 3; do \
     if apt-get update -o Acquire::Retries=3; then break; fi; \
@@ -25,6 +25,6 @@ RUN --mount=type=cache,id=openclaw-install-sh-smoke-apt-cache,target=/var/cache/
 
 COPY install-sh-common/cli-verify.sh /usr/local/install-sh-common/cli-verify.sh
 COPY install-sh-common/version-parse.sh /usr/local/install-sh-common/version-parse.sh
-COPY --chmod=755 install-sh-smoke/run.sh /usr/local/bin/openclaw-install-smoke
+COPY --chmod=755 install-sh-smoke/run.sh /usr/local/bin/mullusi-install-smoke
 
-ENTRYPOINT ["/usr/local/bin/openclaw-install-smoke"]
+ENTRYPOINT ["/usr/local/bin/mullusi-install-smoke"]

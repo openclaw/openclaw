@@ -5,7 +5,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
@@ -67,7 +67,7 @@ function resolveExplicitSessionEndReason(
 }
 
 function resolveSessionDefaultAccountId(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   channelRaw?: string;
   accountIdRaw?: string;
   persistedLastAccountId?: string;
@@ -133,7 +133,7 @@ export type SessionInitResult = {
 
 function isResetAuthorizedForContext(params: {
   ctx: MsgContext;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   commandAuthorized: boolean;
 }): boolean {
   const auth = resolveCommandAuthorization(params);
@@ -155,7 +155,7 @@ function isResetAuthorizedForContext(params: {
 }
 
 function resolveSessionConversationBindingContext(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   ctx: MsgContext,
 ): {
   channel: string;
@@ -181,7 +181,7 @@ function resolveSessionConversationBindingContext(
 }
 
 function resolveBoundAcpSessionForReset(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   ctx: MsgContext;
   bindingContext?: {
     channel: string;
@@ -207,7 +207,7 @@ function resolveBoundAcpSessionForReset(params: {
 }
 
 function resolveBoundConversationSessionKey(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   ctx: MsgContext;
   bindingContext?: {
     channel: string;
@@ -238,7 +238,7 @@ function resolveBoundConversationSessionKey(params: {
 
 export async function initSessionState(params: {
   ctx: MsgContext;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   commandAuthorized: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
@@ -270,7 +270,7 @@ export async function initSessionState(params: {
   const parentForkMaxTokens = resolveParentForkMaxTokens(cfg);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
-  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const ingressTimingEnabled = process.env.MULLUSI_DEBUG_INGRESS_TIMING === "1";
 
   // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
   // Stale cache (especially with multiple gateway processes or on Windows where
@@ -372,7 +372,7 @@ export async function initSessionState(params: {
       if (shouldBypassAcpResetForTrigger(triggerLower)) {
         // ACP-bound conversations handle /new and /reset in command handling
         // so the bound ACP runtime can be reset in place without rotating the
-        // normal OpenClaw session/transcript.
+        // normal Mullusi session/transcript.
         break;
       }
       isNewSession = true;

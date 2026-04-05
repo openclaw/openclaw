@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw skills` (search/install/update/list/info/check)"
+summary: "CLI reference for `mullusi skills` (search/install/update/list/info/check)"
 read_when:
   - You want to see which skills are available and ready to run
   - You want to search, install, or update skills from ClawHub
@@ -7,7 +7,7 @@ read_when:
 title: "skills"
 ---
 
-# `openclaw skills`
+# `mullusi skills`
 
 Inspect local skills and install/update skills from ClawHub.
 
@@ -20,21 +20,21 @@ Related:
 ## Commands
 
 ```bash
-openclaw skills search "calendar"
-openclaw skills search --limit 20 --json
-openclaw skills install <slug>
-openclaw skills install <slug> --version <version>
-openclaw skills install <slug> --force
-openclaw skills update <slug>
-openclaw skills update --all
-openclaw skills list
-openclaw skills list --eligible
-openclaw skills list --json
-openclaw skills list --verbose
-openclaw skills info <name>
-openclaw skills info <name> --json
-openclaw skills check
-openclaw skills check --json
+mullusi skills search "calendar"
+mullusi skills search --limit 20 --json
+mullusi skills install <slug>
+mullusi skills install <slug> --version <version>
+mullusi skills install <slug> --force
+mullusi skills update <slug>
+mullusi skills update --all
+mullusi skills list
+mullusi skills list --eligible
+mullusi skills list --json
+mullusi skills list --verbose
+mullusi skills info <name>
+mullusi skills info <name> --json
+mullusi skills check
+mullusi skills check --json
 ```
 
 `search`/`install`/`update` use ClawHub directly and install into the active

@@ -1,5 +1,5 @@
 ---
-summary: "Run OpenClaw on local LLMs (LM Studio, vLLM, LiteLLM, custom OpenAI endpoints)"
+summary: "Run Mullusi on local LLMs (LM Studio, vLLM, LiteLLM, custom OpenAI endpoints)"
 read_when:
   - You want to serve models from your own GPU box
   - You are wiring LM Studio or an OpenAI-compatible proxy
@@ -9,9 +9,9 @@ title: "Local Models"
 
 # Local models
 
-Local is doable, but OpenClaw expects large context + strong defenses against prompt injection. Small cards truncate context and leak safety. Aim high: **≥2 maxed-out Mac Studios or equivalent GPU rig (~$30k+)**. A single **24 GB** GPU works only for lighter prompts with higher latency. Use the **largest / full-size model variant you can run**; aggressively quantized or “small” checkpoints raise prompt-injection risk (see [Security](/gateway/security)).
+Local is doable, but Mullusi expects large context + strong defenses against prompt injection. Small cards truncate context and leak safety. Aim high: **≥2 maxed-out Mac Studios or equivalent GPU rig (~$30k+)**. A single **24 GB** GPU works only for lighter prompts with higher latency. Use the **largest / full-size model variant you can run**; aggressively quantized or “small” checkpoints raise prompt-injection risk (see [Security](/gateway/security)).
 
-If you want the lowest-friction local setup, start with [Ollama](/providers/ollama) and `openclaw onboard`. This page is the opinionated guide for higher-end local stacks and custom OpenAI-compatible local servers.
+If you want the lowest-friction local setup, start with [Ollama](/providers/ollama) and `mullusi onboard`. This page is the opinionated guide for higher-end local stacks and custom OpenAI-compatible local servers.
 
 ## Recommended: LM Studio + large local model (Responses API)
 
@@ -147,12 +147,12 @@ Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
 
 Behavior note for local/proxied `/v1` backends:
 
-- OpenClaw treats these as proxy-style OpenAI-compatible routes, not native
+- Mullusi treats these as proxy-style OpenAI-compatible routes, not native
   OpenAI endpoints
 - native OpenAI-only request shaping does not apply here: no
   `service_tier`, no Responses `store`, no OpenAI reasoning-compat payload
   shaping, and no prompt-cache hints
-- hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
+- hidden Mullusi attribution headers (`originator`, `version`, `User-Agent`)
   are not injected on these custom proxy URLs
 
 ## Troubleshooting

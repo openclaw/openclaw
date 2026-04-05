@@ -1,15 +1,15 @@
 {
-  "name": "@openclaw/telegram",
+  "name": "@mullusi/telegram",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Telegram channel plugin",
+  "description": "Mullusi Telegram channel plugin",
   "type": "module",
   "dependencies": {
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "grammy": "^1.41.1"
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],
@@ -26,7 +26,7 @@
       "selectionDocsPrefix": "",
       "selectionDocsOmitLabel": true,
       "selectionExtras": [
-        "https://openclaw.ai"
+        "https://mullusi.com"
       ],
       "markdownCapable": true
     },

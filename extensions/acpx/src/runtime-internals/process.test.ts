@@ -22,7 +22,7 @@ function winRuntime(env: NodeJS.ProcessEnv) {
 }
 
 async function createTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "openclaw-acpx-process-test-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "mullusi-acpx-process-test-"));
   tempDirs.push(dir);
   return dir;
 }
@@ -340,7 +340,7 @@ describe("spawnAndCollect", () => {
     openai?: string;
     github?: string;
     hf?: string;
-    openclaw?: string;
+    mullusi?: string;
     shell?: string;
   };
 
@@ -363,7 +363,7 @@ describe("spawnAndCollect", () => {
       command: process.execPath,
       args: [
         "-e",
-        `process.stdout.write(JSON.stringify({openai:process.env.${openAiEnvKey},github:process.env.${githubEnvKey},hf:process.env.${hfEnvKey},openclaw:process.env.OPENCLAW_API_KEY,shell:process.env.OPENCLAW_SHELL}), () => process.exit(0))`,
+        `process.stdout.write(JSON.stringify({openai:process.env.${openAiEnvKey},github:process.env.${githubEnvKey},hf:process.env.${hfEnvKey},mullusi:process.env.MULLUSI_API_KEY,shell:process.env.MULLUSI_SHELL}), () => process.exit(0))`,
       ],
       cwd: process.cwd(),
       stripProviderAuthEnvVars: options?.stripProviderAuthEnvVars,
@@ -414,7 +414,7 @@ describe("spawnAndCollect", () => {
       OPENAI_API_KEY: "openai-secret",
       GITHUB_TOKEN: "gh-secret",
       HF_TOKEN: "hf-secret",
-      OPENCLAW_API_KEY: "keep-me",
+      MULLUSI_API_KEY: "keep-me",
     });
     const parsed = await collectSpawnedEnvSnapshot({
       stripProviderAuthEnvVars: true,
@@ -422,7 +422,7 @@ describe("spawnAndCollect", () => {
     expect(parsed.openai).toBeUndefined();
     expect(parsed.github).toBeUndefined();
     expect(parsed.hf).toBeUndefined();
-    expect(parsed.openclaw).toBe("keep-me");
+    expect(parsed.mullusi).toBe("keep-me");
     expect(parsed.shell).toBe("acp");
   });
 
@@ -430,7 +430,7 @@ describe("spawnAndCollect", () => {
     stubProviderAuthEnv({
       OpenAI_Api_Key: "openai-secret",
       Github_Token: "gh-secret",
-      OPENCLAW_API_KEY: "keep-me",
+      MULLUSI_API_KEY: "keep-me",
     });
     const parsed = await collectSpawnedEnvSnapshot({
       stripProviderAuthEnvVars: true,
@@ -439,7 +439,7 @@ describe("spawnAndCollect", () => {
     });
     expect(parsed.openai).toBeUndefined();
     expect(parsed.github).toBeUndefined();
-    expect(parsed.openclaw).toBe("keep-me");
+    expect(parsed.mullusi).toBe("keep-me");
     expect(parsed.shell).toBe("acp");
   });
 
@@ -448,13 +448,13 @@ describe("spawnAndCollect", () => {
       OPENAI_API_KEY: "openai-secret",
       GITHUB_TOKEN: "gh-secret",
       HF_TOKEN: "hf-secret",
-      OPENCLAW_API_KEY: "keep-me",
+      MULLUSI_API_KEY: "keep-me",
     });
     const parsed = await collectSpawnedEnvSnapshot();
     expect(parsed.openai).toBe("openai-secret");
     expect(parsed.github).toBe("gh-secret");
     expect(parsed.hf).toBe("hf-secret");
-    expect(parsed.openclaw).toBe("keep-me");
+    expect(parsed.mullusi).toBe("keep-me");
     expect(parsed.shell).toBe("acp");
   });
 });

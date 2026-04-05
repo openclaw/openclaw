@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   getAccessToken,
   sendC2CMessage,
@@ -380,7 +380,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
       providerLabel = ttsCfg.model;
     } else {
       // Strategy 2: Fall back to global TTS provider registry (e.g. Edge TTS).
-      if (!isGlobalTTSAvailable(cfg as OpenClawConfig)) {
+      if (!isGlobalTTSAvailable(cfg as MullusiConfig)) {
         log?.error(
           `[qqbot:${account.accountId}] TTS not configured (neither plugin channels.qqbot.tts nor global messages.tts)`,
         );
@@ -389,7 +389,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
       log?.info(`[qqbot:${account.accountId}] TTS (global fallback): "${ttsText.slice(0, 50)}..."`);
       const globalResult = await getQQBotRuntime().tts.textToSpeech({
         text: ttsText,
-        cfg: cfg as OpenClawConfig,
+        cfg: cfg as MullusiConfig,
         channel: "qqbot",
       });
       if (!globalResult.success || !globalResult.audioPath) {

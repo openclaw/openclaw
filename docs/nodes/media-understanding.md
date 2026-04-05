@@ -8,9 +8,9 @@ title: "Media Understanding"
 
 # Media Understanding - Inbound (2026-01-17)
 
-OpenClaw can **summarize inbound media** (image/audio/video) before the reply pipeline runs. It auto‑detects when local tools or provider keys are available, and can be disabled or customized. If understanding is off, models still receive the original files/URLs as usual.
+Mullusi can **summarize inbound media** (image/audio/video) before the reply pipeline runs. It auto‑detects when local tools or provider keys are available, and can be disabled or customized. If understanding is off, models still receive the original files/URLs as usual.
 
-Vendor-specific media behavior is registered by vendor plugins, while OpenClaw
+Vendor-specific media behavior is registered by vendor plugins, while Mullusi
 core owns the shared `tools.media` config, fallback order, and reply-pipeline
 integration.
 
@@ -133,16 +133,16 @@ Rules:
 - Audio files smaller than **1024 bytes** are treated as empty/corrupt and skipped before provider/CLI transcription.
 - If the model returns more than `maxChars`, output is trimmed.
 - `prompt` defaults to simple “Describe the {media}.” plus the `maxChars` guidance (image/video only).
-- If the active primary image model already supports vision natively, OpenClaw
+- If the active primary image model already supports vision natively, Mullusi
   skips the `[Image]` summary block and passes the original image into the
   model instead.
-- If `<capability>.enabled: true` but no models are configured, OpenClaw tries the
+- If `<capability>.enabled: true` but no models are configured, Mullusi tries the
   **active reply model** when its provider supports the capability.
 
 ### Auto-detect media understanding (default)
 
 If `tools.media.<capability>.enabled` is **not** set to `false` and you haven’t
-configured models, OpenClaw auto-detects in this order and **stops at the first
+configured models, Mullusi auto-detects in this order and **stops at the first
 working option**:
 
 1. **Active reply model** when its provider supports the capability.
@@ -180,7 +180,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 
 ### Proxy environment support (provider models)
 
-When provider-based **audio** and **video** media understanding is enabled, OpenClaw
+When provider-based **audio** and **video** media understanding is enabled, Mullusi
 honors standard outbound proxy environment variables for provider HTTP calls:
 
 - `HTTPS_PROXY`
@@ -189,13 +189,13 @@ honors standard outbound proxy environment variables for provider HTTP calls:
 - `http_proxy`
 
 If no proxy env vars are set, media understanding uses direct egress.
-If the proxy value is malformed, OpenClaw logs a warning and falls back to direct
+If the proxy value is malformed, Mullusi logs a warning and falls back to direct
 fetch.
 
 ## Capabilities (optional)
 
 If you set `capabilities`, the entry only runs for those media types. For shared
-lists, OpenClaw can infer defaults:
+lists, Mullusi can infer defaults:
 
 - `openai`, `anthropic`, `minimax`: **image**
 - `minimax-portal`: **image**
@@ -213,7 +213,7 @@ lists, OpenClaw can infer defaults:
 For CLI entries, **set `capabilities` explicitly** to avoid surprising matches.
 If you omit `capabilities`, the entry is eligible for the list it appears in.
 
-## Provider support matrix (OpenClaw integrations)
+## Provider support matrix (Mullusi integrations)
 
 | Capability | Provider integration                                                                   | Notes                                                                                                                                    |
 | ---------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -234,7 +234,7 @@ MiniMax note:
 - For tool-enabled agents handling untrusted inputs, avoid older/weaker media models.
 - Keep at least one fallback per capability for availability (quality model + faster/cheaper model).
 - CLI fallbacks (`whisper-cli`, `whisper`, `gemini`) are useful when provider APIs are unavailable.
-- `parakeet-mlx` note: with `--output-dir`, OpenClaw reads `<output-dir>/<media-basename>.txt` when output format is `txt` (or unspecified); non-`txt` formats fall back to stdout.
+- `parakeet-mlx` note: with `--output-dir`, Mullusi reads `<output-dir>/<media-basename>.txt` when output format is `txt` (or unspecified); non-`txt` formats fall back to stdout.
 
 ## Attachment policy
 
@@ -257,7 +257,7 @@ File-attachment extraction behavior:
 - This attachment-extraction path intentionally omits the long
   `SECURITY NOTICE:` banner to avoid bloating the media prompt; the boundary
   markers and metadata still remain.
-- If a file has no extractable text, OpenClaw injects `[No extractable text]`.
+- If a file has no extractable text, Mullusi injects `[No extractable text]`.
 - If a PDF falls back to rendered page images in this path, the media prompt keeps
   the placeholder `[PDF content rendered to images; images not forwarded to model]`
   because this attachment-extraction step forwards text blocks, not the rendered PDF images.

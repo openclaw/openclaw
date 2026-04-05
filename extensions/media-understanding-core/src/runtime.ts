@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { MullusiConfig } from "mullusi/plugin-sdk/core";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -8,7 +8,7 @@ import {
   normalizeMediaProviderId,
   runCapability,
   type ActiveMediaModel,
-} from "openclaw/plugin-sdk/media-runtime";
+} from "mullusi/plugin-sdk/media-runtime";
 
 type MediaUnderstandingCapability = "image" | "audio" | "video";
 type MediaUnderstandingOutput = Awaited<ReturnType<typeof runCapability>>["outputs"][number];
@@ -22,7 +22,7 @@ const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandin
 export type RunMediaUnderstandingFileParams = {
   capability: MediaUnderstandingCapability;
   filePath: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
@@ -95,7 +95,7 @@ export async function runMediaUnderstandingFile(
 
 export async function describeImageFile(params: {
   filePath: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
@@ -105,7 +105,7 @@ export async function describeImageFile(params: {
 
 export async function describeImageFileWithModel(params: {
   filePath: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentDir?: string;
   mime?: string;
   provider: string;
@@ -137,7 +137,7 @@ export async function describeImageFileWithModel(params: {
 
 export async function describeVideoFile(params: {
   filePath: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
@@ -147,7 +147,7 @@ export async function describeVideoFile(params: {
 
 export async function transcribeAudioFile(params: {
   filePath: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;

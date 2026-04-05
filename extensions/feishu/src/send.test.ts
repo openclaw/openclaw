@@ -24,11 +24,11 @@ const {
   mockRuntimeResolveMarkdownTableMode: vi.fn(() => "preserve"),
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+vi.mock("mullusi/plugin-sdk/config-runtime", () => ({
   resolveMarkdownTableMode: mockResolveMarkdownTableMode,
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+vi.mock("mullusi/plugin-sdk/text-runtime", () => ({
   convertMarkdownTables: mockConvertMarkdownTables,
 }));
 
@@ -402,7 +402,7 @@ describe("resolveFeishuCardTemplate", () => {
   });
 
   it("drops unsupported free-form identity themes", () => {
-    expect(resolveFeishuCardTemplate("space lobster")).toBeUndefined();
+    expect(resolveFeishuCardTemplate("space mullusi")).toBeUndefined();
   });
 });
 
@@ -425,7 +425,7 @@ describe("buildStructuredCard", () => {
     const card = buildStructuredCard("hello", {
       header: {
         title: "Agent",
-        template: "space lobster",
+        template: "space mullusi",
       },
     });
 

@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { DiscordActionConfig } from "mullusi/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
@@ -152,7 +152,7 @@ describe("handleDiscordMessagingAction", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     );
 
     expect(reactMessageDiscord).toHaveBeenCalledWith(
@@ -270,7 +270,7 @@ describe("handleDiscordMessagingAction", () => {
           token: "token",
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     await handleDiscordMessagingAction(
       "readMessages",
       { channelId: "C1" },
@@ -306,7 +306,7 @@ describe("handleDiscordMessagingAction", () => {
           token: "token",
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     await handleDiscordMessagingAction(
       "fetchMessage",
       { guildId: "G1", channelId: "C1", messageId: "M1" },
@@ -519,7 +519,7 @@ describe("handleDiscordGuildAction", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     );
 
     expect(discordGuildActionRuntime.fetchMemberInfoDiscord).toHaveBeenCalledWith("G1", "U1", {
@@ -815,7 +815,7 @@ describe("handleDiscordAction per-account gating", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     await handleDiscordAction(
       { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "ops" },
@@ -836,7 +836,7 @@ describe("handleDiscordAction per-account gating", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     await expect(
       handleDiscordAction(
@@ -857,7 +857,7 @@ describe("handleDiscordAction per-account gating", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     await handleDiscordAction(
       { action: "kick", guildId: "G1", userId: "U1", accountId: "ops" },
@@ -876,7 +876,7 @@ describe("handleDiscordAction per-account gating", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     await expect(
       handleDiscordAction(
@@ -899,7 +899,7 @@ describe("handleDiscordAction per-account gating", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     await handleDiscordAction(
       { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },

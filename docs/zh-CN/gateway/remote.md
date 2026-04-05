@@ -21,7 +21,7 @@ x-i18n:
 
 ## 核心理念
 
-- Gateway WebSocket 绑定到你配置端口的 **loopback**（默认为 18789）。
+- Gateway WebSocket 绑定到你配置端口的 **loopback**（默认为 18790）。
 - 对于远程使用，你通过 SSH 转发该 loopback 端口（或使用 tailnet/VPN 减少隧道需求）。
 
 ## 常见的 VPN/tailnet 设置（智能体所在位置）
@@ -43,7 +43,7 @@ x-i18n:
 
 笔记本电脑**不**运行智能体。它远程连接：
 
-- 使用 macOS 应用的 **Remote over SSH** 模式（设置 → 通用 → "OpenClaw runs"）。
+- 使用 macOS 应用的 **Remote over SSH** 模式（设置 → 通用 → "Mullusi runs"）。
 - 应用打开并管理隧道，因此 WebChat + 健康检查"直接工作"。
 
 操作手册：[macOS 远程访问](/platforms/mac/remote)。
@@ -78,15 +78,15 @@ x-i18n:
 创建到远程 Gateway WS 的本地隧道：
 
 ```bash
-ssh -N -L 18789:127.0.0.1:18789 user@host
+ssh -N -L 18790:127.0.0.1:18790 user@host
 ```
 
 隧道建立后：
 
-- `openclaw health` 和 `openclaw status --deep` 现在通过 `ws://127.0.0.1:18789` 访问远程 Gateway 网关。
-- `openclaw gateway {status,health,send,agent,call}` 在需要时也可以通过 `--url` 指定转发的 URL。
+- `mullusi health` 和 `mullusi status --deep` 现在通过 `ws://127.0.0.1:18790` 访问远程 Gateway 网关。
+- `mullusi gateway {status,health,send,agent,call}` 在需要时也可以通过 `--url` 指定转发的 URL。
 
-注意：将 `18789` 替换为你配置的 `gateway.port`（或 `--port`/`OPENCLAW_GATEWAY_PORT`）。
+注意：将 `18790` 替换为你配置的 `gateway.port`（或 `--port`/`MULLUSI_GATEWAY_PORT`）。
 
 ## CLI 远程默认值
 
@@ -97,20 +97,20 @@ ssh -N -L 18789:127.0.0.1:18789 user@host
   gateway: {
     mode: "remote",
     remote: {
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       token: "your-token",
     },
   },
 }
 ```
 
-当 Gateway 网关仅限 loopback 时，保持 URL 为 `ws://127.0.0.1:18789` 并先打开 SSH 隧道。
+当 Gateway 网关仅限 loopback 时，保持 URL 为 `ws://127.0.0.1:18790` 并先打开 SSH 隧道。
 
 ## 通过 SSH 的聊天 UI
 
 WebChat 不再使用单独的 HTTP 端口。SwiftUI 聊天 UI 直接连接到 Gateway WebSocket。
 
-- 通过 SSH 转发 `18789`（见上文），然后让客户端连接到 `ws://127.0.0.1:18789`。
+- 通过 SSH 转发 `18790`（见上文），然后让客户端连接到 `ws://127.0.0.1:18790`。
 - 在 macOS 上，优先使用应用的"Remote over SSH"模式，它会自动管理隧道。
 
 ## macOS 应用"Remote over SSH"

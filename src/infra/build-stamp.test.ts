@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { writeBuildStamp } from "../../scripts/build-stamp.mjs";
 
 async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-build-stamp-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-build-stamp-"));
   try {
     return await run(dir);
   } finally {

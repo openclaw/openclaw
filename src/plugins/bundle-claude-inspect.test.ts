@@ -151,7 +151,7 @@ describe("Claude bundle plugin inspect integration", () => {
   }
 
   beforeAll(() => {
-    rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-bundle-"));
+    rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-claude-bundle-"));
     setupClaudeInspectFixture();
   });
 

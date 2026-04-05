@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import WebSocket from "ws";
 import {
   getAccessToken,
@@ -83,7 +83,7 @@ const QUICK_DISCONNECT_THRESHOLD = 5000;
 export interface GatewayContext {
   account: ResolvedQQBotAccount;
   abortSignal: AbortSignal;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   onReady?: (data: unknown) => void;
   onError?: (error: Error) => void;
   log?: {
@@ -170,8 +170,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     log?.info(
       `[qqbot:${account.accountId}] TTS apiKey: ${maskedKey}${ttsCfg.queryParams ? `, queryParams=${JSON.stringify(ttsCfg.queryParams)}` : ""}${ttsCfg.speed !== undefined ? `, speed=${ttsCfg.speed}` : ""}`,
     );
-  } else if (isGlobalTTSAvailable(cfg as OpenClawConfig)) {
-    const globalProvider = (cfg as OpenClawConfig).messages?.tts?.provider ?? "auto";
+  } else if (isGlobalTTSAvailable(cfg as MullusiConfig)) {
+    const globalProvider = (cfg as MullusiConfig).messages?.tts?.provider ?? "auto";
     log?.info(
       `[qqbot:${account.accountId}] TTS configured (global fallback): provider=${globalProvider}`,
     );
@@ -671,7 +671,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
         const hasTTS =
           !!resolveTTSConfig(cfg as Record<string, unknown>) ||
-          isGlobalTTSAvailable(cfg as OpenClawConfig);
+          isGlobalTTSAvailable(cfg as MullusiConfig);
 
         let quotePart = "";
         if (replyToIsQuote) {
@@ -717,7 +717,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const rawAllowFrom = account.config?.allowFrom ?? [];
         const normalizedAllowFrom = qqbotPlugin.config?.formatAllowFrom
           ? qqbotPlugin.config.formatAllowFrom({
-              cfg: cfg as OpenClawConfig,
+              cfg: cfg as MullusiConfig,
               accountId: account.accountId,
               allowFrom: rawAllowFrom,
             })

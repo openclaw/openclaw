@@ -24,11 +24,11 @@ describe("write-cli-startup-metadata", () => {
     const rootHelpText = await renderBundledRootHelpText();
 
     expect(rootHelpText).toContain("Usage:");
-    expect(rootHelpText).toContain("openclaw");
+    expect(rootHelpText).toContain("mullusi");
   });
 
   it("writes startup metadata with populated root help text", async () => {
-    const tempRoot = createTempDir("openclaw-startup-metadata-");
+    const tempRoot = createTempDir("mullusi-startup-metadata-");
     tempDirs.push(tempRoot);
     const distDir = path.join(tempRoot, "dist");
     const extensionsDir = path.join(tempRoot, "extensions");
@@ -39,7 +39,7 @@ describe("write-cli-startup-metadata", () => {
     writeFileSync(
       path.join(extensionsDir, "matrix", "package.json"),
       JSON.stringify({
-        openclaw: {
+        mullusi: {
           channel: {
             id: "matrix",
             order: 120,
@@ -58,6 +58,6 @@ describe("write-cli-startup-metadata", () => {
     };
     expect(written.channelOptions).toContain("matrix");
     expect(written.rootHelpText).toContain("Usage:");
-    expect(written.rootHelpText).toContain("openclaw");
+    expect(written.rootHelpText).toContain("mullusi");
   });
 });

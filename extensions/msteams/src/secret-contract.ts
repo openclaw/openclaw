@@ -4,13 +4,13 @@ import {
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "mullusi/plugin-sdk/security-runtime";
 
 export const secretTargetRegistryEntries = [
   {
     id: "channels.msteams.appPassword",
     targetType: "channels.msteams.appPassword",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.msteams.appPassword",
     secretShape: "secret_input",
     expectedResolvedValue: "string",

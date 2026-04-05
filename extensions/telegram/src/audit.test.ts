@@ -6,7 +6,7 @@ const fetchWithTimeoutMock = vi.hoisted(() => vi.fn());
 const resolveTelegramFetchMock = vi.hoisted(() => vi.fn(() => fetchWithTimeoutMock));
 const resolveTelegramApiBaseMock = vi.hoisted(() => vi.fn(() => "https://api.telegram.org"));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+vi.mock("mullusi/plugin-sdk/text-runtime", () => ({
   fetchWithTimeout: fetchWithTimeoutMock,
   isRecord: (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null,

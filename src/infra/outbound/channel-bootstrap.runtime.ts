@@ -1,5 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveRuntimePluginRegistry } from "../../plugins/loader.js";
 import {
@@ -16,7 +16,7 @@ export function resetOutboundChannelBootstrapStateForTests(): void {
 
 export function bootstrapOutboundChannelPlugin(params: {
   channel: DeliverableMessageChannel;
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
 }): void {
   const cfg = params.cfg;
   if (!cfg) {

@@ -2,13 +2,13 @@
  * Signal reactions via signal-cli JSON-RPC API
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalReactionOpts = {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   baseUrl?: string;
   account?: string;
   accountId?: string;
@@ -31,11 +31,11 @@ type SignalReactionErrorMessages = {
 };
 
 let signalConfigRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/config-runtime")>
+  | Promise<typeof import("mullusi/plugin-sdk/config-runtime")>
   | undefined;
 
 async function loadSignalConfigRuntime() {
-  signalConfigRuntimePromise ??= import("openclaw/plugin-sdk/config-runtime");
+  signalConfigRuntimePromise ??= import("mullusi/plugin-sdk/config-runtime");
   return await signalConfigRuntimePromise;
 }
 

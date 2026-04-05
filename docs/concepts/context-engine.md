@@ -1,7 +1,7 @@
 ---
 summary: "Context engine: pluggable context assembly, compaction, and subagent lifecycle"
 read_when:
-  - You want to understand how OpenClaw assembles model context
+  - You want to understand how Mullusi assembles model context
   - You are switching between the legacy engine and a plugin engine
   - You are building a context engine plugin
 title: "Context Engine"
@@ -9,11 +9,11 @@ title: "Context Engine"
 
 # Context Engine
 
-A **context engine** controls how OpenClaw builds model context for each run.
+A **context engine** controls how Mullusi builds model context for each run.
 It decides which messages to include, how to summarize older history, and how
 to manage context across subagent boundaries.
 
-OpenClaw ships with a built-in `legacy` engine. Plugins can register
+Mullusi ships with a built-in `legacy` engine. Plugins can register
 alternative engines that replace the active context-engine lifecycle.
 
 ## Quick start
@@ -21,28 +21,28 @@ alternative engines that replace the active context-engine lifecycle.
 Check which engine is active:
 
 ```bash
-openclaw doctor
+mullusi doctor
 # or inspect config directly:
-cat ~/.openclaw/openclaw.json | jq '.plugins.slots.contextEngine'
+cat ~/.mullusi/mullusi.json | jq '.plugins.slots.contextEngine'
 ```
 
 ### Installing a context engine plugin
 
-Context engine plugins are installed like any other OpenClaw plugin. Install
+Context engine plugins are installed like any other Mullusi plugin. Install
 first, then select the engine in the slot:
 
 ```bash
 # Install from npm
-openclaw plugins install @martian-engineering/lossless-claw
+mullusi plugins install @martian-engineering/lossless-claw
 
 # Or install from a local path (for development)
-openclaw plugins install -l ./my-context-engine
+mullusi plugins install -l ./my-context-engine
 ```
 
 Then enable the plugin and select it as the active engine in your config:
 
 ```json5
-// openclaw.json
+// mullusi.json
 {
   plugins: {
     slots: {
@@ -65,7 +65,7 @@ remove the key entirely — `"legacy"` is the default).
 
 ## How it works
 
-Every time OpenClaw runs a model prompt, the context engine participates at
+Every time Mullusi runs a model prompt, the context engine participates at
 four lifecycle points:
 
 1. **Ingest** — called when a new message is added to the session. The engine
@@ -80,7 +80,7 @@ four lifecycle points:
 
 ### Subagent lifecycle (optional)
 
-OpenClaw currently calls one subagent lifecycle hook:
+Mullusi currently calls one subagent lifecycle hook:
 
 - **onSubagentEnded** — clean up when a subagent session completes or is swept.
 
@@ -89,14 +89,14 @@ the runtime does not invoke it yet.
 
 ### System prompt addition
 
-The `assemble` method can return a `systemPromptAddition` string. OpenClaw
+The `assemble` method can return a `systemPromptAddition` string. Mullusi
 prepends this to the system prompt for the run. This lets engines inject
 dynamic recall guidance, retrieval instructions, or context-aware hints
 without requiring static workspace files.
 
 ## The legacy engine
 
-The built-in `legacy` engine preserves OpenClaw's original behavior:
+The built-in `legacy` engine preserves Mullusi's original behavior:
 
 - **Ingest**: no-op (the session manager handles message persistence directly).
 - **Assemble**: pass-through (the existing sanitize → validate → limit pipeline
@@ -177,7 +177,7 @@ Required members:
 
 - `messages` — the ordered messages to send to the model.
 - `estimatedTokens` (required, `number`) — the engine's estimate of total
-  tokens in the assembled context. OpenClaw uses this for compaction threshold
+  tokens in the assembled context. Mullusi uses this for compaction threshold
   decisions and diagnostic reporting.
 - `systemPromptAddition` (optional, `string`) — prepended to the system prompt.
 
@@ -197,7 +197,7 @@ Optional members:
 `ownsCompaction` controls whether Pi's built-in in-attempt auto-compaction stays
 enabled for the run:
 
-- `true` — the engine owns compaction behavior. OpenClaw disables Pi's built-in
+- `true` — the engine owns compaction behavior. Mullusi disables Pi's built-in
   auto-compaction for that run, and the engine's `compact()` implementation is
   responsible for `/compact`, overflow recovery compaction, and any proactive
   compaction it wants to do in `afterTurn()`.
@@ -205,7 +205,7 @@ enabled for the run:
   execution, but the active engine's `compact()` method is still called for
   `/compact` and overflow recovery.
 
-`ownsCompaction: false` does **not** mean OpenClaw automatically falls back to
+`ownsCompaction: false` does **not** mean Mullusi automatically falls back to
 the legacy engine's compaction path.
 
 That means there are two valid plugin patterns:
@@ -213,8 +213,8 @@ That means there are two valid plugin patterns:
 - **Owning mode** — implement your own compaction algorithm and set
   `ownsCompaction: true`.
 - **Delegating mode** — set `ownsCompaction: false` and have `compact()` call
-  `delegateCompactionToRuntime(...)` from `openclaw/plugin-sdk/core` to use
-  OpenClaw's built-in compaction behavior.
+  `delegateCompactionToRuntime(...)` from `mullusi/plugin-sdk/core` to use
+  Mullusi's built-in compaction behavior.
 
 A no-op `compact()` is unsafe for an active non-owning engine because it
 disables the normal `/compact` and overflow-recovery compaction path for that
@@ -238,12 +238,12 @@ The slot is exclusive at run time — only one registered context engine is
 resolved for a given run or compaction operation. Other enabled
 `kind: "context-engine"` plugins can still load and run their registration
 code; `plugins.slots.contextEngine` only selects which registered engine id
-OpenClaw resolves when it needs a context engine.
+Mullusi resolves when it needs a context engine.
 
 ## Relationship to compaction and memory
 
 - **Compaction** is one responsibility of the context engine. The legacy engine
-  delegates to OpenClaw's built-in summarization. Plugin engines can implement
+  delegates to Mullusi's built-in summarization. Plugin engines can implement
   any compaction strategy (DAG summaries, vector retrieval, etc.).
 - **Memory plugins** (`plugins.slots.memory`) are separate from context engines.
   Memory plugins provide search/retrieval; context engines control what the
@@ -254,14 +254,14 @@ OpenClaw resolves when it needs a context engine.
 
 ## Tips
 
-- Use `openclaw doctor` to verify your engine is loading correctly.
+- Use `mullusi doctor` to verify your engine is loading correctly.
 - If switching engines, existing sessions continue with their current history.
   The new engine takes over for future runs.
 - Engine errors are logged and surfaced in diagnostics. If a plugin engine
-  fails to register or the selected engine id cannot be resolved, OpenClaw
+  fails to register or the selected engine id cannot be resolved, Mullusi
   does not fall back automatically; runs fail until you fix the plugin or
   switch `plugins.slots.contextEngine` back to `"legacy"`.
-- For development, use `openclaw plugins install -l ./my-engine` to link a
+- For development, use `mullusi plugins install -l ./my-engine` to link a
   local plugin directory without copying.
 
 See also: [Compaction](/concepts/compaction), [Context](/concepts/context),

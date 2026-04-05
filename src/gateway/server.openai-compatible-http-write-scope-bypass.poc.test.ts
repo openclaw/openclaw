@@ -35,10 +35,10 @@ describe("gateway OpenAI-compatible HTTP shared-secret auth", () => {
         headers: {
           authorization: "Bearer secret",
           "content-type": "application/json",
-          "x-openclaw-scopes": "operator.approvals",
+          "x-mullusi-scopes": "operator.approvals",
         },
         body: JSON.stringify({
-          model: "openclaw",
+          model: "mullusi",
           messages: [{ role: "user", content: "hi" }],
         }),
       });
@@ -64,7 +64,7 @@ describe("gateway OpenAI-compatible HTTP shared-secret auth", () => {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "openclaw",
+          model: "mullusi",
           messages: [{ role: "user", content: "hi" }],
         }),
       });
@@ -92,10 +92,10 @@ describe("gateway OpenAI-compatible HTTP shared-secret auth", () => {
         headers: {
           authorization: "Bearer secret",
           "content-type": "application/json",
-          "x-openclaw-scopes": "operator.write",
+          "x-mullusi-scopes": "operator.write",
         },
         body: JSON.stringify({
-          model: "openclaw",
+          model: "mullusi",
           messages: [{ role: "user", content: "hi" }],
         }),
       });
@@ -134,11 +134,11 @@ describe("gateway OpenAI-compatible HTTP shared-secret auth", () => {
         headers: {
           authorization: "Bearer secret",
           "content-type": "application/json",
-          "x-openclaw-scopes": "operator.approvals",
+          "x-mullusi-scopes": "operator.approvals",
         },
         body: JSON.stringify({
           stream: false,
-          model: "openclaw",
+          model: "mullusi",
           input: "hi",
         }),
       });
@@ -174,11 +174,11 @@ describe("gateway OpenAI-compatible HTTP shared-secret auth", () => {
         headers: {
           authorization: "Bearer secret",
           "content-type": "application/json",
-          "x-openclaw-scopes": "operator.write",
+          "x-mullusi-scopes": "operator.write",
         },
         body: JSON.stringify({
           stream: false,
-          model: "openclaw",
+          model: "mullusi",
           input: "hi",
         }),
       });

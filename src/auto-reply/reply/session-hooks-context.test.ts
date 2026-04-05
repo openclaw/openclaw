@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 
@@ -73,9 +73,9 @@ describe("session hook context wiring", () => {
 
   it("passes sessionKey to session_start hook context", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
-    const storePath = await createStorePath("openclaw-session-hook-start");
+    const storePath = await createStorePath("mullusi-session-hook-start");
     await writeStore(storePath, {});
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const cfg = { session: { store: storePath } } as MullusiConfig;
 
     await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey },
@@ -92,7 +92,7 @@ describe("session hook context wiring", () => {
 
   it("passes sessionKey to session_end hook context on reset", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
-    const storePath = await createStorePath("openclaw-session-hook-end");
+    const storePath = await createStorePath("mullusi-session-hook-end");
     const transcriptPath = await writeTranscript(storePath, "old-session");
     await writeStore(storePath, {
       [sessionKey]: {
@@ -101,7 +101,7 @@ describe("session hook context wiring", () => {
         updatedAt: Date.now(),
       },
     });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const cfg = { session: { store: storePath } } as MullusiConfig;
 
     await initSessionState({
       ctx: { Body: "/new", SessionKey: sessionKey },
@@ -129,7 +129,7 @@ describe("session hook context wiring", () => {
 
   it("marks explicit /reset rollovers with reason reset", async () => {
     const sessionKey = "agent:main:telegram:direct:456";
-    const storePath = await createStorePath("openclaw-session-hook-explicit-reset");
+    const storePath = await createStorePath("mullusi-session-hook-explicit-reset");
     const transcriptPath = await writeTranscript(storePath, "reset-session", "reset me");
     await writeStore(storePath, {
       [sessionKey]: {
@@ -138,7 +138,7 @@ describe("session hook context wiring", () => {
         updatedAt: Date.now(),
       },
     });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const cfg = { session: { store: storePath } } as MullusiConfig;
 
     await initSessionState({
       ctx: { Body: "/reset", SessionKey: sessionKey },
@@ -152,7 +152,7 @@ describe("session hook context wiring", () => {
 
   it("maps custom reset trigger aliases to the new-session reason", async () => {
     const sessionKey = "agent:main:telegram:direct:alias";
-    const storePath = await createStorePath("openclaw-session-hook-reset-alias");
+    const storePath = await createStorePath("mullusi-session-hook-reset-alias");
     const transcriptPath = await writeTranscript(storePath, "alias-session", "alias me");
     await writeStore(storePath, {
       [sessionKey]: {
@@ -166,7 +166,7 @@ describe("session hook context wiring", () => {
         store: storePath,
         resetTriggers: ["/fresh"],
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     await initSessionState({
       ctx: { Body: "/fresh", SessionKey: sessionKey },
@@ -183,7 +183,7 @@ describe("session hook context wiring", () => {
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
       const sessionKey = "agent:main:telegram:direct:daily";
-      const storePath = await createStorePath("openclaw-session-hook-daily");
+      const storePath = await createStorePath("mullusi-session-hook-daily");
       const transcriptPath = await writeTranscript(storePath, "daily-session", "daily");
       await writeStore(storePath, {
         [sessionKey]: {
@@ -192,7 +192,7 @@ describe("session hook context wiring", () => {
           updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
         },
       });
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const cfg = { session: { store: storePath } } as MullusiConfig;
 
       await initSessionState({
         ctx: { Body: "hello", SessionKey: sessionKey },
@@ -218,7 +218,7 @@ describe("session hook context wiring", () => {
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
       const sessionKey = "agent:main:telegram:direct:idle";
-      const storePath = await createStorePath("openclaw-session-hook-idle");
+      const storePath = await createStorePath("mullusi-session-hook-idle");
       const transcriptPath = await writeTranscript(storePath, "idle-session", "idle");
       await writeStore(storePath, {
         [sessionKey]: {
@@ -235,7 +235,7 @@ describe("session hook context wiring", () => {
             idleMinutes: 30,
           },
         },
-      } as OpenClawConfig;
+      } as MullusiConfig;
 
       await initSessionState({
         ctx: { Body: "hello", SessionKey: sessionKey },
@@ -255,7 +255,7 @@ describe("session hook context wiring", () => {
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
       const sessionKey = "agent:main:telegram:direct:overlap";
-      const storePath = await createStorePath("openclaw-session-hook-overlap");
+      const storePath = await createStorePath("mullusi-session-hook-overlap");
       const transcriptPath = await writeTranscript(storePath, "overlap-session", "overlap");
       await writeStore(storePath, {
         [sessionKey]: {
@@ -273,7 +273,7 @@ describe("session hook context wiring", () => {
             idleMinutes: 30,
           },
         },
-      } as OpenClawConfig;
+      } as MullusiConfig;
 
       await initSessionState({
         ctx: { Body: "hello", SessionKey: sessionKey },

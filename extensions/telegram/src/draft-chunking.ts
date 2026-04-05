@@ -1,14 +1,14 @@
-import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { type MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { resolveTextChunkLimit } from "mullusi/plugin-sdk/reply-chunking";
+import { resolveAccountEntry } from "mullusi/plugin-sdk/routing";
+import { normalizeAccountId } from "mullusi/plugin-sdk/routing";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 
 const DEFAULT_TELEGRAM_DRAFT_STREAM_MIN = 200;
 const DEFAULT_TELEGRAM_DRAFT_STREAM_MAX = 800;
 
 export function resolveTelegramDraftStreamingChunking(
-  cfg: OpenClawConfig | undefined,
+  cfg: MullusiConfig | undefined,
   accountId?: string | null,
 ): {
   minChars: number;

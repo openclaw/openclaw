@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   buildConfigureCandidates,
   buildConfigureCandidatesForScope,
@@ -23,7 +23,7 @@ describe("secrets configure plan helpers", () => {
           botToken: "token", // pragma: allowlist secret
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const candidates = buildConfigureCandidates(config);
     const paths = candidates.map((entry) => entry.path);
@@ -39,7 +39,7 @@ describe("secrets configure plan helpers", () => {
           legacy: { source: "env" },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const next = {
       secrets: {
         providers: {
@@ -47,7 +47,7 @@ describe("secrets configure plan helpers", () => {
           modern: { source: "env" },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const changes = collectConfigureProviderChanges({ original, next });
     expect(Object.keys(changes.upserts).toSorted()).toEqual(["default", "modern"]);
@@ -56,7 +56,7 @@ describe("secrets configure plan helpers", () => {
 
   it("discovers auth-profiles candidates for the selected agent scope", () => {
     const candidates = buildConfigureCandidatesForScope({
-      config: {} as OpenClawConfig,
+      config: {} as MullusiConfig,
       authProfiles: {
         agentId: "main",
         store: {
@@ -98,7 +98,7 @@ describe("secrets configure plan helpers", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       authProfiles: {
         agentId: "main",
         store: {
@@ -152,12 +152,12 @@ describe("secrets configure plan helpers", () => {
           },
           apiKey: "demo-talk-key", // pragma: allowlist secret
         },
-      } as OpenClawConfig,
-      authoredOpenClawConfig: {
+      } as MullusiConfig,
+      authoredMullusiConfig: {
         talk: {
           apiKey: "demo-talk-key", // pragma: allowlist secret
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     });
 
     const normalized = candidates.find(
@@ -175,7 +175,7 @@ describe("secrets configure plan helpers", () => {
           path: "talk.providers.elevenlabs.apiKey",
           pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
           label: "talk.providers.elevenlabs.apiKey",
-          configFile: "openclaw.json" as const,
+          configFile: "mullusi.json" as const,
           expectedResolvedValue: "string" as const,
           providerId: "elevenlabs",
           ref: {

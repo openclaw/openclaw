@@ -1,10 +1,10 @@
-import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { attachChannelToResult } from "mullusi/plugin-sdk/channel-send-result";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
-} from "openclaw/plugin-sdk/outbound-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+} from "mullusi/plugin-sdk/outbound-runtime";
+import type { ReplyPayload } from "mullusi/plugin-sdk/reply-runtime";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { sendTelegramPayloadMessages } from "./outbound-adapter.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
@@ -63,13 +63,13 @@ async function sendTypingTelegramLazy(
 export function resolveTelegramTokenHelper() {
   return (
     getOptionalTelegramRuntime()?.channel?.telegram?.resolveTelegramToken ??
-    ((cfg: OpenClawConfig, params?: { accountId?: string | null }) =>
+    ((cfg: MullusiConfig, params?: { accountId?: string | null }) =>
       import("./token.js").then(({ resolveTelegramToken }) => resolveTelegramToken(cfg, params)))
   );
 }
 
 export function buildTelegramSendOptions(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   mediaUrl?: string | null;
   mediaLocalRoots?: readonly string[] | null;
   accountId?: string | null;
@@ -96,7 +96,7 @@ export function buildTelegramSendOptions(params: {
 }
 
 async function sendTelegramOutbound(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   to: string;
   text: string;
   mediaUrl?: string | null;
@@ -138,7 +138,7 @@ export const telegramChannelOutbound = {
       accountId,
       payload,
     }: {
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       accountId?: string | null;
       payload: ReplyPayload;
     }) =>
@@ -152,7 +152,7 @@ export const telegramChannelOutbound = {
       target,
       hint,
     }: {
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       target: { to: string; accountId?: string | null; threadId?: string | number | null };
       hint?: { kind?: string; approvalKind?: string } | null;
     }) => {
@@ -188,7 +188,7 @@ export const telegramChannelOutbound = {
       forceDocument,
       gatewayClientScopes,
     }: {
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       to: string;
       payload: ReplyPayload;
       mediaLocalRoots?: readonly string[] | null;
@@ -232,7 +232,7 @@ export const telegramChannelOutbound = {
       silent,
       gatewayClientScopes,
     }: {
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       to: string;
       text: string;
       accountId?: string | null;
@@ -266,7 +266,7 @@ export const telegramChannelOutbound = {
       silent,
       gatewayClientScopes,
     }: {
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       to: string;
       text: string;
       mediaUrl?: string | null;
@@ -301,7 +301,7 @@ export const telegramChannelOutbound = {
       isAnonymous,
       gatewayClientScopes,
     }: {
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       to: string;
       poll: Parameters<TelegramSendPollFn>[1];
       accountId?: string | null;

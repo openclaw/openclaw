@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
 
@@ -11,7 +11,7 @@ const modelCatalog: ModelCatalogEntry[] = [
 ];
 
 function createResetFixture(entry: Partial<SessionEntry> = {}) {
-  const cfg = {} as OpenClawConfig;
+  const cfg = {} as MullusiConfig;
   const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
   const sessionEntry: SessionEntry = {
     sessionId: "s1",

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   createReplyRuntimeMocks,
   createTempHomeHarness,
@@ -11,14 +11,14 @@ import {
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 const agentMocks = createReplyRuntimeMocks();
 
-const { withTempHome } = createTempHomeHarness({ prefix: "openclaw-rawbody-" });
+const { withTempHome } = createTempHomeHarness({ prefix: "mullusi-rawbody-" });
 
 installReplyRuntimeMocks(agentMocks);
 
 describe("RawBody directive parsing", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("MULLUSI_TEST_FAST", "1");
     resetReplyRuntimeMocks(agentMocks);
     ({ getReplyFromConfig } = await import("./reply.js"));
   });
@@ -48,7 +48,7 @@ describe("RawBody directive parsing", () => {
       const res = await getReplyFromConfig(
         groupMessageCtx,
         {},
-        makeReplyConfig(home) as OpenClawConfig,
+        makeReplyConfig(home) as MullusiConfig,
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;

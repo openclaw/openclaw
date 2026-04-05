@@ -6,7 +6,7 @@ import {
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import type {
   ConfiguredBindingResolution,
   StatefulBindingTargetDescriptor,
@@ -19,7 +19,7 @@ import type {
 } from "./stateful-target-drivers.js";
 
 function toAcpStatefulBindingTargetDescriptor(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   sessionKey: string;
 }): StatefulBindingTargetDescriptor | null {
   const meta = readAcpSessionEntry(params)?.acp;
@@ -46,7 +46,7 @@ function toAcpStatefulBindingTargetDescriptor(params: {
 }
 
 async function ensureAcpTargetReady(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   bindingResolution: ConfiguredBindingResolution;
 }): Promise<StatefulBindingTargetReadyResult> {
   const configuredBinding = resolveConfiguredAcpBindingSpecFromRecord(
@@ -68,7 +68,7 @@ async function ensureAcpTargetReady(params: {
 }
 
 async function ensureAcpTargetSession(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   bindingResolution: ConfiguredBindingResolution;
 }): Promise<StatefulBindingTargetSessionResult> {
   const spec = resolveConfiguredAcpBindingSpecFromRecord(params.bindingResolution.record);
@@ -86,7 +86,7 @@ async function ensureAcpTargetSession(params: {
 }
 
 async function resetAcpTargetInPlace(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   sessionKey: string;
   reason: "new" | "reset";
 }): Promise<StatefulBindingTargetResetResult> {

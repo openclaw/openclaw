@@ -6,7 +6,7 @@ export { handleBrowserGatewayRequest } from "./src/gateway/browser-request.js";
 export { browserHandlers } from "./src/gateway/browser-request.js";
 export {
   definePluginEntry,
-  type OpenClawPluginApi,
-  type OpenClawPluginToolContext,
-  type OpenClawPluginToolFactory,
-} from "openclaw/plugin-sdk/plugin-entry";
+  type MullusiPluginApi,
+  type MullusiPluginToolContext,
+  type MullusiPluginToolFactory,
+} from "mullusi/plugin-sdk/plugin-entry";

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { MullusiConfig } from "../../../config/config.js";
 import type {
   PluginHookBeforeAgentStartResult,
   ProviderRuntimeModel,
@@ -100,7 +100,7 @@ export async function resolveHookModelSelection(params: {
 }
 
 export function resolveEffectiveRuntimeModel(params: {
-  cfg: OpenClawConfig | undefined;
+  cfg: MullusiConfig | undefined;
   provider: string;
   modelId: string;
   runtimeModel: ProviderRuntimeModel;

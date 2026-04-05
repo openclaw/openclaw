@@ -12,9 +12,9 @@ import {
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";
-import type { OpenClawConfig } from "./types.js";
+import type { MullusiConfig } from "./types.js";
 
-function createSourceConfig(): OpenClawConfig {
+function createSourceConfig(): MullusiConfig {
   return {
     models: {
       providers: {
@@ -28,7 +28,7 @@ function createSourceConfig(): OpenClawConfig {
   };
 }
 
-function createRuntimeConfig(): OpenClawConfig {
+function createRuntimeConfig(): MullusiConfig {
   return {
     models: {
       providers: {
@@ -57,7 +57,7 @@ describe("runtime config snapshot writes", () => {
   });
 
   it("returns the source snapshot when runtime snapshot is active", async () => {
-    await withTempHome("openclaw-config-runtime-source-", async () => {
+    await withTempHome("mullusi-config-runtime-source-", async () => {
       const sourceConfig = createSourceConfig();
       const runtimeConfig = createRuntimeConfig();
       try {
@@ -70,8 +70,8 @@ describe("runtime config snapshot writes", () => {
   });
 
   it("skips source projection for non-runtime-derived configs", async () => {
-    await withTempHome("openclaw-config-runtime-projection-shape-", async () => {
-      const sourceConfig: OpenClawConfig = {
+    await withTempHome("mullusi-config-runtime-projection-shape-", async () => {
+      const sourceConfig: MullusiConfig = {
         ...createSourceConfig(),
         gateway: {
           auth: {
@@ -79,7 +79,7 @@ describe("runtime config snapshot writes", () => {
           },
         },
       };
-      const runtimeConfig: OpenClawConfig = {
+      const runtimeConfig: MullusiConfig = {
         ...createRuntimeConfig(),
         gateway: {
           auth: {
@@ -87,7 +87,7 @@ describe("runtime config snapshot writes", () => {
           },
         },
       };
-      const independentConfig: OpenClawConfig = {
+      const independentConfig: MullusiConfig = {
         models: {
           providers: {
             openai: {
@@ -119,8 +119,8 @@ describe("runtime config snapshot writes", () => {
   });
 
   it("preserves source secret refs when writeConfigFile receives runtime-resolved config", async () => {
-    await withTempHome("openclaw-config-runtime-write-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
+    await withTempHome("mullusi-config-runtime-write-", async (home) => {
+      const configPath = path.join(home, ".mullusi", "mullusi.json");
       const sourceConfig = createSourceConfig();
       const runtimeConfig = createRuntimeConfig();
 
@@ -148,9 +148,9 @@ describe("runtime config snapshot writes", () => {
   });
 
   it("refreshes the runtime snapshot after writes so follow-up reads see persisted changes", async () => {
-    await withTempHome("openclaw-config-runtime-write-refresh-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const sourceConfig: OpenClawConfig = {
+    await withTempHome("mullusi-config-runtime-write-refresh-", async (home) => {
+      const configPath = path.join(home, ".mullusi", "mullusi.json");
+      const sourceConfig: MullusiConfig = {
         models: {
           providers: {
             openai: {
@@ -161,7 +161,7 @@ describe("runtime config snapshot writes", () => {
           },
         },
       };
-      const runtimeConfig: OpenClawConfig = {
+      const runtimeConfig: MullusiConfig = {
         models: {
           providers: {
             openai: {
@@ -172,7 +172,7 @@ describe("runtime config snapshot writes", () => {
           },
         },
       };
-      const nextRuntimeConfig: OpenClawConfig = {
+      const nextRuntimeConfig: MullusiConfig = {
         ...runtimeConfig,
         gateway: { auth: { mode: "token" as const } },
       };
@@ -220,11 +220,11 @@ describe("runtime config snapshot writes", () => {
   });
 
   it("keeps the last-known-good runtime snapshot active while a specialized refresh is pending", async () => {
-    await withTempHome("openclaw-config-runtime-refresh-pending-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
+    await withTempHome("mullusi-config-runtime-refresh-pending-", async (home) => {
+      const configPath = path.join(home, ".mullusi", "mullusi.json");
       const sourceConfig = createSourceConfig();
       const runtimeConfig = createRuntimeConfig();
-      const nextRuntimeConfig: OpenClawConfig = {
+      const nextRuntimeConfig: MullusiConfig = {
         ...runtimeConfig,
         gateway: { auth: { mode: "token" as const } },
       };
@@ -260,12 +260,12 @@ describe("runtime config snapshot writes", () => {
   });
 
   it("notifies in-process write listeners with the refreshed runtime snapshot", async () => {
-    await withTempHome("openclaw-config-runtime-write-listener-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
+    await withTempHome("mullusi-config-runtime-write-listener-", async (home) => {
+      const configPath = path.join(home, ".mullusi", "mullusi.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, `${JSON.stringify({ gateway: { port: 18789 } }, null, 2)}\n`);
+      await fs.writeFile(configPath, `${JSON.stringify({ gateway: { port: 18790 } }, null, 2)}\n`);
 
-      const seen: Array<{ configPath: string; runtimeConfig: OpenClawConfig }> = [];
+      const seen: Array<{ configPath: string; runtimeConfig: MullusiConfig }> = [];
       const unsubscribe = registerConfigWriteListener((event) => {
         seen.push({
           configPath: event.configPath,
@@ -274,7 +274,7 @@ describe("runtime config snapshot writes", () => {
       });
 
       try {
-        expect(loadConfig().gateway?.port).toBe(18789);
+        expect(loadConfig().gateway?.port).toBe(18790);
         await writeConfigFile({
           ...loadConfig(),
           gateway: { port: 19003 },

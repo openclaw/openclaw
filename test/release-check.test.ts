@@ -51,14 +51,14 @@ describe("collectBundledExtensionManifestErrors", () => {
         {
           id: "broken",
           packageJson: {
-            openclaw: {
+            mullusi: {
               install: { npmSpec: "   " },
             },
           },
         },
       ]),
     ).toEqual([
-      "bundled extension 'broken' manifest invalid | openclaw.install.npmSpec must be a non-empty string",
+      "bundled extension 'broken' manifest invalid | mullusi.install.npmSpec must be a non-empty string",
     ]);
   });
 
@@ -68,14 +68,14 @@ describe("collectBundledExtensionManifestErrors", () => {
         {
           id: "broken",
           packageJson: {
-            openclaw: {
-              install: { npmSpec: "@openclaw/broken", minHostVersion: "2026.3.14" },
+            mullusi: {
+              install: { npmSpec: "@mullusi/broken", minHostVersion: "2026.3.14" },
             },
           },
         },
       ]),
     ).toEqual([
-      "bundled extension 'broken' manifest invalid | openclaw.install.minHostVersion must use a semver floor in the form \">=x.y.z\"",
+      "bundled extension 'broken' manifest invalid | mullusi.install.minHostVersion must use a semver floor in the form \">=x.y.z\"",
     ]);
   });
 
@@ -85,7 +85,7 @@ describe("collectBundledExtensionManifestErrors", () => {
         {
           id: "irc",
           packageJson: {
-            openclaw: {
+            mullusi: {
               install: { minHostVersion: ">=2026.3.14" },
             },
           },
@@ -100,13 +100,13 @@ describe("collectBundledExtensionManifestErrors", () => {
         {
           id: "broken",
           packageJson: {
-            openclaw: {
+            mullusi: {
               install: 123,
             },
           },
         },
       ]),
-    ).toEqual(["bundled extension 'broken' manifest invalid | openclaw.install must be an object"]);
+    ).toEqual(["bundled extension 'broken' manifest invalid | mullusi.install must be an object"]);
   });
 });
 
@@ -118,7 +118,7 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
           {
             id: "matrix",
             packageJson: {
-              openclaw: {
+              mullusi: {
                 releaseChecks: {
                   rootDependencyMirrorAllowlist: true,
                 },
@@ -129,7 +129,7 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
         new Map(),
       ),
     ).toEqual([
-      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must be an array",
+      "bundled extension 'matrix' manifest invalid | mullusi.releaseChecks.rootDependencyMirrorAllowlist must be an array",
     ]);
   });
 
@@ -143,7 +143,7 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
               dependencies: {
                 "matrix-js-sdk": "41.2.0",
               },
-              openclaw: {
+              mullusi: {
                 releaseChecks: {
                   rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
                 },
@@ -154,7 +154,7 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
         new Map([["@matrix-org/matrix-sdk-crypto-wasm", "18.0.0"]]),
       ),
     ).toEqual([
-      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must be declared in extension runtime dependencies",
+      "bundled extension 'matrix' manifest invalid | mullusi.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must be declared in extension runtime dependencies",
     ]);
   });
 
@@ -168,7 +168,7 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
               dependencies: {
                 "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
               },
-              openclaw: {
+              mullusi: {
                 releaseChecks: {
                   rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
                 },
@@ -179,7 +179,7 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
         new Map(),
       ),
     ).toEqual([
-      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must be mirrored in root runtime dependencies",
+      "bundled extension 'matrix' manifest invalid | mullusi.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must be mirrored in root runtime dependencies",
     ]);
   });
 
@@ -193,7 +193,7 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
               dependencies: {
                 "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
               },
-              openclaw: {
+              mullusi: {
                 releaseChecks: {
                   rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
                 },
@@ -204,7 +204,7 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
         new Map([["@matrix-org/matrix-sdk-crypto-wasm", "18.1.0"]]),
       ),
     ).toEqual([
-      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must match root runtime dependency version (extension '18.0.0', root '18.1.0')",
+      "bundled extension 'matrix' manifest invalid | mullusi.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must match root runtime dependency version (extension '18.0.0', root '18.1.0')",
     ]);
   });
 
@@ -218,7 +218,7 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
               dependencies: {
                 "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
               },
-              openclaw: {
+              mullusi: {
                 releaseChecks: {
                   rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
                 },
@@ -239,9 +239,9 @@ describe("collectForbiddenPackPaths", () => {
         "dist/index.js",
         bundledDistPluginFile("discord", "node_modules/@buape/carbon/index.js"),
         bundledPluginFile("tlon", "node_modules/.bin/tlon"),
-        "node_modules/.bin/openclaw",
+        "node_modules/.bin/mullusi",
       ]),
-    ).toEqual([bundledPluginFile("tlon", "node_modules/.bin/tlon"), "node_modules/.bin/openclaw"]);
+    ).toEqual([bundledPluginFile("tlon", "node_modules/.bin/tlon"), "node_modules/.bin/mullusi"]);
   });
 
   it("blocks generated docs artifacts from npm pack output", () => {
@@ -280,11 +280,11 @@ describe("collectMissingPackPaths", () => {
         bundledDistPluginFile("matrix", "helper-api.js"),
         bundledDistPluginFile("matrix", "runtime-api.js"),
         bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
-        bundledDistPluginFile("matrix", "openclaw.plugin.json"),
+        bundledDistPluginFile("matrix", "mullusi.plugin.json"),
         bundledDistPluginFile("matrix", "package.json"),
         bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
         bundledDistPluginFile("whatsapp", "runtime-api.js"),
-        bundledDistPluginFile("whatsapp", "openclaw.plugin.json"),
+        bundledDistPluginFile("whatsapp", "mullusi.plugin.json"),
         bundledDistPluginFile("whatsapp", "package.json"),
       ]),
     );
@@ -325,23 +325,23 @@ describe("collectMissingPackPaths", () => {
 describe("collectPackUnpackedSizeErrors", () => {
   it("accepts pack results within the unpacked size budget", () => {
     expect(
-      collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.14.tgz", 120_354_302)]),
+      collectPackUnpackedSizeErrors([makePackResult("mullusi-2026.3.14.tgz", 120_354_302)]),
     ).toEqual([]);
   });
 
   it("flags oversized pack results that risk low-memory startup failures", () => {
     expect(
-      collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.12.tgz", 224_002_564)]),
+      collectPackUnpackedSizeErrors([makePackResult("mullusi-2026.3.12.tgz", 224_002_564)]),
     ).toEqual([
-      "openclaw-2026.3.12.tgz unpackedSize 224002564 bytes (213.6 MiB) exceeds budget 200278016 bytes (191.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
+      "mullusi-2026.3.12.tgz unpackedSize 224002564 bytes (213.6 MiB) exceeds budget 200278016 bytes (191.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
     ]);
   });
 
   it("fails closed when npm pack output omits unpackedSize for every result", () => {
     expect(
       collectPackUnpackedSizeErrors([
-        { filename: "openclaw-2026.3.14.tgz" },
-        { filename: "openclaw-extra.tgz", unpackedSize: Number.NaN },
+        { filename: "mullusi-2026.3.14.tgz" },
+        { filename: "mullusi-extra.tgz", unpackedSize: Number.NaN },
       ]),
     ).toEqual([
       "npm pack --dry-run produced no unpackedSize data; pack size budget was not verified.",

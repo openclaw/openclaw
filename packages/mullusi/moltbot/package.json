@@ -1,0 +1,16 @@
+{
+  "name": "mullusi",
+  "version": "2026.2.12",
+  "description": "Compatibility shim that forwards to mullusi",
+  "bin": {
+    "mullusi": "./bin/mullusi.js"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./cli-entry": "./bin/mullusi.js"
+  },
+  "dependencies": {
+    "mullusi": "workspace:*"
+  }
+}

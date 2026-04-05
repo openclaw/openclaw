@@ -1,4 +1,4 @@
-export type { OpenClawConfig } from "../config/config.js";
+export type { MullusiConfig } from "../config/config.js";
 
 export { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 export {

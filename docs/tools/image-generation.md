@@ -30,7 +30,7 @@ The tool only appears when at least one image generation provider is available. 
 }
 ```
 
-3. Ask the agent: _"Generate an image of a friendly lobster mascot."_
+3. Ask the agent: _"Generate an image of a friendly mullusi mascot."_
 
 The agent calls `image_generate` automatically. No tool allow-listing needed — it's enabled by default when a provider is available.
 
@@ -89,7 +89,7 @@ Not all providers support all parameters. The tool passes what each provider sup
 
 ### Provider selection order
 
-When generating an image, OpenClaw tries providers in this order:
+When generating an image, Mullusi tries providers in this order:
 
 1. **`model` parameter** from the tool call (if the agent specifies one)
 2. **`imageGenerationModel.primary`** from config
@@ -103,7 +103,7 @@ If a provider fails (auth error, rate limit, etc.), the next candidate is tried 
 Notes:
 
 - Auto-detection is auth-aware. A provider default only enters the candidate list
-  when OpenClaw can actually authenticate that provider.
+  when Mullusi can actually authenticate that provider.
 - Use `action: "list"` to inspect the currently registered providers, their
   default models, and auth env-var hints.
 

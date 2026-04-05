@@ -1,7 +1,7 @@
 {
-  "name": "@openclaw/matrix",
+  "name": "@mullusi/matrix",
   "version": "2026.4.4",
-  "description": "OpenClaw Matrix channel plugin",
+  "description": "Mullusi Matrix channel plugin",
   "type": "module",
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
@@ -12,17 +12,17 @@
     "music-metadata": "^11.12.3"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "mullusi": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.4"
+    "mullusi": ">=2026.4.4"
   },
   "peerDependenciesMeta": {
-    "openclaw": {
+    "mullusi": {
       "optional": true
     }
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],
@@ -38,7 +38,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/matrix",
+      "npmSpec": "@mullusi/matrix",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.4",
       "allowInvalidConfigRecovery": true

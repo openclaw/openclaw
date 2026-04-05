@@ -10,7 +10,7 @@ import { createProviderAuthResolver } from "./models-config.providers.secrets.js
 
 describe("models-config provider auth provenance", () => {
   it("persists env keyRef and tokenRef auth profiles as env var markers", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["VOLCANO_ENGINE_API_KEY", "TOGETHER_API_KEY"]);
     delete process.env.VOLCANO_ENGINE_API_KEY;
     delete process.env.TOGETHER_API_KEY;
@@ -48,7 +48,7 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("uses non-env marker for ref-managed profiles even when runtime plaintext is present", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     await writeFile(
       join(agentDir, "auth-profiles.json"),
       JSON.stringify(
@@ -82,7 +82,7 @@ describe("models-config provider auth provenance", () => {
   });
 
   it("keeps oauth compatibility markers for minimax-portal", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     await writeFile(
       join(agentDir, "auth-profiles.json"),
       JSON.stringify(

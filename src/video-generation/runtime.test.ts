@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import {
   generateVideo,
@@ -38,7 +38,7 @@ describe("video-generation runtime facade", () => {
             videoGenerationModel: { primary: "video-plugin/vid-v1" },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       prompt: "animate a cat",
       agentDir: "/tmp/agent",
       authStore: { version: 1, profiles: {} },
@@ -64,7 +64,7 @@ describe("video-generation runtime facade", () => {
       },
     ];
     mocks.listRuntimeVideoGenerationProviders.mockReturnValue(providers);
-    const params = { config: {} as OpenClawConfig };
+    const params = { config: {} as MullusiConfig };
 
     expect(listRuntimeVideoGenerationProviders(params)).toBe(providers);
     expect(mocks.listRuntimeVideoGenerationProviders).toHaveBeenCalledWith(params);

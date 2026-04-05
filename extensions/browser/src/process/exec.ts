@@ -1,1 +1,1 @@
-export { runExec } from "openclaw/plugin-sdk/browser-support";
+export { runExec } from "mullusi/plugin-sdk/browser-support";

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { MullusiConfig } from "mullusi/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings.js";
 import type {
@@ -53,7 +53,7 @@ function buildConfig(params: {
   indexPath: string;
   provider: "openai" | "mistral";
   fallback?: "none" | "mistral" | "ollama";
-}): OpenClawConfig {
+}): MullusiConfig {
   return {
     agents: {
       defaults: {
@@ -69,7 +69,7 @@ function buildConfig(params: {
       },
       list: [{ id: "main", default: true }],
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
 }
 
 describe("memory manager mistral provider wiring", () => {
@@ -82,7 +82,7 @@ describe("memory manager mistral provider wiring", () => {
     ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     vi.clearAllMocks();
     createEmbeddingProviderMock.mockReset();
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-mistral-"));
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-memory-mistral-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "test");

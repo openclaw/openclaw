@@ -1,6 +1,6 @@
 import { normalizeStructuredPromptSection } from "./prompt-cache-stability.js";
 
-export const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\n";
+export const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- MULLUSI_CACHE_BOUNDARY -->\n";
 
 export function stripSystemPromptCacheBoundary(text: string): string {
   return text.replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY, "\n");

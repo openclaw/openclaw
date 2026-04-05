@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 首次设置 OpenClaw
+  - 首次设置 Mullusi
   - 查找常见配置模式
   - 导航到特定配置部分
 summary: 配置概览：常见任务、快速设置，以及完整参考的链接
@@ -16,9 +16,9 @@ x-i18n:
 
 # 配置
 
-OpenClaw 会从 `~/.openclaw/openclaw.json` 读取可选的 <Tooltip tip="JSON5 supports comments and trailing commas">**JSON5**</Tooltip> 配置。
+Mullusi 会从 `~/.mullusi/mullusi.json` 读取可选的 <Tooltip tip="JSON5 supports comments and trailing commas">**JSON5**</Tooltip> 配置。
 
-如果该文件缺失，OpenClaw 会使用安全的默认值。添加配置的常见原因包括：
+如果该文件缺失，Mullusi 会使用安全的默认值。添加配置的常见原因包括：
 
 - 连接渠道并控制谁可以向 bot 发消息
 - 设置模型、工具、沙箱隔离或自动化（cron、hooks）
@@ -27,15 +27,15 @@ OpenClaw 会从 `~/.openclaw/openclaw.json` 读取可选的 <Tooltip tip="JSON5 
 所有可用字段请参阅 [完整参考](/gateway/configuration-reference)。
 
 <Tip>
-**刚接触配置？** 从 `openclaw onboard` 开始进行交互式设置，或者查看 [Configuration Examples](/gateway/configuration-examples) 指南，获取完整的可复制粘贴配置。
+**刚接触配置？** 从 `mullusi onboard` 开始进行交互式设置，或者查看 [Configuration Examples](/gateway/configuration-examples) 指南，获取完整的可复制粘贴配置。
 </Tip>
 
 ## 最小配置
 
 ```json5
-// ~/.openclaw/openclaw.json
+// ~/.mullusi/mullusi.json
 {
-  agents: { defaults: { workspace: "~/.openclaw/workspace" } },
+  agents: { defaults: { workspace: "~/.mullusi/workspace" } },
   channels: { whatsapp: { allowFrom: ["+15555550123"] } },
 }
 ```
@@ -45,38 +45,38 @@ OpenClaw 会从 `~/.openclaw/openclaw.json` 读取可选的 <Tooltip tip="JSON5 
 <Tabs>
   <Tab title="Interactive wizard">
     ```bash
-    openclaw onboard       # 完整设置向导
-    openclaw configure     # 配置向导
+    mullusi onboard       # 完整设置向导
+    mullusi configure     # 配置向导
     ```
   </Tab>
   <Tab title="CLI (one-liners)">
     ```bash
-    openclaw config get agents.defaults.workspace
-    openclaw config set agents.defaults.heartbeat.every "2h"
-    openclaw config unset plugins.entries.brave.config.webSearch.apiKey
+    mullusi config get agents.defaults.workspace
+    mullusi config set agents.defaults.heartbeat.every "2h"
+    mullusi config unset plugins.entries.brave.config.webSearch.apiKey
     ```
   </Tab>
   <Tab title="Control UI">
-    打开 [http://127.0.0.1:18789](http://127.0.0.1:18789) 并使用 **Config** 标签页。
+    打开 [http://127.0.0.1:18790](http://127.0.0.1:18790) 并使用 **Config** 标签页。
     Control UI 会根据配置 schema 渲染表单，并提供 **Raw JSON** 编辑器作为后备方式。
   </Tab>
   <Tab title="Direct edit">
-    直接编辑 `~/.openclaw/openclaw.json`。Gateway 网关会监视该文件并自动应用更改（参见[热重载](#config-hot-reload)）。
+    直接编辑 `~/.mullusi/mullusi.json`。Gateway 网关会监视该文件并自动应用更改（参见[热重载](#config-hot-reload)）。
   </Tab>
 </Tabs>
 
 ## 严格校验
 
 <Warning>
-OpenClaw 只接受完全符合 schema 的配置。未知键、类型格式错误或无效值都会导致 Gateway 网关**拒绝启动**。唯一的根级例外是 `$schema`（字符串），这样编辑器就可以附加 JSON Schema 元数据。
+Mullusi 只接受完全符合 schema 的配置。未知键、类型格式错误或无效值都会导致 Gateway 网关**拒绝启动**。唯一的根级例外是 `$schema`（字符串），这样编辑器就可以附加 JSON Schema 元数据。
 </Warning>
 
 当校验失败时：
 
 - Gateway 网关不会启动
-- 只有诊断命令可用（`openclaw doctor`、`openclaw logs`、`openclaw health`、`openclaw status`）
-- 运行 `openclaw doctor` 以查看具体问题
-- 运行 `openclaw doctor --fix`（或 `--yes`）以应用修复
+- 只有诊断命令可用（`mullusi doctor`、`mullusi logs`、`mullusi health`、`mullusi status`）
+- 运行 `mullusi doctor` 以查看具体问题
+- 运行 `mullusi doctor --fix`（或 `--yes`）以应用修复
 
 ## 常见任务
 
@@ -163,7 +163,7 @@ OpenClaw 只接受完全符合 schema 的配置。未知键、类型格式错误
           {
             id: "main",
             groupChat: {
-              mentionPatterns: ["@openclaw", "openclaw"],
+              mentionPatterns: ["@mullusi", "mullusi"],
             },
           },
         ],
@@ -263,7 +263,7 @@ OpenClaw 只接受完全符合 schema 的配置。未知键、类型格式错误
   </Accordion>
 
   <Accordion title="为官方 iOS 构建启用基于 relay 的推送">
-    基于 relay 的推送在 `openclaw.json` 中配置。
+    基于 relay 的推送在 `mullusi.json` 中配置。
 
     在 Gateway 网关配置中设置：
 
@@ -286,7 +286,7 @@ OpenClaw 只接受完全符合 schema 的配置。未知键、类型格式错误
     等价 CLI：
 
     ```bash
-    openclaw config set gateway.push.apns.relay.baseUrl https://relay.example.com
+    mullusi config set gateway.push.apns.relay.baseUrl https://relay.example.com
     ```
 
     这会带来以下效果：
@@ -312,8 +312,8 @@ OpenClaw 只接受完全符合 schema 的配置。未知键、类型格式错误
 
     兼容性说明：
 
-    - `OPENCLAW_APNS_RELAY_BASE_URL` 和 `OPENCLAW_APNS_RELAY_TIMEOUT_MS` 仍可作为临时环境变量覆盖使用。
-    - `OPENCLAW_APNS_RELAY_ALLOW_HTTP=true` 仍是仅限 loopback 的开发逃生口；不要在配置中持久化 HTTP relay URL。
+    - `MULLUSI_APNS_RELAY_BASE_URL` 和 `MULLUSI_APNS_RELAY_TIMEOUT_MS` 仍可作为临时环境变量覆盖使用。
+    - `MULLUSI_APNS_RELAY_ALLOW_HTTP=true` 仍是仅限 loopback 的开发逃生口；不要在配置中持久化 HTTP relay URL。
 
     关于端到端流程，请参阅 [iOS App](/platforms/ios#relay-backed-push-for-official-builds)；关于 relay 安全模型，请参阅 [Authentication and trust flow](/platforms/ios#authentication-and-trust-flow)。
 
@@ -401,8 +401,8 @@ OpenClaw 只接受完全符合 schema 的配置。未知键、类型格式错误
     {
       agents: {
         list: [
-          { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-          { id: "work", workspace: "~/.openclaw/workspace-work" },
+          { id: "home", default: true, workspace: "~/.mullusi/workspace-home" },
+          { id: "work", workspace: "~/.mullusi/workspace-work" },
         ],
       },
       bindings: [
@@ -420,9 +420,9 @@ OpenClaw 只接受完全符合 schema 的配置。未知键、类型格式错误
     使用 `$include` 组织大型配置：
 
     ```json5
-    // ~/.openclaw/openclaw.json
+    // ~/.mullusi/mullusi.json
     {
-      gateway: { port: 18789 },
+      gateway: { port: 18790 },
       agents: { $include: "./agents.json5" },
       broadcast: {
         $include: ["./clients/a.json5", "./clients/b.json5"],
@@ -442,7 +442,7 @@ OpenClaw 只接受完全符合 schema 的配置。未知键、类型格式错误
 
 ## 配置热重载
 
-Gateway 网关会监视 `~/.openclaw/openclaw.json` 并自动应用更改 —— 对于大多数设置，无需手动重启。
+Gateway 网关会监视 `~/.mullusi/mullusi.json` 并自动应用更改 —— 对于大多数设置，无需手动重启。
 
 ### 重载模式
 
@@ -491,7 +491,7 @@ Gateway 网关会监视 `~/.openclaw/openclaw.json` 并自动应用更改 ——
     校验 + 写入完整配置，并在一步中重启 Gateway 网关。
 
     <Warning>
-    `config.apply` 会替换**整个配置**。部分更新请使用 `config.patch`，单个键请使用 `openclaw config set`。
+    `config.apply` 会替换**整个配置**。部分更新请使用 `config.patch`，单个键请使用 `mullusi config set`。
     </Warning>
 
     参数：
@@ -505,9 +505,9 @@ Gateway 网关会监视 `~/.openclaw/openclaw.json` 并自动应用更改 ——
     当已有重启处于待处理/进行中时，重启请求会被合并，并且两次重启周期之间会应用 30 秒冷却。
 
     ```bash
-    openclaw gateway call config.get --params '{}'  # 捕获 payload.hash
-    openclaw gateway call config.apply --params '{
-      "raw": "{ agents: { defaults: { workspace: \"~/.openclaw/workspace\" } } }",
+    mullusi gateway call config.get --params '{}'  # 捕获 payload.hash
+    mullusi gateway call config.apply --params '{
+      "raw": "{ agents: { defaults: { workspace: \"~/.mullusi/workspace\" } } }",
       "baseHash": "<hash>",
       "sessionKey": "agent:main:whatsapp:direct:+15555550123"
     }'
@@ -531,7 +531,7 @@ Gateway 网关会监视 `~/.openclaw/openclaw.json` 并自动应用更改 ——
     重启行为与 `config.apply` 一致：合并待处理重启，并在两次重启周期之间应用 30 秒冷却。
 
     ```bash
-    openclaw gateway call config.patch --params '{
+    mullusi gateway call config.patch --params '{
       "raw": "{ channels: { telegram: { groups: { \"*\": { requireMention: false } } } } }",
       "baseHash": "<hash>"
     }'
@@ -542,10 +542,10 @@ Gateway 网关会监视 `~/.openclaw/openclaw.json` 并自动应用更改 ——
 
 ## 环境变量
 
-OpenClaw 会从父进程读取环境变量，另外还会读取：
+Mullusi 会从父进程读取环境变量，另外还会读取：
 
 - 当前工作目录中的 `.env`（如果存在）
-- `~/.openclaw/.env`（全局回退）
+- `~/.mullusi/.env`（全局回退）
 
 这两个文件都不会覆盖现有环境变量。你也可以在配置中设置内联环境变量：
 
@@ -559,7 +559,7 @@ OpenClaw 会从父进程读取环境变量，另外还会读取：
 ```
 
 <Accordion title="Shell 环境变量导入（可选）">
-  如果启用，并且预期键名尚未设置，OpenClaw 会运行你的登录 shell，并且只导入缺失的键：
+  如果启用，并且预期键名尚未设置，Mullusi 会运行你的登录 shell，并且只导入缺失的键：
 
 ```json5
 {
@@ -569,7 +569,7 @@ OpenClaw 会从父进程读取环境变量，另外还会读取：
 }
 ```
 
-环境变量等价项：`OPENCLAW_LOAD_SHELL_ENV=1`
+环境变量等价项：`MULLUSI_LOAD_SHELL_ENV=1`
 </Accordion>
 
 <Accordion title="在配置值中替换环境变量">
@@ -577,7 +577,7 @@ OpenClaw 会从父进程读取环境变量，另外还会读取：
 
 ```json5
 {
-  gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } },
+  gateway: { auth: { token: "${MULLUSI_GATEWAY_TOKEN}" } },
   models: { providers: { custom: { apiKey: "${CUSTOM_API_KEY}" } } },
 }
 ```

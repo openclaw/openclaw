@@ -1,6 +1,6 @@
-import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
+import { defineSingleProviderPluginEntry } from "mullusi/plugin-sdk/provider-entry";
+import { buildProviderReplayFamilyHooks } from "mullusi/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "mullusi/plugin-sdk/provider-stream";
 import { applyMoonshotNativeStreamingUsageCompat } from "./api.js";
 import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {

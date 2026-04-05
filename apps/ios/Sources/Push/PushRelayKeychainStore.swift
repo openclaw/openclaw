@@ -13,7 +13,7 @@ private struct StoredPushRelayRegistrationState: Codable {
 }
 
 enum PushRelayRegistrationStore {
-    private static let service = "ai.openclaw.pushrelay"
+    private static let service = "ai.mullusi.pushrelay"
     private static let registrationStateAccount = "registration-state"
     private static let appAttestKeyIDAccount = "app-attest-key-id"
     private static let appAttestedKeyIDAccount = "app-attested-key-id"

@@ -1,4 +1,4 @@
-import { normalizeAccountId, normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
+import { normalizeAccountId, normalizeOptionalAccountId } from "mullusi/plugin-sdk/account-id";
 
 const MATRIX_SCOPED_ENV_SUFFIXES = [
   "HOMESERVER",

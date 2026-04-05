@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { RateLimitError } from "@buape/carbon";
-import { AcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { AcpRuntimeError } from "mullusi/plugin-sdk/acp-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   baseConfig,
@@ -39,7 +39,7 @@ const {
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
 let providerTesting: typeof import("./provider.js").__testing;
-let runtimeEnvModule: typeof import("openclaw/plugin-sdk/runtime-env");
+let runtimeEnvModule: typeof import("mullusi/plugin-sdk/runtime-env");
 
 function createCompatRateLimitError(
   response: Response,
@@ -59,7 +59,7 @@ function createCompatRateLimitError(
   return new RateLimitErrorCtor(response, body, compatRequest);
 }
 
-function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {}): OpenClawConfig {
+function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {}): MullusiConfig {
   return {
     channels: {
       discord: {
@@ -71,7 +71,7 @@ function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {})
         },
       },
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
 }
 
 vi.mock("../voice/manager.runtime.js", () => {
@@ -83,7 +83,7 @@ vi.mock("../voice/manager.runtime.js", () => {
 });
 describe("monitorDiscordProvider", () => {
   type ReconcileHealthProbeParams = {
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     accountId: string;
     sessionKey: string;
     binding: unknown;
@@ -91,7 +91,7 @@ describe("monitorDiscordProvider", () => {
   };
 
   type ReconcileStartupParams = {
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     healthProbe?: (
       params: ReconcileHealthProbeParams,
     ) => Promise<{ status: string; reason?: string }>;
@@ -129,9 +129,9 @@ describe("monitorDiscordProvider", () => {
   };
 
   beforeAll(async () => {
-    vi.doMock("openclaw/plugin-sdk/plugin-runtime", async () => {
-      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
-        "openclaw/plugin-sdk/plugin-runtime",
+    vi.doMock("mullusi/plugin-sdk/plugin-runtime", async () => {
+      const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/plugin-runtime")>(
+        "mullusi/plugin-sdk/plugin-runtime",
       );
       return {
         ...actual,
@@ -148,7 +148,7 @@ describe("monitorDiscordProvider", () => {
     vi.doMock("../token.js", () => ({
       normalizeDiscordToken: (value?: string) => value,
     }));
-    runtimeEnvModule = await import("openclaw/plugin-sdk/runtime-env");
+    runtimeEnvModule = await import("mullusi/plugin-sdk/runtime-env");
     vi.spyOn(runtimeEnvModule, "logVerbose").mockImplementation(() => undefined);
     ({ monitorDiscordProvider, __testing: providerTesting } = await import("./provider.js"));
   });
@@ -703,7 +703,7 @@ describe("monitorDiscordProvider", () => {
     );
     clientFetchUserMock.mockImplementationOnce(async () => {
       emitter.emit("debug", "Gateway websocket opened");
-      return { id: "bot-1", username: "Molty" };
+      return { id: "bot-1", username: "Mullusi" };
     });
     isVerboseMock.mockReturnValue(true);
 

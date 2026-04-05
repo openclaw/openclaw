@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE_NAME="openclaw-onboard-e2e"
+IMAGE_NAME="mullusi-onboard-e2e"
 
 echo "Building Docker image..."
 docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
@@ -15,20 +15,20 @@ docker run --rm -t "$IMAGE_NAME" bash -lc '
 	  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
 	  # tsdown may emit dist/index.js or dist/index.mjs depending on runtime/bundler.
 	  if [ -f dist/index.mjs ]; then
-	    OPENCLAW_ENTRY="dist/index.mjs"
+	    MULLUSI_ENTRY="dist/index.mjs"
 	  elif [ -f dist/index.js ]; then
-	    OPENCLAW_ENTRY="dist/index.js"
+	    MULLUSI_ENTRY="dist/index.js"
 	  else
 	    echo "Missing dist/index.(m)js (build output):"
 	    ls -la dist || true
 	    exit 1
 	  fi
-	  export OPENCLAW_ENTRY
+	  export MULLUSI_ENTRY
 
   # Provide a minimal trash shim to avoid noisy "missing trash" logs in containers.
-  export PATH="/tmp/openclaw-bin:$PATH"
-  mkdir -p /tmp/openclaw-bin
-  cat > /tmp/openclaw-bin/trash <<'"'"'TRASH'"'"'
+  export PATH="/tmp/mullusi-bin:$PATH"
+  mkdir -p /tmp/mullusi-bin
+  cat > /tmp/mullusi-bin/trash <<'"'"'TRASH'"'"'
 #!/usr/bin/env bash
 set -euo pipefail
 trash_dir="$HOME/.Trash"
@@ -43,7 +43,7 @@ for target in "$@"; do
   mv "$target" "$dest"
 done
 TRASH
-  chmod +x /tmp/openclaw-bin/trash
+  chmod +x /tmp/mullusi-bin/trash
 
   send() {
     local payload="$1"
@@ -112,7 +112,7 @@ TRASH
   }
 
 	  start_gateway() {
-	    node "$OPENCLAW_ENTRY" gateway --port 18789 --bind loopback --allow-unconfigured > /tmp/gateway-e2e.log 2>&1 &
+	    node "$MULLUSI_ENTRY" gateway --port 18790 --bind loopback --allow-unconfigured > /tmp/gateway-e2e.log 2>&1 &
 	    GATEWAY_PID="$!"
 	  }
 
@@ -120,7 +120,7 @@ TRASH
     for _ in $(seq 1 20); do
       if node --input-type=module -e "
         import net from 'node:net';
-        const socket = net.createConnection({ host: '127.0.0.1', port: 18789 });
+        const socket = net.createConnection({ host: '127.0.0.1', port: 18790 });
         const timeout = setTimeout(() => {
           socket.destroy();
           process.exit(1);
@@ -137,7 +137,7 @@ TRASH
       " >/dev/null 2>&1; then
         return 0
       fi
-      if [ -f /tmp/gateway-e2e.log ] && grep -E -q "listening on ws://[^ ]+:18789" /tmp/gateway-e2e.log; then
+      if [ -f /tmp/gateway-e2e.log ] && grep -E -q "listening on ws://[^ ]+:18790" /tmp/gateway-e2e.log; then
         if [ -n "${GATEWAY_PID:-}" ] && kill -0 "$GATEWAY_PID" 2>/dev/null; then
           return 0
         fi
@@ -166,11 +166,11 @@ TRASH
     local validate_fn="${6:-}"
 
     echo "== Wizard case: $case_name =="
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_mullusi_env "$home_dir"
 
-    input_fifo="$(mktemp -u "/tmp/openclaw-onboard-${case_name}.XXXXXX")"
+    input_fifo="$(mktemp -u "/tmp/mullusi-onboard-${case_name}.XXXXXX")"
     mkfifo "$input_fifo"
-    local log_path="/tmp/openclaw-onboard-${case_name}.log"
+    local log_path="/tmp/mullusi-onboard-${case_name}.log"
     WIZARD_LOG_PATH="$log_path"
     export WIZARD_LOG_PATH
     # Run under script to keep an interactive TTY for clack prompts.
@@ -213,20 +213,20 @@ TRASH
     local validate_fn="${4:-}"
 
 	    # Default onboarding command wrapper.
-	    run_wizard_cmd "$case_name" "$home_dir" "node \"$OPENCLAW_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
+	    run_wizard_cmd "$case_name" "$home_dir" "node \"$MULLUSI_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
 	  }
 
   make_home() {
-    mktemp -d "/tmp/openclaw-e2e-$1.XXXXXX"
+    mktemp -d "/tmp/mullusi-e2e-$1.XXXXXX"
   }
 
-  set_isolated_openclaw_env() {
+  set_isolated_mullusi_env() {
     local home_dir="$1"
     export HOME="$home_dir"
-    export OPENCLAW_HOME="$home_dir"
-    export OPENCLAW_STATE_DIR="$home_dir/.openclaw"
-    export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
-    mkdir -p "$OPENCLAW_STATE_DIR"
+    export MULLUSI_HOME="$home_dir"
+    export MULLUSI_STATE_DIR="$home_dir/.mullusi"
+    export MULLUSI_CONFIG_PATH="$MULLUSI_STATE_DIR/mullusi.json"
+    mkdir -p "$MULLUSI_STATE_DIR"
   }
 
   assert_file() {
@@ -297,8 +297,8 @@ TRASH
   run_case_local_basic() {
     local home_dir
     home_dir="$(make_home local-basic)"
-    set_isolated_openclaw_env "$home_dir"
-    node "$OPENCLAW_ENTRY" onboard \
+    set_isolated_mullusi_env "$home_dir"
+    node "$MULLUSI_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
       --flow quickstart \
@@ -310,9 +310,9 @@ TRASH
       --skip-health
 
     # Assert config + workspace scaffolding.
-    workspace_dir="$OPENCLAW_STATE_DIR/workspace"
-    config_path="$OPENCLAW_CONFIG_PATH"
-    sessions_dir="$OPENCLAW_STATE_DIR/agents/main/sessions"
+    workspace_dir="$MULLUSI_STATE_DIR/workspace"
+    config_path="$MULLUSI_CONFIG_PATH"
+    sessions_dir="$MULLUSI_STATE_DIR/agents/main/sessions"
 
     assert_file "$config_path"
     assert_dir "$sessions_dir"
@@ -372,16 +372,16 @@ NODE
   run_case_remote_non_interactive() {
     local home_dir
     home_dir="$(make_home remote-non-interactive)"
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_mullusi_env "$home_dir"
 	    # Smoke test non-interactive remote config write.
-	    node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
+	    node "$MULLUSI_ENTRY" onboard --non-interactive --accept-risk \
 	      --mode remote \
-	      --remote-url ws://gateway.local:18789 \
+	      --remote-url ws://gateway.local:18790 \
       --remote-token remote-token \
       --skip-skills \
       --skip-health
 
-    config_path="$OPENCLAW_CONFIG_PATH"
+    config_path="$MULLUSI_CONFIG_PATH"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -394,7 +394,7 @@ const errors = [];
 if (cfg?.gateway?.mode !== "remote") {
   errors.push(`gateway.mode mismatch (got ${cfg?.gateway?.mode ?? "unset"})`);
 }
-if (cfg?.gateway?.remote?.url !== "ws://gateway.local:18789") {
+if (cfg?.gateway?.remote?.url !== "ws://gateway.local:18790") {
   errors.push(`gateway.remote.url mismatch (got ${cfg?.gateway?.remote?.url ?? "unset"})`);
 }
 if (cfg?.gateway?.remote?.token !== "remote-token") {
@@ -414,20 +414,20 @@ NODE
   run_case_reset() {
     local home_dir
     home_dir="$(make_home reset-config)"
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_mullusi_env "$home_dir"
     # Seed a remote config to exercise reset path.
-	    cat > "$OPENCLAW_CONFIG_PATH" <<'"'"'JSON'"'"'
+	    cat > "$MULLUSI_CONFIG_PATH" <<'"'"'JSON'"'"'
 {
   "meta": {},
   "agents": { "defaults": { "workspace": "/root/old" } },
   "gateway": {
     "mode": "remote",
-    "remote": { "url": "ws://old.example:18789", "token": "old-token" }
+    "remote": { "url": "ws://old.example:18790", "token": "old-token" }
   }
 }
 JSON
 
-	    node "$OPENCLAW_ENTRY" onboard \
+	    node "$MULLUSI_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
       --flow quickstart \
@@ -439,7 +439,7 @@ JSON
       --skip-ui \
       --skip-health
 
-    config_path="$OPENCLAW_CONFIG_PATH"
+    config_path="$MULLUSI_CONFIG_PATH"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -470,9 +470,9 @@ NODE
 	    local home_dir
 	    home_dir="$(make_home channels)"
 	    # Channels-only configure flow.
-	    run_wizard_cmd channels "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
+	    run_wizard_cmd channels "$home_dir" "node \"$MULLUSI_ENTRY\" configure --section channels" send_channels_flow
 
-    config_path="$OPENCLAW_CONFIG_PATH"
+    config_path="$MULLUSI_CONFIG_PATH"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -509,9 +509,9 @@ NODE
   run_case_skills() {
     local home_dir
     home_dir="$(make_home skills)"
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_mullusi_env "$home_dir"
     # Seed skills config to ensure it survives the wizard.
-	    cat > "$OPENCLAW_CONFIG_PATH" <<'"'"'JSON'"'"'
+	    cat > "$MULLUSI_CONFIG_PATH" <<'"'"'JSON'"'"'
 {
   "meta": {},
   "skills": {
@@ -521,9 +521,9 @@ NODE
 }
 JSON
 
-	    run_wizard_cmd skills "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section skills" send_skills_flow
+	    run_wizard_cmd skills "$home_dir" "node \"$MULLUSI_ENTRY\" configure --section skills" send_skills_flow
 
-    config_path="$OPENCLAW_CONFIG_PATH"
+    config_path="$MULLUSI_CONFIG_PATH"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'

@@ -76,7 +76,7 @@ vi.mock("../gateway/call.js", () => ({
       };
     }
     return {
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       urlSource: "local loopback",
     };
   },

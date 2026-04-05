@@ -21,7 +21,7 @@ function acpMeta() {
 
 describe("updateSessionStoreAfterAgentRun", () => {
   it("preserves ACP metadata when caller has a stale session snapshot", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-session-store-"));
     const storePath = path.join(dir, "sessions.json");
     const sessionKey = `agent:codex:acp:${randomUUID()}`;
     const sessionId = randomUUID();
@@ -66,7 +66,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
   });
 
   it("persists latest systemPromptReport for downstream warning dedupe", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-session-store-"));
     const storePath = path.join(dir, "sessions.json");
     const sessionKey = `agent:codex:report:${randomUUID()}`;
     const sessionId = randomUUID();
@@ -127,7 +127,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
   });
 
   it("stores and reloads CLI bindings for explicit session-id-only runs", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-session-store-"));
     const storePath = path.join(dir, "sessions.json");
     const cfg = {
       session: {

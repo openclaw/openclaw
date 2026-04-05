@@ -175,7 +175,7 @@ describe("formatGitInstallLabel", () => {
 
 describe("checkDepsStatus", () => {
   it("reports unknown, missing, stale, and ok states from lockfile markers", async () => {
-    const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-"));
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-update-check-"));
 
     await expect(checkDepsStatus({ root: base, manager: "unknown" })).resolves.toEqual({
       manager: "unknown",
@@ -228,7 +228,7 @@ describe("checkUpdateStatus", () => {
   });
 
   it("detects package installs for non-git roots", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-update-check-"));
     await fs.writeFile(
       path.join(root, "package.json"),
       JSON.stringify({ packageManager: "npm@10.0.0" }),

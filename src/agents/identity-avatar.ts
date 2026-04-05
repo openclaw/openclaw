@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   AVATAR_MAX_BYTES,
   isAvatarDataUrl,
@@ -25,7 +25,7 @@ function normalizeAvatarValue(value: string | undefined | null): string | null {
 }
 
 function resolveAvatarSource(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   agentId: string,
   opts?: { includeUiOverride?: boolean },
 ): string | null {
@@ -84,7 +84,7 @@ function resolveLocalAvatarPath(params: {
 }
 
 export function resolveAgentAvatar(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   agentId: string,
   opts?: { includeUiOverride?: boolean },
 ): AgentAvatarResolution {

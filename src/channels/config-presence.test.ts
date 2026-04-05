@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   hasMeaningfulChannelConfig,
   hasPotentialConfiguredChannels,
@@ -12,13 +12,13 @@ import {
 const tempDirs: string[] = [];
 
 function makeTempStateDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-config-presence-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-channel-config-presence-"));
   tempDirs.push(dir);
   return dir;
 }
 
 function expectPotentialConfiguredChannelCase(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   env: NodeJS.ProcessEnv;
   expectedIds: string[];
   expectedConfigured: boolean;
@@ -46,7 +46,7 @@ describe("config presence", () => {
 
   it("ignores enabled-only matrix config when listing configured channels", () => {
     const stateDir = makeTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
+    const env = { MULLUSI_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
     const cfg = { channels: { matrix: { enabled: false } } };
 
     expectPotentialConfiguredChannelCase({
@@ -60,7 +60,7 @@ describe("config presence", () => {
   it("detects env-only channel config", () => {
     const stateDir = makeTempStateDir();
     const env = {
-      OPENCLAW_STATE_DIR: stateDir,
+      MULLUSI_STATE_DIR: stateDir,
       MATRIX_ACCESS_TOKEN: "token",
     } as NodeJS.ProcessEnv;
 

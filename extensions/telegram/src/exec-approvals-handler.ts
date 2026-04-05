@@ -1,23 +1,23 @@
-import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { buildPluginApprovalPendingReplyPayload } from "mullusi/plugin-sdk/approval-reply-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   createChannelNativeApprovalRuntime,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalChannelRuntime,
-} from "openclaw/plugin-sdk/infra-runtime";
-import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
+} from "mullusi/plugin-sdk/infra-runtime";
+import { resolveExecApprovalCommandDisplay } from "mullusi/plugin-sdk/infra-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
   type ExecApprovalPendingReplyParams,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "mullusi/plugin-sdk/infra-runtime";
 import type {
   ExecApprovalRequest,
   ExecApprovalResolved,
   PluginApprovalRequest,
   PluginApprovalResolved,
-} from "openclaw/plugin-sdk/infra-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+} from "mullusi/plugin-sdk/infra-runtime";
+import { createSubsystemLogger } from "mullusi/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "mullusi/plugin-sdk/runtime-env";
 import { telegramNativeApprovalAdapter } from "./approval-native.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
@@ -42,7 +42,7 @@ type TelegramPendingDelivery = {
 export type TelegramExecApprovalHandlerOpts = {
   token: string;
   accountId: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   gatewayUrl?: string;
   runtime?: RuntimeEnv;
 };
@@ -54,7 +54,7 @@ export type TelegramExecApprovalHandlerDeps = {
   editReplyMarkup?: typeof editMessageReplyMarkupTelegram;
 };
 
-function isHandlerConfigured(params: { cfg: OpenClawConfig; accountId: string }): boolean {
+function isHandlerConfigured(params: { cfg: MullusiConfig; accountId: string }): boolean {
   return isTelegramExecApprovalHandlerConfigured(params);
 }
 

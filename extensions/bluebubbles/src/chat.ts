@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { SsrFPolicy } from "mullusi/plugin-sdk/ssrf-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
-import type { OpenClawConfig } from "./runtime-api.js";
+import type { MullusiConfig } from "./runtime-api.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 function blueBubblesPolicy(allowPrivateNetwork: boolean): SsrFPolicy {
@@ -16,7 +16,7 @@ export type BlueBubblesChatOpts = {
   password?: string;
   accountId?: string;
   timeoutMs?: number;
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
 };
 
 function resolveAccount(params: BlueBubblesChatOpts) {

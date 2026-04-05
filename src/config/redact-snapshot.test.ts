@@ -8,7 +8,7 @@ import {
 } from "./redact-snapshot.test-helpers.js";
 import { redactSnapshotTestHints as mainSchemaHints } from "./redact-snapshot.test-hints.js";
 import { buildConfigSchema, type ConfigUiHints } from "./schema.js";
-import type { ConfigFileSnapshot } from "./types.openclaw.js";
+import type { ConfigFileSnapshot } from "./types.mullusi.js";
 
 function expectNestedLevelPairValue(
   source: Record<string, Record<string, Record<string, unknown>>>,
@@ -122,7 +122,7 @@ describe("redactConfigSnapshot", () => {
   it("preserves non-sensitive fields", () => {
     const snapshot = makeSnapshot({
       ui: { seamColor: "#0088cc" },
-      gateway: { port: 18789 },
+      gateway: { port: 18790 },
       models: { providers: { openai: { baseUrl: "https://api.openai.com" } } },
     });
     const result = redactConfigSnapshot(snapshot);
@@ -438,9 +438,9 @@ describe("redactConfigSnapshot", () => {
     const snapshot = makeSnapshot({
       channels: {
         irc: {
-          passwordFile: "/etc/openclaw/irc-password.txt",
+          passwordFile: "/etc/mullusi/irc-password.txt",
           nickserv: {
-            passwordFile: "/etc/openclaw/nickserv-password.txt",
+            passwordFile: "/etc/mullusi/nickserv-password.txt",
             password: "super-secret-nickserv-password",
           },
         },
@@ -452,8 +452,8 @@ describe("redactConfigSnapshot", () => {
     const irc = channels.irc;
     const nickserv = irc.nickserv as Record<string, unknown>;
 
-    expect(irc.passwordFile).toBe("/etc/openclaw/irc-password.txt");
-    expect(nickserv.passwordFile).toBe("/etc/openclaw/nickserv-password.txt");
+    expect(irc.passwordFile).toBe("/etc/mullusi/irc-password.txt");
+    expect(nickserv.passwordFile).toBe("/etc/mullusi/nickserv-password.txt");
     expect(nickserv.password).toBe(REDACTED_SENTINEL);
   });
 

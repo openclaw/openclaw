@@ -1,5 +1,5 @@
 ---
-summary: "Use OpenCode Zen and Go catalogs with OpenClaw"
+summary: "Use OpenCode Zen and Go catalogs with Mullusi"
 read_when:
   - You want OpenCode-hosted model access
   - You want to pick between the Zen and Go catalogs
@@ -8,12 +8,12 @@ title: "OpenCode"
 
 # OpenCode
 
-OpenCode exposes two hosted catalogs in OpenClaw:
+OpenCode exposes two hosted catalogs in Mullusi:
 
 - `opencode/...` for the **Zen** catalog
 - `opencode-go/...` for the **Go** catalog
 
-Both catalogs use the same OpenCode API key. OpenClaw keeps the runtime provider ids
+Both catalogs use the same OpenCode API key. Mullusi keeps the runtime provider ids
 split so upstream per-model routing stays correct, but onboarding and docs treat them
 as one OpenCode setup.
 
@@ -22,15 +22,15 @@ as one OpenCode setup.
 ### Zen catalog
 
 ```bash
-openclaw onboard --auth-choice opencode-zen
-openclaw onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
+mullusi onboard --auth-choice opencode-zen
+mullusi onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
 ```
 
 ### Go catalog
 
 ```bash
-openclaw onboard --auth-choice opencode-go
-openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
+mullusi onboard --auth-choice opencode-go
+mullusi onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 ```
 
 ## Config snippet
@@ -62,7 +62,7 @@ openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 - Entering one OpenCode key during setup stores credentials for both runtime providers.
 - You sign in to OpenCode, add billing details, and copy your API key.
 - Billing and catalog availability are managed from the OpenCode dashboard.
-- Gemini-backed OpenCode refs stay on the proxy-Gemini path, so OpenClaw keeps
+- Gemini-backed OpenCode refs stay on the proxy-Gemini path, so Mullusi keeps
   Gemini thought-signature sanitation there without enabling native Gemini
   replay validation or bootstrap rewrites.
 - Non-Gemini OpenCode refs keep the minimal OpenAI-compatible replay policy.

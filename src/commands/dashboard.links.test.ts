@@ -44,7 +44,7 @@ function resetRuntime() {
 
 function mockSnapshot(token: unknown = "abc") {
   readConfigFileSnapshotMock.mockResolvedValue({
-    path: "/tmp/openclaw.json",
+    path: "/tmp/mullusi.json",
     exists: true,
     raw: "{}",
     parsed: {},
@@ -53,10 +53,10 @@ function mockSnapshot(token: unknown = "abc") {
     issues: [],
     legacyIssues: [],
   });
-  resolveGatewayPortMock.mockReturnValue(18789);
+  resolveGatewayPortMock.mockReturnValue(18790);
   resolveControlUiLinksMock.mockReturnValue({
-    httpUrl: "http://127.0.0.1:18789/",
-    wsUrl: "ws://127.0.0.1:18789",
+    httpUrl: "http://127.0.0.1:18790/",
+    wsUrl: "ws://127.0.0.1:18790",
   });
   resolveSecretRefValuesMock.mockReset();
 }
@@ -71,7 +71,7 @@ describe("dashboardCommand", () => {
     openUrlMock.mockClear();
     formatControlUiSshHintMock.mockClear();
     copyToClipboardMock.mockClear();
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.MULLUSI_GATEWAY_TOKEN;
     delete process.env.CUSTOM_GATEWAY_TOKEN;
   });
 
@@ -84,15 +84,15 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
-      port: 18789,
+      port: 18790,
       bind: "loopback",
       customBindHost: undefined,
       basePath: undefined,
     });
-    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
-    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18790/#token=abc123");
+    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18790/#token=abc123");
     expect(runtime.log).toHaveBeenCalledWith(
-      "Opened in your browser. Keep that tab to control OpenClaw.",
+      "Opened in your browser. Keep that tab to control Mullusi.",
     );
   });
 
@@ -137,7 +137,7 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime);
 
-    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18790/");
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("Token auto-auth unavailable"),
     );
@@ -155,7 +155,7 @@ describe("dashboardCommand", () => {
       provider: "default",
       id: "MISSING_GATEWAY_TOKEN",
     });
-    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
+    process.env.MULLUSI_GATEWAY_TOKEN = "fallback-token";
     copyToClipboardMock.mockResolvedValue(true);
     detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
     openUrlMock.mockResolvedValue(true);
@@ -163,8 +163,8 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime);
 
-    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
-    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18790/");
+    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18790/");
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
     );
@@ -181,8 +181,8 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime);
 
-    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
-    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18790/");
+    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18790/");
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining(
         "Token auto-auth unavailable: gateway.auth.token SecretRef is unresolved (env:default:CUSTOM_GATEWAY_TOKEN).",

@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { createPluginRegistry, type PluginRecord } from "../registry.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
-import type { OpenClawPluginApi } from "../types.js";
+import type { MullusiPluginApi } from "../types.js";
 
 export {
   registerProviderPlugins as registerProviders,
@@ -13,7 +13,7 @@ export function uniqueSortedStrings(values: readonly string[]) {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
 }
 
-export function createPluginRegistryFixture(config = {} as OpenClawConfig) {
+export function createPluginRegistryFixture(config = {} as MullusiConfig) {
   return {
     config,
     registry: createPluginRegistry({
@@ -30,9 +30,9 @@ export function createPluginRegistryFixture(config = {} as OpenClawConfig) {
 
 export function registerTestPlugin(params: {
   registry: ReturnType<typeof createPluginRegistry>;
-  config: OpenClawConfig;
+  config: MullusiConfig;
   record: PluginRecord;
-  register(api: OpenClawPluginApi): void;
+  register(api: MullusiPluginApi): void;
 }) {
   params.registry.registry.plugins.push(params.record);
   params.register(
@@ -44,12 +44,12 @@ export function registerTestPlugin(params: {
 
 export function registerVirtualTestPlugin(params: {
   registry: ReturnType<typeof createPluginRegistry>;
-  config: OpenClawConfig;
+  config: MullusiConfig;
   id: string;
   name: string;
   source?: string;
   kind?: PluginRecord["kind"];
-  register(this: void, api: OpenClawPluginApi): void;
+  register(this: void, api: MullusiPluginApi): void;
 }) {
   registerTestPlugin({
     registry: params.registry,

@@ -1,4 +1,4 @@
-const MODELS_JSON_STATE_KEY = Symbol.for("openclaw.modelsJsonState");
+const MODELS_JSON_STATE_KEY = Symbol.for("mullusi.modelsJsonState");
 
 type ModelsJsonState = {
   writeLocks: Map<string, Promise<void>>;

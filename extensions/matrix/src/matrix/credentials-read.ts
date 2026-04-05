@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "mullusi/plugin-sdk/account-id";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -39,12 +39,12 @@ function resolveStateDir(env: NodeJS.ProcessEnv): string {
   } catch {
     // Some config-only helpers read stored credentials before the Matrix plugin
     // runtime is installed. Fall back to the standard state-dir env contract.
-    const override = env.OPENCLAW_STATE_DIR?.trim();
+    const override = env.MULLUSI_STATE_DIR?.trim();
     if (override) {
       return path.resolve(override);
     }
-    const homeDir = env.OPENCLAW_HOME?.trim() || env.HOME?.trim() || os.homedir();
-    return path.join(homeDir, ".openclaw");
+    const homeDir = env.MULLUSI_HOME?.trim() || env.HOME?.trim() || os.homedir();
+    return path.join(homeDir, ".mullusi");
   }
 }
 

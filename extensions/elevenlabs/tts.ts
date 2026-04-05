@@ -7,7 +7,7 @@ import {
   requireInRange,
   trimToUndefined,
   truncateErrorDetail,
-} from "openclaw/plugin-sdk/speech";
+} from "mullusi/plugin-sdk/speech";
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 

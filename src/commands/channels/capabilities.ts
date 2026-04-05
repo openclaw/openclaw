@@ -13,7 +13,7 @@ import type {
 import {
   readConfigFileSnapshot,
   replaceConfigFile,
-  type OpenClawConfig,
+  type MullusiConfig,
 } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -128,7 +128,7 @@ function renderDisplayLine(line: ChannelCapabilitiesDisplayLine) {
 
 async function resolveChannelReports(params: {
   plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   timeoutMs: number;
   accountOverride?: string;
   target?: string;

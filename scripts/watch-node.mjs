@@ -42,10 +42,10 @@ export async function runWatchMain(params = {}) {
 
   const childEnv = { ...deps.env };
   const watchSession = `${deps.now()}-${deps.process.pid}`;
-  childEnv.OPENCLAW_WATCH_MODE = "1";
-  childEnv.OPENCLAW_WATCH_SESSION = watchSession;
+  childEnv.MULLUSI_WATCH_MODE = "1";
+  childEnv.MULLUSI_WATCH_SESSION = watchSession;
   if (deps.args.length > 0) {
-    childEnv.OPENCLAW_WATCH_COMMAND = deps.args.join(" ");
+    childEnv.MULLUSI_WATCH_COMMAND = deps.args.join(" ");
   }
 
   return await new Promise((resolve) => {

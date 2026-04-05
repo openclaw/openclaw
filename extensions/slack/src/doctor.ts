@@ -2,9 +2,9 @@ import {
   type ChannelDoctorAdapter,
   type ChannelDoctorConfigMutation,
   type ChannelDoctorLegacyConfigRule,
-} from "openclaw/plugin-sdk/channel-contract";
-import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime";
+} from "mullusi/plugin-sdk/channel-contract";
+import { type MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { collectProviderDangerousNameMatchingScopes } from "mullusi/plugin-sdk/runtime";
 import { isSlackMutableAllowEntry } from "./security-doctor.js";
 import {
   formatSlackStreamingBooleanMigrationMessage,
@@ -163,7 +163,7 @@ function normalizeSlackStreamingAliases(params: {
   return { entry: updated, changed };
 }
 
-function normalizeSlackCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
+function normalizeSlackCompatibilityConfig(cfg: MullusiConfig): ChannelDoctorConfigMutation {
   const rawEntry = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.slack);
   if (!rawEntry) {
     return { config: cfg, changes: [] };
@@ -233,14 +233,14 @@ function normalizeSlackCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorCo
       ...cfg,
       channels: {
         ...cfg.channels,
-        slack: updated as unknown as NonNullable<OpenClawConfig["channels"]>["slack"],
-      } as OpenClawConfig["channels"],
+        slack: updated as unknown as NonNullable<MullusiConfig["channels"]>["slack"],
+      } as MullusiConfig["channels"],
     },
     changes,
   };
 }
 
-export function collectSlackMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
+export function collectSlackMutableAllowlistWarnings(cfg: MullusiConfig): string[] {
   const hits: Array<{ path: string; entry: string }> = [];
   const addHits = (pathLabel: string, list: unknown) => {
     if (!Array.isArray(list)) {

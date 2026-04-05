@@ -2,14 +2,14 @@
 set -euo pipefail
 
 VM_NAME="Windows 11"
-SNAPSHOT_HINT="pre-openclaw-native-e2e-2026-03-12"
+SNAPSHOT_HINT="pre-mullusi-native-e2e-2026-03-12"
 MODE="both"
 PROVIDER="openai"
 API_KEY_ENV=""
 AUTH_CHOICE=""
 AUTH_KEY_FLAG=""
 MODEL_ID=""
-INSTALL_URL="https://openclaw.ai/install.ps1"
+INSTALL_URL="https://mullusi.com/install.ps1"
 HOST_PORT="18426"
 HOST_PORT_EXPLICIT=0
 HOST_IP=""
@@ -30,8 +30,8 @@ MINGIT_ZIP_PATH=""
 MINGIT_ZIP_NAME=""
 WINDOWS_ONBOARD_SCRIPT_PATH=""
 SERVER_PID=""
-RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-windows.XXXXXX)"
-BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
+RUN_DIR="$(mktemp -d /tmp/mullusi-parallels-windows.XXXXXX)"
+BUILD_LOCK_DIR="${TMPDIR:-/tmp}/mullusi-parallels-build.lock"
 
 TIMEOUT_SNAPSHOT_S=240
 TIMEOUT_INSTALL_S=1200
@@ -92,21 +92,21 @@ Usage: bash scripts/e2e/parallels-windows-smoke.sh [options]
 Options:
   --vm <name>                Parallels VM name. Default: "Windows 11"
   --snapshot-hint <name>     Snapshot name substring/fuzzy match.
-                             Default: "pre-openclaw-native-e2e-2026-03-12"
+                             Default: "pre-mullusi-native-e2e-2026-03-12"
   --mode <fresh|upgrade|both>
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
-  --install-url <url>        Installer URL for latest release. Default: https://openclaw.ai/install.ps1
+  --install-url <url>        Installer URL for latest release. Default: https://mullusi.com/install.ps1
   --host-port <port>         Host HTTP port for current-main tgz. Default: 18426
   --host-ip <ip>             Override Parallels host IP.
   --latest-version <ver>     Override npm latest version lookup.
   --install-version <ver>    Pin site-installer version/dist-tag for the baseline lane.
   --target-package-spec <npm-spec>
                              Install this npm package tarball instead of packing current main.
-                             Example: openclaw@2026.3.13-beta.1
+                             Example: mullusi@2026.3.13-beta.1
   --skip-latest-ref-check    Skip latest-release ref-mode precheck.
   --keep-server              Leave temp host HTTP server running.
   --json                     Print machine-readable JSON summary.
@@ -418,7 +418,7 @@ PY
   host_timeout_exec "$timeout_s" prlctl exec "$VM_NAME" --current-user powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
 }
 
-guest_run_openclaw() {
+guest_run_mullusi() {
   local env_name="${1:-}"
   local env_value="${2:-}"
   shift 2
@@ -429,14 +429,14 @@ guest_run_openclaw() {
   env_value_q="$(ps_single_quote "$env_value")"
 
   guest_powershell "$(cat <<EOF
-\$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
+\$mullusi = Join-Path \$env:APPDATA 'npm\mullusi.cmd'
 \$args = $args_literal
 if ('${env_name_q}' -ne '') {
   Set-Item -Path ('Env:' + '${env_name_q}') -Value '${env_value_q}'
 }
-# openclaw.cmd preserves multi-word --message args reliably here; Start-Process
+# mullusi.cmd preserves multi-word --message args reliably here; Start-Process
 # against the shim can re-split argv and make Commander reject the turn.
-\$output = & \$openclaw @args 2>&1
+\$output = & \$mullusi @args 2>&1
 if (\$null -ne \$output) {
   \$output | ForEach-Object { \$_ }
 }
@@ -599,7 +599,7 @@ import re
 import sys
 
 text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
-matches = re.findall(r"OpenClaw [^\r\n]+ \([0-9a-f]{7,}\)", text)
+matches = re.findall(r"Mullusi [^\r\n]+ \([0-9a-f]{7,}\)", text)
 print(matches[-1] if matches else "")
 PY
 }
@@ -648,7 +648,7 @@ resolve_latest_version() {
     printf '%s\n' "$LATEST_VERSION"
     return
   fi
-  npm view openclaw version --userconfig "$(mktemp)"
+  npm view mullusi version --userconfig "$(mktemp)"
 }
 
 resolve_mingit_download() {
@@ -659,7 +659,7 @@ import urllib.request
 req = urllib.request.Request(
     "https://api.github.com/repos/git-for-windows/git/releases/latest",
     headers={
-        "User-Agent": "openclaw-parallels-smoke",
+        "User-Agent": "mullusi-parallels-smoke",
         "Accept": "application/vnd.github+json",
     },
 )
@@ -754,12 +754,12 @@ ensure_guest_git() {
   if guest_exec cmd.exe /d /s /c "where git.exe >nul 2>nul && git.exe --version"; then
     return
   fi
-  guest_exec cmd.exe /d /s /c "if exist \"%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\" rmdir /s /q \"%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\""
-  guest_exec cmd.exe /d /s /c "if not exist \"%LOCALAPPDATA%\\OpenClaw\\deps\" mkdir \"%LOCALAPPDATA%\\OpenClaw\\deps\""
-  guest_exec cmd.exe /d /s /c "mkdir \"%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\""
+  guest_exec cmd.exe /d /s /c "if exist \"%LOCALAPPDATA%\\Mullusi\\deps\\portable-git\" rmdir /s /q \"%LOCALAPPDATA%\\Mullusi\\deps\\portable-git\""
+  guest_exec cmd.exe /d /s /c "if not exist \"%LOCALAPPDATA%\\Mullusi\\deps\" mkdir \"%LOCALAPPDATA%\\Mullusi\\deps\""
+  guest_exec cmd.exe /d /s /c "mkdir \"%LOCALAPPDATA%\\Mullusi\\deps\\portable-git\""
   guest_exec cmd.exe /d /s /c "curl.exe -fsSL \"$mingit_url\" -o \"%TEMP%\\$MINGIT_ZIP_NAME\""
-  guest_exec cmd.exe /d /s /c "tar.exe -xf \"%TEMP%\\$MINGIT_ZIP_NAME\" -C \"%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\""
-  guest_exec cmd.exe /d /s /c "del /q \"%TEMP%\\$MINGIT_ZIP_NAME\" & set \"PATH=%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\usr\\bin;%PATH%\" && git.exe --version"
+  guest_exec cmd.exe /d /s /c "tar.exe -xf \"%TEMP%\\$MINGIT_ZIP_NAME\" -C \"%LOCALAPPDATA%\\Mullusi\\deps\\portable-git\""
+  guest_exec cmd.exe /d /s /c "del /q \"%TEMP%\\$MINGIT_ZIP_NAME\" & set \"PATH=%LOCALAPPDATA%\\Mullusi\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\Mullusi\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\Mullusi\\deps\\portable-git\\usr\\bin;%PATH%\" && git.exe --version"
 }
 
 pack_main_tgz() {
@@ -801,7 +801,7 @@ pack_main_tgz() {
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
       | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
   )"
-  MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
+  MAIN_TGZ_PATH="$MAIN_TGZ_DIR/mullusi-main-$short_head.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
   packed_commit="$(extract_package_build_commit_from_tgz "$MAIN_TGZ_PATH")"
   [[ -n "$packed_commit" ]] || die "failed to read packed build commit from $MAIN_TGZ_PATH"
@@ -830,7 +830,7 @@ start_server() {
     (
       cd "$MAIN_TGZ_DIR"
       exec python3 -m http.server "$HOST_PORT" --bind 0.0.0.0
-    ) >/tmp/openclaw-parallels-windows-http.log 2>&1 &
+    ) >/tmp/mullusi-parallels-windows-http.log 2>&1 &
     SERVER_PID=$!
     sleep 1
     probe_url="http://127.0.0.1:$HOST_PORT/$artifact"
@@ -860,7 +860,7 @@ install_latest_release() {
 \$ProgressPreference = 'SilentlyContinue'
 \$script = Invoke-RestMethod -Uri '$install_url_q'
 & ([scriptblock]::Create(\$script)) ${version_flag_q}-NoOnboard
-& (Join-Path \$env:APPDATA 'npm\openclaw.cmd') --version
+& (Join-Path \$env:APPDATA 'npm\mullusi.cmd') --version
 EOF
 )"
   run_windows_retry "latest release installer" 2 guest_powershell "$install_script"
@@ -875,13 +875,13 @@ install_main_tgz() {
   # Treat the phase log plus retry wrapper as the primary signal before assuming
   # the guest hung.
   run_windows_retry "main tgz install" 2 \
-    guest_exec cmd.exe /d /s /c "set \"PATH=%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\usr\\bin;%PATH%\" && curl.exe -fsSL \"$tgz_url\" -o \"%TEMP%\\$temp_name\" && npm.cmd install -g \"%TEMP%\\$temp_name\" --no-fund --no-audit && \"%APPDATA%\\npm\\openclaw.cmd\" --version"
+    guest_exec cmd.exe /d /s /c "set \"PATH=%LOCALAPPDATA%\\Mullusi\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\Mullusi\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\Mullusi\\deps\\portable-git\\usr\\bin;%PATH%\" && curl.exe -fsSL \"$tgz_url\" -o \"%TEMP%\\$temp_name\" && npm.cmd install -g \"%TEMP%\\$temp_name\" --no-fund --no-audit && \"%APPDATA%\\npm\\mullusi.cmd\" --version"
 }
 
 verify_version_contains() {
   local needle="$1"
   local version
-  version="$(guest_run_openclaw "" "" "--version")"
+  version="$(guest_run_mullusi "" "" "--version")"
   printf '%s\n' "$version"
   case "$version" in
     *"$needle"*) ;;
@@ -893,7 +893,7 @@ verify_version_contains() {
 }
 
 write_onboard_runner_script() {
-  WINDOWS_ONBOARD_SCRIPT_PATH="$MAIN_TGZ_DIR/openclaw-onboard-$PROVIDER.ps1"
+  WINDOWS_ONBOARD_SCRIPT_PATH="$MAIN_TGZ_DIR/mullusi-onboard-$PROVIDER.ps1"
   cat >"$WINDOWS_ONBOARD_SCRIPT_PATH" <<EOF
 param(
   [Parameter(Mandatory = \$true)][string]\$LogPath,
@@ -904,8 +904,8 @@ param(
 \$PSNativeCommandUseErrorActionPreference = \$false
 
 try {
-  \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
-  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --accept-risk --json > "{1}" 2>&1' -f \$openclaw, \$LogPath)
+  \$mullusi = Join-Path \$env:APPDATA 'npm\mullusi.cmd'
+  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18790 --gateway-bind loopback --install-daemon --skip-skills --accept-risk --json > "{1}" 2>&1' -f \$mullusi, \$LogPath)
   & cmd.exe /d /s /c \$cmdLine
   Set-Content -Path \$DonePath -Value ([string]\$LASTEXITCODE)
 } catch {
@@ -927,9 +927,9 @@ run_ref_onboard() {
   api_key_value_q="$(ps_single_quote "$API_KEY_VALUE")"
   write_onboard_runner_script
   script_url="http://$HOST_IP:$HOST_PORT/$(basename "$WINDOWS_ONBOARD_SCRIPT_PATH")"
-  runner_name="openclaw-onboard-$RANDOM-$RANDOM.ps1"
-  log_name="openclaw-onboard-$RANDOM-$RANDOM.log"
-  done_name="openclaw-onboard-$RANDOM-$RANDOM.done"
+  runner_name="mullusi-onboard-$RANDOM-$RANDOM.ps1"
+  log_name="mullusi-onboard-$RANDOM-$RANDOM.log"
+  done_name="mullusi-onboard-$RANDOM-$RANDOM.done"
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + TIMEOUT_ONBOARD_S + 60))
   startup_checked=0
@@ -1003,16 +1003,16 @@ EOF
 }
 
 verify_gateway() {
-  guest_run_openclaw "" "" gateway status --deep --require-rpc
+  guest_run_mullusi "" "" gateway status --deep --require-rpc
 }
 
 run_gateway_daemon_action() {
   local action="$1"
   local runner_name log_name done_name done_status launcher_state
   local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
-  runner_name="openclaw-gateway-$action-$RANDOM-$RANDOM.ps1"
-  log_name="openclaw-gateway-$action-$RANDOM-$RANDOM.log"
-  done_name="openclaw-gateway-$action-$RANDOM-$RANDOM.done"
+  runner_name="mullusi-gateway-$action-$RANDOM-$RANDOM.ps1"
+  log_name="mullusi-gateway-$action-$RANDOM-$RANDOM.log"
+  done_name="mullusi-gateway-$action-$RANDOM-$RANDOM.done"
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + TIMEOUT_GATEWAY_S + 60))
   startup_checked=0
@@ -1028,8 +1028,8 @@ Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
 \$log = Join-Path \$env:TEMP '$log_name'
 \$done = Join-Path \$env:TEMP '$done_name'
 try {
-  \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
-  & \$openclaw gateway $action *>&1 | Tee-Object -FilePath \$log -Append | Out-Null
+  \$mullusi = Join-Path \$env:APPDATA 'npm\mullusi.cmd'
+  & \$mullusi gateway $action *>&1 | Tee-Object -FilePath \$log -Append | Out-Null
   Set-Content -Path \$done -Value ([string]\$LASTEXITCODE)
 } catch {
   if (Test-Path \$log) {
@@ -1110,16 +1110,16 @@ stop_gateway() {
 }
 
 show_gateway_status_compat() {
-  if guest_run_openclaw "" "" gateway status --help | grep -Fq -- "--require-rpc"; then
-    guest_run_openclaw "" "" gateway status --deep --require-rpc
+  if guest_run_mullusi "" "" gateway status --help | grep -Fq -- "--require-rpc"; then
+    guest_run_mullusi "" "" gateway status --deep --require-rpc
     return
   fi
-  guest_run_openclaw "" "" gateway status --deep
+  guest_run_mullusi "" "" gateway status --deep
 }
 
 verify_turn() {
-  guest_run_openclaw "" "" models set "$MODEL_ID"
-  guest_run_openclaw "$API_KEY_ENV" "$API_KEY_VALUE" \
+  guest_run_mullusi "" "" models set "$MODEL_ID"
+  guest_run_mullusi "$API_KEY_ENV" "$API_KEY_VALUE" \
     agent --agent main --message "Reply with exact ASCII text OK only." --json
 }
 
@@ -1145,7 +1145,7 @@ run_fresh_main_lane() {
   phase_run "fresh.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "fresh.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
   phase_run "fresh.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
-  phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz" || return $?
+  phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "mullusi-main-fresh.tgz" || return $?
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard || return $?
@@ -1173,7 +1173,7 @@ run_upgrade_lane() {
     UPGRADE_PRECHECK_STATUS="skipped"
   fi
   phase_run "upgrade.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
-  phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz" || return $?
+  phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "mullusi-main-upgrade.tgz" || return $?
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
   phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   # Stop the old managed gateway before ref-mode onboard rewrites config and

@@ -5,9 +5,9 @@ const readStoreAllowFromForDmPolicyMock = vi.hoisted(() => vi.fn());
 let clearSlackAllowFromCacheForTest: typeof import("./auth.js").clearSlackAllowFromCacheForTest;
 let resolveSlackEffectiveAllowFrom: typeof import("./auth.js").resolveSlackEffectiveAllowFrom;
 
-vi.mock("openclaw/plugin-sdk/security-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
-    "openclaw/plugin-sdk/security-runtime",
+vi.mock("mullusi/plugin-sdk/security-runtime", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/security-runtime")>(
+    "mullusi/plugin-sdk/security-runtime",
   );
   return {
     ...actual,
@@ -25,7 +25,7 @@ function makeSlackCtx(allowFrom: string[]): SlackMonitorContext {
 }
 
 describe("resolveSlackEffectiveAllowFrom", () => {
-  const prevTtl = process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS;
+  const prevTtl = process.env.MULLUSI_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS;
 
   beforeAll(async () => {
     ({ clearSlackAllowFromCacheForTest, resolveSlackEffectiveAllowFrom } =
@@ -36,9 +36,9 @@ describe("resolveSlackEffectiveAllowFrom", () => {
     readStoreAllowFromForDmPolicyMock.mockReset();
     clearSlackAllowFromCacheForTest();
     if (prevTtl === undefined) {
-      delete process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS;
+      delete process.env.MULLUSI_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS;
     } else {
-      process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS = prevTtl;
+      process.env.MULLUSI_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS = prevTtl;
     }
   });
 
@@ -73,7 +73,7 @@ describe("resolveSlackEffectiveAllowFrom", () => {
   });
 
   it("refreshes pairing-store allowFrom when cache TTL is zero", async () => {
-    process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS = "0";
+    process.env.MULLUSI_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS = "0";
     readStoreAllowFromForDmPolicyMock.mockResolvedValue(["u2"]);
     const ctx = makeSlackCtx(["u1"]);
 

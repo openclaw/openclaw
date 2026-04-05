@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/types.js";
+import type { MullusiConfig } from "../config/types.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveSecretRefValues } from "../secrets/resolve.js";
@@ -36,7 +36,7 @@ function buildUnresolvedReason(params: {
 }
 
 export async function resolveConfiguredSecretInputString(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   env: NodeJS.ProcessEnv;
   value: unknown;
   path: string;
@@ -93,7 +93,7 @@ export async function resolveConfiguredSecretInputString(params: {
 }
 
 export async function resolveConfiguredSecretInputWithFallback(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   env: NodeJS.ProcessEnv;
   value: unknown;
   path: string;
@@ -160,7 +160,7 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
 }
 
 export async function resolveRequiredConfiguredSecretRefInputString(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   env: NodeJS.ProcessEnv;
   value: unknown;
   path: string;

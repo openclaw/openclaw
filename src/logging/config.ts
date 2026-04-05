@@ -1,8 +1,8 @@
 import { getCommandPathWithRootOptions } from "../cli/argv.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 
-type LoggingConfig = OpenClawConfig["logging"];
+type LoggingConfig = MullusiConfig["logging"];
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
@@ -18,7 +18,7 @@ export function readLoggingConfig(): LoggingConfig | undefined {
   try {
     const loaded = requireConfig?.("../config/config.js") as
       | {
-          loadConfig?: () => OpenClawConfig;
+          loadConfig?: () => MullusiConfig;
         }
       | undefined;
     const parsed = loaded?.loadConfig?.();

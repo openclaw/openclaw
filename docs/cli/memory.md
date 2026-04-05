@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw memory` (status/index/search/promote)"
+summary: "CLI reference for `mullusi memory` (status/index/search/promote)"
 read_when:
   - You want to index or search semantic memory
   - You’re debugging memory availability or indexing
@@ -7,7 +7,7 @@ read_when:
 title: "memory"
 ---
 
-# `openclaw memory`
+# `mullusi memory`
 
 Manage semantic memory indexing and search.
 Provided by the active memory plugin (default: `memory-core`; set `plugins.slots.memory = "none"` to disable).
@@ -20,20 +20,20 @@ Related:
 ## Examples
 
 ```bash
-openclaw memory status
-openclaw memory status --deep
-openclaw memory status --fix
-openclaw memory index --force
-openclaw memory search "meeting notes"
-openclaw memory search --query "deployment" --max-results 20
-openclaw memory promote --limit 10 --min-score 0.75
-openclaw memory promote --apply
-openclaw memory promote --json --min-recall-count 0 --min-unique-queries 0
-openclaw memory status --json
-openclaw memory status --deep --index
-openclaw memory status --deep --index --verbose
-openclaw memory status --agent main
-openclaw memory index --agent main --verbose
+mullusi memory status
+mullusi memory status --deep
+mullusi memory status --fix
+mullusi memory index --force
+mullusi memory search "meeting notes"
+mullusi memory search --query "deployment" --max-results 20
+mullusi memory promote --limit 10 --min-score 0.75
+mullusi memory promote --apply
+mullusi memory promote --json --min-recall-count 0 --min-unique-queries 0
+mullusi memory status --json
+mullusi memory status --deep --index
+mullusi memory status --deep --index --verbose
+mullusi memory status --agent main
+mullusi memory index --agent main --verbose
 ```
 
 ## Options
@@ -69,7 +69,7 @@ openclaw memory index --agent main --verbose
 Preview and apply short-term memory promotions.
 
 ```bash
-openclaw memory promote [--apply] [--limit <n>] [--include-promoted]
+mullusi memory promote [--apply] [--limit <n>] [--include-promoted]
 ```
 
 - `--apply` -- write promotions to `MEMORY.md` (default: preview only).
@@ -80,7 +80,7 @@ Full options:
 
 - Ranks short-term candidates from `memory/YYYY-MM-DD.md` using weighted recall signals (`frequency`, `relevance`, `query diversity`, `recency`).
 - Uses recall events captured when `memory_search` returns daily-memory hits.
-- Optional auto-dreaming mode: when `plugins.entries.memory-core.config.dreaming.mode` is `core`, `deep`, or `rem`, `memory-core` auto-manages a cron job that triggers promotion in the background (no manual `openclaw cron add` required).
+- Optional auto-dreaming mode: when `plugins.entries.memory-core.config.dreaming.mode` is `core`, `deep`, or `rem`, `memory-core` auto-manages a cron job that triggers promotion in the background (no manual `mullusi cron add` required).
 - `--agent <id>`: scope to a single agent (default: the default agent).
 - `--limit <n>`: max candidates to return/apply.
 - `--min-score <n>`: minimum weighted promotion score.

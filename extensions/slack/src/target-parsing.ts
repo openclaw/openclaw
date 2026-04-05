@@ -6,7 +6,7 @@ import {
   type MessagingTarget,
   type MessagingTargetKind,
   type MessagingTargetParseOptions,
-} from "openclaw/plugin-sdk/messaging-targets";
+} from "mullusi/plugin-sdk/messaging-targets";
 
 export type SlackTargetKind = MessagingTargetKind;
 

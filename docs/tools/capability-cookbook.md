@@ -1,5 +1,5 @@
 ---
-summary: "Contributor guide for adding a new shared capability to the OpenClaw plugin system"
+summary: "Contributor guide for adding a new shared capability to the Mullusi plugin system"
 read_when:
   - Adding a new core capability and plugin registration surface
   - Deciding whether code belongs in core, a vendor plugin, or a feature plugin
@@ -11,12 +11,12 @@ sidebarTitle: "Adding Capabilities"
 # Adding Capabilities
 
 <Info>
-  This is a **contributor guide** for OpenClaw core developers. If you are
+  This is a **contributor guide** for Mullusi core developers. If you are
   building an external plugin, see [Building Plugins](/plugins/building-plugins)
   instead.
 </Info>
 
-Use this when OpenClaw needs a new domain such as image generation, video
+Use this when Mullusi needs a new domain such as image generation, video
 generation, or some future vendor-backed feature area.
 
 The rule:

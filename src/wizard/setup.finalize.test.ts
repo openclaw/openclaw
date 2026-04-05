@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -42,16 +42,16 @@ const resolveSetupSecretInputString = vi.hoisted(() =>
   vi.fn<() => Promise<string | undefined>>(async () => undefined),
 );
 const resolveExistingKey = vi.hoisted(() =>
-  vi.fn<(config: OpenClawConfig, provider: string) => string | undefined>(() => undefined),
+  vi.fn<(config: MullusiConfig, provider: string) => string | undefined>(() => undefined),
 );
 const hasExistingKey = vi.hoisted(() =>
-  vi.fn<(config: OpenClawConfig, provider: string) => boolean>(() => false),
+  vi.fn<(config: MullusiConfig, provider: string) => boolean>(() => false),
 );
 const hasKeyInEnv = vi.hoisted(() =>
   vi.fn<(entry: Pick<PluginWebSearchProviderEntry, "envVars">) => boolean>(() => false),
 );
 const listConfiguredWebSearchProviders = vi.hoisted(() =>
-  vi.fn<(params?: { config?: OpenClawConfig }) => PluginWebSearchProviderEntry[]>(() => []),
+  vi.fn<(params?: { config?: MullusiConfig }) => PluginWebSearchProviderEntry[]>(() => []),
 );
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -60,8 +60,8 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   openUrl: vi.fn(async () => false),
   probeGatewayReachable,
   resolveControlUiLinks: vi.fn(() => ({
-    httpUrl: "http://127.0.0.1:18789",
-    wsUrl: "ws://127.0.0.1:18789",
+    httpUrl: "http://127.0.0.1:18790",
+    wsUrl: "ws://127.0.0.1:18790",
   })),
   waitForGatewayReachable,
 }));
@@ -182,7 +182,7 @@ function expectFirstOnboardingInstallPlanCallOmitsToken() {
 }
 
 type AdvancedFinalizeArgs = {
-  nextConfig?: OpenClawConfig;
+  nextConfig?: MullusiConfig;
   prompter?: ReturnType<typeof buildWizardPrompter>;
   runtime?: RuntimeEnv;
   installDaemon?: boolean;
@@ -195,7 +195,7 @@ function createLaterPrompter() {
   });
 }
 
-function createEnabledFirecrawlSearchConfig(): OpenClawConfig {
+function createEnabledFirecrawlSearchConfig(): MullusiConfig {
   return {
     tools: {
       web: {
@@ -222,7 +222,7 @@ function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
     nextConfig: params.nextConfig ?? {},
     workspaceDir: "/tmp",
     settings: {
-      port: 18789,
+      port: 18790,
       bind: "loopback" as const,
       authMode: "token" as const,
       gatewayToken: undefined,
@@ -266,8 +266,8 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("resolves gateway password SecretRef for probe and TUI", async () => {
-    const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-gateway-password"; // pragma: allowlist secret
+    const previous = process.env.MULLUSI_GATEWAY_PASSWORD;
+    process.env.MULLUSI_GATEWAY_PASSWORD = "resolved-gateway-password"; // pragma: allowlist secret
     resolveSetupSecretInputString.mockResolvedValueOnce("resolved-gateway-password");
     const select = vi.fn(async (params: { message: string }) => {
       if (params.message === "How do you want to hatch your bot?") {
@@ -299,7 +299,7 @@ describe("finalizeSetupWizard", () => {
               password: {
                 source: "env",
                 provider: "default",
-                id: "OPENCLAW_GATEWAY_PASSWORD",
+                id: "MULLUSI_GATEWAY_PASSWORD",
               },
             },
           },
@@ -313,7 +313,7 @@ describe("finalizeSetupWizard", () => {
         },
         workspaceDir: "/tmp",
         settings: {
-          port: 18789,
+          port: 18790,
           bind: "loopback",
           authMode: "password",
           gatewayToken: undefined,
@@ -325,21 +325,21 @@ describe("finalizeSetupWizard", () => {
       });
     } finally {
       if (previous === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+        delete process.env.MULLUSI_GATEWAY_PASSWORD;
       } else {
-        process.env.OPENCLAW_GATEWAY_PASSWORD = previous;
+        process.env.MULLUSI_GATEWAY_PASSWORD = previous;
       }
     }
 
     expect(probeGatewayReachable).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
+        url: "ws://127.0.0.1:18790",
         password: "resolved-gateway-password", // pragma: allowlist secret
       }),
     );
     expect(runTui).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
+        url: "ws://127.0.0.1:18790",
         password: "resolved-gateway-password", // pragma: allowlist secret
       }),
     );
@@ -369,14 +369,14 @@ describe("finalizeSetupWizard", () => {
             token: {
               source: "env",
               provider: "default",
-              id: "OPENCLAW_GATEWAY_TOKEN",
+              id: "MULLUSI_GATEWAY_TOKEN",
             },
           },
         },
       },
       workspaceDir: "/tmp",
       settings: {
-        port: 18789,
+        port: 18790,
         bind: "loopback",
         authMode: "token",
         gatewayToken: "session-token",
@@ -422,7 +422,7 @@ describe("finalizeSetupWizard", () => {
       nextConfig: {},
       workspaceDir: "/tmp",
       settings: {
-        port: 18789,
+        port: 18790,
         bind: "loopback",
         authMode: "token",
         gatewayToken: undefined,
@@ -538,7 +538,7 @@ describe("finalizeSetupWizard", () => {
       nextConfig: {},
       workspaceDir: "/tmp",
       settings: {
-        port: 18789,
+        port: 18790,
         bind: "loopback",
         authMode: "token",
         gatewayToken: "test-token",
@@ -590,7 +590,7 @@ describe("finalizeSetupWizard", () => {
       },
       workspaceDir: "/tmp",
       settings: {
-        port: 18789,
+        port: 18790,
         bind: "loopback",
         authMode: "token",
         gatewayToken: undefined,

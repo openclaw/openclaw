@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
+import type { MullusiConfig, RuntimeEnv } from "../../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import { createSlashCommandHttpHandler } from "./slash-http.js";
 
@@ -68,7 +68,7 @@ async function runSlashRequest(params: {
 }) {
   const handler = createSlashCommandHttpHandler({
     account: accountFixture,
-    cfg: {} as OpenClawConfig,
+    cfg: {} as MullusiConfig,
     runtime: {} as RuntimeEnv,
     commandTokens: params.commandTokens,
   });
@@ -82,7 +82,7 @@ describe("slash-http", () => {
   it("rejects non-POST methods", async () => {
     const handler = createSlashCommandHttpHandler({
       account: accountFixture,
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       runtime: {} as RuntimeEnv,
       commandTokens: new Set(["valid-token"]),
     });
@@ -99,7 +99,7 @@ describe("slash-http", () => {
   it("rejects malformed payloads", async () => {
     const handler = createSlashCommandHttpHandler({
       account: accountFixture,
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       runtime: {} as RuntimeEnv,
       commandTokens: new Set(["valid-token"]),
     });
@@ -137,7 +137,7 @@ describe("slash-http", () => {
     try {
       const handler = createSlashCommandHttpHandler({
         account: accountFixture,
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         runtime: {} as RuntimeEnv,
         commandTokens: new Set(["valid-token"]),
       });

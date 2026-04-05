@@ -52,7 +52,7 @@ export function createHookRequest(params?: {
   return createRequest({
     method: "POST",
     path: params?.url ?? "/hooks/wake",
-    host: "127.0.0.1:18789",
+    host: "127.0.0.1:18790",
     authorization: params?.authorization ?? "Bearer hook-secret",
     remoteAddress: params?.remoteAddress,
     headers: params?.headers,
@@ -195,7 +195,7 @@ export function createHooksHandler(
   return createHooksRequestHandler({
     getHooksConfig: () => createHooksConfig(),
     bindHost: options.bindHost ?? "127.0.0.1",
-    port: 18789,
+    port: 18790,
     logHooks: {
       warn: vi.fn(),
       debug: vi.fn(),

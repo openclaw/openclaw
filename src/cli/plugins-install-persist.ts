@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { replaceConfigFile } from "../config/config.js";
 import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
@@ -13,13 +13,13 @@ import {
 } from "./plugins-command-helpers.js";
 
 export async function persistPluginInstall(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   baseHash?: string;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
   successMessage?: string;
   warningMessage?: string;
-}): Promise<OpenClawConfig> {
+}): Promise<MullusiConfig> {
   let next = enablePluginInConfig(params.config, params.pluginId).config;
   next = recordPluginInstall(next, {
     pluginId: params.pluginId,
@@ -41,13 +41,13 @@ export async function persistPluginInstall(params: {
 }
 
 export async function persistHookPackInstall(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   baseHash?: string;
   hookPackId: string;
   hooks: string[];
   install: Omit<HookInstallUpdate, "hookId" | "hooks">;
   successMessage?: string;
-}): Promise<OpenClawConfig> {
+}): Promise<MullusiConfig> {
   let next = enableInternalHookEntries(params.config, params.hooks);
   next = recordHookInstall(next, {
     hookId: params.hookPackId,

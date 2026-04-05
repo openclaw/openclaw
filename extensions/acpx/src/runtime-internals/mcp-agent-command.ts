@@ -2,10 +2,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnAndCollect, type SpawnCommandOptions } from "./process.js";
 
-// Keep this mirror aligned with openclaw/acpx src/agent-registry.ts built-ins.
+// Keep this mirror aligned with mullusi/acpx src/agent-registry.ts built-ins.
 const ACPX_BUILTIN_AGENT_COMMANDS: Record<string, string> = {
   pi: "npx -y pi-acp@0.0.22",
-  openclaw: "openclaw acp",
+  mullusi: "mullusi acp",
   codex: "npx -y @zed-industries/codex-acp@0.9.5",
   claude: "npx -y @zed-industries/claude-agent-acp@0.21.0",
   gemini: "gemini --acp",

@@ -16,9 +16,9 @@ const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
 const saveMediaBufferSpy = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
+vi.mock("mullusi/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/config-runtime")>(
+    "mullusi/plugin-sdk/config-runtime",
   );
   return {
     ...actual,
@@ -47,9 +47,9 @@ vi.mock("../../../src/pairing/pairing-store.js", () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
-    "openclaw/plugin-sdk/media-runtime",
+vi.mock("mullusi/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/media-runtime")>(
+    "mullusi/plugin-sdk/media-runtime",
   );
   return {
     ...actual,
@@ -60,7 +60,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
-const HOME = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID()}`);
+const HOME = path.join(os.tmpdir(), `mullusi-inbound-media-${crypto.randomUUID()}`);
 process.env.HOME = HOME;
 
 vi.mock("@whiskeysockets/baileys", async () => {

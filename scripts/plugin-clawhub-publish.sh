@@ -33,7 +33,7 @@ fi
 package_name="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.name)' "${package_dir}")"
 package_version="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.version)' "${package_dir}")"
 publish_tag="${PACKAGE_TAG:-latest}"
-source_repo="${SOURCE_REPO:-${GITHUB_REPOSITORY:-openclaw/openclaw}}"
+source_repo="${SOURCE_REPO:-${GITHUB_REPOSITORY:-mullusi/mullusi}}"
 source_commit="${SOURCE_COMMIT:-$(git rev-parse HEAD)}"
 source_ref="${SOURCE_REF:-$(git symbolic-ref -q HEAD || true)}"
 clawhub_workdir="${CLAWDHUB_WORKDIR:-${CLAWHUB_WORKDIR:-$(pwd)}}"

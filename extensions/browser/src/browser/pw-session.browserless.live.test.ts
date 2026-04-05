@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../../test-support.js";
 
 const LIVE = isLiveTestEnabled();
-const CDP_URL = process.env.OPENCLAW_LIVE_BROWSER_CDP_URL?.trim() || "";
+const CDP_URL = process.env.MULLUSI_LIVE_BROWSER_CDP_URL?.trim() || "";
 const describeLive = LIVE && CDP_URL ? describe : describe.skip;
 
 async function waitFor(

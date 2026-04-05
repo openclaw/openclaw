@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { MemorySyncProgressUpdate } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { MemorySyncProgressUpdate } from "mullusi/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import { useFastShortTimeouts } from "../../../../test/helpers/fast-short-timeouts.js";
 import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness.js";
 
 const fx = installEmbeddingManagerFixture({
-  fixturePrefix: "openclaw-mem-",
+  fixturePrefix: "mullusi-mem-",
   largeTokens: 4000,
   smallTokens: 200,
   createCfg: ({ workspaceDir, indexPath, tokens }) => ({

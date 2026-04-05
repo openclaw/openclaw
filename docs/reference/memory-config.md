@@ -10,7 +10,7 @@ read_when:
 
 # Memory configuration reference
 
-This page lists every configuration knob for OpenClaw memory search. For
+This page lists every configuration knob for Mullusi memory search. For
 conceptual overviews, see:
 
 - [Memory Overview](/concepts/memory) -- how memory works
@@ -19,7 +19,7 @@ conceptual overviews, see:
 - [Memory Search](/concepts/memory-search) -- search pipeline and tuning
 
 All memory search settings live under `agents.defaults.memorySearch` in
-`openclaw.json` unless noted otherwise.
+`mullusi.json` unless noted otherwise.
 
 ---
 
@@ -34,7 +34,7 @@ All memory search settings live under `agents.defaults.memorySearch` in
 
 ### Auto-detection order
 
-When `provider` is not set, OpenClaw selects the first available:
+When `provider` is not set, Mullusi selects the first available:
 
 1. `local` -- if `memorySearch.local.modelPath` is configured and the file exists.
 2. `openai` -- if an OpenAI key can be resolved.
@@ -46,7 +46,7 @@ When `provider` is not set, OpenClaw selects the first available:
 
 ### API key resolution
 
-Remote embeddings require an API key. OpenClaw resolves from:
+Remote embeddings require an API key. Mullusi resolves from:
 auth profiles, `models.providers.*.apiKey`, or environment variables.
 
 | Provider | Env var                        | Config key                        |
@@ -268,7 +268,7 @@ boundary.
 | `store.vector.enabled`       | `boolean` | `true`  | Use sqlite-vec for vector queries |
 | `store.vector.extensionPath` | `string`  | bundled | Override sqlite-vec path          |
 
-When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine
+When sqlite-vec is unavailable, Mullusi falls back to in-process cosine
 similarity automatically.
 
 ---
@@ -277,7 +277,7 @@ similarity automatically.
 
 | Key                   | Type     | Default                               | Description                                 |
 | --------------------- | -------- | ------------------------------------- | ------------------------------------------- |
-| `store.path`          | `string` | `~/.openclaw/memory/{agentId}.sqlite` | Index location (supports `{agentId}` token) |
+| `store.path`          | `string` | `~/.mullusi/memory/{agentId}.sqlite` | Index location (supports `{agentId}` token) |
 | `store.fts.tokenizer` | `string` | `unicode61`                           | FTS5 tokenizer (`unicode61` or `trigram`)   |
 
 ---

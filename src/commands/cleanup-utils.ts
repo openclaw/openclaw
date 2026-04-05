@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveHomeDir, resolveUserPath, shortenHomeInString } from "../utils.js";
 
@@ -18,7 +18,7 @@ export type CleanupResolvedPaths = {
   oauthInsideState: boolean;
 };
 
-export function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
+export function collectWorkspaceDirs(cfg: MullusiConfig | undefined): string[] {
   const dirs = new Set<string>();
   const defaults = cfg?.agents?.defaults;
   if (typeof defaults?.workspace === "string" && defaults.workspace.trim()) {
@@ -38,7 +38,7 @@ export function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] 
 }
 
 export function buildCleanupPlan(params: {
-  cfg: OpenClawConfig | undefined;
+  cfg: MullusiConfig | undefined;
   stateDir: string;
   configPath: string;
   oauthDir: string;

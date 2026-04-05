@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/video-generation-core";
+export * from "mullusi/plugin-sdk/video-generation-core";

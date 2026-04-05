@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { createOpenClawCodingTools } from "./pi-tools.js";
+import type { MullusiConfig } from "../config/config.js";
+import { createMullusiCodingTools } from "./pi-tools.js";
 import {
   expectReadWriteEditTools,
   expectReadWriteTools,
@@ -19,7 +19,7 @@ vi.mock("../infra/shell-env.js", async () => {
 type ToolWithExecute = {
   execute: (toolCallId: string, args: unknown, signal?: AbortSignal) => Promise<unknown>;
 };
-type CodingToolsInput = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
+type CodingToolsInput = NonNullable<Parameters<typeof createMullusiCodingTools>[0]>;
 
 const APPLY_PATCH_PAYLOAD = `*** Begin Patch
 *** Add File: /agent/pwned.txt
@@ -27,9 +27,9 @@ const APPLY_PATCH_PAYLOAD = `*** Begin Patch
 *** End Patch`;
 
 function resolveApplyPatchTool(
-  params: Pick<CodingToolsInput, "sandbox" | "workspaceDir"> & { config: OpenClawConfig },
+  params: Pick<CodingToolsInput, "sandbox" | "workspaceDir"> & { config: MullusiConfig },
 ): ToolWithExecute {
-  const tools = createOpenClawCodingTools({
+  const tools = createMullusiCodingTools({
     sandbox: params.sandbox,
     workspaceDir: params.workspaceDir,
     config: params.config,
@@ -48,7 +48,7 @@ describe("tools.fs.workspaceOnly", () => {
     await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
 
-      const tools = createOpenClawCodingTools({ sandbox, workspaceDir: sandboxRoot });
+      const tools = createMullusiCodingTools({ sandbox, workspaceDir: sandboxRoot });
       const { readTool, writeTool } = expectReadWriteTools(tools);
 
       const readResult = await readTool?.execute("t1", { path: "/agent/secret.txt" });
@@ -63,8 +63,8 @@ describe("tools.fs.workspaceOnly", () => {
     await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, agentRoot, sandbox }) => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
 
-      const cfg = { tools: { fs: { workspaceOnly: true } } } as unknown as OpenClawConfig;
-      const tools = createOpenClawCodingTools({ sandbox, workspaceDir: sandboxRoot, config: cfg });
+      const cfg = { tools: { fs: { workspaceOnly: true } } } as unknown as MullusiConfig;
+      const tools = createMullusiCodingTools({ sandbox, workspaceDir: sandboxRoot, config: cfg });
       const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
 
       await expect(readTool?.execute("t1", { path: "/agent/secret.txt" })).rejects.toThrow(
@@ -95,7 +95,7 @@ describe("tools.fs.workspaceOnly", () => {
             allow: ["read", "write", "exec"],
             exec: { applyPatch: {} },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
       });
 
       await expect(applyPatchTool.execute("t1", { input: APPLY_PATCH_PAYLOAD })).rejects.toThrow(
@@ -117,7 +117,7 @@ describe("tools.fs.workspaceOnly", () => {
             allow: ["read", "write", "exec"],
             exec: { applyPatch: { workspaceOnly: false } },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
       });
 
       await applyPatchTool.execute("t2", { input: APPLY_PATCH_PAYLOAD });

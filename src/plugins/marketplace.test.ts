@@ -48,7 +48,7 @@ beforeAll(async () => {
 });
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-test-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-marketplace-test-"));
   try {
     return await fn(dir);
   } finally {
@@ -60,7 +60,7 @@ async function listMarketplaceDownloadTempDirs(): Promise<string[]> {
   const entries = await fs.readdir(os.tmpdir(), { withFileTypes: true });
   return entries
     .filter(
-      (entry) => entry.isDirectory() && entry.name.startsWith("openclaw-marketplace-download-"),
+      (entry) => entry.isDirectory() && entry.name.startsWith("mullusi-marketplace-download-"),
     )
     .map((entry) => entry.name)
     .toSorted();
@@ -134,7 +134,7 @@ function mockRemoteMarketplaceCloneWithOutsideSymlink(params: {
       repoDir: repoDir as string,
       manifest: params.manifest,
     });
-    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-outside-"));
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-marketplace-outside-"));
     tempOutsideDirs.push(outsideDir);
     await fs.mkdir(path.dirname(path.join(repoDir as string, params.symlinkPath)), {
       recursive: true,
@@ -368,7 +368,7 @@ describe("marketplace plugins", () => {
 
   it("resolves Claude-style plugin@marketplace shortcuts from known_marketplaces.json", async () => {
     await withTempDir(async (homeDir) => {
-      const openClawHome = path.join(homeDir, "openclaw-home");
+      const openClawHome = path.join(homeDir, "mullusi-home");
       await fs.mkdir(path.join(homeDir, ".claude", "plugins"), { recursive: true });
       await fs.mkdir(openClawHome, { recursive: true });
       await fs.writeFile(
@@ -385,7 +385,7 @@ describe("marketplace plugins", () => {
       );
 
       const shortcut = await withEnvAsync(
-        { HOME: homeDir, OPENCLAW_HOME: openClawHome },
+        { HOME: homeDir, MULLUSI_HOME: openClawHome },
         async () => await resolveMarketplaceInstallShortcut("superpowers@claude-plugins-official"),
       );
 

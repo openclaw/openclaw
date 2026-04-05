@@ -54,17 +54,17 @@ describe("listManifestInstalledChannelIds", () => {
     const installedIds = listManifestInstalledChannelIds({
       cfg: {} as never,
       workspaceDir: "/tmp/workspace",
-      env: { OPENCLAW_HOME: "/tmp/home" } as NodeJS.ProcessEnv,
+      env: { MULLUSI_HOME: "/tmp/home" } as NodeJS.ProcessEnv,
     });
 
     expect(applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {},
-      env: { OPENCLAW_HOME: "/tmp/home" },
+      env: { MULLUSI_HOME: "/tmp/home" },
     });
     expect(loadPluginManifestRegistry).toHaveBeenCalledWith({
       config: autoEnabledConfig,
       workspaceDir: "/tmp/workspace",
-      env: { OPENCLAW_HOME: "/tmp/home" },
+      env: { MULLUSI_HOME: "/tmp/home" },
     });
     expect(installedIds).toEqual(new Set(["slack"]));
   });

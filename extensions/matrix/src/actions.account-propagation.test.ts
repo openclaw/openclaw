@@ -138,7 +138,7 @@ describe("matrixMessageActions account propagation", () => {
       createContext({
         action: "send",
         accountId: "ops",
-        mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
+        mediaLocalRoots: ["/tmp/mullusi-matrix-test"],
         params: {
           to: "room:!room:example",
           message: "hello",
@@ -154,7 +154,7 @@ describe("matrixMessageActions account propagation", () => {
         mediaUrl: "file:///tmp/photo.png",
       }),
       expect.any(Object),
-      { mediaLocalRoots: ["/tmp/openclaw-matrix-test"] },
+      { mediaLocalRoots: ["/tmp/mullusi-matrix-test"] },
     );
   });
 

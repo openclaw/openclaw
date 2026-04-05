@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import * as sessions from "../config/sessions.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
@@ -29,7 +29,7 @@ describe("sendControlledSubagentMessage", () => {
     const result = await sendControlledSubagentMessage({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:subagent:leaf",
         callerSessionKey: "agent:main:subagent:leaf",
@@ -83,7 +83,7 @@ describe("sendControlledSubagentMessage", () => {
     const result = await sendControlledSubagentMessage({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -127,7 +127,7 @@ describe("sendControlledSubagentMessage", () => {
     const result = await sendControlledSubagentMessage({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -188,7 +188,7 @@ describe("sendControlledSubagentMessage", () => {
     const result = await sendControlledSubagentMessage({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -263,7 +263,7 @@ describe("sendControlledSubagentMessage", () => {
     const result = await sendControlledSubagentMessage({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -333,7 +333,7 @@ describe("sendControlledSubagentMessage", () => {
     const result = await sendControlledSubagentMessage({
       cfg: {
         channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -372,7 +372,7 @@ describe("killSubagentRunAdmin", () => {
   });
 
   it("kills a subagent by session key without requester ownership checks", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-admin-kill-"));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-subagent-admin-kill-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:worker";
 
@@ -405,7 +405,7 @@ describe("killSubagentRunAdmin", () => {
 
     const cfg = {
       session: { store: storePath },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const result = await killSubagentRunAdmin({
       cfg,
@@ -423,7 +423,7 @@ describe("killSubagentRunAdmin", () => {
 
   it("returns found=false when the session key is not tracked as a subagent run", async () => {
     const result = await killSubagentRunAdmin({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       sessionKey: "agent:main:subagent:missing",
     });
 
@@ -459,7 +459,7 @@ describe("killSubagentRunAdmin", () => {
     });
 
     const result = await killSubagentRunAdmin({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       sessionKey: childSessionKey,
     });
 
@@ -472,7 +472,7 @@ describe("killSubagentRunAdmin", () => {
   });
 
   it("still terminates the run when session store persistence fails during kill", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-admin-kill-store-"));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-subagent-admin-kill-store-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:worker-store-fail";
 
@@ -511,7 +511,7 @@ describe("killSubagentRunAdmin", () => {
       const result = await killSubagentRunAdmin({
         cfg: {
           session: { store: storePath },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         sessionKey: childSessionKey,
       });
 
@@ -535,7 +535,7 @@ describe("killControlledSubagentRun", () => {
   });
 
   it("does not mutate the live session when the caller passes a stale run entry", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-stale-kill-"));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-subagent-stale-kill-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:stale-kill-worker";
 
@@ -568,7 +568,7 @@ describe("killControlledSubagentRun", () => {
     const result = await killControlledSubagentRun({
       cfg: {
         session: { store: storePath },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -658,7 +658,7 @@ describe("killControlledSubagentRun", () => {
     });
 
     const result = await killControlledSubagentRun({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -759,7 +759,7 @@ describe("killControlledSubagentRun", () => {
     });
 
     const result = await killControlledSubagentRun({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -799,7 +799,7 @@ describe("killAllControlledSubagentRuns", () => {
   });
 
   it("ignores stale run snapshots in bulk kill requests", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-stale-kill-all-"));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-subagent-stale-kill-all-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:stale-kill-all-worker";
 
@@ -832,7 +832,7 @@ describe("killAllControlledSubagentRuns", () => {
     const result = await killAllControlledSubagentRuns({
       cfg: {
         session: { store: storePath },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -869,7 +869,7 @@ describe("killAllControlledSubagentRuns", () => {
 
   it("does not let a stale bulk entry suppress the current live entry for the same child key", async () => {
     const tmpDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-subagent-stale-kill-all-shadow-"),
+      path.join(os.tmpdir(), "mullusi-subagent-stale-kill-all-shadow-"),
     );
     const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:stale-kill-all-shadow-worker";
@@ -903,7 +903,7 @@ describe("killAllControlledSubagentRuns", () => {
     const result = await killAllControlledSubagentRuns({
       cfg: {
         session: { store: storePath },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -973,7 +973,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
 
     const result = await killAllControlledSubagentRuns({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -1045,7 +1045,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
 
     const result = await killAllControlledSubagentRuns({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -1115,7 +1115,7 @@ describe("steerControlledSubagentRun", () => {
 
     try {
       const result = await steerControlledSubagentRun({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         controller: {
           controllerSessionKey: "agent:main:main",
           callerSessionKey: "agent:main:main",
@@ -1160,7 +1160,7 @@ describe("steerControlledSubagentRun", () => {
     });
 
     const result = await steerControlledSubagentRun({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -1240,7 +1240,7 @@ describe("steerControlledSubagentRun", () => {
     });
 
     const result = await steerControlledSubagentRun({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",

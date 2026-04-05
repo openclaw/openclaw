@@ -1,7 +1,7 @@
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -32,7 +32,7 @@ type InferredProviderProbe = {
 
 function resolveProviderFromContext(
   ctx: MsgContext,
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
 ): { providerId: ChannelId | undefined; hadResolutionError: boolean } {
   const explicitMessageChannels = [ctx.Surface, ctx.OriginatingChannel, ctx.Provider]
     .map((value) => normalizeMessageChannel(value))
@@ -84,7 +84,7 @@ function resolveProviderFromContext(
   };
 }
 
-function probeInferredProviders(ctx: MsgContext, cfg: OpenClawConfig): InferredProviderProbe {
+function probeInferredProviders(ctx: MsgContext, cfg: MullusiConfig): InferredProviderProbe {
   let droppedResolutionError = false;
   const candidates = listChannelPlugins()
     .map((plugin) => {
@@ -119,7 +119,7 @@ function probeInferredProviders(ctx: MsgContext, cfg: OpenClawConfig): InferredP
 
 function formatAllowFromList(params: {
   plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   allowFrom: Array<string | number>;
 }): string[] {
@@ -135,7 +135,7 @@ function formatAllowFromList(params: {
 
 function normalizeAllowFromEntry(params: {
   plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   value: string;
 }): string[] {
@@ -150,7 +150,7 @@ function normalizeAllowFromEntry(params: {
 
 function resolveProviderAllowFrom(params: {
   plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
 }): {
   allowFrom: Array<string | number>;
@@ -207,7 +207,7 @@ function describeAllowFromResolutionError(err: unknown): string {
 
 function resolveOwnerAllowFromList(params: {
   plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   providerId?: ChannelId;
   allowFrom?: Array<string | number>;
@@ -254,7 +254,7 @@ function resolveOwnerAllowFromList(params: {
  */
 function resolveCommandsAllowFromList(params: {
   plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   providerId?: ChannelId;
 }): string[] | null {
@@ -314,7 +314,7 @@ function shouldUseFromAsSenderFallback(params: {
 function resolveSenderCandidates(params: {
   plugin?: ChannelPlugin;
   providerId?: ChannelId;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   senderId?: string | null;
   senderE164?: string | null;
@@ -357,7 +357,7 @@ function resolveSenderCandidates(params: {
 }
 
 function resolveFallbackAllowFrom(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   providerId?: ChannelId;
   accountId?: string | null;
 }): Array<string | number> {
@@ -454,7 +454,7 @@ function resolveFallbackDefaultAccountConfig(
 
 export function resolveCommandAuthorization(params: {
   ctx: MsgContext;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   commandAuthorized: boolean;
 }): CommandAuthorization {
   const { ctx, cfg, commandAuthorized } = params;

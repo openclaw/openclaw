@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/mistral-provider",
+  "name": "@mullusi/mistral-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Mistral provider plugin",
+  "description": "Mullusi Mistral provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

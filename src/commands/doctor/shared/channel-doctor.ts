@@ -5,7 +5,7 @@ import type {
   ChannelDoctorEmptyAllowlistAccountContext,
   ChannelDoctorSequenceResult,
 } from "../../../channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { MullusiConfig } from "../../../config/config.js";
 
 type ChannelDoctorEntry = {
   channelId: string;
@@ -23,7 +23,7 @@ function listChannelDoctorEntries(): ChannelDoctorEntry[] {
 }
 
 export async function runChannelDoctorConfigSequences(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
 }): Promise<ChannelDoctorSequenceResult> {
@@ -41,7 +41,7 @@ export async function runChannelDoctorConfigSequences(params: {
 }
 
 export function collectChannelDoctorCompatibilityMutations(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
 ): ChannelDoctorConfigMutation[] {
   const mutations: ChannelDoctorConfigMutation[] = [];
   let nextCfg = cfg;
@@ -57,7 +57,7 @@ export function collectChannelDoctorCompatibilityMutations(
 }
 
 export async function collectChannelDoctorStaleConfigMutations(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
 ): Promise<ChannelDoctorConfigMutation[]> {
   const mutations: ChannelDoctorConfigMutation[] = [];
   let nextCfg = cfg;
@@ -73,7 +73,7 @@ export async function collectChannelDoctorStaleConfigMutations(
 }
 
 export async function collectChannelDoctorPreviewWarnings(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   doctorFixCommand: string;
 }): Promise<string[]> {
   const warnings: string[] = [];
@@ -87,7 +87,7 @@ export async function collectChannelDoctorPreviewWarnings(params: {
 }
 
 export async function collectChannelDoctorMutableAllowlistWarnings(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
 }): Promise<string[]> {
   const warnings: string[] = [];
   for (const entry of listChannelDoctorEntries()) {
@@ -100,7 +100,7 @@ export async function collectChannelDoctorMutableAllowlistWarnings(params: {
 }
 
 export async function collectChannelDoctorRepairMutations(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   doctorFixCommand: string;
 }): Promise<ChannelDoctorConfigMutation[]> {
   const mutations: ChannelDoctorConfigMutation[] = [];

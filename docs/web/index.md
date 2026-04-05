@@ -10,8 +10,8 @@ title: "Web"
 
 The Gateway serves a small **browser Control UI** (Vite + Lit) from the same port as the Gateway WebSocket:
 
-- default: `http://<host>:18789/`
-- optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
+- default: `http://<host>:18790/`
+- optional prefix: set `gateway.controlUi.basePath` (e.g. `/mullusi`)
 
 Capabilities live in [Control UI](/web/control-ui).
 This page focuses on bind modes, security, and web-facing surfaces.
@@ -29,7 +29,7 @@ You can control it via config:
 ```json5
 {
   gateway: {
-    controlUi: { enabled: true, basePath: "/openclaw" }, // basePath optional
+    controlUi: { enabled: true, basePath: "/mullusi" }, // basePath optional
   },
 }
 ```
@@ -52,7 +52,7 @@ Keep the Gateway on loopback and let Tailscale Serve proxy it:
 Then start the gateway:
 
 ```bash
-openclaw gateway
+mullusi gateway
 ```
 
 Open:
@@ -75,12 +75,12 @@ Then start the gateway (this non-loopback example uses shared-secret token
 auth):
 
 ```bash
-openclaw gateway
+mullusi gateway
 ```
 
 Open:
 
-- `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`)
+- `http://<tailscale-ip>:18790/` (or your configured `gateway.controlUi.basePath`)
 
 ### Public internet (Funnel)
 
@@ -89,7 +89,7 @@ Open:
   gateway: {
     bind: "loopback",
     tailscale: { mode: "funnel" },
-    auth: { mode: "password" }, // or OPENCLAW_GATEWAY_PASSWORD
+    auth: { mode: "password" }, // or MULLUSI_GATEWAY_PASSWORD
   },
 }
 ```

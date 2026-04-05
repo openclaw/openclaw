@@ -1,11 +1,11 @@
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import type { MemorySearchResult } from "mullusi/plugin-sdk/memory-core-host-runtime-files";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetMemoryToolMockState,
   setMemoryBackend,
   setMemorySearchImpl,
 } from "../../../test/helpers/memory-tool-manager-mock.js";
-import type { OpenClawConfig } from "../api.js";
+import type { MullusiConfig } from "../api.js";
 import { createMemorySearchTool } from "./tools.js";
 
 type RecordShortTermRecallsFn = (params: {
@@ -23,11 +23,11 @@ vi.mock("./short-term-promotion.js", () => ({
   recordShortTermRecalls: recallTrackingMock.recordShortTermRecalls,
 }));
 
-function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
-  return config as OpenClawConfig;
+function asMullusiConfig(config: Partial<MullusiConfig>): MullusiConfig {
+  return config as MullusiConfig;
 }
 
-function createSearchTool(config: OpenClawConfig) {
+function createSearchTool(config: MullusiConfig) {
   const tool = createMemorySearchTool({ config });
   if (!tool) {
     throw new Error("memory_search tool missing");
@@ -64,7 +64,7 @@ describe("memory_search recall tracking", () => {
     ]);
 
     const tool = createSearchTool(
-      asOpenClawConfig({
+      asMullusiConfig({
         agents: { list: [{ id: "main", default: true }] },
         memory: {
           backend: "qmd",
@@ -98,7 +98,7 @@ describe("memory_search recall tracking", () => {
     );
 
     const tool = createSearchTool(
-      asOpenClawConfig({
+      asMullusiConfig({
         agents: { list: [{ id: "main", default: true }] },
       }),
     );

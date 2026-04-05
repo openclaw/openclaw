@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/vllm-provider",
+  "name": "@mullusi/vllm-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw vLLM provider plugin",
+  "description": "Mullusi vLLM provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

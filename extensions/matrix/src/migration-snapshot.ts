@@ -1,15 +1,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
-import { resolveRequiredHomeDir } from "openclaw/plugin-sdk/provider-auth";
-import { createBackupArchive } from "openclaw/plugin-sdk/runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { writeJsonFileAtomically } from "mullusi/plugin-sdk/json-store";
+import { resolveRequiredHomeDir } from "mullusi/plugin-sdk/provider-auth";
+import { createBackupArchive } from "mullusi/plugin-sdk/runtime";
+import { resolveStateDir } from "mullusi/plugin-sdk/state-paths";
 import { detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 import { detectLegacyMatrixState } from "./legacy-state.js";
 
-const MATRIX_MIGRATION_SNAPSHOT_DIRNAME = "openclaw-migrations";
+const MATRIX_MIGRATION_SNAPSHOT_DIRNAME = "mullusi-migrations";
 
 function isMatrixLegacyCryptoInspectorAvailable(): boolean {
   return true;
@@ -72,7 +72,7 @@ export function resolveMatrixMigrationSnapshotOutputDir(
 }
 
 export function hasPendingMatrixMigration(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   env?: NodeJS.ProcessEnv;
 }): boolean {
   const env = params.env ?? process.env;
@@ -85,7 +85,7 @@ export function hasPendingMatrixMigration(params: {
 }
 
 export function hasActionableMatrixMigration(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   env?: NodeJS.ProcessEnv;
 }): boolean {
   const env = params.env ?? process.env;

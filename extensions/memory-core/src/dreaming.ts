@@ -1,4 +1,4 @@
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
+import type { MullusiConfig, MullusiPluginApi } from "mullusi/plugin-sdk/memory-core";
 import {
   applyShortTermPromotions,
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -10,7 +10,7 @@ import {
 
 const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DREAMING_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
-const DREAMING_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
+const DREAMING_SYSTEM_EVENT_TEXT = "__mullusi_memory_core_short_term_promotion_dream__";
 const DEFAULT_DREAMING_CRON_EXPR = "0 3 * * *";
 const DEFAULT_DREAMING_LIMIT = 10;
 const DEFAULT_DREAMING_MIN_SCORE = DEFAULT_PROMOTION_MIN_SCORE;
@@ -55,7 +55,7 @@ const DREAMING_PRESET_DEFAULTS: Record<
   },
 };
 
-type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
+type Logger = Pick<MullusiPluginApi["logger"], "info" | "warn" | "error">;
 
 type CronSchedule = { kind: "cron"; expr: string; tz?: string };
 type CronPayload = { kind: "systemEvent"; text: string };
@@ -186,7 +186,7 @@ function formatErrorMessage(err: unknown): string {
   return String(err);
 }
 
-function resolveTimezoneFallback(cfg: OpenClawConfig | undefined): string | undefined {
+function resolveTimezoneFallback(cfg: MullusiConfig | undefined): string | undefined {
   const agents = asRecord(cfg?.agents);
   const defaults = asRecord(agents?.defaults);
   return normalizeTrimmedString(defaults?.userTimezone);
@@ -338,7 +338,7 @@ function resolveCronServiceFromStartupEvent(event: unknown): CronServiceLike | n
 
 export function resolveShortTermPromotionDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
 }): ShortTermPromotionDreamingConfig {
   const dreaming = asRecord(params.pluginConfig?.dreaming);
   const mode = normalizeDreamingMode(dreaming?.mode);
@@ -502,7 +502,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   return { handled: true, reason: "memory-core: short-term dreaming processed" };
 }
 
-export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void {
+export function registerShortTermPromotionDreaming(api: MullusiPluginApi): void {
   api.registerHook(
     "gateway:startup",
     async (event: unknown) => {

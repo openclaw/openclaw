@@ -26,7 +26,7 @@ afterEach(async () => {
 });
 
 async function createSessionStoreFile(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-message-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-session-message-"));
   cleanupDirs.push(dir);
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
@@ -82,8 +82,8 @@ async function expectNoMessageWithin(params: {
 
 describe("session.message websocket events", () => {
   test("includes spawned session ownership metadata on lifecycle sessions.changed events", async () => {
-    const previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-    delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    const previousMinimalGateway = process.env.MULLUSI_TEST_MINIMAL_GATEWAY;
+    delete process.env.MULLUSI_TEST_MINIMAL_GATEWAY;
     try {
       const storePath = await createSessionStoreFile();
       await writeSessionStore({
@@ -138,9 +138,9 @@ describe("session.message websocket events", () => {
       }
     } finally {
       if (previousMinimalGateway === undefined) {
-        delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+        delete process.env.MULLUSI_TEST_MINIMAL_GATEWAY;
       } else {
-        process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
+        process.env.MULLUSI_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
       }
     }
   });
@@ -255,9 +255,9 @@ describe("session.message websocket events", () => {
         expect(
           (
             event.payload as {
-              message?: { __openclaw?: { id?: string; seq?: number } };
+              message?: { __mullusi?: { id?: string; seq?: number } };
             }
-          ).message?.__openclaw,
+          ).message?.__mullusi,
         ).toMatchObject({
           id: appended.ok ? appended.messageId : undefined,
           seq: 1,

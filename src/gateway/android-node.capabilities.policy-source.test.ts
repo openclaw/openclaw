@@ -4,7 +4,7 @@ import type { GatewayConnectionDetails } from "./call.js";
 
 function details(overrides: Partial<GatewayConnectionDetails>): GatewayConnectionDetails {
   return {
-    url: "ws://127.0.0.1:18789",
+    url: "ws://127.0.0.1:18790",
     urlSource: "local loopback",
     message: "test",
     ...overrides,
@@ -19,13 +19,13 @@ describe("shouldFetchRemotePolicyConfig", () => {
   it("returns true for config-driven remote urls even if loopback-tunneled", () => {
     expect(
       shouldFetchRemotePolicyConfig(
-        details({ url: "ws://127.0.0.1:18789", urlSource: "config gateway.remote.url" }),
+        details({ url: "ws://127.0.0.1:18790", urlSource: "config gateway.remote.url" }),
       ),
     ).toBe(true);
   });
 
   it("returns true for env and cli overrides", () => {
-    expect(shouldFetchRemotePolicyConfig(details({ urlSource: "env OPENCLAW_GATEWAY_URL" }))).toBe(
+    expect(shouldFetchRemotePolicyConfig(details({ urlSource: "env MULLUSI_GATEWAY_URL" }))).toBe(
       true,
     );
     expect(shouldFetchRemotePolicyConfig(details({ urlSource: "cli --url" }))).toBe(true);

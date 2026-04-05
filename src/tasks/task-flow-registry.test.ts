@@ -17,11 +17,11 @@ import {
 } from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_STATE_DIR = process.env.MULLUSI_STATE_DIR;
 
 async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Promise<T> {
-  return await withTempDir({ prefix: "openclaw-task-flow-registry-" }, async (root) => {
-    process.env.OPENCLAW_STATE_DIR = root;
+  return await withTempDir({ prefix: "mullusi-task-flow-registry-" }, async (root) => {
+    process.env.MULLUSI_STATE_DIR = root;
     resetTaskFlowRegistryForTests();
     try {
       return await run(root);
@@ -39,16 +39,16 @@ describe("task-flow-registry", () => {
   afterEach(() => {
     vi.useRealTimers();
     if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.MULLUSI_STATE_DIR;
     } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+      process.env.MULLUSI_STATE_DIR = ORIGINAL_STATE_DIR;
     }
     resetTaskFlowRegistryForTests();
   });
 
   it("creates managed flows and updates them through revision-checked helpers", async () => {
     await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      process.env.MULLUSI_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -166,7 +166,7 @@ describe("task-flow-registry", () => {
 
   it("requires a controller for managed flows and rejects clearing it later", async () => {
     await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      process.env.MULLUSI_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
 
       expect(() =>
@@ -270,7 +270,7 @@ describe("task-flow-registry", () => {
 
   it("mirrors one-task flow state from tasks and leaves managed flows alone", async () => {
     await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      process.env.MULLUSI_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
 
       const mirrored = createTaskFlowForTask({
@@ -336,7 +336,7 @@ describe("task-flow-registry", () => {
 
   it("preserves explicit json null in state and wait payloads", async () => {
     await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      process.env.MULLUSI_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "./config-runtime.js";
+import type { MullusiConfig } from "./config-runtime.js";
 
 type ApprovalKind = "exec" | "plugin";
 
@@ -9,7 +9,7 @@ function defaultNormalizeSenderId(value: string): string | undefined {
 
 export function createResolvedApproverActionAuthAdapter(params: {
   channelLabel: string;
-  resolveApprovers: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
+  resolveApprovers: (params: { cfg: MullusiConfig; accountId?: string | null }) => string[];
   normalizeSenderId?: (value: string) => string | undefined;
 }) {
   const normalizeSenderId = params.normalizeSenderId ?? defaultNormalizeSenderId;
@@ -21,7 +21,7 @@ export function createResolvedApproverActionAuthAdapter(params: {
       senderId,
       approvalKind,
     }: {
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       accountId?: string | null;
       senderId?: string | null;
       action: "approve";

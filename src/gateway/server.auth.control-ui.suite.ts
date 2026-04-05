@@ -131,7 +131,7 @@ export function registerControlUiAndPairingSuite(): void {
     };
   };
 
-  const startServerWithOperatorIdentity = async (identityPrefix = "openclaw-device-scope-") => {
+  const startServerWithOperatorIdentity = async (identityPrefix = "mullusi-device-scope-") => {
     const { server, ws, port, prevToken } = await startServerWithClient("secret", {
       controlUiEnabled: true,
     });
@@ -260,7 +260,7 @@ export function registerControlUiAndPairingSuite(): void {
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { rejectDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
-    const { identity } = await createOperatorIdentityFixture("openclaw-control-ui-trusted-proxy-");
+    const { identity } = await createOperatorIdentityFixture("mullusi-control-ui-trusted-proxy-");
     const pendingRequest = await requestDevicePairing({
       deviceId: identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
@@ -336,8 +336,8 @@ export function registerControlUiAndPairingSuite(): void {
     };
     testState.gatewayAuth = { mode: "token", token: "secret" };
     await writeTrustedProxyControlUiConfig({ allowInsecureAuth: true });
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    const prevToken = process.env.MULLUSI_GATEWAY_TOKEN;
+    process.env.MULLUSI_GATEWAY_TOKEN = "secret";
     try {
       await withControlUiGatewayServer(async ({ port }) => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
@@ -371,7 +371,7 @@ export function registerControlUiAndPairingSuite(): void {
           clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
           identityPath: path.join(
             os.tmpdir(),
-            `openclaw-controlui-device-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${controlUiIdentityPathSeq++}.json`,
+            `mullusi-controlui-device-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${controlUiIdentityPathSeq++}.json`,
           ),
           nonce: String(nonce),
         });
@@ -398,8 +398,8 @@ export function registerControlUiAndPairingSuite(): void {
   test("allows control ui with stale device identity when device auth is disabled", async () => {
     testState.gatewayControlUi = { dangerouslyDisableDeviceAuth: true };
     testState.gatewayAuth = { mode: "token", token: "secret" };
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    const prevToken = process.env.MULLUSI_GATEWAY_TOKEN;
+    process.env.MULLUSI_GATEWAY_TOKEN = "secret";
     try {
       await withControlUiGatewayServer(async ({ port }) => {
         const ws = await openWs(port, { origin: originForPort(port) });
@@ -435,8 +435,8 @@ export function registerControlUiAndPairingSuite(): void {
   test("preserves requested control ui scopes when dangerouslyDisableDeviceAuth bypasses device identity", async () => {
     testState.gatewayControlUi = { dangerouslyDisableDeviceAuth: true };
     testState.gatewayAuth = { mode: "token", token: "secret" };
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    const prevToken = process.env.MULLUSI_GATEWAY_TOKEN;
+    process.env.MULLUSI_GATEWAY_TOKEN = "secret";
     try {
       await withControlUiGatewayServer(async ({ port }) => {
         const ws = await openWs(port, { origin: originForPort(port) });
@@ -678,7 +678,7 @@ export function registerControlUiAndPairingSuite(): void {
     const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret");
     const { identity, identityPath } = await seedApprovedOperatorReadPairing({
-      identityPrefix: "openclaw-device-token-scope-",
+      identityPrefix: "mullusi-device-token-scope-",
       clientId: CONTROL_UI_CLIENT.id,
       clientMode: CONTROL_UI_CLIENT.mode,
       displayName: "loopback-control-ui-upgrade",
@@ -724,10 +724,10 @@ export function registerControlUiAndPairingSuite(): void {
     ws.close();
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
-      "openclaw-bootstrap-node-",
+      "mullusi-bootstrap-node-",
     );
     const client = {
-      id: "openclaw-ios",
+      id: "mullusi-ios",
       version: "2026.3.30",
       platform: "iOS 26.3.1",
       mode: "node",
@@ -855,11 +855,11 @@ export function registerControlUiAndPairingSuite(): void {
     ws.close();
 
     const { identityPath, client } = await createOperatorIdentityFixture(
-      "openclaw-bootstrap-reconcile-fail-",
+      "mullusi-bootstrap-reconcile-fail-",
     );
     const nodeClient = {
       ...client,
-      id: "openclaw-android",
+      id: "mullusi-android",
       mode: "node",
     };
 
@@ -912,10 +912,10 @@ export function registerControlUiAndPairingSuite(): void {
     ws.close();
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
-      "openclaw-bootstrap-role-upgrade-",
+      "mullusi-bootstrap-role-upgrade-",
     );
     const client = {
-      id: "openclaw-ios",
+      id: "mullusi-ios",
       version: "2026.3.30",
       platform: "iOS 26.3.1",
       mode: "node",
@@ -983,7 +983,7 @@ export function registerControlUiAndPairingSuite(): void {
     ws.close();
 
     const { identityPath, identity, client } = await createOperatorIdentityFixture(
-      "openclaw-bootstrap-operator-",
+      "mullusi-bootstrap-operator-",
     );
 
     try {
@@ -1027,7 +1027,7 @@ export function registerControlUiAndPairingSuite(): void {
     const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret");
     ws.close();
     const { identityPath, identity, client } =
-      await createOperatorIdentityFixture("openclaw-device-scope-");
+      await createOperatorIdentityFixture("mullusi-device-scope-");
     const connectWithNonce = async (role: "operator" | "node", scopes: string[]) => {
       const socket = new WebSocket(`ws://127.0.0.1:${port}`, {
         headers: { host: "gateway.example" },
@@ -1138,7 +1138,7 @@ export function registerControlUiAndPairingSuite(): void {
     const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
     const { identityPath, identity } = await createOperatorIdentityFixture(
-      "openclaw-device-legacy-meta-",
+      "mullusi-device-legacy-meta-",
     );
     const deviceId = identity.deviceId;
     const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
@@ -1195,7 +1195,7 @@ export function registerControlUiAndPairingSuite(): void {
   test("requires approval for local scope upgrades even when paired metadata is legacy-shaped", async () => {
     const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     const { identity, identityPath } = await seedApprovedOperatorReadPairing({
-      identityPrefix: "openclaw-device-legacy-",
+      identityPrefix: "mullusi-device-legacy-",
       clientId: TEST_OPERATOR_CLIENT.id,
       clientMode: TEST_OPERATOR_CLIENT.mode,
       displayName: "legacy-upgrade-test",
@@ -1262,9 +1262,9 @@ export function registerControlUiAndPairingSuite(): void {
     ws2.close();
     await server.close();
     if (prevToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.MULLUSI_GATEWAY_TOKEN;
     } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      process.env.MULLUSI_GATEWAY_TOKEN = prevToken;
     }
   });
 
@@ -1287,10 +1287,10 @@ export function registerControlUiAndPairingSuite(): void {
     const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret");
     ws.close();
-    const wsDockerCli = await openWs(port, { host: "172.17.0.2:18789" });
+    const wsDockerCli = await openWs(port, { host: "172.17.0.2:18790" });
     try {
       const { identity, identityPath } =
-        await createOperatorIdentityFixture("openclaw-cli-docker-");
+        await createOperatorIdentityFixture("mullusi-cli-docker-");
       const nonce = await readConnectChallengeNonce(wsDockerCli);
       const dockerCli = await connectReq(wsDockerCli, {
         token: "secret",
@@ -1341,7 +1341,7 @@ export function registerControlUiAndPairingSuite(): void {
   test("allows gateway backend clients on loopback with a private host header", async () => {
     const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret");
     ws.close();
-    const wsPrivateHost = await openWs(port, { host: "172.17.0.2:18789" });
+    const wsPrivateHost = await openWs(port, { host: "172.17.0.2:18790" });
     try {
       const remoteLikeBackend = await connectReq(wsPrivateHost, {
         token: "secret",

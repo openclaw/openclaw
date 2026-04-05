@@ -41,8 +41,8 @@ export { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_BROWSER_EVALUATE_ENABLED,
-  DEFAULT_OPENCLAW_BROWSER_COLOR,
-  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  DEFAULT_MULLUSI_BROWSER_COLOR,
+  DEFAULT_MULLUSI_BROWSER_PROFILE_NAME,
 } from "./browser/constants.js";
 export {
   parseBrowserMajorVersion,

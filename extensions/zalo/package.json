@@ -1,23 +1,23 @@
 {
-  "name": "@openclaw/zalo",
+  "name": "@mullusi/zalo",
   "version": "2026.4.4",
-  "description": "OpenClaw Zalo channel plugin",
+  "description": "Mullusi Zalo channel plugin",
   "type": "module",
   "dependencies": {
     "undici": "8.0.0"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "mullusi": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.4"
+    "mullusi": ">=2026.4.4"
   },
   "peerDependenciesMeta": {
-    "openclaw": {
+    "mullusi": {
       "optional": true
     }
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],
@@ -36,7 +36,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/zalo",
+      "npmSpec": "@mullusi/zalo",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.4"
     },
@@ -44,7 +44,7 @@
       "pluginApi": ">=2026.4.4"
     },
     "build": {
-      "openclawVersion": "2026.4.4"
+      "mullusiVersion": "2026.4.4"
     },
     "release": {
       "publishToClawHub": true,

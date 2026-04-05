@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/amazon-bedrock-provider",
+  "name": "@mullusi/amazon-bedrock-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Amazon Bedrock provider plugin",
+  "description": "Mullusi Amazon Bedrock provider plugin",
   "type": "module",
   "dependencies": {
     "@aws-sdk/client-bedrock": "3.1022.0"
   },
-  "openclaw": {
+  "mullusi": {
     "bundle": {
       "stageRuntimeDependencies": true
     },

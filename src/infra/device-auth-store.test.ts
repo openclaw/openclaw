@@ -10,8 +10,8 @@ import {
 
 function createEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_TEST_FAST: "1",
+    MULLUSI_STATE_DIR: stateDir,
+    MULLUSI_TEST_FAST: "1",
   };
 }
 
@@ -21,7 +21,7 @@ function deviceAuthFile(stateDir: string): string {
 
 describe("infra/device-auth-store", () => {
   it("stores and loads device auth tokens under the configured state dir", async () => {
-    await withTempDir("openclaw-device-auth-", async (stateDir) => {
+    await withTempDir("mullusi-device-auth-", async (stateDir) => {
       vi.spyOn(Date, "now").mockReturnValue(1234);
 
       const entry = storeDeviceAuthToken({
@@ -59,7 +59,7 @@ describe("infra/device-auth-store", () => {
   });
 
   it("returns null for missing, invalid, or mismatched stores", async () => {
-    await withTempDir("openclaw-device-auth-", async (stateDir) => {
+    await withTempDir("mullusi-device-auth-", async (stateDir) => {
       const env = createEnv(stateDir);
 
       expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toBeNull();
@@ -78,7 +78,7 @@ describe("infra/device-auth-store", () => {
   });
 
   it("clears only the requested role and leaves unrelated tokens intact", async () => {
-    await withTempDir("openclaw-device-auth-", async (stateDir) => {
+    await withTempDir("mullusi-device-auth-", async (stateDir) => {
       const env = createEnv(stateDir);
 
       storeDeviceAuthToken({

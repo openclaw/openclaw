@@ -7,7 +7,7 @@ import {
 } from "../plugins/bundled-plugin-metadata.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 
-const OPENCLAW_PACKAGE_ROOT =
+const MULLUSI_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
     modulePath: fileURLToPath(import.meta.url),
     moduleUrl: import.meta.url,
@@ -47,7 +47,7 @@ export function resolveRelativeBundledPluginPublicModuleId(params: {
   const metadata = findBundledPluginMetadata(params.pluginId);
   const fromFilePath = fileURLToPath(params.fromModuleUrl);
   const targetPath = path.resolve(
-    OPENCLAW_PACKAGE_ROOT,
+    MULLUSI_PACKAGE_ROOT,
     "extensions",
     metadata.dirName,
     params.artifactBasename,

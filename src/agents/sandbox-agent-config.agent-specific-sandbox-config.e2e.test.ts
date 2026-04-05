@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
 type SpawnCall = {
@@ -54,7 +54,7 @@ let resolveSandboxContext: typeof import("./sandbox/context.js").resolveSandboxC
 let resolveSandboxConfigForAgent: typeof import("./sandbox/config.js").resolveSandboxConfigForAgent;
 let resolveSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").resolveSandboxRuntimeStatus;
 
-async function resolveContext(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
+async function resolveContext(config: MullusiConfig, sessionKey: string, workspaceDir: string) {
   return resolveSandboxContext({
     config,
     sessionKey,
@@ -76,7 +76,7 @@ function expectDockerSetupCommand(command: string) {
 
 function createDefaultsSandboxConfig(
   scope: "agent" | "shared" | "session" = "agent",
-): OpenClawConfig {
+): MullusiConfig {
   return {
     agents: {
       defaults: {
@@ -89,7 +89,7 @@ function createDefaultsSandboxConfig(
   };
 }
 
-function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig {
+function createWorkSetupCommandConfig(scope: "agent" | "shared"): MullusiConfig {
   return {
     agents: {
       defaults: {
@@ -104,7 +104,7 @@ function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig
       list: [
         {
           id: "work",
-          workspace: "~/openclaw-work",
+          workspace: "~/mullusi-work",
           sandbox: {
             mode: "all",
             scope,
@@ -133,19 +133,19 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should use agent-specific workspaceRoot", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         defaults: {
           sandbox: {
             mode: "all",
             scope: "agent",
-            workspaceRoot: "~/.openclaw/sandboxes",
+            workspaceRoot: "~/.mullusi/sandboxes",
           },
         },
         list: [
           {
             id: "isolated",
-            workspace: "~/openclaw-isolated",
+            workspace: "~/mullusi-isolated",
             sandbox: {
               mode: "all",
               scope: "agent",
@@ -163,7 +163,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should prefer agent config over global for multiple agents", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -174,14 +174,14 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "main",
-            workspace: "~/openclaw",
+            workspace: "~/mullusi",
             sandbox: {
               mode: "off",
             },
           },
           {
             id: "family",
-            workspace: "~/openclaw-family",
+            workspace: "~/mullusi-family",
             sandbox: {
               mode: "all",
               scope: "agent",
@@ -230,7 +230,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should use global sandbox config when no agent-specific config exists", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -241,7 +241,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "main",
-            workspace: "~/openclaw",
+            workspace: "~/mullusi",
           },
         ],
       },
@@ -276,7 +276,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should allow agent-specific docker settings beyond setupCommand", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -291,7 +291,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "work",
-            workspace: "~/openclaw-work",
+            workspace: "~/mullusi-work",
             sandbox: {
               mode: "all",
               scope: "agent",
@@ -324,14 +324,14 @@ describe("Agent-specific sandbox config", () => {
             list: [
               {
                 id: "main",
-                workspace: "~/openclaw",
+                workspace: "~/mullusi",
                 sandbox: {
                   mode: "off",
                 },
               },
             ],
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         sessionKey: "agent:main:main",
         assert: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => {
           expect(runtime.mode).toBe("off");
@@ -349,7 +349,7 @@ describe("Agent-specific sandbox config", () => {
             list: [
               {
                 id: "family",
-                workspace: "~/openclaw-family",
+                workspace: "~/mullusi-family",
                 sandbox: {
                   mode: "all",
                   scope: "agent",
@@ -357,7 +357,7 @@ describe("Agent-specific sandbox config", () => {
               },
             ],
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         sessionKey: "agent:family:whatsapp:group:123",
         assert: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => {
           expect(runtime.mode).toBe("all");
@@ -374,7 +374,7 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("should use agent-specific scope", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         defaults: {
           sandbox: {
@@ -385,7 +385,7 @@ describe("Agent-specific sandbox config", () => {
         list: [
           {
             id: "work",
-            workspace: "~/openclaw-work",
+            workspace: "~/mullusi-work",
             sandbox: {
               mode: "all",
               scope: "agent",
@@ -423,7 +423,7 @@ describe("Agent-specific sandbox config", () => {
               },
             },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         expected: ["image"],
       },
     ]) {

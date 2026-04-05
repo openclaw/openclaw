@@ -7,7 +7,7 @@ import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 describe("infra store", () => {
   describe("state migrations fs", () => {
     it("treats array session stores as invalid", async () => {
-      await withTempDir("openclaw-session-store-", async (dir) => {
+      await withTempDir("mullusi-session-store-", async (dir) => {
         const storePath = path.join(dir, "sessions.json");
         await fs.writeFile(storePath, "[]", "utf-8");
 
@@ -18,7 +18,7 @@ describe("infra store", () => {
     });
 
     it("parses JSON5 object session stores", async () => {
-      await withTempDir("openclaw-session-store-", async (dir) => {
+      await withTempDir("mullusi-session-store-", async (dir) => {
         const storePath = path.join(dir, "sessions.json");
         await fs.writeFile(
           storePath,

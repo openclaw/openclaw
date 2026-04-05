@@ -4,10 +4,10 @@ export type {
   ChannelStatusIssue,
 } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export type { OpenClawConfig } from "../config/config.js";
+export type { MullusiConfig } from "../config/config.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
-export type { OpenClawPluginApi, PluginRuntime } from "./channel-plugin-common.js";
+export type { MullusiPluginApi, PluginRuntime } from "./channel-plugin-common.js";
 
 export {
   DEFAULT_ACCOUNT_ID,

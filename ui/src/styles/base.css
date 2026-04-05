@@ -514,7 +514,7 @@ html.theme-transition::view-transition-new(theme) {
   }
 }
 
-openclaw-app {
+mullusi-app {
   display: block;
   position: relative;
   z-index: 1;

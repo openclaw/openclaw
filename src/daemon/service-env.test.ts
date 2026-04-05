@@ -277,7 +277,7 @@ describe("buildServiceEnvironment", () => {
   it("sets minimal PATH and gateway vars", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
-      port: 18789,
+      port: 18790,
     });
     expect(env.HOME).toBe("/home/user");
     if (process.platform === "win32") {
@@ -285,22 +285,22 @@ describe("buildServiceEnvironment", () => {
     } else {
       expect(env.PATH).toContain("/usr/bin");
     }
-    expect(env.OPENCLAW_GATEWAY_PORT).toBe("18789");
-    expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-    expect(env.OPENCLAW_SERVICE_MARKER).toBe("openclaw");
-    expect(env.OPENCLAW_SERVICE_KIND).toBe("gateway");
-    expect(typeof env.OPENCLAW_SERVICE_VERSION).toBe("string");
-    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
-    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
+    expect(env.MULLUSI_GATEWAY_PORT).toBe("18790");
+    expect(env.MULLUSI_GATEWAY_TOKEN).toBeUndefined();
+    expect(env.MULLUSI_SERVICE_MARKER).toBe("mullusi");
+    expect(env.MULLUSI_SERVICE_KIND).toBe("gateway");
+    expect(typeof env.MULLUSI_SERVICE_VERSION).toBe("string");
+    expect(env.MULLUSI_SYSTEMD_UNIT).toBe("mullusi-gateway.service");
+    expect(env.MULLUSI_WINDOWS_TASK_NAME).toBe("Mullusi Gateway");
     if (process.platform === "darwin") {
-      expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
+      expect(env.MULLUSI_LAUNCHD_LABEL).toBe("ai.mullusi.gateway");
     }
   });
 
   it("forwards TMPDIR from the host environment", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", TMPDIR: "/var/folders/xw/abc123/T/" },
-      port: 18789,
+      port: 18790,
     });
     expect(env.TMPDIR).toBe("/var/folders/xw/abc123/T/");
   });
@@ -308,20 +308,20 @@ describe("buildServiceEnvironment", () => {
   it("falls back to os.tmpdir when TMPDIR is not set", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
-      port: 18789,
+      port: 18790,
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
   });
 
   it("uses profile-specific unit and label", () => {
     const env = buildServiceEnvironment({
-      env: { HOME: "/home/user", OPENCLAW_PROFILE: "work" },
-      port: 18789,
+      env: { HOME: "/home/user", MULLUSI_PROFILE: "work" },
+      port: 18790,
     });
-    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-work.service");
-    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway (work)");
+    expect(env.MULLUSI_SYSTEMD_UNIT).toBe("mullusi-gateway-work.service");
+    expect(env.MULLUSI_WINDOWS_TASK_NAME).toBe("Mullusi Gateway (work)");
     if (process.platform === "darwin") {
-      expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
+      expect(env.MULLUSI_LAUNCHD_LABEL).toBe("ai.mullusi.work");
     }
   });
 
@@ -335,7 +335,7 @@ describe("buildServiceEnvironment", () => {
         http_proxy: "http://proxy.local:7890",
         all_proxy: "socks5://proxy.local:1080",
       },
-      port: 18789,
+      port: 18790,
     });
 
     expect(env.HTTP_PROXY).toBe("http://proxy.local:7890");
@@ -351,18 +351,18 @@ describe("buildServiceEnvironment", () => {
         HOME: "C:\\Users\\alice",
         PATH: "C:\\Windows\\System32;C:\\Tools\\rg",
       },
-      port: 18789,
+      port: 18790,
       platform: "win32",
     });
 
     expect(env).not.toHaveProperty("PATH");
-    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
+    expect(env.MULLUSI_WINDOWS_TASK_NAME).toBe("Mullusi Gateway");
   });
 
   it("prepends extra runtime directories to the gateway service PATH", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
-      port: 18789,
+      port: 18790,
       platform: "linux",
       extraPathDirs: ["/home/user/.nvm/versions/node/v22.22.0/bin"],
     });
@@ -381,21 +381,21 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.HOME).toBe("/home/user");
   });
 
-  it("passes through OPENCLAW_GATEWAY_TOKEN for node services", () => {
+  it("passes through MULLUSI_GATEWAY_TOKEN for node services", () => {
     const env = buildNodeServiceEnvironment({
-      env: { HOME: "/home/user", OPENCLAW_GATEWAY_TOKEN: " node-token " },
+      env: { HOME: "/home/user", MULLUSI_GATEWAY_TOKEN: " node-token " },
     });
-    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("node-token");
+    expect(env.MULLUSI_GATEWAY_TOKEN).toBe("node-token");
   });
 
-  it("omits OPENCLAW_GATEWAY_TOKEN when the env var is empty", () => {
+  it("omits MULLUSI_GATEWAY_TOKEN when the env var is empty", () => {
     const env = buildNodeServiceEnvironment({
       env: {
         HOME: "/home/user",
-        OPENCLAW_GATEWAY_TOKEN: "   ",
+        MULLUSI_GATEWAY_TOKEN: "   ",
       },
     });
-    expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    expect(env.MULLUSI_GATEWAY_TOKEN).toBeUndefined();
   });
 
   it("forwards proxy environment variables for node services", () => {
@@ -443,7 +443,7 @@ describe("shared Node TLS env defaults", () => {
     {
       name: "gateway service env",
       build: (env: Record<string, string | undefined>, platform?: NodeJS.Platform) =>
-        buildServiceEnvironment({ env, port: 18789, platform }),
+        buildServiceEnvironment({ env, port: 18790, platform }),
     },
     {
       name: "node service env",
@@ -486,32 +486,32 @@ describe("shared Node TLS env defaults", () => {
 describe("resolveGatewayStateDir", () => {
   it("uses the default state dir when no overrides are set", () => {
     const env = { HOME: "/Users/test" };
-    expect(resolveGatewayStateDir(env)).toBe(path.join("/Users/test", ".openclaw"));
+    expect(resolveGatewayStateDir(env)).toBe(path.join("/Users/test", ".mullusi"));
   });
 
   it("appends the profile suffix when set", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "rescue" };
-    expect(resolveGatewayStateDir(env)).toBe(path.join("/Users/test", ".openclaw-rescue"));
+    const env = { HOME: "/Users/test", MULLUSI_PROFILE: "rescue" };
+    expect(resolveGatewayStateDir(env)).toBe(path.join("/Users/test", ".mullusi-rescue"));
   });
 
   it("treats default profiles as the base state dir", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_PROFILE: "Default" };
-    expect(resolveGatewayStateDir(env)).toBe(path.join("/Users/test", ".openclaw"));
+    const env = { HOME: "/Users/test", MULLUSI_PROFILE: "Default" };
+    expect(resolveGatewayStateDir(env)).toBe(path.join("/Users/test", ".mullusi"));
   });
 
-  it("uses OPENCLAW_STATE_DIR when provided", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_STATE_DIR: "/var/lib/openclaw" };
-    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/var/lib/openclaw"));
+  it("uses MULLUSI_STATE_DIR when provided", () => {
+    const env = { HOME: "/Users/test", MULLUSI_STATE_DIR: "/var/lib/mullusi" };
+    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/var/lib/mullusi"));
   });
 
-  it("expands ~ in OPENCLAW_STATE_DIR", () => {
-    const env = { HOME: "/Users/test", OPENCLAW_STATE_DIR: "~/openclaw-state" };
-    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/Users/test/openclaw-state"));
+  it("expands ~ in MULLUSI_STATE_DIR", () => {
+    const env = { HOME: "/Users/test", MULLUSI_STATE_DIR: "~/mullusi-state" };
+    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/Users/test/mullusi-state"));
   });
 
   it("preserves Windows absolute paths without HOME", () => {
-    const env = { OPENCLAW_STATE_DIR: "C:\\State\\openclaw" };
-    expect(resolveGatewayStateDir(env)).toBe("C:\\State\\openclaw");
+    const env = { MULLUSI_STATE_DIR: "C:\\State\\mullusi" };
+    expect(resolveGatewayStateDir(env)).toBe("C:\\State\\mullusi");
   });
 });
 
@@ -544,7 +544,7 @@ describe("shared Node TLS env defaults", () => {
   it("sets macOS TLS defaults for gateway services", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/Users/test" },
-      port: 18789,
+      port: 18790,
       platform: "darwin",
     });
     expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
@@ -564,7 +564,7 @@ describe("shared Node TLS env defaults", () => {
     const expected = resolveLinuxSystemCaBundle();
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", NVM_DIR: "/home/user/.nvm" },
-      port: 18789,
+      port: 18790,
       platform: "linux",
       execPath: "/usr/bin/node",
     });
@@ -584,7 +584,7 @@ describe("shared Node TLS env defaults", () => {
   it("does not default NODE_EXTRA_CA_CERTS on Linux without nvm", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
-      port: 18789,
+      port: 18790,
       platform: "linux",
       execPath: "/usr/bin/node",
     });

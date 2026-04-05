@@ -4,17 +4,17 @@
 
 #include "Config/Version.xcconfig"
 
-OPENCLAW_CODE_SIGN_STYLE = Manual
-OPENCLAW_DEVELOPMENT_TEAM = Y5PE65HELJ
+MULLUSI_CODE_SIGN_STYLE = Manual
+MULLUSI_DEVELOPMENT_TEAM = Y5PE65HELJ
 
-OPENCLAW_APP_BUNDLE_ID = ai.openclaw.client
-OPENCLAW_SHARE_BUNDLE_ID = ai.openclaw.client.share
-OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclaw.client.watchkitapp
-OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclaw.client.watchkitapp.extension
-OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID = ai.openclaw.client.activitywidget
+MULLUSI_APP_BUNDLE_ID = ai.mullusi.client
+MULLUSI_SHARE_BUNDLE_ID = ai.mullusi.client.share
+MULLUSI_WATCH_APP_BUNDLE_ID = ai.mullusi.client.watchkitapp
+MULLUSI_WATCH_EXTENSION_BUNDLE_ID = ai.mullusi.client.watchkitapp.extension
+MULLUSI_ACTIVITY_WIDGET_BUNDLE_ID = ai.mullusi.client.activitywidget
 
-OPENCLAW_APP_PROFILE = ai.openclaw.client Development
-OPENCLAW_SHARE_PROFILE = ai.openclaw.client.share Development
+MULLUSI_APP_PROFILE = ai.mullusi.client Development
+MULLUSI_SHARE_PROFILE = ai.mullusi.client.share Development
 
 // Keep local includes after defaults: xcconfig is evaluated top-to-bottom,
 // so later assignments in local files override the defaults above.

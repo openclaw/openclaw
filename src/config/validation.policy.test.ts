@@ -19,7 +19,7 @@ describe("config validation SecretRef policy guards", () => {
       expect(issue).toBeDefined();
       expect(issue?.message).toContain("SecretRef objects are not supported at hooks.token");
       expect(issue?.message).toContain(
-        "https://docs.openclaw.ai/reference/secretref-credential-surface",
+        "https://docs.mullusi.com/reference/secretref-credential-surface",
       );
       expect(
         result.issues.some(

@@ -278,7 +278,7 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     expect(result.media.length).toBeGreaterThan(0);
   });
 
-  it("adds the OpenClaw User-Agent to guarded Graph attachment fetches", async () => {
+  it("adds the Mullusi User-Agent to guarded Graph attachment fetches", async () => {
     vi.mocked(fetchWithSsrFGuard).mockImplementation(
       async (params: { url: string; init?: RequestInit }) => {
         const url = params.url;
@@ -323,12 +323,12 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       expect(headers).toBeInstanceOf(Headers);
       expect((headers as Headers).get("Authorization")).toBe("Bearer test-token");
       expect((headers as Headers).get("User-Agent")).toMatch(
-        /^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/,
+        /^teams\.ts\[apps\]\/.+ Mullusi\/.+$/,
       );
     }
   });
 
-  it("adds the OpenClaw User-Agent to Graph shares downloads for reference attachments", async () => {
+  it("adds the Mullusi User-Agent to Graph shares downloads for reference attachments", async () => {
     vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: { url: string }) => {
       const url = params.url;
       if (url.endsWith("/messages/msg-share") && !url.includes("hostedContents")) {
@@ -394,6 +394,6 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     );
     const requestInit = vi.mocked(safeFetchWithPolicy).mock.calls[0]?.[0]?.requestInit;
     const headers = requestInit?.headers as Headers;
-    expect(headers.get("User-Agent")).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
+    expect(headers.get("User-Agent")).toMatch(/^teams\.ts\[apps\]\/.+ Mullusi\/.+$/);
   });
 });

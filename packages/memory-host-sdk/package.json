@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/memory-host-sdk",
+  "name": "@mullusi/memory-host-sdk",
   "version": "0.0.0-private",
   "private": true,
   "type": "module",

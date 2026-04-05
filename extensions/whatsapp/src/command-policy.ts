@@ -1,4 +1,4 @@
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import type { ChannelPlugin } from "mullusi/plugin-sdk/core";
 
 export const whatsappCommandPolicy: NonNullable<ChannelPlugin["commands"]> = {
   enforceOwnerForCommands: true,

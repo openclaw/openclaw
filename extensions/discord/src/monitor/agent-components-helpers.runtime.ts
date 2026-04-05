@@ -1,5 +1,5 @@
 export {
   readStoreAllowFromForDmPolicy,
   resolvePinnedMainDmOwnerFromAllowlist,
-} from "openclaw/plugin-sdk/security-runtime";
-export { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
+} from "mullusi/plugin-sdk/security-runtime";
+export { upsertChannelPairingRequest } from "mullusi/plugin-sdk/conversation-runtime";

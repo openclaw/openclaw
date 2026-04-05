@@ -15,7 +15,7 @@ function normalizeHostPath(value: string): string {
 
 describe("local media roots", () => {
   function withStateDir<T>(stateDir: string, run: () => T): T {
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("MULLUSI_STATE_DIR", stateDir);
     return run();
   }
 
@@ -87,7 +87,7 @@ describe("local media roots", () => {
   it.each([
     {
       name: "keeps temp, media cache, and workspace roots by default",
-      stateDir: path.join("/tmp", "openclaw-media-roots-state"),
+      stateDir: path.join("/tmp", "mullusi-media-roots-state"),
       getRoots: () => getDefaultMediaLocalRoots(),
       expectedContained: ["media", "workspace", "sandboxes"],
       expectedExcluded: ["agents"],
@@ -95,7 +95,7 @@ describe("local media roots", () => {
     },
     {
       name: "adds the active agent workspace without re-opening broad agent state roots",
-      stateDir: path.join("/tmp", "openclaw-agent-media-roots-state"),
+      stateDir: path.join("/tmp", "mullusi-agent-media-roots-state"),
       getRoots: () => getAgentScopedMediaLocalRoots({}, "ops"),
       expectedContained: ["workspace-ops", "sandboxes"],
       expectedExcluded: ["agents"],
@@ -113,25 +113,25 @@ describe("local media roots", () => {
   it.each([
     {
       name: "does not widen agent media roots for concrete local sources when workspaceOnly is disabled",
-      stateDir: path.join("/tmp", "openclaw-flexible-media-roots-state"),
+      stateDir: path.join("/tmp", "mullusi-flexible-media-roots-state"),
       cfg: {},
       shouldContainPictures: false,
     },
     {
       name: "does not widen agent media roots when workspaceOnly is enabled",
-      stateDir: path.join("/tmp", "openclaw-flexible-media-roots-state"),
+      stateDir: path.join("/tmp", "mullusi-flexible-media-roots-state"),
       cfg: { tools: { fs: { workspaceOnly: true } } },
       shouldContainPictures: false,
     },
     {
       name: "does not widen media roots for messaging-profile agents without filesystem tools",
-      stateDir: path.join("/tmp", "openclaw-messaging-media-roots-state"),
+      stateDir: path.join("/tmp", "mullusi-messaging-media-roots-state"),
       cfg: { tools: { profile: "messaging" } },
       shouldContainPictures: false,
     },
     {
       name: "does not widen media roots even when messaging-profile agents explicitly enable filesystem tools",
-      stateDir: path.join("/tmp", "openclaw-messaging-fs-media-roots-state"),
+      stateDir: path.join("/tmp", "mullusi-messaging-fs-media-roots-state"),
       cfg: {
         tools: {
           profile: "messaging",
@@ -152,7 +152,7 @@ describe("local media roots", () => {
   });
 
   it("keeps agent-scoped defaults even when mediaSources include file URLs and top-level paths", () => {
-    const stateDir = path.join("/tmp", "openclaw-file-url-media-roots-state");
+    const stateDir = path.join("/tmp", "mullusi-file-url-media-roots-state");
     const picturesDir =
       process.platform === "win32" ? "C:\\Users\\peter\\Pictures" : "/Users/peter/Pictures";
     const moviesDir =
@@ -181,17 +181,17 @@ describe("local media roots", () => {
   });
 
   it("includes the config media root when legacy state and config dirs diverge", () => {
-    const homeRoot = path.join(os.tmpdir(), "openclaw-legacy-home-test");
+    const homeRoot = path.join(os.tmpdir(), "mullusi-legacy-home-test");
     const roots = buildMediaLocalRoots(
-      path.join(homeRoot, ".clawdbot"),
-      path.join(homeRoot, ".openclaw"),
+      path.join(homeRoot, ".mullusi"),
+      path.join(homeRoot, ".mullusi"),
     );
 
     expectNormalizedRootsContain(roots, [
-      path.join(homeRoot, ".clawdbot", "media"),
-      path.join(homeRoot, ".clawdbot", "workspace"),
-      path.join(homeRoot, ".clawdbot", "sandboxes"),
-      path.join(homeRoot, ".openclaw", "media"),
+      path.join(homeRoot, ".mullusi", "media"),
+      path.join(homeRoot, ".mullusi", "workspace"),
+      path.join(homeRoot, ".mullusi", "sandboxes"),
+      path.join(homeRoot, ".mullusi", "media"),
     ]);
   });
 });

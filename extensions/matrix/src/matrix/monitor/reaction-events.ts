@@ -1,4 +1,4 @@
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { getSessionBindingService } from "mullusi/plugin-sdk/conversation-runtime";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";

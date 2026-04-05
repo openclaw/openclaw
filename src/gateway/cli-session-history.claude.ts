@@ -8,7 +8,7 @@ import {
   type ToolContentBlock,
 } from "../chat/tool-content.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { attachOpenClawTranscriptMeta } from "./session-utils.fs.js";
+import { attachMullusiTranscriptMeta } from "./session-utils.fs.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude-cli";
 const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
@@ -243,7 +243,7 @@ function parseClaudeCliHistoryEntry(
   }
 
   if (type === "user") {
-    return attachOpenClawTranscriptMeta(
+    return attachMullusiTranscriptMeta(
       {
         role: "user",
         content,
@@ -253,7 +253,7 @@ function parseClaudeCliHistoryEntry(
     ) as TranscriptLikeMessage;
   }
 
-  return attachOpenClawTranscriptMeta(
+  return attachMullusiTranscriptMeta(
     {
       role: "assistant",
       content,

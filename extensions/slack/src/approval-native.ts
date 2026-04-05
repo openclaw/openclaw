@@ -1,13 +1,13 @@
 import {
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
-} from "openclaw/plugin-sdk/approval-delivery-runtime";
+} from "mullusi/plugin-sdk/approval-delivery-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
-} from "openclaw/plugin-sdk/approval-native-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+} from "mullusi/plugin-sdk/approval-native-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "mullusi/plugin-sdk/infra-runtime";
 import { listSlackAccountIds } from "./accounts.js";
 import { isSlackApprovalAuthorizedSender } from "./approval-auth.js";
 import {

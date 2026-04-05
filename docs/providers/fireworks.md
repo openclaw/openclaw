@@ -1,13 +1,13 @@
 ---
 summary: "Fireworks setup (auth + model selection)"
 read_when:
-  - You want to use Fireworks with OpenClaw
+  - You want to use Fireworks with Mullusi
   - You need the Fireworks API key env var or default model id
 ---
 
 # Fireworks
 
-[Fireworks](https://fireworks.ai) exposes open-weight and routed models through an OpenAI-compatible API. OpenClaw now includes a bundled Fireworks provider plugin.
+[Fireworks](https://fireworks.ai) exposes open-weight and routed models through an OpenAI-compatible API. Mullusi now includes a bundled Fireworks provider plugin.
 
 - Provider: `fireworks`
 - Auth: `FIREWORKS_API_KEY`
@@ -20,15 +20,15 @@ read_when:
 Set up Fireworks auth through onboarding:
 
 ```bash
-openclaw onboard --auth-choice fireworks-api-key
+mullusi onboard --auth-choice fireworks-api-key
 ```
 
-This stores your Fireworks key in OpenClaw config and sets the Fire Pass starter model as the default.
+This stores your Fireworks key in Mullusi config and sets the Fire Pass starter model as the default.
 
 ## Non-interactive example
 
 ```bash
-openclaw onboard --non-interactive \
+mullusi onboard --non-interactive \
   --mode local \
   --auth-choice fireworks-api-key \
   --fireworks-api-key "$FIREWORKS_API_KEY" \
@@ -50,7 +50,7 @@ help a launchd/systemd daemon unless that environment is imported there as well.
 
 ## Custom Fireworks model ids
 
-OpenClaw accepts dynamic Fireworks model ids too. Use the exact model or router id shown by Fireworks and prefix it with `fireworks/`.
+Mullusi accepts dynamic Fireworks model ids too. Use the exact model or router id shown by Fireworks and prefix it with `fireworks/`.
 
 Example:
 

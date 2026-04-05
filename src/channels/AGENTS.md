@@ -18,7 +18,7 @@ import from this tree directly.
 
 ## Boundary Rules
 
-- Keep extension-facing channel surfaces flowing through `openclaw/plugin-sdk/*`
+- Keep extension-facing channel surfaces flowing through `mullusi/plugin-sdk/*`
   instead of direct imports from `src/channels/**`.
 - When a bundled or third-party channel needs a new seam, add a typed SDK
   contract or facade first.
@@ -40,4 +40,4 @@ import from this tree directly.
 
 - If you touch hot channel entrypoints or lazy-loading seams, run `pnpm build`.
 - For bundled plugin channel changes that can affect startup/import cost, run:
-  `OPENCLAW_LOCAL_CHECK=0 node scripts/profile-extension-memory.mjs --extension <id> --skip-combined --concurrency 1`
+  `MULLUSI_LOCAL_CHECK=0 node scripts/profile-extension-memory.mjs --extension <id> --skip-combined --concurrency 1`

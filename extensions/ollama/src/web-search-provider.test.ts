@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 
@@ -6,7 +6,7 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("mullusi/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
@@ -78,8 +78,8 @@ describe("ollama web search provider", () => {
         JSON.stringify({
           results: [
             {
-              title: "OpenClaw",
-              url: "https://openclaw.ai/docs",
+              title: "Mullusi",
+              url: "https://mullusi.com/docs",
               content: "Gateway docs and setup details",
             },
           ],
@@ -109,7 +109,7 @@ describe("ollama web search provider", () => {
     if (!tool) {
       throw new Error("Expected tool definition");
     }
-    const result = await tool.execute({ query: "openclaw docs", count: 3 });
+    const result = await tool.execute({ query: "mullusi docs", count: 3 });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -128,14 +128,14 @@ describe("ollama web search provider", () => {
         ),
       ),
     ).toEqual({
-      query: "openclaw docs",
+      query: "mullusi docs",
       max_results: 3,
     });
     expect(result).toMatchObject({
-      query: "openclaw docs",
+      query: "mullusi docs",
       provider: "ollama",
       count: 1,
-      results: [{ url: "https://openclaw.ai/docs" }],
+      results: [{ url: "https://mullusi.com/docs" }],
     });
     expect(release).toHaveBeenCalledTimes(1);
   });
@@ -146,7 +146,7 @@ describe("ollama web search provider", () => {
       release: vi.fn(async () => {}),
     });
 
-    await expect(runOllamaWebSearch({ query: "latest openclaw release" })).rejects.toThrow(
+    await expect(runOllamaWebSearch({ query: "latest mullusi release" })).rejects.toThrow(
       "ollama signin",
     );
   });
@@ -155,7 +155,7 @@ describe("ollama web search provider", () => {
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("connect failed"));
 
     const notes: Array<{ title?: string; message: string }> = [];
-    const config: OpenClawConfig = {
+    const config: MullusiConfig = {
       models: {
         providers: {
           ollama: {
@@ -232,7 +232,7 @@ describe("ollama web search provider", () => {
       });
 
     const notes: Array<{ title?: string; message: string }> = [];
-    const config: OpenClawConfig = {
+    const config: MullusiConfig = {
       models: {
         providers: {
           ollama: {

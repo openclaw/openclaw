@@ -547,7 +547,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     loadWebMediaMock.mockRejectedValueOnce(
       new Error(
-        "Local media path is not under an allowed directory: /home/admin/.openclaw/openclaw.json",
+        "Local media path is not under an allowed directory: /home/admin/.mullusi/mullusi.json",
       ),
     );
 
@@ -556,7 +556,7 @@ describe("feishu_doc image fetch hardening", () => {
     const result = await executeFeishuDocTool(feishuDocTool, {
       action: "upload_image",
       doc_token: "doc_1",
-      file_path: "/home/admin/.openclaw/openclaw.json",
+      file_path: "/home/admin/.mullusi/mullusi.json",
     });
 
     expect(result.details.error).toContain("not under an allowed directory");

@@ -1,4 +1,4 @@
-import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { loadConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   getPrimaryIdentityId,
   getReplyContext,

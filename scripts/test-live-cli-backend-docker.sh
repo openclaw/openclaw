@@ -3,16 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/live-docker-auth.sh"
-IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
-LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
-CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
-WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
-PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
-CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/openclaw/docker-cli-tools}"
+IMAGE_NAME="${MULLUSI_IMAGE:-mullusi:local}"
+LIVE_IMAGE_NAME="${MULLUSI_LIVE_IMAGE:-${IMAGE_NAME}-live}"
+CONFIG_DIR="${MULLUSI_CONFIG_DIR:-$HOME/.mullusi}"
+WORKSPACE_DIR="${MULLUSI_WORKSPACE_DIR:-$HOME/.mullusi/workspace}"
+PROFILE_FILE="${MULLUSI_PROFILE_FILE:-$HOME/.profile}"
+CLI_TOOLS_DIR="${MULLUSI_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/mullusi/docker-cli-tools}"
 DEFAULT_MODEL="claude-cli/claude-sonnet-4-6"
-CLI_MODEL="${OPENCLAW_LIVE_CLI_BACKEND_MODEL:-$DEFAULT_MODEL}"
+CLI_MODEL="${MULLUSI_LIVE_CLI_BACKEND_MODEL:-$DEFAULT_MODEL}"
 CLI_PROVIDER="${CLI_MODEL%%/*}"
-CLI_DISABLE_MCP_CONFIG="${OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG:-}"
+CLI_DISABLE_MCP_CONFIG="${MULLUSI_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG:-}"
 
 if [[ -z "$CLI_PROVIDER" || "$CLI_PROVIDER" == "$CLI_MODEL" ]]; then
   CLI_PROVIDER="claude-cli"
@@ -30,32 +30,32 @@ fi
 
 AUTH_DIRS=()
 AUTH_FILES=()
-if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
+if [[ -n "${MULLUSI_DOCKER_AUTH_DIRS:-}" ]]; then
   while IFS= read -r auth_dir; do
     [[ -n "$auth_dir" ]] || continue
     AUTH_DIRS+=("$auth_dir")
-  done < <(openclaw_live_collect_auth_dirs)
+  done < <(mullusi_live_collect_auth_dirs)
   while IFS= read -r auth_file; do
     [[ -n "$auth_file" ]] || continue
     AUTH_FILES+=("$auth_file")
-  done < <(openclaw_live_collect_auth_files)
+  done < <(mullusi_live_collect_auth_files)
 else
   while IFS= read -r auth_dir; do
     [[ -n "$auth_dir" ]] || continue
     AUTH_DIRS+=("$auth_dir")
-  done < <(openclaw_live_collect_auth_dirs_from_csv "$CLI_PROVIDER")
+  done < <(mullusi_live_collect_auth_dirs_from_csv "$CLI_PROVIDER")
   while IFS= read -r auth_file; do
     [[ -n "$auth_file" ]] || continue
     AUTH_FILES+=("$auth_file")
-  done < <(openclaw_live_collect_auth_files_from_csv "$CLI_PROVIDER")
+  done < <(mullusi_live_collect_auth_files_from_csv "$CLI_PROVIDER")
 fi
 AUTH_DIRS_CSV=""
 if ((${#AUTH_DIRS[@]} > 0)); then
-  AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
+  AUTH_DIRS_CSV="$(mullusi_live_join_csv "${AUTH_DIRS[@]}")"
 fi
 AUTH_FILES_CSV=""
 if ((${#AUTH_FILES[@]} > 0)); then
-  AUTH_FILES_CSV="$(openclaw_live_join_csv "${AUTH_FILES[@]}")"
+  AUTH_FILES_CSV="$(mullusi_live_join_csv "${AUTH_FILES[@]}")"
 fi
 
 EXTERNAL_AUTH_MOUNTS=()
@@ -80,8 +80,8 @@ read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
 [ -f "$HOME/.profile" ] && source "$HOME/.profile" || true
 export PATH="$HOME/.npm-global/bin:$PATH"
-IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
-IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
+IFS=',' read -r -a auth_dirs <<<"${MULLUSI_DOCKER_AUTH_DIRS_RESOLVED:-}"
+IFS=',' read -r -a auth_files <<<"${MULLUSI_DOCKER_AUTH_FILES_RESOLVED:-}"
 if ((${#auth_dirs[@]} > 0)); then
   for auth_dir in "${auth_dirs[@]}"; do
     [ -n "$auth_dir" ] || continue
@@ -101,12 +101,12 @@ if ((${#auth_files[@]} > 0)); then
     fi
   done
 fi
-provider="${OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER:-claude-cli}"
+provider="${MULLUSI_DOCKER_CLI_BACKEND_PROVIDER:-claude-cli}"
 if [ "$provider" = "claude-cli" ]; then
-  if [ -z "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ]; then
-    export OPENCLAW_LIVE_CLI_BACKEND_COMMAND="$HOME/.npm-global/bin/claude"
+  if [ -z "${MULLUSI_LIVE_CLI_BACKEND_COMMAND:-}" ]; then
+    export MULLUSI_LIVE_CLI_BACKEND_COMMAND="$HOME/.npm-global/bin/claude"
   fi
-  if [ ! -x "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" ]; then
+  if [ ! -x "${MULLUSI_LIVE_CLI_BACKEND_COMMAND}" ]; then
     npm_config_prefix="$HOME/.npm-global" npm install -g @anthropic-ai/claude-code
   fi
   real_claude="$HOME/.npm-global/bin/claude-real"
@@ -117,18 +117,18 @@ if [ "$provider" = "claude-cli" ]; then
     cat > "$HOME/.npm-global/bin/claude" <<WRAP
 #!/usr/bin/env bash
 script_dir="\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)"
-if [ -n "\${OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY:-}" ]; then
-  export ANTHROPIC_API_KEY="\${OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY}"
+if [ -n "\${MULLUSI_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY:-}" ]; then
+  export ANTHROPIC_API_KEY="\${MULLUSI_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY}"
 fi
-if [ -n "\${OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD:-}" ]; then
-  export ANTHROPIC_API_KEY_OLD="\${OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD}"
+if [ -n "\${MULLUSI_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD:-}" ]; then
+  export ANTHROPIC_API_KEY_OLD="\${MULLUSI_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD}"
 fi
 exec "\$script_dir/claude-real" "\$@"
 WRAP
     chmod +x "$HOME/.npm-global/bin/claude"
   fi
-  if [ -z "${OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV:-}" ]; then
-    export OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV='["ANTHROPIC_API_KEY","ANTHROPIC_API_KEY_OLD"]'
+  if [ -z "${MULLUSI_LIVE_CLI_BACKEND_PRESERVE_ENV:-}" ]; then
+    export MULLUSI_LIVE_CLI_BACKEND_PRESERVE_ENV='["ANTHROPIC_API_KEY","ANTHROPIC_API_KEY_OLD"]'
   fi
   claude auth status || true
 fi
@@ -147,9 +147,9 @@ tar -C /src \
 ln -s /app/node_modules "$tmp_dir/node_modules"
 ln -s /app/dist "$tmp_dir/dist"
 if [ -d /app/dist-runtime/extensions ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
+  export MULLUSI_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
 elif [ -d /app/dist/extensions ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
+  export MULLUSI_BUNDLED_PLUGINS_DIR=/app/dist/extensions
 fi
 cd "$tmp_dir"
 pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
@@ -168,31 +168,31 @@ docker run --rm -t \
   --entrypoint bash \
   -e ANTHROPIC_API_KEY \
   -e ANTHROPIC_API_KEY_OLD \
-  -e OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}" \
+  -e MULLUSI_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+  -e MULLUSI_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e HOME=/home/node \
   -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
-  -e OPENCLAW_SKIP_CHANNELS=1 \
-  -e OPENCLAW_VITEST_FS_MODULE_CACHE=0 \
-  -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
-  -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
-  -e OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER="$CLI_PROVIDER" \
-  -e OPENCLAW_LIVE_TEST=1 \
-  -e OPENCLAW_LIVE_CLI_BACKEND=1 \
-  -e OPENCLAW_LIVE_CLI_BACKEND_MODEL="$CLI_MODEL" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_COMMAND="${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_ARGS="${OPENCLAW_LIVE_CLI_BACKEND_ARGS:-}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV="${OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV:-}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV="${OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV:-}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG="$CLI_DISABLE_MCP_CONFIG" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE:-}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE:-}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG:-}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE:-}" \
+  -e MULLUSI_SKIP_CHANNELS=1 \
+  -e MULLUSI_VITEST_FS_MODULE_CACHE=0 \
+  -e MULLUSI_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
+  -e MULLUSI_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
+  -e MULLUSI_DOCKER_CLI_BACKEND_PROVIDER="$CLI_PROVIDER" \
+  -e MULLUSI_LIVE_TEST=1 \
+  -e MULLUSI_LIVE_CLI_BACKEND=1 \
+  -e MULLUSI_LIVE_CLI_BACKEND_MODEL="$CLI_MODEL" \
+  -e MULLUSI_LIVE_CLI_BACKEND_COMMAND="${MULLUSI_LIVE_CLI_BACKEND_COMMAND:-}" \
+  -e MULLUSI_LIVE_CLI_BACKEND_ARGS="${MULLUSI_LIVE_CLI_BACKEND_ARGS:-}" \
+  -e MULLUSI_LIVE_CLI_BACKEND_CLEAR_ENV="${MULLUSI_LIVE_CLI_BACKEND_CLEAR_ENV:-}" \
+  -e MULLUSI_LIVE_CLI_BACKEND_PRESERVE_ENV="${MULLUSI_LIVE_CLI_BACKEND_PRESERVE_ENV:-}" \
+  -e MULLUSI_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG="$CLI_DISABLE_MCP_CONFIG" \
+  -e MULLUSI_LIVE_CLI_BACKEND_RESUME_PROBE="${MULLUSI_LIVE_CLI_BACKEND_RESUME_PROBE:-}" \
+  -e MULLUSI_LIVE_CLI_BACKEND_IMAGE_PROBE="${MULLUSI_LIVE_CLI_BACKEND_IMAGE_PROBE:-}" \
+  -e MULLUSI_LIVE_CLI_BACKEND_IMAGE_ARG="${MULLUSI_LIVE_CLI_BACKEND_IMAGE_ARG:-}" \
+  -e MULLUSI_LIVE_CLI_BACKEND_IMAGE_MODE="${MULLUSI_LIVE_CLI_BACKEND_IMAGE_MODE:-}" \
   -v "$ROOT_DIR":/src:ro \
-  -v "$CONFIG_DIR":/home/node/.openclaw \
-  -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \
+  -v "$CONFIG_DIR":/home/node/.mullusi \
+  -v "$WORKSPACE_DIR":/home/node/.mullusi/workspace \
   -v "$CLI_TOOLS_DIR":/home/node/.npm-global \
   "${EXTERNAL_AUTH_MOUNTS[@]}" \
   "${PROFILE_MOUNT[@]}" \

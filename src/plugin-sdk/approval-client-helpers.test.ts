@@ -4,11 +4,11 @@ import {
   isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
 } from "./approval-client-helpers.js";
-import type { OpenClawConfig } from "./config-runtime.js";
+import type { MullusiConfig } from "./config-runtime.js";
 
 describe("isChannelExecApprovalTargetRecipient", () => {
   it("matches targets by channel and account", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       approvals: {
         exec: {
           enabled: true,
@@ -43,7 +43,7 @@ describe("isChannelExecApprovalTargetRecipient", () => {
   });
 
   it("normalizes the requested channel id before matching targets", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       approvals: {
         exec: {
           enabled: true,

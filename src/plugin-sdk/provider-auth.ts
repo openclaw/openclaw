@@ -1,6 +1,6 @@
 // Public auth/onboarding helpers for provider plugins.
 
-export type { OpenClawConfig } from "../config/config.js";
+export type { MullusiConfig } from "../config/config.js";
 export type { SecretInput } from "../config/types.secrets.js";
 export type { ProviderAuthResult } from "../plugins/types.js";
 export type { ProviderAuthContext } from "../plugins/types.js";

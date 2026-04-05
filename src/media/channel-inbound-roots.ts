@@ -1,6 +1,6 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 
 function normalizeChannelId(value?: string | null): string | undefined {
   const normalized = value?.trim().toLowerCase();
@@ -16,7 +16,7 @@ function findChannelMessagingAdapter(channelId?: string | null) {
 }
 
 export function resolveChannelInboundAttachmentRoots(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   ctx: MsgContext;
 }): readonly string[] | undefined {
   const messaging = findChannelMessagingAdapter(params.ctx.Surface ?? params.ctx.Provider);
@@ -27,7 +27,7 @@ export function resolveChannelInboundAttachmentRoots(params: {
 }
 
 export function resolveChannelRemoteInboundAttachmentRoots(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   ctx: MsgContext;
 }): readonly string[] | undefined {
   const messaging = findChannelMessagingAdapter(params.ctx.Surface ?? params.ctx.Provider);

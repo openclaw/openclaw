@@ -117,7 +117,7 @@ function hasRuntimeDeps(packageJson) {
 }
 
 function shouldStageRuntimeDeps(packageJson) {
-  return packageJson.openclaw?.bundle?.stageRuntimeDependencies === true;
+  return packageJson.mullusi?.bundle?.stageRuntimeDependencies === true;
 }
 
 function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
@@ -125,9 +125,9 @@ function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
   const packageJson = readJson(manifestPath);
   let changed = false;
 
-  if (packageJson.peerDependencies?.openclaw) {
+  if (packageJson.peerDependencies?.mullusi) {
     const nextPeerDependencies = { ...packageJson.peerDependencies };
-    delete nextPeerDependencies.openclaw;
+    delete nextPeerDependencies.mullusi;
     if (Object.keys(nextPeerDependencies).length === 0) {
       delete packageJson.peerDependencies;
     } else {
@@ -136,9 +136,9 @@ function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
     changed = true;
   }
 
-  if (packageJson.peerDependenciesMeta?.openclaw) {
+  if (packageJson.peerDependenciesMeta?.mullusi) {
     const nextPeerDependenciesMeta = { ...packageJson.peerDependenciesMeta };
-    delete nextPeerDependenciesMeta.openclaw;
+    delete nextPeerDependenciesMeta.mullusi;
     if (Object.keys(nextPeerDependenciesMeta).length === 0) {
       delete packageJson.peerDependenciesMeta;
     } else {
@@ -147,9 +147,9 @@ function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
     changed = true;
   }
 
-  if (packageJson.devDependencies?.openclaw) {
+  if (packageJson.devDependencies?.mullusi) {
     const nextDevDependencies = { ...packageJson.devDependencies };
-    delete nextDevDependencies.openclaw;
+    delete nextDevDependencies.mullusi;
     if (Object.keys(nextDevDependencies).length === 0) {
       delete packageJson.devDependencies;
     } else {
@@ -166,7 +166,7 @@ function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
 }
 
 function resolveRuntimeDepsStampPath(pluginDir) {
-  return path.join(pluginDir, ".openclaw-runtime-deps-stamp.json");
+  return path.join(pluginDir, ".mullusi-runtime-deps-stamp.json");
 }
 
 function createRuntimeDepsFingerprint(packageJson) {
@@ -205,7 +205,7 @@ function stageInstalledRootRuntimeDeps(params) {
   const stagedNodeModulesDir = path.join(
     makeTempDir(
       os.tmpdir(),
-      `openclaw-runtime-deps-${sanitizeTempPrefixSegment(path.basename(pluginDir))}-`,
+      `mullusi-runtime-deps-${sanitizeTempPrefixSegment(path.basename(pluginDir))}-`,
     ),
     "node_modules",
   );
@@ -241,7 +241,7 @@ function installPluginRuntimeDeps(params) {
   const stampPath = resolveRuntimeDepsStampPath(pluginDir);
   const tempInstallDir = makeTempDir(
     os.tmpdir(),
-    `openclaw-runtime-deps-${sanitizeTempPrefixSegment(pluginId)}-`,
+    `mullusi-runtime-deps-${sanitizeTempPrefixSegment(pluginId)}-`,
   );
   const npmRunner = resolveNpmRunner({
     npmArgs: [

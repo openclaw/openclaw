@@ -26,7 +26,7 @@ function setupHardlinkHookWorkspace(hookName: string): {
   hookDir: string;
   outsideDir: string;
 } {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-hardlink-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-hooks-workspace-hardlink-"));
   const hooksRoot = path.join(root, "hooks");
   fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -51,7 +51,7 @@ function tryCreateHardlinkOrSkip(createLink: () => void): boolean {
 
 describe("hooks workspace", () => {
   it("ignores package.json hook paths that traverse outside package directory", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-hooks-workspace-"));
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -65,12 +65,12 @@ describe("hooks workspace", () => {
 
     writeHookPackageManifest(pkgDir, ["../outside"]);
 
-    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "mullusi-workspace" });
     expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
   });
 
   it("accepts package.json hook paths within package directory", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-ok-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-hooks-workspace-ok-"));
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -83,12 +83,12 @@ describe("hooks workspace", () => {
 
     writeHookPackageManifest(pkgDir, ["./nested"]);
 
-    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "mullusi-workspace" });
     expect(entries.some((e) => e.hook.name === "nested")).toBe(true);
   });
 
   it("ignores package.json hook paths that escape via symlink", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-link-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-hooks-workspace-link-"));
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -107,7 +107,7 @@ describe("hooks workspace", () => {
 
     writeHookPackageManifest(pkgDir, ["./linked"]);
 
-    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "mullusi-workspace" });
     expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
   });
 
@@ -127,7 +127,7 @@ describe("hooks workspace", () => {
       return;
     }
 
-    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "mullusi-workspace" });
     expect(entries.some((e) => e.hook.name === "hardlink-hook")).toBe(false);
     expect(entries.some((e) => e.hook.name === "outside")).toBe(false);
   });
@@ -146,12 +146,12 @@ describe("hooks workspace", () => {
       return;
     }
 
-    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "mullusi-workspace" });
     expect(entries.some((e) => e.hook.name === "hardlink-handler-hook")).toBe(false);
   });
 
   it("does not let workspace hooks override managed hooks with the same name", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-collision-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-hooks-collision-"));
     const workspaceDir = path.join(root, "workspace");
     const managedHooksDir = path.join(root, "managed-hooks");
     const workspaceHookDir = path.join(workspaceDir, "hooks", "session-memory");
@@ -165,7 +165,7 @@ describe("hooks workspace", () => {
         [
           "---",
           "name: session-memory",
-          'metadata: {"openclaw":{"events":["command:new"]}}',
+          'metadata: {"mullusi":{"events":["command:new"]}}',
           "---",
         ].join("\n"),
       );
@@ -177,17 +177,17 @@ describe("hooks workspace", () => {
       bundledHooksDir: path.join(root, "bundled-none"),
     });
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.hook.source).toBe("openclaw-managed");
+    expect(entries[0]?.hook.source).toBe("mullusi-managed");
   });
 
   it("treats configured extraDirs as managed hook sources", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-extra-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-hooks-extra-"));
     const workspaceDir = path.join(root, "workspace");
     const extraHookDir = path.join(root, "shared-hooks", "shared-hook");
     fs.mkdirSync(extraHookDir, { recursive: true });
     fs.writeFileSync(
       path.join(extraHookDir, "HOOK.md"),
-      ["---", "name: shared-hook", 'metadata: {"openclaw":{"events":["command:new"]}}', "---"].join(
+      ["---", "name: shared-hook", 'metadata: {"mullusi":{"events":["command:new"]}}', "---"].join(
         "\n",
       ),
     );
@@ -209,6 +209,6 @@ describe("hooks workspace", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.hook.name).toBe("shared-hook");
-    expect(entries[0]?.hook.source).toBe("openclaw-managed");
+    expect(entries[0]?.hook.source).toBe("mullusi-managed");
   });
 });

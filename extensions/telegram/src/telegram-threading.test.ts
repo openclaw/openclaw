@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { telegramThreading } from "./telegram-threading.js";
 
@@ -19,7 +19,7 @@ describe("telegramThreading", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     expect(
       resolveReplyToMode(telegramThreading.scopedAccountReplyToMode.resolveAccount(cfg, "work")),

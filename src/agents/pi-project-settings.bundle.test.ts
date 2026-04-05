@@ -16,7 +16,7 @@ async function createWorkspaceBundle(params: {
   pluginId?: string;
 }): Promise<string> {
   const pluginId = params.pluginId ?? "claude-bundle";
-  const pluginRoot = path.join(params.workspaceDir, ".openclaw", "extensions", pluginId);
+  const pluginRoot = path.join(params.workspaceDir, ".mullusi", "extensions", pluginId);
   await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
   await fs.writeFile(
     path.join(pluginRoot, ".claude-plugin", "plugin.json"),
@@ -30,7 +30,7 @@ async function createWorkspaceBundle(params: {
 
 describe("loadEnabledBundlePiSettingsSnapshot", () => {
   it("loads sanitized settings from enabled bundle plugins", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
+    const workspaceDir = await tempDirs.make("mullusi-workspace-");
     const pluginRoot = await createWorkspaceBundle({ workspaceDir });
     await fs.writeFile(
       path.join(pluginRoot, "settings.json"),
@@ -59,7 +59,7 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
   });
 
   it("loads enabled bundle MCP servers into the Pi settings snapshot", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
+    const workspaceDir = await tempDirs.make("mullusi-workspace-");
     const pluginRoot = await createWorkspaceBundle({ workspaceDir });
     const resolvedPluginRoot = await fs.realpath(pluginRoot);
     await fs.mkdir(path.join(pluginRoot, "servers"), { recursive: true });
@@ -98,7 +98,7 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
   });
 
   it("lets top-level MCP config override bundle MCP defaults", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
+    const workspaceDir = await tempDirs.make("mullusi-workspace-");
     const pluginRoot = await createWorkspaceBundle({ workspaceDir });
     await fs.writeFile(
       path.join(pluginRoot, ".mcp.json"),
@@ -139,7 +139,7 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
   });
 
   it("ignores disabled bundle plugins", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
+    const workspaceDir = await tempDirs.make("mullusi-workspace-");
     const pluginRoot = await createWorkspaceBundle({ workspaceDir });
     await fs.writeFile(
       path.join(pluginRoot, "settings.json"),

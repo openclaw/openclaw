@@ -2,13 +2,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
 describe("anthropic-vertex implicit provider", () => {
   it("offers Claude models when GOOGLE_CLOUD_PROJECT_ID is set", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["GOOGLE_CLOUD_PROJECT_ID"]);
     process.env.GOOGLE_CLOUD_PROJECT_ID = "vertex-project";
 
@@ -21,9 +21,9 @@ describe("anthropic-vertex implicit provider", () => {
   });
 
   it("accepts ADC credentials when the file includes a project_id", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_LOCATION"]);
-    const adcDir = mkdtempSync(join(tmpdir(), "openclaw-adc-"));
+    const adcDir = mkdtempSync(join(tmpdir(), "mullusi-adc-"));
     const credentialsPath = join(adcDir, "application_default_credentials.json");
     writeFileSync(credentialsPath, JSON.stringify({ project_id: "vertex-project" }), "utf8");
     process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
@@ -45,9 +45,9 @@ describe("anthropic-vertex implicit provider", () => {
   });
 
   it("accepts ADC credentials when the file only includes a quota_project_id", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_LOCATION"]);
-    const adcDir = mkdtempSync(join(tmpdir(), "openclaw-adc-"));
+    const adcDir = mkdtempSync(join(tmpdir(), "mullusi-adc-"));
     const credentialsPath = join(adcDir, "application_default_credentials.json");
     writeFileSync(credentialsPath, JSON.stringify({ quota_project_id: "vertex-quota" }), "utf8");
     process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
@@ -65,9 +65,9 @@ describe("anthropic-vertex implicit provider", () => {
   });
 
   it("accepts ADC credentials when project_id is resolved at runtime", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_LOCATION"]);
-    const adcDir = mkdtempSync(join(tmpdir(), "openclaw-adc-"));
+    const adcDir = mkdtempSync(join(tmpdir(), "mullusi-adc-"));
     const credentialsPath = join(adcDir, "application_default_credentials.json");
     writeFileSync(credentialsPath, "{}", "utf8");
     process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
@@ -85,9 +85,9 @@ describe("anthropic-vertex implicit provider", () => {
   });
 
   it("falls back to the default region when GOOGLE_CLOUD_LOCATION is invalid", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_LOCATION"]);
-    const adcDir = mkdtempSync(join(tmpdir(), "openclaw-adc-"));
+    const adcDir = mkdtempSync(join(tmpdir(), "mullusi-adc-"));
     const credentialsPath = join(adcDir, "application_default_credentials.json");
     writeFileSync(credentialsPath, JSON.stringify({ project_id: "vertex-project" }), "utf8");
     process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
@@ -103,9 +103,9 @@ describe("anthropic-vertex implicit provider", () => {
   });
 
   it("uses the Vertex global endpoint when GOOGLE_CLOUD_LOCATION=global", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_LOCATION"]);
-    const adcDir = mkdtempSync(join(tmpdir(), "openclaw-adc-"));
+    const adcDir = mkdtempSync(join(tmpdir(), "mullusi-adc-"));
     const credentialsPath = join(adcDir, "application_default_credentials.json");
     writeFileSync(credentialsPath, JSON.stringify({ project_id: "vertex-project" }), "utf8");
     process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
@@ -121,7 +121,7 @@ describe("anthropic-vertex implicit provider", () => {
   });
 
   it("accepts explicit metadata auth opt-in without local credential files", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["ANTHROPIC_VERTEX_USE_GCP_METADATA", "GOOGLE_CLOUD_LOCATION"]);
     process.env.ANTHROPIC_VERTEX_USE_GCP_METADATA = "true";
     process.env.GOOGLE_CLOUD_LOCATION = "us-east5";
@@ -137,9 +137,9 @@ describe("anthropic-vertex implicit provider", () => {
   });
 
   it("merges the bundled catalog into explicit anthropic-vertex provider overrides", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_LOCATION"]);
-    const adcDir = mkdtempSync(join(tmpdir(), "openclaw-adc-"));
+    const adcDir = mkdtempSync(join(tmpdir(), "mullusi-adc-"));
     const credentialsPath = join(adcDir, "application_default_credentials.json");
     writeFileSync(credentialsPath, JSON.stringify({ project_id: "vertex-project" }), "utf8");
     process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
@@ -157,7 +157,7 @@ describe("anthropic-vertex implicit provider", () => {
               },
             },
           },
-        } as unknown as OpenClawConfig,
+        } as unknown as MullusiConfig,
       });
 
       expect(providers?.["anthropic-vertex"]?.baseUrl).toBe(
@@ -175,7 +175,7 @@ describe("anthropic-vertex implicit provider", () => {
   });
 
   it("does not accept generic Kubernetes env without a GCP ADC signal", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["KUBERNETES_SERVICE_HOST", "GOOGLE_CLOUD_LOCATION"]);
     process.env.KUBERNETES_SERVICE_HOST = "10.0.0.1";
     process.env.GOOGLE_CLOUD_LOCATION = "us-east5";

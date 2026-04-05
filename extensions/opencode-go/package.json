@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/opencode-go-provider",
+  "name": "@mullusi/opencode-go-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw OpenCode Go provider plugin",
+  "description": "Mullusi OpenCode Go provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

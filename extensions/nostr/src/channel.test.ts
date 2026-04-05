@@ -5,7 +5,7 @@ import {
   runSetupWizardConfigure,
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { MullusiConfig } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
 import { nostrSetupWizard } from "./setup-surface.js";
 import {
@@ -193,7 +193,7 @@ describe("nostr setup wizard", () => {
 
     const result = await runSetupWizardConfigure({
       configure: nostrConfigure,
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       prompter,
       options: {},
     });
@@ -219,7 +219,7 @@ describe("nostr setup wizard", () => {
 
     const result = await runSetupWizardConfigure({
       configure: nostrConfigure,
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       prompter,
       options: {},
       accountOverrides: {
@@ -235,7 +235,7 @@ describe("nostr setup wizard", () => {
   it("uses configured defaultAccount when setup accountId is omitted", () => {
     expect(
       nostrPlugin.setup?.resolveAccountId?.({
-        cfg: createConfiguredNostrCfg({ defaultAccount: "work" }) as OpenClawConfig,
+        cfg: createConfiguredNostrCfg({ defaultAccount: "work" }) as MullusiConfig,
         accountId: undefined,
         input: {},
       } as never),

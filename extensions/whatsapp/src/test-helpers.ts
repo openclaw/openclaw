@@ -6,7 +6,7 @@ import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
 
 // Use globalThis to store the mock config so it survives vi.mock hoisting
-const CONFIG_KEY = Symbol.for("openclaw:testConfigMock");
+const CONFIG_KEY = Symbol.for("mullusi:testConfigMock");
 const DEFAULT_CONFIG = {
   channels: {
     whatsapp: {
@@ -38,7 +38,7 @@ function resolveStorePathFallback(store?: string, opts?: { agentId?: string }) {
     const agentId = (opts?.agentId?.trim() || "main").toLowerCase();
     return path.join(
       process.env.HOME ?? "/tmp",
-      ".openclaw",
+      ".mullusi",
       "agents",
       agentId,
       "sessions",
@@ -448,12 +448,12 @@ vi.mock("./auto-reply/monitor/message-line.runtime.js", () => ({
 }));
 
 vi.mock("./auth-store.runtime.js", () => ({
-  resolveOAuthDir: () => "/tmp/openclaw-oauth",
+  resolveOAuthDir: () => "/tmp/mullusi-oauth",
 }));
 
 vi.mock("./session.runtime.js", () => {
   const created = createMockBaileys();
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("mullusi:lastSocket")] =
     created.lastSocket;
   return {
     ...created.mod,
@@ -485,7 +485,7 @@ function resetMockExport<T extends (...args: never[]) => unknown>(params: {
 
 export function resetBaileysMocks() {
   const recreated = createMockBaileys();
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("mullusi:lastSocket")] =
     recreated.lastSocket;
 
   const makeWASocket = vi.mocked(baileys.makeWASocket);
@@ -529,7 +529,7 @@ export function resetBaileysMocks() {
 }
 
 export function getLastSocket(): MockBaileysSocket {
-  const getter = (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")];
+  const getter = (globalThis as Record<PropertyKey, unknown>)[Symbol.for("mullusi:lastSocket")];
   if (typeof getter === "function") {
     return (getter as () => MockBaileysSocket)();
   }

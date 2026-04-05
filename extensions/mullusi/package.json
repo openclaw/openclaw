@@ -1,0 +1,24 @@
+{
+  "name": "@mullusi/mullusi",
+  "version": "2026.4.4",
+  "description": "Mullusi workflow tool plugin (typed pipelines + resumable approvals)",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49"
+  },
+  "mullusi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.4.4"
+    },
+    "build": {
+      "mullusiVersion": "2026.4.4"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

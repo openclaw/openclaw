@@ -142,7 +142,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     role: "assistant" as const,
     content: [{ type: "text", text: mirrorText }],
     api: "openai-responses",
-    provider: "openclaw",
+    provider: "mullusi",
     model: "delivery-mirror",
     usage: {
       input: 0,

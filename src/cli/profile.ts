@@ -84,7 +84,7 @@ function resolveProfileStateDir(
   homedir: () => string,
 ): string {
   const suffix = profile.toLowerCase() === "default" ? "" : `-${profile}`;
-  return path.join(resolveRequiredHomeDir(env as NodeJS.ProcessEnv, homedir), `.openclaw${suffix}`);
+  return path.join(resolveRequiredHomeDir(env as NodeJS.ProcessEnv, homedir), `.mullusi${suffix}`);
 }
 
 export function applyCliProfileEnv(params: {
@@ -100,18 +100,18 @@ export function applyCliProfileEnv(params: {
   }
 
   // Convenience only: fill defaults, never override explicit env values.
-  env.OPENCLAW_PROFILE = profile;
+  env.MULLUSI_PROFILE = profile;
 
-  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || resolveProfileStateDir(profile, env, homedir);
-  if (!env.OPENCLAW_STATE_DIR?.trim()) {
-    env.OPENCLAW_STATE_DIR = stateDir;
+  const stateDir = env.MULLUSI_STATE_DIR?.trim() || resolveProfileStateDir(profile, env, homedir);
+  if (!env.MULLUSI_STATE_DIR?.trim()) {
+    env.MULLUSI_STATE_DIR = stateDir;
   }
 
-  if (!env.OPENCLAW_CONFIG_PATH?.trim()) {
-    env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+  if (!env.MULLUSI_CONFIG_PATH?.trim()) {
+    env.MULLUSI_CONFIG_PATH = path.join(stateDir, "mullusi.json");
   }
 
-  if (profile === "dev" && !env.OPENCLAW_GATEWAY_PORT?.trim()) {
-    env.OPENCLAW_GATEWAY_PORT = "19001";
+  if (profile === "dev" && !env.MULLUSI_GATEWAY_PORT?.trim()) {
+    env.MULLUSI_GATEWAY_PORT = "19001";
   }
 }

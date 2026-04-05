@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   registerSessionBindingAdapter,
   resolveThreadBindingConversationIdFromBindingId,
@@ -8,8 +8,8 @@ import {
   type BindingTargetKind,
   type SessionBindingAdapter,
   type SessionBindingRecord,
-} from "openclaw/plugin-sdk/conversation-runtime";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+} from "mullusi/plugin-sdk/conversation-runtime";
+import { normalizeAccountId, resolveAgentIdFromSessionKey } from "mullusi/plugin-sdk/routing";
 
 type IMessageBindingTargetKind = "subagent" | "acp";
 
@@ -50,7 +50,7 @@ type IMessageConversationBindingsState = {
 };
 
 const IMESSAGE_CONVERSATION_BINDINGS_STATE_KEY = Symbol.for(
-  "openclaw.imessageConversationBindingsState",
+  "mullusi.imessageConversationBindingsState",
 );
 let state: IMessageConversationBindingsState | undefined;
 
@@ -119,7 +119,7 @@ function toSessionBindingRecord(
 
 export function createIMessageConversationBindingManager(params: {
   accountId?: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
 }): IMessageConversationBindingManager {
   const accountId = normalizeAccountId(params.accountId);
   const existing = getState().managersByAccountId.get(accountId);

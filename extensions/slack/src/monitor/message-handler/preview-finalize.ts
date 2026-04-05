@@ -1,5 +1,5 @@
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "mullusi/plugin-sdk/runtime-env";
 import { editSlackMessage } from "../../actions.js";
 import { buildSlackBlocksFallbackText } from "../../blocks-fallback.js";
 import { normalizeSlackOutboundText } from "../../format.js";

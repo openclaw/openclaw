@@ -7,9 +7,9 @@ import {
   type ChannelSetupDmPolicy,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
-} from "openclaw/plugin-sdk/setup";
+} from "mullusi/plugin-sdk/setup";
 import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
-import type { OpenClawConfig } from "./runtime-api.js";
+import type { MullusiConfig } from "./runtime-api.js";
 
 const channel = "zalo" as const;
 
@@ -40,10 +40,10 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
   policyKey: "channels.zalo.dmPolicy",
   allowFromKey: "channels.zalo.allowFrom",
   resolveConfigKeys: (cfg, accountId) =>
-    (accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig)) !== DEFAULT_ACCOUNT_ID
+    (accountId ?? resolveDefaultZaloAccountId(cfg as MullusiConfig)) !== DEFAULT_ACCOUNT_ID
       ? {
-          policyKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig)}.dmPolicy`,
-          allowFromKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig)}.allowFrom`,
+          policyKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg as MullusiConfig)}.dmPolicy`,
+          allowFromKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg as MullusiConfig)}.allowFrom`,
         }
       : {
           policyKey: "channels.zalo.dmPolicy",
@@ -51,16 +51,16 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
         },
   getCurrent: (cfg, accountId) =>
     resolveZaloAccount({
-      cfg: cfg as OpenClawConfig,
-      accountId: accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig),
+      cfg: cfg as MullusiConfig,
+      accountId: accountId ?? resolveDefaultZaloAccountId(cfg as MullusiConfig),
     }).config.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) => {
     const resolvedAccountId =
       accountId && normalizeAccountId(accountId)
         ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
-        : resolveDefaultZaloAccountId(cfg as OpenClawConfig);
+        : resolveDefaultZaloAccountId(cfg as MullusiConfig);
     const resolved = resolveZaloAccount({
-      cfg: cfg as OpenClawConfig,
+      cfg: cfg as MullusiConfig,
       accountId: resolvedAccountId,
     });
     if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {

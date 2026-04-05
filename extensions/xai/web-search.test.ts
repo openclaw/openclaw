@@ -1,6 +1,6 @@
-import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { withEnv } from "openclaw/plugin-sdk/testing";
+import { NON_ENV_SECRETREF_MARKER } from "mullusi/plugin-sdk/provider-auth-runtime";
+import { createNonExitingRuntime } from "mullusi/plugin-sdk/runtime-env";
+import { withEnv } from "mullusi/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
 import { capturePluginRegistration } from "../../src/plugins/captured-registration.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
@@ -106,7 +106,7 @@ describe("xai web search config resolution", () => {
         throw new Error("expected xai web search tool");
       }
 
-      await expect(maybeTool.execute({ query: "OpenClaw" })).resolves.toMatchObject({
+      await expect(maybeTool.execute({ query: "Mullusi" })).resolves.toMatchObject({
         error: "missing_xai_api_key",
       });
     });

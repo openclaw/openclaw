@@ -36,6 +36,6 @@ export function renderSystemdUnavailableHints(
     ...(options.container || options.kind !== "user_bus_unavailable"
       ? []
       : renderSystemdHeadlessServerHints()),
-    `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway")}\`.`,
+    `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("mullusi gateway")}\`.`,
   ];
 }

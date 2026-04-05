@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/tavily-plugin",
+  "name": "@mullusi/tavily-plugin",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Tavily plugin",
+  "description": "Mullusi Tavily plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

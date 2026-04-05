@@ -3,7 +3,7 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { installSubagentsCommandCoreMocks } from "./commands-subagents.test-mocks.js";
 
@@ -221,7 +221,7 @@ const { buildCommandTestParams } = await import("./commands-spawn.test-harness.j
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
-} satisfies OpenClawConfig;
+} satisfies MullusiConfig;
 
 function createThreadCommandParams(commandBody: string) {
   const params = buildCommandTestParams(commandBody, baseCfg, {
@@ -238,7 +238,7 @@ function createThreadCommandParams(commandBody: string) {
 
 function createThreadCommandParamsWithoutAccountId(
   commandBody: string,
-  cfg: OpenClawConfig = baseCfg,
+  cfg: MullusiConfig = baseCfg,
 ) {
   const params = buildCommandTestParams(commandBody, cfg, {
     Provider: THREAD_CHANNEL,
@@ -264,7 +264,7 @@ function createTopicCommandParams(commandBody: string) {
   return params;
 }
 
-function createRoomThreadCommandParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+function createRoomThreadCommandParams(commandBody: string, cfg: MullusiConfig = baseCfg) {
   const params = buildCommandTestParams(commandBody, cfg, {
     Provider: ROOM_CHANNEL,
     Surface: ROOM_CHANNEL,
@@ -277,7 +277,7 @@ function createRoomThreadCommandParams(commandBody: string, cfg: OpenClawConfig 
   return params;
 }
 
-function createRoomTriggerThreadCommandParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+function createRoomTriggerThreadCommandParams(commandBody: string, cfg: MullusiConfig = baseCfg) {
   const params = buildCommandTestParams(commandBody, cfg, {
     Provider: ROOM_CHANNEL,
     Surface: ROOM_CHANNEL,
@@ -290,7 +290,7 @@ function createRoomTriggerThreadCommandParams(commandBody: string, cfg: OpenClaw
   return params;
 }
 
-function createRoomCommandParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+function createRoomCommandParams(commandBody: string, cfg: MullusiConfig = baseCfg) {
   const params = buildCommandTestParams(commandBody, cfg, {
     Provider: ROOM_CHANNEL,
     Surface: ROOM_CHANNEL,
@@ -439,8 +439,8 @@ describe("/focus, /unfocus, /agents", () => {
             spawnSubagentSessions: true,
           },
         },
-      } as OpenClawConfig["channels"],
-    } as OpenClawConfig;
+      } as MullusiConfig["channels"],
+    } as MullusiConfig;
 
     const result = await focusCodexAcp(createRoomCommandParams("/focus codex-acp", cfg));
 
@@ -481,8 +481,8 @@ describe("/focus, /unfocus, /agents", () => {
             enabled: true,
           },
         },
-      } as OpenClawConfig["channels"],
-    } as OpenClawConfig;
+      } as MullusiConfig["channels"],
+    } as MullusiConfig;
 
     const result = await focusCodexAcp(createRoomCommandParams("/focus codex-acp", cfg));
 

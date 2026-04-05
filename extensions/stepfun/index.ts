@@ -1,9 +1,9 @@
 import {
   definePluginEntry,
-  type OpenClawConfig,
+  type MullusiConfig,
   type ProviderCatalogContext,
-} from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+} from "mullusi/plugin-sdk/plugin-entry";
+import { createProviderApiKeyAuthMethod } from "mullusi/plugin-sdk/provider-auth-api-key";
 import {
   applyStepFunPlanConfig,
   applyStepFunPlanConfigCn,
@@ -130,7 +130,7 @@ function createStepFunApiKeyMethod(params: {
   choiceId: string;
   choiceLabel: string;
   choiceHint: string;
-  applyConfig: (cfg: OpenClawConfig) => OpenClawConfig;
+  applyConfig: (cfg: MullusiConfig) => MullusiConfig;
 }) {
   return createProviderApiKeyAuthMethod({
     providerId: params.providerId,

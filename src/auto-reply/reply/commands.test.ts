@@ -7,7 +7,7 @@ import {
   whatsappCommandPolicy,
 } from "../../../test/helpers/channels/command-contract.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { formatAllowFromLowercase } from "../../plugin-sdk/allow-from.js";
 import {
@@ -39,7 +39,7 @@ function normalizeDiscordDirectApproverId(value: string | number): string | unde
   return normalized || undefined;
 }
 
-function getDiscordExecApprovalApproversForTests(params: { cfg: OpenClawConfig }): string[] {
+function getDiscordExecApprovalApproversForTests(params: { cfg: MullusiConfig }): string[] {
   const discord = params.cfg.channels?.discord;
   return resolveApprovalApprovers({
     explicit: discord?.execApprovals?.approvers,
@@ -316,7 +316,7 @@ type TelegramTestSectionConfig = TelegramTestAccountConfig & {
   accounts?: Record<string, TelegramTestAccountConfig>;
 };
 
-function listConfiguredTelegramAccountIds(cfg: OpenClawConfig): string[] {
+function listConfiguredTelegramAccountIds(cfg: MullusiConfig): string[] {
   const channel = cfg.channels?.telegram as TelegramTestSectionConfig | undefined;
   const accountIds = Object.keys(channel?.accounts ?? {});
   if (accountIds.length > 0) {
@@ -330,7 +330,7 @@ function listConfiguredTelegramAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 function resolveTelegramTestAccount(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId?: string | null,
 ): TelegramTestAccountConfig {
   const resolvedAccountId = normalizeAccountId(accountId);
@@ -383,7 +383,7 @@ function normalizeTelegramDirectApproverId(value: string | number): string | und
 }
 
 function getTelegramExecApprovalApprovers(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
 }): string[] {
   const account = resolveTelegramTestAccount(params.cfg, params.accountId);
@@ -395,7 +395,7 @@ function getTelegramExecApprovalApprovers(params: {
 }
 
 function isTelegramExecApprovalTargetRecipient(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   senderId?: string | null;
   accountId?: string | null;
 }): boolean {
@@ -422,7 +422,7 @@ function isTelegramExecApprovalTargetRecipient(params: {
 }
 
 function isTelegramExecApprovalAuthorizedSender(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   senderId?: string | null;
 }): boolean {
@@ -437,7 +437,7 @@ function isTelegramExecApprovalAuthorizedSender(params: {
 }
 
 function isTelegramExecApprovalClientEnabled(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
 }): boolean {
   const config = resolveTelegramTestAccount(params.cfg, params.accountId).execApprovals;
@@ -445,7 +445,7 @@ function isTelegramExecApprovalClientEnabled(params: {
 }
 
 function resolveTelegramExecApprovalTarget(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
 }): "dm" | "channel" | "both" {
   return resolveTelegramTestAccount(params.cfg, params.accountId).execApprovals?.target ?? "dm";
@@ -554,7 +554,7 @@ describe("telegram command test plugin helpers", () => {
               execApprovals: { enabled: true, approvers: [] },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
       }),
     ).toEqual(["123"]);
   });
@@ -597,7 +597,7 @@ function setMinimalChannelPluginRegistryForTests(): void {
 }
 
 beforeAll(async () => {
-  testWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commands-"));
+  testWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-commands-"));
   await fs.writeFile(path.join(testWorkspaceDir, "AGENTS.md"), "# Agents\n", "utf-8");
 });
 
@@ -616,7 +616,7 @@ beforeEach(() => {
   resetTaskRegistryForTests();
   setMinimalChannelPluginRegistryForTests();
   readConfigFileSnapshotMock.mockImplementation(async () => {
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    const configPath = process.env.MULLUSI_CONFIG_PATH;
     if (!configPath) {
       return { valid: false, parsed: null };
     }
@@ -628,7 +628,7 @@ beforeEach(() => {
     config,
   }));
   writeConfigFileMock.mockImplementation(async (config: unknown) => {
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    const configPath = process.env.MULLUSI_CONFIG_PATH;
     if (!configPath) {
       return;
     }
@@ -643,18 +643,18 @@ async function withTempConfigPath<T>(
   initialConfig: Record<string, unknown>,
   run: (configPath: string) => Promise<T>,
 ): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commands-config-"));
-  const configPath = path.join(dir, "openclaw.json");
-  const previous = process.env.OPENCLAW_CONFIG_PATH;
-  process.env.OPENCLAW_CONFIG_PATH = configPath;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-commands-config-"));
+  const configPath = path.join(dir, "mullusi.json");
+  const previous = process.env.MULLUSI_CONFIG_PATH;
+  process.env.MULLUSI_CONFIG_PATH = configPath;
   await fs.writeFile(configPath, JSON.stringify(initialConfig, null, 2), "utf-8");
   try {
     return await run(configPath);
   } finally {
     if (previous === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.MULLUSI_CONFIG_PATH;
     } else {
-      process.env.OPENCLAW_CONFIG_PATH = previous;
+      process.env.MULLUSI_CONFIG_PATH = previous;
     }
     await fs.rm(dir, {
       recursive: true,
@@ -669,7 +669,7 @@ async function readJsonFile<T>(filePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(filePath, "utf-8")) as T;
 }
 
-function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Partial<MsgContext>) {
+function buildParams(commandBody: string, cfg: MullusiConfig, ctxOverrides?: Partial<MsgContext>) {
   return buildCommandTestParams(commandBody, cfg, ctxOverrides, { workspaceDir: testWorkspaceDir });
 }
 
@@ -678,7 +678,7 @@ describe("handleCommands gating", () => {
     const cases = typedCases<{
       name: string;
       commandBody: string;
-      makeCfg: () => OpenClawConfig;
+      makeCfg: () => MullusiConfig;
       applyParams?: (params: ReturnType<typeof buildParams>) => void;
       expectedText: string;
     }>([
@@ -689,7 +689,7 @@ describe("handleCommands gating", () => {
           ({
             commands: { bash: false, text: true },
             whatsapp: { allowFrom: ["*"] },
-          }) as OpenClawConfig,
+          }) as MullusiConfig,
         expectedText: "bash is disabled",
       },
       {
@@ -699,7 +699,7 @@ describe("handleCommands gating", () => {
           ({
             commands: { bash: true, text: true },
             whatsapp: { allowFrom: ["*"] },
-          }) as OpenClawConfig,
+          }) as MullusiConfig,
         applyParams: (params: ReturnType<typeof buildParams>) => {
           params.elevated = {
             enabled: true,
@@ -716,7 +716,7 @@ describe("handleCommands gating", () => {
           ({
             commands: { config: false, debug: false, text: true },
             channels: { whatsapp: { allowFrom: ["*"] } },
-          }) as OpenClawConfig,
+          }) as MullusiConfig,
         applyParams: (params: ReturnType<typeof buildParams>) => {
           params.command.senderIsOwner = true;
         },
@@ -729,7 +729,7 @@ describe("handleCommands gating", () => {
           ({
             commands: { config: false, debug: false, text: true },
             channels: { whatsapp: { allowFrom: ["*"] } },
-          }) as OpenClawConfig,
+          }) as MullusiConfig,
         applyParams: (params: ReturnType<typeof buildParams>) => {
           params.command.senderIsOwner = true;
         },
@@ -747,7 +747,7 @@ describe("handleCommands gating", () => {
           return {
             commands: inheritedCommands as never,
             channels: { whatsapp: { allowFrom: ["*"] } },
-          } as OpenClawConfig;
+          } as MullusiConfig;
         },
         expectedText: "bash is disabled",
       },
@@ -763,7 +763,7 @@ describe("handleCommands gating", () => {
           return {
             commands: inheritedCommands as never,
             channels: { whatsapp: { allowFrom: ["*"] } },
-          } as OpenClawConfig;
+          } as MullusiConfig;
         },
         applyParams: (params: ReturnType<typeof buildParams>) => {
           params.command.senderIsOwner = true;
@@ -782,7 +782,7 @@ describe("handleCommands gating", () => {
           return {
             commands: inheritedCommands as never,
             channels: { whatsapp: { allowFrom: ["*"] } },
-          } as OpenClawConfig;
+          } as MullusiConfig;
         },
         applyParams: (params: ReturnType<typeof buildParams>) => {
           params.command.senderIsOwner = true;
@@ -813,7 +813,7 @@ describe("/approve command", () => {
       approvers: string[];
       target: "dm";
     } | null = { enabled: true, approvers: ["123"], target: "dm" },
-  ): OpenClawConfig {
+  ): MullusiConfig {
     return {
       commands: { text: true },
       channels: {
@@ -822,7 +822,7 @@ describe("/approve command", () => {
           ...(execApprovals ? { execApprovals } : {}),
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
   }
 
   function createDiscordApproveCfg(
@@ -831,7 +831,7 @@ describe("/approve command", () => {
       approvers: string[];
       target: "dm" | "channel" | "both";
     } | null = { enabled: true, approvers: ["123"], target: "channel" },
-  ): OpenClawConfig {
+  ): MullusiConfig {
     return {
       commands: { text: true },
       channels: {
@@ -840,14 +840,14 @@ describe("/approve command", () => {
           ...(execApprovals ? { execApprovals } : {}),
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
   }
 
   it("rejects invalid usage", async () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/approve", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -858,7 +858,7 @@ describe("/approve command", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/approve abc allow-once", cfg, { SenderId: "123" });
 
     callGatewayMock.mockResolvedValue({ ok: true });
@@ -878,7 +878,7 @@ describe("/approve command", () => {
     const cfg = {
       commands: { text: true },
       channels: { slack: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("approve abc allow-once", cfg, {
       Provider: "slack",
       Surface: "slack",
@@ -951,7 +951,7 @@ describe("/approve command", () => {
             ...telegramCommandTestPlugin,
             config: {
               ...telegramCommandTestPlugin.config,
-              defaultAccountId: (cfg: OpenClawConfig) =>
+              defaultAccountId: (cfg: MullusiConfig) =>
                 (cfg.channels?.telegram as { defaultAccount?: string } | undefined)
                   ?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
             },
@@ -974,7 +974,7 @@ describe("/approve command", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/approve abc12345 allow-once", cfg, {
       Provider: "telegram",
       Surface: "telegram",
@@ -1004,7 +1004,7 @@ describe("/approve command", () => {
           allowFrom: ["+15551230000"],
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/approve abc12345 allow-once", cfg, {
       Provider: "signal",
       Surface: "signal",
@@ -1028,7 +1028,7 @@ describe("/approve command", () => {
   it("does not treat implicit default approval auth as a bypass for unauthorized senders", async () => {
     const cfg = {
       commands: { text: true },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/approve abc12345 allow-once", cfg, {
       Provider: "webchat",
       Surface: "webchat",
@@ -1063,7 +1063,7 @@ describe("/approve command", () => {
       {
         commands: { text: true },
         channels: { slack: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       {
         Provider: "slack",
         Surface: "slack",
@@ -1093,7 +1093,7 @@ describe("/approve command", () => {
           allowFrom: ["*"],
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/approve abc12345 allow-once", cfg, {
       Provider: "telegram",
       Surface: "telegram",
@@ -1255,7 +1255,7 @@ describe("/approve command", () => {
       {
         commands: { text: true },
         channels: { matrix: { allowFrom: ["*"] } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       {
         Provider: "matrix",
         Surface: "matrix",
@@ -1386,7 +1386,7 @@ describe("/approve command", () => {
   it("enforces gateway approval scopes", async () => {
     const cfg = {
       commands: { text: true },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const cases = [
       {
         scopes: ["operator.write"],
@@ -1440,7 +1440,7 @@ describe("/compact command", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/status", cfg);
 
     const result = await handleCompactCommand(
@@ -1458,7 +1458,7 @@ describe("/compact command", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/compact", cfg);
 
     const result = await handleCompactCommand(
@@ -1481,13 +1481,13 @@ describe("/compact command", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: "/tmp/openclaw-session-store.json" },
-    } as OpenClawConfig;
+      session: { store: "/tmp/mullusi-session-store.json" },
+    } as MullusiConfig;
     const params = buildParams("/compact: focus on decisions", cfg, {
       From: "+15550001",
       To: "+15550002",
     });
-    const agentDir = "/tmp/openclaw-agent-compact";
+    const agentDir = "/tmp/mullusi-agent-compact";
     vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
       ok: true,
       compacted: false,
@@ -1539,7 +1539,7 @@ describe("abort trigger command", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("stop", cfg);
     const sessionEntry: SessionEntry = {
       sessionId: "session-1",
@@ -1650,7 +1650,7 @@ describe("handleCommands owner gating for privileged show commands", () => {
           const params = buildParams("/config show", {
             commands: { config: true, text: true },
             channels: { whatsapp: { allowFrom: ["*"] } },
-          } as OpenClawConfig);
+          } as MullusiConfig);
           params.command.senderIsOwner = false;
           return params;
         },
@@ -1669,7 +1669,7 @@ describe("handleCommands owner gating for privileged show commands", () => {
           const params = buildParams("/config show messages.ackReaction", {
             commands: { config: true, text: true },
             channels: { whatsapp: { allowFrom: ["*"] } },
-          } as OpenClawConfig);
+          } as MullusiConfig);
           params.command.senderIsOwner = true;
           return params;
         },
@@ -1684,7 +1684,7 @@ describe("handleCommands owner gating for privileged show commands", () => {
           const params = buildParams("/debug show", {
             commands: { debug: true, text: true },
             channels: { whatsapp: { allowFrom: ["*"] } },
-          } as OpenClawConfig);
+          } as MullusiConfig);
           params.command.senderIsOwner = false;
           return params;
         },
@@ -1699,7 +1699,7 @@ describe("handleCommands owner gating for privileged show commands", () => {
           const params = buildParams("/debug show", {
             commands: { debug: true, text: true },
             channels: { whatsapp: { allowFrom: ["*"] } },
-          } as OpenClawConfig);
+          } as MullusiConfig);
           params.command.senderIsOwner = true;
           return params;
         },
@@ -1722,7 +1722,7 @@ describe("handleCommands owner gating for privileged show commands", () => {
       {
         commands: { config: true, text: true },
         channels: { discord: { dm: { enabled: true, policy: "open" } } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       {
         Provider: "discord",
         Surface: "discord",
@@ -1742,7 +1742,7 @@ describe("handleCommands owner gating for privileged show commands", () => {
       {
         commands: { plugins: true, text: true },
         channels: { discord: { dm: { enabled: true, policy: "open" } } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       {
         Provider: "discord",
         Surface: "discord",
@@ -1768,7 +1768,7 @@ describe("handleCommands /config configWrites gating", () => {
           const params = buildParams('/config set messages.ackReaction=":)"', {
             commands: { config: true, text: true },
             channels: { whatsapp: { allowFrom: ["*"], configWrites: false } },
-          } as OpenClawConfig);
+          } as MullusiConfig);
           params.command.senderIsOwner = true;
           return params;
         })(),
@@ -1789,7 +1789,7 @@ describe("handleCommands /config configWrites gating", () => {
                   },
                 },
               },
-            } as OpenClawConfig,
+            } as MullusiConfig,
             {
               AccountId: "default",
               Provider: "telegram",
@@ -1809,7 +1809,7 @@ describe("handleCommands /config configWrites gating", () => {
             {
               commands: { config: true, text: true },
               channels: { telegram: { configWrites: true } },
-            } as OpenClawConfig,
+            } as MullusiConfig,
             {
               Provider: "telegram",
               Surface: "telegram",
@@ -1841,7 +1841,7 @@ describe("handleCommands /config configWrites gating", () => {
             ...telegramCommandTestPlugin,
             config: {
               ...telegramCommandTestPlugin.config,
-              defaultAccountId: (cfg: OpenClawConfig) =>
+              defaultAccountId: (cfg: MullusiConfig) =>
                 (cfg.channels?.telegram as { defaultAccount?: string } | undefined)
                   ?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
             },
@@ -1862,7 +1862,7 @@ describe("handleCommands /config configWrites gating", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildPolicyParams('/config set messages.ackReaction=":)"', cfg, {
       Provider: "telegram",
       Surface: "telegram",
@@ -1880,7 +1880,7 @@ describe("handleCommands /config configWrites gating", () => {
   it("enforces gateway client permissions for /config commands", async () => {
     const baseCfg = {
       commands: { config: true, text: true },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const cases = [
       {
         name: "blocks /config set from gateway clients without operator.admin",
@@ -1938,7 +1938,7 @@ describe("handleCommands /config configWrites gating", () => {
             const result = await handleCommands(params);
             expect(result.shouldContinue).toBe(false);
             expect(result.reply?.text).toContain("Config updated");
-            const written = await readJsonFile<OpenClawConfig>(configPath);
+            const written = await readJsonFile<MullusiConfig>(configPath);
             expect(written.messages?.ackReaction).toBe(":D");
           });
         },
@@ -1975,7 +1975,7 @@ describe("handleCommands /config configWrites gating", () => {
                     },
                   },
                 },
-              } as OpenClawConfig,
+              } as MullusiConfig,
               {
                 Provider: INTERNAL_MESSAGE_CHANNEL,
                 Surface: INTERNAL_MESSAGE_CHANNEL,
@@ -1987,7 +1987,7 @@ describe("handleCommands /config configWrites gating", () => {
             const result = await handleCommands(params);
             expect(result.shouldContinue).toBe(false);
             expect(result.reply?.text).toContain("Config updated");
-            const written = await readJsonFile<OpenClawConfig>(configPath);
+            const written = await readJsonFile<MullusiConfig>(configPath);
             expect(written.channels?.telegram?.accounts?.work?.enabled).toBe(false);
           });
         },
@@ -2005,7 +2005,7 @@ describe("handleCommands bash alias", () => {
     const cfg = {
       commands: { bash: true, text: true },
       whatsapp: { allowFrom: ["*"] },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     for (const aliasCommand of ["!poll", "!stop"]) {
       resetBashChatCommandForTests();
       const params = buildParams(aliasCommand, cfg);
@@ -2018,7 +2018,7 @@ describe("handleCommands bash alias", () => {
 
 function buildPolicyParams(
   commandBody: string,
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   ctxOverrides?: Partial<MsgContext>,
 ): HandleCommandsParams {
   const ctx = {
@@ -2071,7 +2071,7 @@ describe("handleCommands /allowlist", () => {
     const cfg = {
       commands: { text: true },
       channels: { telegram: { allowFrom: ["123", "@Alice"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildPolicyParams("/allowlist list dm", cfg);
     const result = await handleCommands(params);
 
@@ -2109,12 +2109,12 @@ describe("handleCommands /allowlist", () => {
               const params = buildPolicyParams("/allowlist add dm 789", {
                 commands: { text: true, config: true },
                 channels: { telegram: { allowFrom: ["123"] } },
-              } as OpenClawConfig);
+              } as MullusiConfig);
               params.command.senderIsOwner = true;
               const result = await handleCommands(params);
 
               expect(result.shouldContinue).toBe(false);
-              const written = await readJsonFile<OpenClawConfig>(configPath);
+              const written = await readJsonFile<MullusiConfig>(configPath);
               expect(written.channels?.telegram?.allowFrom, "default account").toEqual([
                 "123",
                 "789",
@@ -2148,7 +2148,7 @@ describe("handleCommands /allowlist", () => {
             {
               commands: { text: true, config: true },
               channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
-            } as OpenClawConfig,
+            } as MullusiConfig,
             {
               AccountId: "work",
             },
@@ -2181,7 +2181,7 @@ describe("handleCommands /allowlist", () => {
             ...telegramCommandTestPlugin,
             config: {
               ...telegramCommandTestPlugin.config,
-              defaultAccountId: (cfg: OpenClawConfig) =>
+              defaultAccountId: (cfg: MullusiConfig) =>
                 (cfg.channels?.telegram as { defaultAccount?: string } | undefined)
                   ?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
             },
@@ -2198,7 +2198,7 @@ describe("handleCommands /allowlist", () => {
           accounts: { work: { allowFrom: ["123"] } },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     readChannelAllowFromStoreMock.mockResolvedValueOnce([]);
 
     const params = buildPolicyParams("/allowlist list dm", cfg, {
@@ -2225,7 +2225,7 @@ describe("handleCommands /allowlist", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       valid: true,
       parsed: structuredClone(cfg),
@@ -2253,7 +2253,7 @@ describe("handleCommands /allowlist", () => {
             ...telegramCommandTestPlugin,
             config: {
               ...telegramCommandTestPlugin.config,
-              defaultAccountId: (cfg: OpenClawConfig) =>
+              defaultAccountId: (cfg: MullusiConfig) =>
                 (cfg.channels?.telegram as { defaultAccount?: string } | undefined)
                   ?.defaultAccount ?? DEFAULT_ACCOUNT_ID,
             },
@@ -2274,7 +2274,7 @@ describe("handleCommands /allowlist", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     readConfigFileSnapshotMock.mockResolvedValueOnce({
       valid: true,
       parsed: structuredClone(cfg),
@@ -2304,7 +2304,7 @@ describe("handleCommands /allowlist", () => {
         telegram: { allowFrom: ["*"], configWrites: true },
         discord: { allowFrom: ["owner-discord-id"], configWrites: true },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildPolicyParams(
       "/allowlist add dm --channel discord attacker-discord-id",
       cfg,
@@ -2341,7 +2341,7 @@ describe("handleCommands /allowlist", () => {
     const cfg = {
       commands: { text: true, config: true },
       channels: { telegram: { allowFrom: ["123"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildPolicyParams("/allowlist remove dm --store 789", cfg);
     params.command.senderIsOwner = true;
     const result = await handleCommands(params);
@@ -2364,7 +2364,7 @@ describe("handleCommands /allowlist", () => {
     const cfg = {
       commands: { text: true, config: true },
       channels: { telegram: { allowFrom: ["123"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildPolicyParams("/allowlist add dm --account __proto__ 789", cfg);
     params.command.senderIsOwner = true;
     const result = await handleCommands(params);
@@ -2420,7 +2420,7 @@ describe("handleCommands /allowlist", () => {
               configWrites: true,
             },
           },
-        } as OpenClawConfig;
+        } as MullusiConfig;
 
         const params = buildPolicyParams(`/allowlist remove dm ${testCase.removeId}`, cfg, {
           Provider: testCase.provider,
@@ -2430,7 +2430,7 @@ describe("handleCommands /allowlist", () => {
         const result = await handleCommands(params);
 
         expect(result.shouldContinue).toBe(false);
-        const written = await readJsonFile<OpenClawConfig>(configPath);
+        const written = await readJsonFile<MullusiConfig>(configPath);
         const channelConfig = written.channels?.[testCase.provider];
         expect(channelConfig?.allowFrom).toEqual(testCase.expectedAllowFrom);
         expect(channelConfig?.dm?.allowFrom).toBeUndefined();
@@ -2444,7 +2444,7 @@ describe("/models command", () => {
   const cfg = {
     commands: { text: true },
     agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
-  } as unknown as OpenClawConfig;
+  } as unknown as MullusiConfig;
 
   it.each(["discord", "whatsapp"])("lists providers on %s (text)", async (surface) => {
     const params = buildPolicyParams("/models", cfg, { Provider: surface, Surface: surface });
@@ -2543,7 +2543,7 @@ describe("/models command", () => {
           imageModel: "visionpro/studio-v1",
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
 
     // Use discord surface for text-based output tests
     const providerList = await handleCommands(
@@ -2568,7 +2568,7 @@ describe("/models command", () => {
         defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
         list: [{ id: "support", model: "localai/ultra-chat" }],
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
     const params = buildPolicyParams("/models", scopedCfg, {
       Provider: "discord",
       Surface: "discord",
@@ -2607,7 +2607,7 @@ describe("handleCommands plugin commands", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/card", cfg, {
       GatewayClientScopes: ["operator.write", "operator.pairing"],
     });
@@ -2637,7 +2637,7 @@ describe("handleCommands identity", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/whoami", cfg, {
       SenderId: "12345",
       SenderUsername: "TestUser",
@@ -2660,7 +2660,7 @@ describe("handleCommands hooks", () => {
         params: buildParams("/new take notes", {
           commands: { text: true },
           channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
+        } as MullusiConfig),
         expectedCall: expect.objectContaining({ type: "command", action: "new" }),
       },
       {
@@ -2671,7 +2671,7 @@ describe("handleCommands hooks", () => {
             {
               commands: { text: true },
               channels: { telegram: { allowFrom: ["*"] } },
-            } as OpenClawConfig,
+            } as MullusiConfig,
             {
               Provider: "telegram",
               Surface: "telegram",
@@ -2711,7 +2711,7 @@ describe("handleCommands context", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const cases = [
       {
         commandBody: "/context",
@@ -2750,7 +2750,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/subagents list", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -2775,7 +2775,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/subagents list", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -2810,7 +2810,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/subagents list", cfg, {
       CommandSource: "native",
       CommandTargetSessionKey: "agent:main:main",
@@ -2851,7 +2851,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/subagents list", cfg);
     const result = await handleCommands(params);
 
@@ -2888,7 +2888,7 @@ describe("handleCommands subagents", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/subagents list", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -2959,7 +2959,7 @@ describe("handleCommands subagents", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/status", cfg);
     if (verboseLevel === "on") {
       params.resolvedVerboseLevel = "on";
@@ -2978,7 +2978,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const cases = [
       { commandBody: "/subagents foo", expectedText: "/subagents" },
       { commandBody: "/subagents info", expectedText: "/subagents info" },
@@ -3019,7 +3019,7 @@ describe("handleCommands subagents", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/subagents info 1", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -3045,7 +3045,7 @@ describe("handleCommands subagents", () => {
       outcome: {
         status: "error",
         error: [
-          "OpenClaw runtime context (internal):",
+          "Mullusi runtime context (internal):",
           "This context is runtime-generated, not user-authored. Keep internal details private.",
           "",
           "[Internal task completion event]",
@@ -3066,7 +3066,7 @@ describe("handleCommands subagents", () => {
       runId: "run-1",
       endedAt: now - 1_000,
       error: [
-        "OpenClaw runtime context (internal):",
+        "Mullusi runtime context (internal):",
         "This context is runtime-generated, not user-authored. Keep internal details private.",
         "",
         "[Internal task completion event]",
@@ -3078,7 +3078,7 @@ describe("handleCommands subagents", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/subagents info 1", cfg);
     const result = await handleCommands(params);
 
@@ -3086,7 +3086,7 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain("Subagent info");
     expect(result.reply?.text).toContain("Outcome: error");
     expect(result.reply?.text).toContain("Task summary: Needs manual follow-up.");
-    expect(result.reply?.text).not.toContain("OpenClaw runtime context (internal):");
+    expect(result.reply?.text).not.toContain("Mullusi runtime context (internal):");
     expect(result.reply?.text).not.toContain("Internal task completion event");
   });
 
@@ -3104,7 +3104,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/kill 1", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -3138,7 +3138,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/kill 1", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -3175,7 +3175,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/subagents send 1 continue with follow-up details", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -3238,7 +3238,7 @@ describe("handleCommands subagents", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/subagents send 1 continue with follow-up details", cfg);
     params.sessionKey = leafKey;
 
@@ -3278,7 +3278,7 @@ describe("handleCommands subagents", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/steer 1 check timer.ts instead", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -3337,7 +3337,7 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/steer 1 check timer.ts instead", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
@@ -3356,7 +3356,7 @@ describe("handleCommands /tts", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
       messages: { tts: { prefsPath: path.join(testWorkspaceDir, "tts.json") } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const params = buildParams("/tts", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);

@@ -2,8 +2,8 @@ import {
   buildMessagingTarget,
   type MessagingTarget,
   type MessagingTargetParseOptions,
-} from "openclaw/plugin-sdk/messaging-targets";
-import { parseMentionPrefixOrAtUserTarget } from "openclaw/plugin-sdk/messaging-targets";
+} from "mullusi/plugin-sdk/messaging-targets";
+import { parseMentionPrefixOrAtUserTarget } from "mullusi/plugin-sdk/messaging-targets";
 
 export type SendDiscordTarget = MessagingTarget;
 

@@ -1,5 +1,5 @@
 import Foundation
-import OpenClawKit
+import MullusiKit
 
 @MainActor
 final class NodeCapabilityRouter {

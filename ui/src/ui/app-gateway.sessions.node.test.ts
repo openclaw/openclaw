@@ -56,7 +56,7 @@ const { addExecApproval } = await vi.importActual<typeof import("./controllers/e
 function createHost() {
   return {
     settings: {
-      gatewayUrl: "ws://127.0.0.1:18789",
+      gatewayUrl: "ws://127.0.0.1:18790",
       token: "",
       sessionKey: "main",
       lastActiveSessionKey: "main",
@@ -94,7 +94,7 @@ function createHost() {
     toolsCatalogError: null,
     toolsCatalogResult: null,
     debugHealth: null,
-    assistantName: "OpenClaw",
+    assistantName: "Mullusi",
     assistantAvatar: null,
     assistantAgentId: null,
     serverVersion: null,

@@ -43,7 +43,7 @@ export function stripMinimaxToolCallXml(text: string): string {
  *
  * This is a provider bug — no upstream fix tracked yet.
  * Remove this function when upstream providers stop leaking tokens.
- * @see https://github.com/openclaw/openclaw/issues/40020
+ * @see https://github.com/mullusi/mullusi/issues/40020
  */
 // Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
 const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;

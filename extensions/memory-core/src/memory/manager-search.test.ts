@@ -1,7 +1,7 @@
 import {
   ensureMemoryIndexSchema,
   requireNodeSqlite,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+} from "mullusi/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
 import { searchKeyword } from "./manager-search.js";

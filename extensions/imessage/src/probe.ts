@@ -1,8 +1,8 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { detectBinary } from "openclaw/plugin-sdk/setup";
+import type { BaseProbeResult } from "mullusi/plugin-sdk/channel-contract";
+import { loadConfig } from "mullusi/plugin-sdk/config-runtime";
+import { runCommandWithTimeout } from "mullusi/plugin-sdk/process-runtime";
+import type { RuntimeEnv } from "mullusi/plugin-sdk/runtime-env";
+import { detectBinary } from "mullusi/plugin-sdk/setup";
 import { createIMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 

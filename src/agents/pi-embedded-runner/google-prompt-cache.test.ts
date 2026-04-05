@@ -115,7 +115,7 @@ describe("google prompt cache", () => {
       }),
     );
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.customType).toBe("openclaw.google-prompt-cache");
+    expect(entries[0]?.customType).toBe("mullusi.google-prompt-cache");
     expect((entries[0]?.data as { status?: string; cachedContent?: string })?.status).toBe("ready");
   });
 
@@ -190,7 +190,7 @@ describe("google prompt cache", () => {
     const sessionManager = makeSessionManager([
       {
         type: "custom",
-        customType: "openclaw.google-prompt-cache",
+        customType: "mullusi.google-prompt-cache",
         data: {
           status: "ready",
           timestamp: now - 5_000,

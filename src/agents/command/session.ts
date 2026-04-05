@@ -6,7 +6,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import {
   evaluateSessionFreshness,
   loadSessionStore,
@@ -52,7 +52,7 @@ function buildExplicitSessionIdSessionKey(params: { sessionId: string; agentId?:
 }
 
 function collectSessionIdMatchesForRequest(opts: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
   storeAgentId?: string;
@@ -96,7 +96,7 @@ function collectSessionIdMatchesForRequest(opts: {
 }
 
 export function resolveSessionKeyForRequest(opts: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   to?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -161,7 +161,7 @@ export function resolveSessionKeyForRequest(opts: {
 }
 
 export function resolveSession(opts: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   to?: string;
   sessionId?: string;
   sessionKey?: string;

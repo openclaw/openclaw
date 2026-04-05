@@ -3,12 +3,12 @@ import {
   normalizeOutboundThreadId,
   resolveThreadSessionKeys,
   type RoutePeer,
-} from "openclaw/plugin-sdk/routing";
-import type { OpenClawConfig } from "./runtime-api.js";
+} from "mullusi/plugin-sdk/routing";
+import type { MullusiConfig } from "./runtime-api.js";
 import { parseDiscordTarget } from "./target-parsing.js";
 
 export type ResolveDiscordOutboundSessionRouteParams = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentId: string;
   accountId?: string | null;
   target: string;

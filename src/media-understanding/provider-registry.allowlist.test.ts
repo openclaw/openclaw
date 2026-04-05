@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 
 const mocks = vi.hoisted(() => ({
@@ -45,7 +45,7 @@ describe("media-understanding provider registry allowlist fallback", () => {
   });
 
   it("honors explicit allowlists when fallback loading bundled providers", () => {
-    const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
+    const cfg = { plugins: { allow: ["custom-plugin"] } } as MullusiConfig;
     const compatConfig = {
       plugins: {
         allow: ["custom-plugin"],

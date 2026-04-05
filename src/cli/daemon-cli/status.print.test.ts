@@ -21,7 +21,7 @@ vi.mock("../../terminal/theme.js", async () => {
 });
 
 vi.mock("../../gateway/control-ui-links.js", () => ({
-  resolveControlUiLinks: () => ({ httpUrl: "http://127.0.0.1:18789" }),
+  resolveControlUiLinks: () => ({ httpUrl: "http://127.0.0.1:18790" }),
 }));
 
 vi.mock("../../daemon/inspect.js", () => ({
@@ -64,7 +64,7 @@ vi.mock("./shared.js", () => ({
 
 vi.mock("./status.gather.js", () => ({
   renderPortDiagnosticsForCli: () => [],
-  resolvePortListeningAddresses: () => ["127.0.0.1:18789"],
+  resolvePortListeningAddresses: () => ["127.0.0.1:18790"],
 }));
 
 describe("printDaemonStatus", () => {
@@ -83,24 +83,24 @@ describe("printDaemonStatus", () => {
           notLoadedText: "not loaded",
           runtime: { status: "running", pid: 8000 },
         },
-        logFile: "/tmp/openclaw.log",
+        logFile: "/tmp/mullusi.log",
         gateway: {
           bindMode: "loopback",
           bindHost: "127.0.0.1",
-          port: 18789,
+          port: 18790,
           portSource: "env/config",
-          probeUrl: "ws://127.0.0.1:18789",
+          probeUrl: "ws://127.0.0.1:18790",
         },
         port: {
-          port: 18789,
+          port: 18790,
           status: "busy",
-          listeners: [{ pid: 9000, ppid: 8999, address: "127.0.0.1:18789" }],
+          listeners: [{ pid: 9000, ppid: 8999, address: "127.0.0.1:18790" }],
           hints: [],
         },
         rpc: {
           ok: false,
           error: "gateway closed (1006 abnormal closure (no close frame))",
-          url: "ws://127.0.0.1:18789",
+          url: "ws://127.0.0.1:18790",
         },
         health: {
           healthy: false,
@@ -115,7 +115,7 @@ describe("printDaemonStatus", () => {
       expect.stringContaining("Gateway runtime PID does not own the listening port"),
     );
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(formatCliCommand("openclaw gateway restart")),
+      expect.stringContaining(formatCliCommand("mullusi gateway restart")),
     );
   });
 });

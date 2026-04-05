@@ -1,19 +1,19 @@
 services:
   - type: web
-    name: openclaw
+    name: mullusi
     runtime: docker
     plan: starter
     healthCheckPath: /health
     envVars:
-      - key: OPENCLAW_GATEWAY_PORT
+      - key: MULLUSI_GATEWAY_PORT
         value: "8080"
-      - key: OPENCLAW_STATE_DIR
-        value: /data/.openclaw
-      - key: OPENCLAW_WORKSPACE_DIR
+      - key: MULLUSI_STATE_DIR
+        value: /data/.mullusi
+      - key: MULLUSI_WORKSPACE_DIR
         value: /data/workspace
-      - key: OPENCLAW_GATEWAY_TOKEN
+      - key: MULLUSI_GATEWAY_TOKEN
         generateValue: true
     disk:
-      name: openclaw-data
+      name: mullusi-data
       mountPath: /data
       sizeGB: 1

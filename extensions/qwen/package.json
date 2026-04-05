@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/qwen-provider",
+  "name": "@mullusi/qwen-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Qwen Cloud provider plugin",
+  "description": "Mullusi Qwen Cloud provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

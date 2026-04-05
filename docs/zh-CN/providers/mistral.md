@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 你想在 OpenClaw 中使用 Mistral 模型
+  - 你想在 Mullusi 中使用 Mistral 模型
   - 你需要 Mistral API 密钥新手引导和模型引用
-summary: 在 OpenClaw 中使用 Mistral 模型和 Voxtral 转录
+summary: 在 Mullusi 中使用 Mistral 模型和 Voxtral 转录
 title: Mistral
 x-i18n:
   generated_at: "2026-03-16T06:25:57Z"
@@ -15,16 +15,16 @@ x-i18n:
 
 # Mistral
 
-OpenClaw 支持 Mistral，用于文本/图像模型路由（`mistral/...`）以及
+Mullusi 支持 Mistral，用于文本/图像模型路由（`mistral/...`）以及
 通过媒体理解中的 Voxtral 进行音频转录。
 Mistral 还可用于记忆嵌入（`memorySearch.provider = "mistral"`）。
 
 ## CLI 设置
 
 ```bash
-openclaw onboard --auth-choice mistral-api-key
+mullusi onboard --auth-choice mistral-api-key
 # or non-interactive
-openclaw onboard --mistral-api-key "$MISTRAL_API_KEY"
+mullusi onboard --mistral-api-key "$MISTRAL_API_KEY"
 ```
 
 ## 配置片段（LLM 提供商）

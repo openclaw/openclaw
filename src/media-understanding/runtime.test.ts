@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 
 const hoisted = vi.hoisted(() => ({
   describeImageFile: vi.fn(),
@@ -39,7 +39,7 @@ describe("media-understanding runtime facade", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       agentDir: "/tmp/agent",
     };
     const result = {
@@ -73,7 +73,7 @@ describe("media-understanding runtime facade", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       agentDir: "/tmp/agent",
     };
     const result = {

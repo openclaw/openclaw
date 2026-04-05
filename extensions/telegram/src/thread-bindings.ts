@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   formatThreadBindingDurationLabel,
   registerSessionBindingAdapter,
@@ -11,11 +11,11 @@ import {
   type BindingTargetKind,
   type SessionBindingAdapter,
   type SessionBindingRecord,
-} from "openclaw/plugin-sdk/conversation-runtime";
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+} from "mullusi/plugin-sdk/conversation-runtime";
+import { writeJsonFileAtomically } from "mullusi/plugin-sdk/json-store";
+import { normalizeAccountId } from "mullusi/plugin-sdk/routing";
+import { logVerbose } from "mullusi/plugin-sdk/runtime-env";
+import { resolveStateDir } from "mullusi/plugin-sdk/state-paths";
 import { createForumTopicTelegram } from "./send.js";
 import { resolveTelegramToken } from "./token.js";
 
@@ -78,7 +78,7 @@ type TelegramThreadBindingsState = {
  * Keep Telegram thread binding state shared across bundled chunks so routing,
  * binding lookups, and binding mutations all observe the same live registry.
  */
-const TELEGRAM_THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.telegramThreadBindingsState");
+const TELEGRAM_THREAD_BINDINGS_STATE_KEY = Symbol.for("mullusi.telegramThreadBindingsState");
 let threadBindingsState: TelegramThreadBindingsState | undefined;
 
 function getThreadBindingsState(): TelegramThreadBindingsState {

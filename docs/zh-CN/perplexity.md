@@ -15,7 +15,7 @@ x-i18n:
 
 # Perplexity Sonar
 
-OpenClaw 可以使用 Perplexity Sonar 作为 `web_search` 工具。你可以通过 Perplexity 的直连 API 或通过 OpenRouter 连接。
+Mullusi 可以使用 Perplexity Sonar 作为 `web_search` 工具。你可以通过 Perplexity 的直连 API 或通过 OpenRouter 连接。
 
 ## API 选项
 
@@ -87,7 +87,7 @@ OpenClaw 可以使用 Perplexity Sonar 作为 `web_search` 工具。你可以通
 
 提供商专属配置现在统一放在 `plugins.entries.<plugin>.config.webSearch.*`。旧的 `tools.web.search.*` 路径仅通过兼容层继续生效，不再推荐用于新配置。
 
-如果未设置 base URL，OpenClaw 会根据 API 密钥来源选择默认值：
+如果未设置 base URL，Mullusi 会根据 API 密钥来源选择默认值：
 
 - `PERPLEXITY_API_KEY` 或 `pplx-...` → 直连 Perplexity（`https://api.perplexity.ai`）
 - `OPENROUTER_API_KEY` 或 `sk-or-...` → OpenRouter（`https://openrouter.ai/api/v1`）

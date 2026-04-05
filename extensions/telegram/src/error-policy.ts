@@ -3,7 +3,7 @@ import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/config-runtime";
 
 export type TelegramErrorPolicy = "always" | "once" | "silent";
 

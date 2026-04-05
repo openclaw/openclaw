@@ -53,7 +53,7 @@ describe("listenGatewayHttpServer", () => {
       listenGatewayHttpServer({
         httpServer: fake as unknown as HttpServer,
         bindHost: "127.0.0.1",
-        port: 18789,
+        port: 18790,
       }),
     ).resolves.toBeUndefined();
 
@@ -76,7 +76,7 @@ describe("listenGatewayHttpServer", () => {
       listenGatewayHttpServer({
         httpServer: fake as unknown as HttpServer,
         bindHost: "127.0.0.1",
-        port: 18789,
+        port: 18790,
       }),
     ).rejects.toBeInstanceOf(GatewayLockError);
 
@@ -91,7 +91,7 @@ describe("listenGatewayHttpServer", () => {
       listenGatewayHttpServer({
         httpServer: fake as unknown as HttpServer,
         bindHost: "127.0.0.1",
-        port: 18789,
+        port: 18790,
       }),
     ).rejects.toBeInstanceOf(GatewayLockError);
 

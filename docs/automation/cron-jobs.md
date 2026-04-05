@@ -2,7 +2,7 @@
 summary: "Scheduled jobs, webhooks, and Gmail PubSub triggers for the Gateway scheduler"
 read_when:
   - Scheduling background jobs or wakeups
-  - Wiring external triggers (webhooks, Gmail) into OpenClaw
+  - Wiring external triggers (webhooks, Gmail) into Mullusi
   - Deciding between heartbeat and cron for scheduled tasks
 title: "Scheduled Tasks"
 ---
@@ -15,7 +15,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 
 ```bash
 # Add a one-shot reminder
-openclaw cron add \
+mullusi cron add \
   --name "Reminder" \
   --at "2026-02-01T16:00:00Z" \
   --session main \
@@ -24,23 +24,23 @@ openclaw cron add \
   --delete-after-run
 
 # Check your jobs
-openclaw cron list
+mullusi cron list
 
 # See run history
-openclaw cron runs --id <job-id>
+mullusi cron runs --id <job-id>
 ```
 
 ## How cron works
 
 - Cron runs **inside the Gateway** process (not inside the model).
-- Jobs persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
+- Jobs persist at `~/.mullusi/cron/jobs.json` so restarts do not lose schedules.
 - All cron executions create [background task](/automation/tasks) records.
 - One-shot jobs (`--at`) auto-delete after success by default.
 - Isolated cron runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session when the run completes, so detached browser automation does not leave orphaned processes behind.
 - Isolated cron runs also guard against stale acknowledgement replies. If the
   first result is just an interim status update (`on it`, `pulling everything
 together`, and similar hints) and no descendant subagent run is still
-  responsible for the final answer, OpenClaw re-prompts once for the actual
+  responsible for the final answer, Mullusi re-prompts once for the actual
   result before delivery.
 
 Task reconciliation for cron is runtime-owned: an active cron task stays live while the
@@ -75,7 +75,7 @@ For isolated jobs, runtime teardown now includes best-effort browser cleanup for
 
 When isolated cron runs orchestrate subagents, delivery also prefers the final
 descendant output over stale parent interim text. If descendants are still
-running, OpenClaw suppresses that partial parent update instead of announcing it.
+running, Mullusi suppresses that partial parent update instead of announcing it.
 
 ### Payload options for isolated jobs
 
@@ -138,7 +138,7 @@ Failure notifications follow a separate destination path:
 One-shot reminder (main session):
 
 ```bash
-openclaw cron add \
+mullusi cron add \
   --name "Calendar check" \
   --at "20m" \
   --session main \
@@ -149,7 +149,7 @@ openclaw cron add \
 Recurring isolated job with delivery:
 
 ```bash
-openclaw cron add \
+mullusi cron add \
   --name "Morning brief" \
   --cron "0 7 * * *" \
   --tz "America/Los_Angeles" \
@@ -163,7 +163,7 @@ openclaw cron add \
 Isolated job with model and thinking override:
 
 ```bash
-openclaw cron add \
+mullusi cron add \
   --name "Deep analysis" \
   --cron "0 6 * * 1" \
   --tz "America/Los_Angeles" \
@@ -193,7 +193,7 @@ Gateway can expose HTTP webhook endpoints for external triggers. Enable in confi
 Every request must include the hook token via header:
 
 - `Authorization: Bearer <token>` (recommended)
-- `x-openclaw-token: <token>`
+- `x-mullusi-token: <token>`
 
 Query-string tokens are rejected.
 
@@ -202,7 +202,7 @@ Query-string tokens are rejected.
 Enqueue a system event for the main session:
 
 ```bash
-curl -X POST http://127.0.0.1:18789/hooks/wake \
+curl -X POST http://127.0.0.1:18790/hooks/wake \
   -H 'Authorization: Bearer SECRET' \
   -H 'Content-Type: application/json' \
   -d '{"text":"New email received","mode":"now"}'
@@ -216,7 +216,7 @@ curl -X POST http://127.0.0.1:18789/hooks/wake \
 Run an isolated agent turn:
 
 ```bash
-curl -X POST http://127.0.0.1:18789/hooks/agent \
+curl -X POST http://127.0.0.1:18790/hooks/agent \
   -H 'Authorization: Bearer SECRET' \
   -H 'Content-Type: application/json' \
   -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4-mini"}'
@@ -240,21 +240,21 @@ Custom hook names are resolved via `hooks.mappings` in config. Mappings can tran
 
 ## Gmail PubSub integration
 
-Wire Gmail inbox triggers to OpenClaw via Google PubSub.
+Wire Gmail inbox triggers to Mullusi via Google PubSub.
 
-**Prerequisites**: `gcloud` CLI, `gog` (gogcli), OpenClaw hooks enabled, Tailscale for the public HTTPS endpoint.
+**Prerequisites**: `gcloud` CLI, `gog` (gogcli), Mullusi hooks enabled, Tailscale for the public HTTPS endpoint.
 
 ### Wizard setup (recommended)
 
 ```bash
-openclaw webhooks gmail setup --account openclaw@gmail.com
+mullusi webhooks gmail setup --account mullusi@gmail.com
 ```
 
 This writes `hooks.gmail` config, enables the Gmail preset, and uses Tailscale Funnel for the push endpoint.
 
 ### Gateway auto-start
 
-When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `gog gmail watch serve` on boot and auto-renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
+When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `gog gmail watch serve` on boot and auto-renews the watch. Set `MULLUSI_SKIP_GMAIL_WATCHER=1` to opt out.
 
 ### Manual one-time setup
 
@@ -279,7 +279,7 @@ gcloud pubsub topics add-iam-policy-binding gog-gmail-watch \
 
 ```bash
 gog gmail watch start \
-  --account openclaw@gmail.com \
+  --account mullusi@gmail.com \
   --label INBOX \
   --topic projects/<project-id>/topics/gog-gmail-watch
 ```
@@ -301,31 +301,31 @@ gog gmail watch start \
 
 ```bash
 # List all jobs
-openclaw cron list
+mullusi cron list
 
 # Edit a job
-openclaw cron edit <jobId> --message "Updated prompt" --model "opus"
+mullusi cron edit <jobId> --message "Updated prompt" --model "opus"
 
 # Force run a job now
-openclaw cron run <jobId>
+mullusi cron run <jobId>
 
 # Run only if due
-openclaw cron run <jobId> --due
+mullusi cron run <jobId> --due
 
 # View run history
-openclaw cron runs --id <jobId> --limit 50
+mullusi cron runs --id <jobId> --limit 50
 
 # Delete a job
-openclaw cron remove <jobId>
+mullusi cron remove <jobId>
 
 # Agent selection (multi-agent setups)
-openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
-openclaw cron edit <jobId> --clear-agent
+mullusi cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
+mullusi cron edit <jobId> --clear-agent
 ```
 
 Model override note:
 
-- `openclaw cron add|edit --model ...` changes the job's selected model.
+- `mullusi cron add|edit --model ...` changes the job's selected model.
 - If the model is allowed, that exact provider/model reaches the isolated agent
   run.
 - If it is not allowed, cron warns and falls back to the job's agent/default
@@ -340,7 +340,7 @@ Model override note:
 {
   cron: {
     enabled: true,
-    store: "~/.openclaw/cron/jobs.json",
+    store: "~/.mullusi/cron/jobs.json",
     maxConcurrentRuns: 1,
     retry: {
       maxAttempts: 3,
@@ -354,7 +354,7 @@ Model override note:
 }
 ```
 
-Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
+Disable cron: `cron.enabled: false` or `MULLUSI_SKIP_CRON=1`.
 
 **One-shot retry**: transient errors (rate limit, overload, network, server error) retry up to 3 times with exponential backoff. Permanent errors disable immediately.
 
@@ -367,22 +367,22 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 ### Command ladder
 
 ```bash
-openclaw status
-openclaw gateway status
-openclaw cron status
-openclaw cron list
-openclaw cron runs --id <jobId> --limit 20
-openclaw system heartbeat last
-openclaw logs --follow
-openclaw doctor
+mullusi status
+mullusi gateway status
+mullusi cron status
+mullusi cron list
+mullusi cron runs --id <jobId> --limit 20
+mullusi system heartbeat last
+mullusi logs --follow
+mullusi doctor
 ```
 
 ### Cron not firing
 
-- Check `cron.enabled` and `OPENCLAW_SKIP_CRON` env var.
+- Check `cron.enabled` and `MULLUSI_SKIP_CRON` env var.
 - Confirm the Gateway is running continuously.
 - For `cron` schedules, verify timezone (`--tz`) vs the host timezone.
-- `reason: not-due` in run output means manual run was checked with `openclaw cron run <jobId> --due` and the job was not due yet.
+- `reason: not-due` in run output means manual run was checked with `mullusi cron run <jobId> --due` and the job was not due yet.
 
 ### Cron fired but no delivery
 
@@ -390,7 +390,7 @@ openclaw doctor
 - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
 - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
 - If the isolated run returns only the silent token (`NO_REPLY` / `no_reply`),
-  OpenClaw suppresses direct outbound delivery and also suppresses the fallback
+  Mullusi suppresses direct outbound delivery and also suppresses the fallback
   queued summary path, so nothing is posted back to chat.
 - For cron-owned isolated jobs, do not expect the agent to use the message tool
   as a fallback. The runner owns final delivery; `--no-deliver` keeps it

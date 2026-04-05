@@ -17,24 +17,24 @@ x-i18n:
 # CLI 新手引导
 
 CLI 新手引导是在 macOS、
-Linux 或 Windows（通过 WSL2；强烈推荐）上设置 OpenClaw 的**推荐**方式。
+Linux 或 Windows（通过 WSL2；强烈推荐）上设置 Mullusi 的**推荐**方式。
 它可在一次引导式流程中配置本地 Gateway 网关或远程 Gateway 网关连接，以及渠道、Skills
 和工作区默认值。
 
 ```bash
-openclaw onboard
+mullusi onboard
 ```
 
 <Info>
 最快的首次聊天方式：打开 Control UI（无需设置渠道）。运行
-`openclaw dashboard` 并在浏览器中聊天。文档：[Dashboard](/web/dashboard)。
+`mullusi dashboard` 并在浏览器中聊天。文档：[Dashboard](/web/dashboard)。
 </Info>
 
 若要稍后重新配置：
 
 ```bash
-openclaw configure
-openclaw agents add <name>
+mullusi configure
+mullusi agents add <name>
 ```
 
 <Note>
@@ -45,7 +45,7 @@ openclaw agents add <name>
 CLI 新手引导包含一个 web search 步骤，你可以选择一个提供商
 （Perplexity、Brave、Gemini、Grok 或 Kimi），并粘贴你的 API 密钥，以便智能体
 可以使用 `web_search`。你也可以稍后通过
-`openclaw configure --section web` 进行配置。文档：[Web 工具](/tools/web)。
+`mullusi configure --section web` 进行配置。文档：[Web 工具](/tools/web)。
 </Tip>
 
 ## 快速开始与高级模式
@@ -56,7 +56,7 @@ CLI 新手引导包含一个 web search 步骤，你可以选择一个提供商
   <Tab title="快速开始（默认值）">
     - 本地网关（loopback）
     - 默认工作区（或现有工作区）
-    - Gateway 网关端口 **18789**
+    - Gateway 网关端口 **18790**
     - Gateway 网关认证 **Token**（即使在 loopback 上也会自动生成）
     - 新本地设置的默认工具策略：`tools.profile: "coding"`（会保留现有显式配置文件）
     - 私信隔离默认值：本地新手引导会在未设置时写入 `session.dmScope: "per-channel-peer"`。详情见：[CLI 设置参考](/start/wizard-cli-reference#outputs-and-internals)
@@ -78,7 +78,7 @@ CLI 新手引导包含一个 web search 步骤，你可以选择一个提供商
    对于非交互式运行，`--secret-input-mode ref` 会在认证配置文件中存储基于环境变量的引用，而不是明文 API 密钥值。
    在非交互式 `ref` 模式下，必须设置提供商环境变量；如果传入内联密钥标志但缺少该环境变量，则会快速失败。
    在交互式运行中，选择 secret reference 模式后，你可以指向环境变量或已配置的 provider ref（`file` 或 `exec`），并在保存前进行快速预检校验。
-2. **工作区** —— 智能体文件的位置（默认 `~/.openclaw/workspace`）。会植入引导文件。
+2. **工作区** —— 智能体文件的位置（默认 `~/.mullusi/workspace`）。会植入引导文件。
 3. **Gateway 网关** —— 端口、绑定地址、认证模式、Tailscale 暴露。
    在交互式 token 模式中，你可以选择默认的明文 token 存储，或选择启用 SecretRef。
    非交互式 token SecretRef 路径：`--gateway-token-ref-env <ENV_VAR>`。
@@ -93,7 +93,7 @@ CLI 新手引导包含一个 web search 步骤，你可以选择一个提供商
 <Note>
 重新运行新手引导**不会**清除任何内容，除非你显式选择 **Reset**（或传入 `--reset`）。
 CLI `--reset` 默认会重置配置、凭证和会话；如需包含工作区，请使用 `--reset-scope full`。
-如果配置无效或包含旧版键，新手引导会先要求你运行 `openclaw doctor`。
+如果配置无效或包含旧版键，新手引导会先要求你运行 `mullusi doctor`。
 </Note>
 
 **远程模式**只会配置本地客户端以连接到其他地方的 Gateway 网关。
@@ -101,7 +101,7 @@ CLI `--reset` 默认会重置配置、凭证和会话；如需包含工作区，
 
 ## 添加另一个智能体
 
-使用 `openclaw agents add <name>` 创建一个单独的智能体，它拥有自己的工作区、
+使用 `mullusi agents add <name>` 创建一个单独的智能体，它拥有自己的工作区、
 会话和认证配置文件。不带 `--workspace` 运行会启动新手引导。
 
 它会设置：
@@ -112,7 +112,7 @@ CLI `--reset` 默认会重置配置、凭证和会话；如需包含工作区，
 
 说明：
 
-- 默认工作区遵循 `~/.openclaw/workspace-<agentId>`。
+- 默认工作区遵循 `~/.mullusi/workspace-<agentId>`。
 - 添加 `bindings` 以路由入站消息（新手引导可以完成这项操作）。
 - 非交互式标志：`--model`、`--agent-dir`、`--bind`、`--non-interactive`。
 
@@ -126,7 +126,7 @@ CLI `--reset` 默认会重置配置、凭证和会话；如需包含工作区，
 
 ## 相关文档
 
-- CLI 命令参考：[`openclaw onboard`](/cli/onboard)
+- CLI 命令参考：[`mullusi onboard`](/cli/onboard)
 - 新手引导概览：[Onboarding Overview](/start/onboarding-overview)
 - macOS 应用新手引导：[新手引导](/start/onboarding)
 - 智能体首次运行仪式：[智能体引导](/start/bootstrapping)

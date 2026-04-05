@@ -14,7 +14,7 @@ const PUBLIC_CONTRACT_REFERENCE_FILES = [
   "docs/plugins/architecture.md",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
 ] as const;
-const PLUGIN_SDK_SUBPATH_PATTERN = /openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
+const PLUGIN_SDK_SUBPATH_PATTERN = /mullusi\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
 
@@ -65,7 +65,7 @@ function readRootPackageJson(): {
 function readMatrixPackageJson(): {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
-  openclaw?: {
+  mullusi?: {
     releaseChecks?: {
       rootDependencyMirrorAllowlist?: unknown;
     };
@@ -74,7 +74,7 @@ function readMatrixPackageJson(): {
   return JSON.parse(readFileSync(resolve(REPO_ROOT, "extensions/matrix/package.json"), "utf8")) as {
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;
-    openclaw?: {
+    mullusi?: {
       releaseChecks?: {
         rootDependencyMirrorAllowlist?: unknown;
       };
@@ -85,7 +85,7 @@ function readMatrixPackageJson(): {
 function readAmazonBedrockPackageJson(): {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
-  openclaw?: {
+  mullusi?: {
     releaseChecks?: {
       rootDependencyMirrorAllowlist?: unknown;
     };
@@ -96,7 +96,7 @@ function readAmazonBedrockPackageJson(): {
   ) as {
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;
-    openclaw?: {
+    mullusi?: {
       releaseChecks?: {
         rootDependencyMirrorAllowlist?: unknown;
       };
@@ -186,7 +186,7 @@ function resolveNpmCommandInvocation(npmArgs: string[]): NpmCommandInvocation {
   };
 }
 
-function packOpenClawToTempDir(packDir: string): string {
+function packMullusiToTempDir(packDir: string): string {
   const invocation = resolveNpmCommandInvocation([
     "pack",
     "--ignore-scripts",
@@ -224,7 +224,7 @@ function packOpenClawToTempDir(packDir: string): string {
 async function readPackedRootPackageJson(archivePath: string): Promise<{
   dependencies?: Record<string, string>;
 }> {
-  const extractDir = mkdtempSync(join(os.tmpdir(), "openclaw-packed-root-package-json-"));
+  const extractDir = mkdtempSync(join(os.tmpdir(), "mullusi-packed-root-package-json-"));
   try {
     await tar.x({
       file: archivePath,
@@ -315,7 +315,7 @@ describe("plugin-sdk package contract guardrails", () => {
         continue;
       }
       failures.push(
-        `${reference.file} references openclaw/plugin-sdk/${reference.subpath}, but ${reference.subpath} is missing from ${missingFrom.join(" and ")}`,
+        `${reference.file} references mullusi/plugin-sdk/${reference.subpath}, but ${reference.subpath} is missing from ${missingFrom.join(" and ")}`,
       );
     }
 
@@ -326,7 +326,7 @@ describe("plugin-sdk package contract guardrails", () => {
     const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
     const matrixPackageJson = readMatrixPackageJson();
     const matrixRuntimeDeps = collectRuntimeDependencySpecs(matrixPackageJson);
-    const allowlist = matrixPackageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist;
+    const allowlist = matrixPackageJson.mullusi?.releaseChecks?.rootDependencyMirrorAllowlist;
 
     expect(Array.isArray(allowlist)).toBe(true);
     const matrixRootMirrorAllowlist = allowlist as string[];
@@ -343,7 +343,7 @@ describe("plugin-sdk package contract guardrails", () => {
     const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
     const bedrockPackageJson = readAmazonBedrockPackageJson();
     const bedrockRuntimeDeps = collectRuntimeDependencySpecs(bedrockPackageJson);
-    const allowlist = bedrockPackageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist;
+    const allowlist = bedrockPackageJson.mullusi?.releaseChecks?.rootDependencyMirrorAllowlist;
 
     expect(Array.isArray(allowlist)).toBe(true);
     const bedrockRootMirrorAllowlist = allowlist as string[];
@@ -365,12 +365,12 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps matrix crypto WASM in the packed artifact manifest", async () => {
-    const tempRoot = mkdtempSync(join(os.tmpdir(), "openclaw-matrix-wasm-pack-"));
+    const tempRoot = mkdtempSync(join(os.tmpdir(), "mullusi-matrix-wasm-pack-"));
     try {
       const packDir = join(tempRoot, "pack");
       mkdirSync(packDir, { recursive: true });
 
-      const archivePath = packOpenClawToTempDir(packDir);
+      const archivePath = packMullusiToTempDir(packDir);
       const packedPackageJson = await readPackedRootPackageJson(archivePath);
       const matrixPackageJson = readMatrixPackageJson();
       const bedrockPackageJson = readAmazonBedrockPackageJson();
@@ -381,7 +381,7 @@ describe("plugin-sdk package contract guardrails", () => {
       expect(packedPackageJson.dependencies?.["@aws-sdk/client-bedrock"]).toBe(
         bedrockPackageJson.dependencies?.["@aws-sdk/client-bedrock"],
       );
-      expect(packedPackageJson.dependencies?.["@openclaw/plugin-package-contract"]).toBeUndefined();
+      expect(packedPackageJson.dependencies?.["@mullusi/plugin-package-contract"]).toBeUndefined();
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }

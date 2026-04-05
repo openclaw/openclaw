@@ -1,5 +1,5 @@
 import Foundation
-import OpenClawKit
+import MullusiKit
 
 struct TalkModeGatewayConfigState {
     let activeProvider: String

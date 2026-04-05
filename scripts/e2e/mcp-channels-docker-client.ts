@@ -69,7 +69,7 @@ async function main() {
     const messages = history.structuredContent?.messages ?? [];
     assert(messages.length >= 2, "expected seeded transcript messages");
     const attachmentMessage = messages.find((entry) => {
-      const raw = entry.__openclaw;
+      const raw = entry.__mullusi;
       return raw && typeof raw === "object" && (raw as { id?: unknown }).id === "msg-attachment";
     });
     assert(attachmentMessage, "expected seeded attachment message");

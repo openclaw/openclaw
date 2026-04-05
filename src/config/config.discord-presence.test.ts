@@ -36,7 +36,7 @@ describe("config discord presence", () => {
     },
     {
       name: "activityUrl without streaming type",
-      config: { discord: { activity: "Live", activityUrl: "https://twitch.tv/openclaw" } },
+      config: { discord: { activity: "Live", activityUrl: "https://twitch.tv/mullusi" } },
     },
     {
       name: "auto presence min update interval above check interval",

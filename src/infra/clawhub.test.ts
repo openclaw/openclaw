@@ -17,10 +17,10 @@ describe("clawhub helpers", () => {
   const originalHome = process.env.HOME;
 
   afterEach(() => {
-    delete process.env.OPENCLAW_CLAWHUB_TOKEN;
+    delete process.env.MULLUSI_CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_AUTH_TOKEN;
-    delete process.env.OPENCLAW_CLAWHUB_CONFIG_PATH;
+    delete process.env.MULLUSI_CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWDHUB_CONFIG_PATH;
     delete process.env.XDG_CONFIG_HOME;
@@ -86,15 +86,15 @@ describe("clawhub helpers", () => {
 
   it("checks min gateway versions with loose host labels", () => {
     expect(satisfiesGatewayMinimum("2026.3.22", "2026.3.0")).toBe(true);
-    expect(satisfiesGatewayMinimum("OpenClaw 2026.3.22", "2026.3.0")).toBe(true);
+    expect(satisfiesGatewayMinimum("Mullusi 2026.3.22", "2026.3.0")).toBe(true);
     expect(satisfiesGatewayMinimum("2026.2.9", "2026.3.0")).toBe(false);
     expect(satisfiesGatewayMinimum("unknown", "2026.3.0")).toBe(false);
   });
 
   it("resolves ClawHub auth token from config.json", async () => {
-    const configRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-config-"));
+    const configRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-clawhub-config-"));
     const configPath = path.join(configRoot, "clawhub", "config.json");
-    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = configPath;
+    process.env.MULLUSI_CLAWHUB_CONFIG_PATH = configPath;
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, JSON.stringify({ auth: { token: "cfg-token-123" } }), "utf8");
 
@@ -102,7 +102,7 @@ describe("clawhub helpers", () => {
   });
 
   it("resolves ClawHub auth token from the legacy config path override", async () => {
-    const configRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawdhub-config-"));
+    const configRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-mullusihub-config-"));
     const configPath = path.join(configRoot, "config.json");
     process.env.CLAWDHUB_CONFIG_PATH = configPath;
     await fs.writeFile(configPath, JSON.stringify({ token: "legacy-token-123" }), "utf8");
@@ -113,7 +113,7 @@ describe("clawhub helpers", () => {
   it.runIf(process.platform === "darwin")(
     "resolves ClawHub auth token from the macOS Application Support path",
     async () => {
-      const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-home-"));
+      const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-clawhub-home-"));
       const configPath = path.join(
         fakeHome,
         "Library",
@@ -136,8 +136,8 @@ describe("clawhub helpers", () => {
   it.runIf(process.platform === "darwin")(
     "falls back to XDG_CONFIG_HOME on macOS when Application Support has no config",
     async () => {
-      const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-home-"));
-      const xdgRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-xdg-"));
+      const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-clawhub-home-"));
+      const xdgRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-clawhub-xdg-"));
       const configPath = path.join(xdgRoot, "clawhub", "config.json");
       const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
       process.env.XDG_CONFIG_HOME = xdgRoot;
@@ -153,7 +153,7 @@ describe("clawhub helpers", () => {
   );
 
   it("injects resolved auth token into ClawHub requests", async () => {
-    process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
+    process.env.MULLUSI_CLAWHUB_TOKEN = "env-token-123";
     const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input);
       expect(url).toContain("/api/v1/search");

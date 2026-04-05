@@ -17,7 +17,7 @@ import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
 type DispatcherCompatibleFetch = FetchLike & {
-  __openclawAcceptsDispatcher?: boolean;
+  __mullusiAcceptsDispatcher?: boolean;
 };
 
 export const GUARDED_FETCH_MODE = {
@@ -304,7 +304,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const supportsDispatcherInit =
         params.fetchImpl !== undefined ||
         isMockedFetch(defaultFetch) ||
-        (defaultFetch as DispatcherCompatibleFetch).__openclawAcceptsDispatcher === true;
+        (defaultFetch as DispatcherCompatibleFetch).__mullusiAcceptsDispatcher === true;
       // Explicit caller stubs, test-installed global fetch mocks, and
       // dispatcher-aware wrappers should win.
       // Otherwise, fall back to undici's fetch whenever we attach a dispatcher,

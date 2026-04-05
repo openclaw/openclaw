@@ -1,6 +1,6 @@
-import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
+import { defineSingleProviderPluginEntry } from "mullusi/plugin-sdk/provider-entry";
+import { buildProviderReplayFamilyHooks } from "mullusi/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "mullusi/plugin-sdk/provider-stream";
 import { applyKilocodeConfig, KILOCODE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildKilocodeProviderWithDiscovery } from "./provider-catalog.js";
 

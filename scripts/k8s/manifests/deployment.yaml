@@ -1,20 +1,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: openclaw
+  name: mullusi
   labels:
-    app: openclaw
+    app: mullusi
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: openclaw
+      app: mullusi
   strategy:
     type: Recreate
   template:
     metadata:
       labels:
-        app: openclaw
+        app: mullusi
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -29,9 +29,9 @@ spec:
             - sh
             - -c
             - |
-              cp /config/openclaw.json /home/node/.openclaw/openclaw.json
-              mkdir -p /home/node/.openclaw/workspace
-              cp /config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
+              cp /config/mullusi.json /home/node/.mullusi/mullusi.json
+              mkdir -p /home/node/.mullusi/workspace
+              cp /config/AGENTS.md /home/node/.mullusi/workspace/AGENTS.md
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
@@ -43,13 +43,13 @@ spec:
               memory: 64Mi
               cpu: 100m
           volumeMounts:
-            - name: openclaw-home
-              mountPath: /home/node/.openclaw
+            - name: mullusi-home
+              mountPath: /home/node/.mullusi
             - name: config
               mountPath: /config
       containers:
         - name: gateway
-          image: ghcr.io/openclaw/openclaw:slim
+          image: ghcr.io/mullusi/mullusi:slim
           imagePullPolicy: IfNotPresent
           command:
             - node
@@ -58,42 +58,42 @@ spec:
             - run
           ports:
             - name: gateway
-              containerPort: 18789
+              containerPort: 18790
               protocol: TCP
           env:
             - name: HOME
               value: /home/node
-            - name: OPENCLAW_CONFIG_DIR
-              value: /home/node/.openclaw
+            - name: MULLUSI_CONFIG_DIR
+              value: /home/node/.mullusi
             - name: NODE_ENV
               value: production
-            - name: OPENCLAW_GATEWAY_TOKEN
+            - name: MULLUSI_GATEWAY_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: openclaw-secrets
-                  key: OPENCLAW_GATEWAY_TOKEN
+                  name: mullusi-secrets
+                  key: MULLUSI_GATEWAY_TOKEN
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: openclaw-secrets
+                  name: mullusi-secrets
                   key: ANTHROPIC_API_KEY
                   optional: true
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: openclaw-secrets
+                  name: mullusi-secrets
                   key: OPENAI_API_KEY
                   optional: true
             - name: GEMINI_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: openclaw-secrets
+                  name: mullusi-secrets
                   key: GEMINI_API_KEY
                   optional: true
             - name: OPENROUTER_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: openclaw-secrets
+                  name: mullusi-secrets
                   key: OPENROUTER_API_KEY
                   optional: true
           resources:
@@ -108,7 +108,7 @@ spec:
               command:
                 - node
                 - -e
-                - "require('http').get('http://127.0.0.1:18789/healthz', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
+                - "require('http').get('http://127.0.0.1:18790/healthz', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
             initialDelaySeconds: 60
             periodSeconds: 30
             timeoutSeconds: 10
@@ -117,13 +117,13 @@ spec:
               command:
                 - node
                 - -e
-                - "require('http').get('http://127.0.0.1:18789/readyz', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
+                - "require('http').get('http://127.0.0.1:18790/readyz', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
             initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 5
           volumeMounts:
-            - name: openclaw-home
-              mountPath: /home/node/.openclaw
+            - name: mullusi-home
+              mountPath: /home/node/.mullusi
             - name: tmp-volume
               mountPath: /tmp
           securityContext:
@@ -136,11 +136,11 @@ spec:
               drop:
                 - ALL
       volumes:
-        - name: openclaw-home
+        - name: mullusi-home
           persistentVolumeClaim:
-            claimName: openclaw-home-pvc
+            claimName: mullusi-home-pvc
         - name: config
           configMap:
-            name: openclaw-config
+            name: mullusi-config
         - name: tmp-volume
           emptyDir: {}

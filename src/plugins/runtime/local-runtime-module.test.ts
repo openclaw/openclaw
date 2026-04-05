@@ -8,7 +8,7 @@ import { loadSiblingRuntimeModuleSync } from "./local-runtime-module.js";
 const tempDirs = new Set<string>();
 
 function createTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-runtime-module-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-local-runtime-module-"));
   tempDirs.add(dir);
   return dir;
 }

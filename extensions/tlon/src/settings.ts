@@ -2,7 +2,7 @@
  * Settings Store integration for hot-reloading Tlon plugin config.
  *
  * Settings are stored in Urbit's %settings agent under:
- *   desk: "moltbot"
+ *   desk: "mullusi"
  *   bucket: "tlon"
  *
  * This allows config changes via poke from any Landscape client
@@ -60,7 +60,7 @@ export type TlonSettingsState = {
   loaded: boolean;
 };
 
-const SETTINGS_DESK = "moltbot";
+const SETTINGS_DESK = "mullusi";
 const SETTINGS_BUCKET = "tlon";
 
 /**

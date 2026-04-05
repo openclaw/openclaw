@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   },
   callGateway: vi.fn(),
   buildGatewayConnectionDetails: vi.fn(() => ({
-    url: "ws://127.0.0.1:18789",
+    url: "ws://127.0.0.1:18790",
     urlSource: "local loopback",
     message: "",
   })),
@@ -300,7 +300,7 @@ describe("devices cli local fallback", () => {
     callGateway.mockRejectedValueOnce(new Error("gateway closed (1008): pairing required"));
 
     await expect(
-      runDevicesCommand(["list", "--json", "--url", "ws://127.0.0.1:18789"]),
+      runDevicesCommand(["list", "--json", "--url", "ws://127.0.0.1:18790"]),
     ).rejects.toThrow("pairing required");
     expect(listDevicePairing).not.toHaveBeenCalled();
   });
@@ -337,7 +337,7 @@ beforeEach(() => {
 
 afterEach(() => {
   buildGatewayConnectionDetails.mockReturnValue({
-    url: "ws://127.0.0.1:18789",
+    url: "ws://127.0.0.1:18790",
     urlSource: "local loopback",
     message: "",
   });

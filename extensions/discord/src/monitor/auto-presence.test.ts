@@ -1,4 +1,4 @@
-import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import type { AuthProfileStore } from "mullusi/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
 import {
   createDiscordAutoPresenceController,

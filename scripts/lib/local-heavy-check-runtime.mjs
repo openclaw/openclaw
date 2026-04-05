@@ -12,7 +12,7 @@ const DEFAULT_STALE_LOCK_MS = 30 * 1000;
 const SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 
 export function isLocalCheckEnabled(env) {
-  const raw = env.OPENCLAW_LOCAL_CHECK?.trim().toLowerCase();
+  const raw = env.MULLUSI_LOCAL_CHECK?.trim().toLowerCase();
   return raw !== "0" && raw !== "false";
 }
 
@@ -37,8 +37,8 @@ export function applyLocalTsgoPolicy(args, env) {
   if (!nextEnv.GOMEMLIMIT) {
     nextEnv.GOMEMLIMIT = DEFAULT_LOCAL_GO_MEMORY_LIMIT;
   }
-  if (nextEnv.OPENCLAW_TSGO_PPROF_DIR && !hasFlag(nextArgs, "--pprofDir")) {
-    insertBeforeSeparator(nextArgs, "--pprofDir", nextEnv.OPENCLAW_TSGO_PPROF_DIR);
+  if (nextEnv.MULLUSI_TSGO_PPROF_DIR && !hasFlag(nextArgs, "--pprofDir")) {
+    insertBeforeSeparator(nextArgs, "--pprofDir", nextEnv.MULLUSI_TSGO_PPROF_DIR);
   }
 
   return { env: nextEnv, args: nextArgs };
@@ -66,20 +66,20 @@ export function acquireLocalHeavyCheckLockSync(params) {
   }
 
   const commonDir = resolveGitCommonDir(params.cwd);
-  const locksDir = path.join(commonDir, "openclaw-local-checks");
+  const locksDir = path.join(commonDir, "mullusi-local-checks");
   const lockDir = path.join(locksDir, `${params.lockName ?? "heavy-check"}.lock`);
   const ownerPath = path.join(lockDir, "owner.json");
   const timeoutMs = readPositiveInt(
-    env.OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS,
+    env.MULLUSI_HEAVY_CHECK_LOCK_TIMEOUT_MS,
     DEFAULT_LOCK_TIMEOUT_MS,
   );
-  const pollMs = readPositiveInt(env.OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS, DEFAULT_LOCK_POLL_MS);
+  const pollMs = readPositiveInt(env.MULLUSI_HEAVY_CHECK_LOCK_POLL_MS, DEFAULT_LOCK_POLL_MS);
   const progressMs = readPositiveInt(
-    env.OPENCLAW_HEAVY_CHECK_LOCK_PROGRESS_MS,
+    env.MULLUSI_HEAVY_CHECK_LOCK_PROGRESS_MS,
     DEFAULT_LOCK_PROGRESS_MS,
   );
   const staleLockMs = readPositiveInt(
-    env.OPENCLAW_HEAVY_CHECK_STALE_LOCK_MS,
+    env.MULLUSI_HEAVY_CHECK_STALE_LOCK_MS,
     DEFAULT_STALE_LOCK_MS,
   );
   const startedAt = Date.now();

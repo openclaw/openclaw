@@ -10,4 +10,4 @@ export {
   resolveStorePath,
   updateLastRoute,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/config-runtime";

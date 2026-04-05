@@ -1,8 +1,8 @@
-import type { CliBackendPlugin, CliBackendConfig } from "openclaw/plugin-sdk/cli-backend";
+import type { CliBackendPlugin, CliBackendConfig } from "mullusi/plugin-sdk/cli-backend";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
-} from "openclaw/plugin-sdk/cli-backend";
+} from "mullusi/plugin-sdk/cli-backend";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_CLEAR_ENV,

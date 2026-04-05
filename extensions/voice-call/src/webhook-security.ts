@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
+import { safeEqualSecret } from "mullusi/plugin-sdk/browser-support";
 import { getHeader } from "./http-headers.js";
 import type { WebhookContext } from "./types.js";
 

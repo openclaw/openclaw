@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+vi.mock("mullusi/plugin-sdk/agent-runtime", () => ({
   resolveApiKeyForProvider: vi.fn(),
   findModelInCatalog: vi.fn(),
   loadModelCatalog: vi.fn(async () => []),
@@ -10,7 +10,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.2" })),
 }));
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+vi.mock("mullusi/plugin-sdk/media-runtime", () => ({
   resolveAutoImageModel: vi.fn(async () => null),
   resolveAutoMediaKeyProviders: vi.fn(() => ["openai"]),
   resolveDefaultMediaModel: vi.fn(() => "gpt-4.1-mini"),
@@ -24,7 +24,7 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";
+const TEST_CACHE_DIR = "/tmp/mullusi-test-sticker-cache/telegram";
 const TEST_CACHE_FILE = path.join(TEST_CACHE_DIR, "sticker-cache.json");
 
 type StickerCacheModule = typeof import("./sticker-cache.js");
@@ -33,16 +33,16 @@ let stickerCache: StickerCacheModule;
 
 describe("sticker-cache", () => {
   beforeEach(async () => {
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-test-sticker-cache";
-    fs.rmSync("/tmp/openclaw-test-sticker-cache", { recursive: true, force: true });
+    process.env.MULLUSI_STATE_DIR = "/tmp/mullusi-test-sticker-cache";
+    fs.rmSync("/tmp/mullusi-test-sticker-cache", { recursive: true, force: true });
     fs.mkdirSync(TEST_CACHE_DIR, { recursive: true });
     vi.resetModules();
     stickerCache = await import("./sticker-cache.js");
   });
 
   afterEach(() => {
-    fs.rmSync("/tmp/openclaw-test-sticker-cache", { recursive: true, force: true });
-    delete process.env.OPENCLAW_STATE_DIR;
+    fs.rmSync("/tmp/mullusi-test-sticker-cache", { recursive: true, force: true });
+    delete process.env.MULLUSI_STATE_DIR;
   });
 
   describe("getCachedSticker", () => {

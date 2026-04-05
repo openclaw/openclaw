@@ -15,13 +15,13 @@ For model selection rules, see [/concepts/models](/concepts/models).
 
 - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
 - If you set `agents.defaults.models`, it becomes the allowlist.
-- CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
+- CLI helpers: `mullusi onboard`, `mullusi models list`, `mullusi models set <provider/model>`.
 - Fallback runtime rules, cooldown probes, and session-override persistence are
   documented in [/concepts/model-failover](/concepts/model-failover).
 - `models.providers.*.models[].contextWindow` is native model metadata;
   `models.providers.*.models[].contextTokens` is the effective runtime cap.
 - Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
-  OpenClaw merges that output into `models.providers` before writing
+  Mullusi merges that output into `models.providers` before writing
   `models.json`.
 - Provider manifests can declare `providerAuthEnvVars` so generic env-based
   auth probes do not need to load plugin runtime. The remaining core env-var
@@ -52,24 +52,24 @@ For model selection rules, see [/concepts/models](/concepts/models).
 
 ## Plugin-owned provider behavior
 
-Provider plugins can now own most provider-specific logic while OpenClaw keeps
+Provider plugins can now own most provider-specific logic while Mullusi keeps
 the generic inference loop.
 
 Typical split:
 
 - `auth[].run` / `auth[].runNonInteractive`: provider owns onboarding/login
-  flows for `openclaw onboard`, `openclaw models auth`, and headless setup
+  flows for `mullusi onboard`, `mullusi models auth`, and headless setup
 - `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
   legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
 - `normalizeModelId`: provider normalizes legacy/preview model ids before
   lookup or canonicalization
 - `normalizeTransport`: provider normalizes transport-family `api` / `baseUrl`
-  before generic model assembly; OpenClaw checks the matched provider first,
+  before generic model assembly; Mullusi checks the matched provider first,
   then other hook-capable provider plugins until one actually changes the
   transport
 - `normalizeConfig`: provider normalizes `models.providers.<id>` config before
-  runtime uses it; OpenClaw checks the matched provider first, then other
+  runtime uses it; Mullusi checks the matched provider first, then other
   hook-capable provider plugins until one actually changes the config. If no
   provider hook rewrites the config, bundled Google-family helpers still
   normalize supported Google provider entries.
@@ -195,7 +195,7 @@ Current bundled examples:
 The bundled `openai` plugin now owns both provider ids: `openai` and
 `openai-codex`.
 
-That covers providers that still fit OpenClaw's normal transports. A provider
+That covers providers that still fit Mullusi's normal transports. A provider
 that needs a totally custom request executor is a separate, deeper extension
 surface.
 
@@ -203,7 +203,7 @@ surface.
 
 - Supports generic provider rotation for selected providers.
 - Configure multiple keys via:
-  - `OPENCLAW_LIVE_<PROVIDER>_KEY` (single live override, highest priority)
+  - `MULLUSI_LIVE_<PROVIDER>_KEY` (single live override, highest priority)
   - `<PROVIDER>_API_KEYS` (comma or semicolon list)
   - `<PROVIDER>_API_KEY` (primary key)
   - `<PROVIDER>_API_KEY_*` (numbered list, e.g. `<PROVIDER>_API_KEY_1`)
@@ -218,28 +218,28 @@ concurrent requests`, `ThrottlingException`, `concurrency limit reached`,
 
 ## Built-in providers (pi-ai catalog)
 
-OpenClaw ships with the pi‑ai catalog. These providers require **no**
+Mullusi ships with the pi‑ai catalog. These providers require **no**
 `models.providers` config; just set auth + pick a model.
 
 ### OpenAI
 
 - Provider: `openai`
 - Auth: `OPENAI_API_KEY`
-- Optional rotation: `OPENAI_API_KEYS`, `OPENAI_API_KEY_1`, `OPENAI_API_KEY_2`, plus `OPENCLAW_LIVE_OPENAI_KEY` (single override)
+- Optional rotation: `OPENAI_API_KEYS`, `OPENAI_API_KEY_1`, `OPENAI_API_KEY_2`, plus `MULLUSI_LIVE_OPENAI_KEY` (single override)
 - Example models: `openai/gpt-5.4`, `openai/gpt-5.4-pro`
-- CLI: `openclaw onboard --auth-choice openai-api-key`
+- CLI: `mullusi onboard --auth-choice openai-api-key`
 - Default transport is `auto` (WebSocket-first, SSE fallback)
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
 - OpenAI Responses WebSocket warm-up defaults to enabled via `params.openaiWsWarmup` (`true`/`false`)
 - OpenAI priority processing can be enabled via `agents.defaults.models["openai/<model>"].params.serviceTier`
 - `/fast` and `params.fastMode` map direct `openai/*` Responses requests to `service_tier=priority` on `api.openai.com`
 - Use `params.serviceTier` when you want an explicit tier instead of the shared `/fast` toggle
-- Hidden OpenClaw attribution headers (`originator`, `version`,
+- Hidden Mullusi attribution headers (`originator`, `version`,
   `User-Agent`) apply only on native OpenAI traffic to `api.openai.com`, not
   generic OpenAI-compatible proxies
 - Native OpenAI routes also keep Responses `store`, prompt-cache hints, and
   OpenAI reasoning-compat payload shaping; proxy routes do not
-- `openai/gpt-5.3-codex-spark` is intentionally suppressed in OpenClaw because the live OpenAI API rejects it; Spark is treated as Codex-only
+- `openai/gpt-5.3-codex-spark` is intentionally suppressed in Mullusi because the live OpenAI API rejects it; Spark is treated as Codex-only
 
 ```json5
 {
@@ -251,12 +251,12 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `anthropic`
 - Auth: `ANTHROPIC_API_KEY`
-- Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
+- Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `MULLUSI_LIVE_ANTHROPIC_KEY` (single override)
 - Example model: `anthropic/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice apiKey` or `openclaw onboard --auth-choice anthropic-cli`
-- Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
-- Billing note: Anthropic's public Claude Code docs still include direct Claude Code terminal usage in Claude plan limits. Separately, Anthropic notified OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription.
-- Anthropic setup-token is available again as a legacy/manual OpenClaw path. Use it with the expectation that Anthropic told OpenClaw users this path requires **Extra Usage**.
+- CLI: `mullusi onboard --auth-choice apiKey` or `mullusi onboard --auth-choice anthropic-cli`
+- Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; Mullusi maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
+- Billing note: Anthropic's public Claude Code docs still include direct Claude Code terminal usage in Claude plan limits. Separately, Anthropic notified Mullusi users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **Mullusi** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription.
+- Anthropic setup-token is available again as a legacy/manual Mullusi path. Use it with the expectation that Anthropic told Mullusi users this path requires **Extra Usage**.
 
 ```json5
 {
@@ -269,17 +269,17 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `openai-codex`
 - Auth: OAuth (ChatGPT)
 - Example model: `openai-codex/gpt-5.4`
-- CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
+- CLI: `mullusi onboard --auth-choice openai-codex` or `mullusi models auth login --provider openai-codex`
 - Default transport is `auto` (WebSocket-first, SSE fallback)
 - Override per model via `agents.defaults.models["openai-codex/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
 - `params.serviceTier` is also forwarded on native Codex Responses requests (`chatgpt.com/backend-api`)
-- Hidden OpenClaw attribution headers (`originator`, `version`,
+- Hidden Mullusi attribution headers (`originator`, `version`,
   `User-Agent`) are only attached on native Codex traffic to
   `chatgpt.com/backend-api`, not generic OpenAI-compatible proxies
-- Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`; OpenClaw maps that to `service_tier=priority`
+- Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`; Mullusi maps that to `service_tier=priority`
 - `openai-codex/gpt-5.3-codex-spark` remains available when the Codex OAuth catalog exposes it; entitlement-dependent
 - `openai-codex/gpt-5.4` keeps native `contextWindow = 1050000` and a default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai-codex.models[].contextTokens`
-- Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
+- Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like Mullusi.
 
 ```json5
 {
@@ -311,7 +311,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Zen runtime provider: `opencode`
 - Go runtime provider: `opencode-go`
 - Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.5`
-- CLI: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`
+- CLI: `mullusi onboard --auth-choice opencode-zen` or `mullusi onboard --auth-choice opencode-go`
 
 ```json5
 {
@@ -323,38 +323,38 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `google`
 - Auth: `GEMINI_API_KEY`
-- Optional rotation: `GEMINI_API_KEYS`, `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, `GOOGLE_API_KEY` fallback, and `OPENCLAW_LIVE_GEMINI_KEY` (single override)
+- Optional rotation: `GEMINI_API_KEYS`, `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, `GOOGLE_API_KEY` fallback, and `MULLUSI_LIVE_GEMINI_KEY` (single override)
 - Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3-flash-preview`
-- Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
-- CLI: `openclaw onboard --auth-choice gemini-api-key`
+- Compatibility: legacy Mullusi config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
+- CLI: `mullusi onboard --auth-choice gemini-api-key`
 - Direct Gemini runs also accept `agents.defaults.models["google/<model>"].params.cachedContent`
   (or legacy `cached_content`) to forward a provider-native
-  `cachedContents/...` handle; Gemini cache hits surface as OpenClaw `cacheRead`
+  `cachedContents/...` handle; Gemini cache hits surface as Mullusi `cacheRead`
 
 ### Google Vertex and Gemini CLI
 
 - Providers: `google-vertex`, `google-gemini-cli`
 - Auth: Vertex uses gcloud ADC; Gemini CLI uses its OAuth flow
-- Caution: Gemini CLI OAuth in OpenClaw is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
+- Caution: Gemini CLI OAuth in Mullusi is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
 - Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
   - Install Gemini CLI first:
     - `brew install gemini-cli`
     - or `npm install -g @google/gemini-cli`
-  - Enable: `openclaw plugins enable google`
-  - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
+  - Enable: `mullusi plugins enable google`
+  - Login: `mullusi models auth login --provider google-gemini-cli --set-default`
   - Default model: `google-gemini-cli/gemini-3.1-pro-preview`
-  - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
+  - Note: you do **not** paste a client id or secret into `mullusi.json`. The CLI login flow stores
     tokens in auth profiles on the gateway host.
   - If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host.
   - Gemini CLI JSON replies are parsed from `response`; usage falls back to
-    `stats`, with `stats.cached` normalized into OpenClaw `cacheRead`.
+    `stats`, with `stats.cached` normalized into Mullusi `cacheRead`.
 
 ### Z.AI (GLM)
 
 - Provider: `zai`
 - Auth: `ZAI_API_KEY`
 - Example model: `zai/glm-5`
-- CLI: `openclaw onboard --auth-choice zai-api-key`
+- CLI: `mullusi onboard --auth-choice zai-api-key`
   - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
   - `zai-api-key` auto-detects the matching Z.AI endpoint; `zai-coding-global`, `zai-coding-cn`, `zai-global`, and `zai-cn` force a specific surface
 
@@ -363,20 +363,20 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `vercel-ai-gateway`
 - Auth: `AI_GATEWAY_API_KEY`
 - Example model: `vercel-ai-gateway/anthropic/claude-opus-4.6`
-- CLI: `openclaw onboard --auth-choice ai-gateway-api-key`
+- CLI: `mullusi onboard --auth-choice ai-gateway-api-key`
 
 ### Kilo Gateway
 
 - Provider: `kilocode`
 - Auth: `KILOCODE_API_KEY`
 - Example model: `kilocode/kilo/auto`
-- CLI: `openclaw onboard --auth-choice kilocode-api-key`
+- CLI: `mullusi onboard --auth-choice kilocode-api-key`
 - Base URL: `https://api.kilo.ai/api/gateway/`
 - Static fallback catalog ships `kilocode/kilo/auto`; live
   `https://api.kilo.ai/api/gateway/models` discovery can expand the runtime
   catalog further.
 - Exact upstream routing behind `kilocode/kilo/auto` is owned by Kilo Gateway,
-  not hard-coded in OpenClaw.
+  not hard-coded in Mullusi.
 
 See [/providers/kilocode](/providers/kilocode) for setup details.
 
@@ -384,7 +384,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
 - Example model: `openrouter/auto`
-- OpenClaw applies OpenRouter's documented app-attribution headers only when
+- Mullusi applies OpenRouter's documented app-attribution headers only when
   the request actually targets `openrouter.ai`
 - OpenRouter-specific Anthropic `cache_control` markers are likewise gated to
   verified OpenRouter routes, not arbitrary proxy URLs
@@ -437,13 +437,13 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
     disable it
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - Example model: `mistral/mistral-large-latest`
-- CLI: `openclaw onboard --auth-choice mistral-api-key`
+- CLI: `mullusi onboard --auth-choice mistral-api-key`
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
   - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.
   - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
-- Hugging Face Inference example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
+- Hugging Face Inference example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `mullusi onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
 
 ## Providers via `models.providers` (custom/base URL)
 
@@ -463,7 +463,7 @@ need to override the base URL or model metadata:
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
 - Example model: `moonshot/kimi-k2.5`
-- CLI: `openclaw onboard --auth-choice moonshot-api-key` or `openclaw onboard --auth-choice moonshot-api-key-cn`
+- CLI: `mullusi onboard --auth-choice moonshot-api-key` or `mullusi onboard --auth-choice moonshot-api-key-cn`
 
 Kimi K2 model IDs:
 
@@ -521,7 +521,7 @@ Volcano Engine (火山引擎) provides access to Doubao and other models in Chin
 - Provider: `volcengine` (coding: `volcengine-plan`)
 - Auth: `VOLCANO_ENGINE_API_KEY`
 - Example model: `volcengine-plan/ark-code-latest`
-- CLI: `openclaw onboard --auth-choice volcengine-api-key`
+- CLI: `mullusi onboard --auth-choice volcengine-api-key`
 
 ```json5
 {
@@ -536,7 +536,7 @@ catalog is registered at the same time.
 
 In onboarding/configure model pickers, the Volcengine auth choice prefers both
 `volcengine/*` and `volcengine-plan/*` rows. If those models are not loaded yet,
-OpenClaw falls back to the unfiltered catalog instead of showing an empty
+Mullusi falls back to the unfiltered catalog instead of showing an empty
 provider-scoped picker.
 
 Available models:
@@ -562,7 +562,7 @@ BytePlus ARK provides access to the same models as Volcano Engine for internatio
 - Provider: `byteplus` (coding: `byteplus-plan`)
 - Auth: `BYTEPLUS_API_KEY`
 - Example model: `byteplus-plan/ark-code-latest`
-- CLI: `openclaw onboard --auth-choice byteplus-api-key`
+- CLI: `mullusi onboard --auth-choice byteplus-api-key`
 
 ```json5
 {
@@ -577,7 +577,7 @@ catalog is registered at the same time.
 
 In onboarding/configure model pickers, the BytePlus auth choice prefers both
 `byteplus/*` and `byteplus-plan/*` rows. If those models are not loaded yet,
-OpenClaw falls back to the unfiltered catalog instead of showing an empty
+Mullusi falls back to the unfiltered catalog instead of showing an empty
 provider-scoped picker.
 
 Available models:
@@ -601,7 +601,7 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 - Provider: `synthetic`
 - Auth: `SYNTHETIC_API_KEY`
 - Example model: `synthetic/hf:MiniMaxAI/MiniMax-M2.5`
-- CLI: `openclaw onboard --auth-choice synthetic-api-key`
+- CLI: `mullusi onboard --auth-choice synthetic-api-key`
 
 ```json5
 {
@@ -635,7 +635,7 @@ MiniMax is configured via `models.providers` because it uses custom endpoints:
 
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
 
-On MiniMax's Anthropic-compatible streaming path, OpenClaw disables thinking by
+On MiniMax's Anthropic-compatible streaming path, Mullusi disables thinking by
 default unless you explicitly set it, and `/fast on` rewrites
 `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 
@@ -670,7 +670,7 @@ ollama pull llama3.3
 
 Ollama is detected locally at `http://127.0.0.1:11434` when you opt in with
 `OLLAMA_API_KEY`, and the bundled provider plugin adds Ollama directly to
-`openclaw onboard` and the model picker. See [/providers/ollama](/providers/ollama)
+`mullusi onboard` and the model picker. See [/providers/ollama](/providers/ollama)
 for onboarding, cloud/local mode, and custom configuration.
 
 ### vLLM
@@ -766,27 +766,27 @@ Example (OpenAI‑compatible):
 Notes:
 
 - For custom providers, `reasoning`, `input`, `cost`, `contextWindow`, and `maxTokens` are optional.
-  When omitted, OpenClaw defaults to:
+  When omitted, Mullusi defaults to:
   - `reasoning: false`
   - `input: ["text"]`
   - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`
   - `contextWindow: 200000`
   - `maxTokens: 8192`
 - Recommended: set explicit values that match your proxy/model limits.
-- For `api: "openai-completions"` on non-native endpoints (any non-empty `baseUrl` whose host is not `api.openai.com`), OpenClaw forces `compat.supportsDeveloperRole: false` to avoid provider 400 errors for unsupported `developer` roles.
+- For `api: "openai-completions"` on non-native endpoints (any non-empty `baseUrl` whose host is not `api.openai.com`), Mullusi forces `compat.supportsDeveloperRole: false` to avoid provider 400 errors for unsupported `developer` roles.
 - Proxy-style OpenAI-compatible routes also skip native OpenAI-only request
   shaping: no `service_tier`, no Responses `store`, no prompt-cache hints, no
-  OpenAI reasoning-compat payload shaping, and no hidden OpenClaw attribution
+  OpenAI reasoning-compat payload shaping, and no hidden Mullusi attribution
   headers.
-- If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
+- If `baseUrl` is empty/omitted, Mullusi keeps the default OpenAI behavior (which resolves to `api.openai.com`).
 - For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
 
 ## CLI examples
 
 ```bash
-openclaw onboard --auth-choice opencode-zen
-openclaw models set opencode/claude-opus-4-6
-openclaw models list
+mullusi onboard --auth-choice opencode-zen
+mullusi models set opencode/claude-opus-4-6
+mullusi models list
 ```
 
 See also: [/gateway/configuration](/gateway/configuration) for full configuration examples.

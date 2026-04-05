@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isRecord } from "../utils.js";
 import { withActivatedPluginIds } from "./activation-context.js";
@@ -8,7 +8,7 @@ import {
   shouldUsePluginSnapshotCache,
 } from "./cache-controls.js";
 import {
-  loadOpenClawPlugins,
+  loadMullusiPlugins,
   resolveCompatibleRuntimePluginRegistry,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
@@ -32,13 +32,13 @@ type WebSearchProviderSnapshotCacheEntry = {
   providers: PluginWebSearchProviderEntry[];
 };
 let webSearchProviderSnapshotCache = new WeakMap<
-  OpenClawConfig,
+  MullusiConfig,
   WeakMap<NodeJS.ProcessEnv, Map<string, WebSearchProviderSnapshotCacheEntry>>
 >();
 
 function resetWebSearchProviderSnapshotCacheForTests() {
   webSearchProviderSnapshotCache = new WeakMap<
-    OpenClawConfig,
+    MullusiConfig,
     WeakMap<NodeJS.ProcessEnv, Map<string, WebSearchProviderSnapshotCacheEntry>>
   >();
 }
@@ -47,7 +47,7 @@ export const __testing = {
   resetWebSearchProviderSnapshotCacheForTests,
 } as const;
 function buildWebSearchSnapshotCacheKey(params: {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   workspaceDir?: string;
   bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
@@ -155,7 +155,7 @@ function resolveWebSearchLoadOptions(params: {
 }
 
 function mapRegistryWebSearchProviders(params: {
-  registry: ReturnType<typeof loadOpenClawPlugins>;
+  registry: ReturnType<typeof loadMullusiPlugins>;
   onlyPluginIds?: readonly string[];
 }): PluginWebSearchProviderEntry[] {
   const onlyPluginIdSet =
@@ -195,7 +195,7 @@ export function resolvePluginWebSearchProviders(params: {
     if (pluginIds.length === 0) {
       return [];
     }
-    const registry = loadOpenClawPlugins({
+    const registry = loadMullusiPlugins({
       config: withActivatedPluginIds({
         config: params.config,
         pluginIds,
@@ -235,7 +235,7 @@ export function resolvePluginWebSearchProviders(params: {
   // re-import the same plugin set through the snapshot path.
   const resolved = mapRegistryWebSearchProviders({
     registry:
-      resolveCompatibleRuntimePluginRegistry(loadOptions) ?? loadOpenClawPlugins(loadOptions),
+      resolveCompatibleRuntimePluginRegistry(loadOptions) ?? loadMullusiPlugins(loadOptions),
   });
   if (cacheOwnerConfig && shouldMemoizeSnapshot) {
     const ttlMs = resolvePluginSnapshotCacheTtlMs(env);

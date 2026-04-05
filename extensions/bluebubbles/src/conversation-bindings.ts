@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { normalizeAccountId, resolveAgentIdFromSessionKey } from "mullusi/plugin-sdk/routing";
 import {
   registerSessionBindingAdapter,
   resolveThreadBindingConversationIdFromBindingId,
@@ -9,7 +9,7 @@ import {
   type BindingTargetKind,
   type SessionBindingAdapter,
   type SessionBindingRecord,
-} from "openclaw/plugin-sdk/thread-bindings-runtime";
+} from "mullusi/plugin-sdk/thread-bindings-runtime";
 
 type BlueBubblesBindingTargetKind = "subagent" | "acp";
 
@@ -50,7 +50,7 @@ type BlueBubblesConversationBindingsState = {
 };
 
 const BLUEBUBBLES_CONVERSATION_BINDINGS_STATE_KEY = Symbol.for(
-  "openclaw.bluebubblesConversationBindingsState",
+  "mullusi.bluebubblesConversationBindingsState",
 );
 let state: BlueBubblesConversationBindingsState | undefined;
 
@@ -119,7 +119,7 @@ function toSessionBindingRecord(
 
 export function createBlueBubblesConversationBindingManager(params: {
   accountId?: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
 }): BlueBubblesConversationBindingManager {
   const accountId = normalizeAccountId(params.accountId);
   const existing = getState().managersByAccountId.get(accountId);

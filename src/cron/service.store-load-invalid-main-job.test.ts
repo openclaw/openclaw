@@ -14,7 +14,7 @@ const noopLogger = createNoopLogger();
 installCronTestHooks({ logger: noopLogger });
 
 async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-store-load-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-cron-store-load-"));
   return {
     dir,
     storePath: path.join(dir, "cron", "jobs.json"),

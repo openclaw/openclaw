@@ -155,7 +155,7 @@ describe("registerQrCli", () => {
   }
 
   function expectLoggedLocalSetupCode() {
-    expectLoggedSetupCode("ws://127.0.0.1:18789");
+    expectLoggedSetupCode("ws://127.0.0.1:18790");
   }
 
   function mockTailscaleStatusLookup() {
@@ -169,8 +169,8 @@ describe("registerQrCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetRuntimeCapture();
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    vi.stubEnv("MULLUSI_GATEWAY_TOKEN", "");
+    vi.stubEnv("MULLUSI_GATEWAY_PASSWORD", "");
     runtimeExit.mockImplementation(() => {
       throw new Error("exit");
     });
@@ -192,7 +192,7 @@ describe("registerQrCli", () => {
     await runQr(["--setup-code-only"]);
 
     const expected = encodePairingSetupCode({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       bootstrapToken: "bootstrap-123",
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
@@ -216,7 +216,7 @@ describe("registerQrCli", () => {
     expect(output).toContain("Pairing QR");
     expect(output).toContain("ASCII-QR");
     expect(output).toContain("Gateway:");
-    expect(output).toContain("openclaw devices approve <requestId>");
+    expect(output).toContain("mullusi devices approve <requestId>");
   });
 
   it("fails fast for insecure remote mobile pairing setup urls", async () => {
@@ -246,7 +246,7 @@ describe("registerQrCli", () => {
 
     await runQr(["--setup-code-only"]);
 
-    expectLoggedSetupCode("ws://gateway.local:18789");
+    expectLoggedSetupCode("ws://gateway.local:18790");
   });
 
   it("allows android emulator cleartext override urls", async () => {
@@ -257,9 +257,9 @@ describe("registerQrCli", () => {
       },
     });
 
-    await runQr(["--setup-code-only", "--url", "ws://10.0.2.2:18789"]);
+    await runQr(["--setup-code-only", "--url", "ws://10.0.2.2:18790"]);
 
-    expectLoggedSetupCode("ws://10.0.2.2:18789");
+    expectLoggedSetupCode("ws://10.0.2.2:18790");
   });
 
   it("accepts --token override when config has no auth", async () => {
@@ -301,8 +301,8 @@ describe("registerQrCli", () => {
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
-  it("uses OPENCLAW_GATEWAY_PASSWORD without resolving local password SecretRef", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "password-from-env");
+  it("uses MULLUSI_GATEWAY_PASSWORD without resolving local password SecretRef", async () => {
+    vi.stubEnv("MULLUSI_GATEWAY_PASSWORD", "password-from-env");
     loadConfig.mockReturnValue(
       createLocalGatewayConfigWithAuth(
         createLocalGatewayPasswordRefAuth("MISSING_LOCAL_GATEWAY_PASSWORD"),

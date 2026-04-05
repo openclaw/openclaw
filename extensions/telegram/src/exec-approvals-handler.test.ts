@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { MullusiConfig } from "../../../src/config/config.js";
 import { updateSessionStore } from "../../../src/config/sessions.js";
 import { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
 
@@ -38,7 +38,7 @@ const pluginRequest = {
   expiresAtMs: 61_000,
 };
 
-function createHandler(cfg: OpenClawConfig, accountId = "default") {
+function createHandler(cfg: MullusiConfig, accountId = "default") {
   const normalizedCfg = {
     ...cfg,
     channels: {
@@ -48,7 +48,7 @@ function createHandler(cfg: OpenClawConfig, accountId = "default") {
         botToken: cfg.channels?.telegram?.botToken ?? "tg-token",
       },
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
   const sendTyping = vi.fn().mockResolvedValue({ ok: true });
   const sendMessage = vi
     .fn()
@@ -83,7 +83,7 @@ describe("TelegramExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, sendTyping, sendMessage } = createHandler(cfg);
 
     await handler.handleRequested(baseRequest);
@@ -135,7 +135,7 @@ describe("TelegramExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, sendMessage } = createHandler(cfg);
 
     await handler.handleRequested({
@@ -179,7 +179,7 @@ describe("TelegramExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, sendMessage } = createHandler(cfg);
 
     await handler.handleRequested({
@@ -219,7 +219,7 @@ describe("TelegramExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const defaultHandler = createHandler(cfg, "default");
     const secondaryHandler = createHandler(cfg, "secondary");
     const request = {
@@ -252,7 +252,7 @@ describe("TelegramExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, sendMessage } = createHandler(cfg);
 
     await handler.handleRequested({
@@ -286,7 +286,7 @@ describe("TelegramExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, editReplyMarkup } = createHandler(cfg);
 
     await handler.handleRequested(baseRequest);
@@ -319,7 +319,7 @@ describe("TelegramExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, sendMessage } = createHandler(cfg);
 
     await handler.handleRequested(pluginRequest);
@@ -353,7 +353,7 @@ describe("TelegramExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, sendMessage } = createHandler(cfg);
 
     await handler.handleRequested({
@@ -389,7 +389,7 @@ describe("TelegramExecApprovalHandler", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const { handler, sendMessage } = createHandler(cfg);
 
     await handler.handleRequested({
@@ -404,7 +404,7 @@ describe("TelegramExecApprovalHandler", () => {
   });
 
   it("falls back to the session-bound Telegram account when turn source account is missing", async () => {
-    const sessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tg-approvals-"));
+    const sessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-tg-approvals-"));
     const storePath = path.join(sessionStoreDir, "sessions.json");
     try {
       await updateSessionStore(storePath, (store) => {
@@ -440,7 +440,7 @@ describe("TelegramExecApprovalHandler", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as MullusiConfig;
       const defaultHandler = createHandler(cfg, "default");
       const secondaryHandler = createHandler(cfg, "secondary");
       const request = {
@@ -469,7 +469,7 @@ describe("TelegramExecApprovalHandler", () => {
   });
 
   it("prefers the explicit Telegram turn-source account over stale session account state", async () => {
-    const sessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tg-approvals-"));
+    const sessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-tg-approvals-"));
     const storePath = path.join(sessionStoreDir, "sessions.json");
     try {
       await updateSessionStore(storePath, (store) => {
@@ -505,7 +505,7 @@ describe("TelegramExecApprovalHandler", () => {
             },
           },
         },
-      } as OpenClawConfig;
+      } as MullusiConfig;
       const defaultHandler = createHandler(cfg, "default");
       const secondaryHandler = createHandler(cfg, "secondary");
 

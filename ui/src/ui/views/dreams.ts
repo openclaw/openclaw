@@ -72,10 +72,10 @@ const STARS: {
   { top: 88, left: 18, size: 2, delay: 2.3, hue: "neutral" },
 ];
 
-// The real vector lobster with sleeping modifications:
+// The real vector mullusi with sleeping modifications:
 // - eyes are closed (horizontal lines instead of open circles)
 // - antennae droop slightly
-const sleepingLobster = html`
+const sleepingMullusi = html`
   <svg viewBox="0 0 120 120" fill="none">
     <defs>
       <linearGradient id="dream-lob-g" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -162,8 +162,8 @@ export function renderDreams(props: DreamsProps) {
       <!-- Ambient glow -->
       <div class="dreams__glow"></div>
 
-      <!-- Sleeping lobster -->
-      <div class="dreams__lobster">${sleepingLobster}</div>
+      <!-- Sleeping mullusi -->
+      <div class="dreams__mullusi">${sleepingMullusi}</div>
 
       <!-- Floating Z's -->
       <span class="dreams__z">z</span>

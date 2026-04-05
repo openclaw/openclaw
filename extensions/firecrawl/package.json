@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/firecrawl-plugin",
+  "name": "@mullusi/firecrawl-plugin",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Firecrawl plugin",
+  "description": "Mullusi Firecrawl plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

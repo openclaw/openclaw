@@ -79,7 +79,7 @@ describe("probeGateway", () => {
   });
   it("connects with operator.read scope", async () => {
     const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       auth: { token: "secret" },
       timeoutMs: 1_000,
     });
@@ -107,7 +107,7 @@ describe("probeGateway", () => {
 
   it("keeps device identity disabled for unauthenticated loopback probes", async () => {
     await probeGateway({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       timeoutMs: 1_000,
     });
 
@@ -116,7 +116,7 @@ describe("probeGateway", () => {
 
   it("skips detail RPCs for lightweight reachability probes", async () => {
     const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       timeoutMs: 1_000,
       includeDetails: false,
     });
@@ -128,7 +128,7 @@ describe("probeGateway", () => {
 
   it("keeps device identity enabled for authenticated lightweight probes", async () => {
     const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       auth: { token: "secret" },
       timeoutMs: 1_000,
       includeDetails: false,
@@ -143,7 +143,7 @@ describe("probeGateway", () => {
     deviceIdentityState.throwOnLoad = true;
 
     const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       auth: { token: "secret" },
       timeoutMs: 1_000,
     });
@@ -160,7 +160,7 @@ describe("probeGateway", () => {
 
   it("fetches only presence for presence-only probes", async () => {
     const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       timeoutMs: 1_000,
       detailLevel: "presence",
     });
@@ -188,7 +188,7 @@ describe("probeGateway", () => {
     gatewayClientState.startMode = "close";
 
     const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       auth: { token: "secret" },
       timeoutMs: 5_000,
       includeDetails: false,

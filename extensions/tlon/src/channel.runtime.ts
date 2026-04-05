@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { createLoggerBackedRuntime } from "openclaw/plugin-sdk/runtime";
+import type { ChannelAccountSnapshot } from "mullusi/plugin-sdk/channel-contract";
+import type { ChannelOutboundAdapter } from "mullusi/plugin-sdk/channel-send-result";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { ChannelPlugin } from "mullusi/plugin-sdk/core";
+import { createLoggerBackedRuntime } from "mullusi/plugin-sdk/runtime";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import {
@@ -90,7 +90,7 @@ async function createHttpPokeApi(params: {
 }
 
 function resolveOutboundContext(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   to: string;
 }) {

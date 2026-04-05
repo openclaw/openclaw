@@ -4,7 +4,7 @@ description: Extract frames or short clips from videos using ffmpeg.
 homepage: https://ffmpeg.org
 metadata:
   {
-    "openclaw":
+    "mullusi":
       {
         "emoji": "🎬",
         "requires": { "bins": ["ffmpeg"] },

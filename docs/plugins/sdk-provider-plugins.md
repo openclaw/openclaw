@@ -1,21 +1,21 @@
 ---
 title: "Building Provider Plugins"
 sidebarTitle: "Provider Plugins"
-summary: "Step-by-step guide to building a model provider plugin for OpenClaw"
+summary: "Step-by-step guide to building a model provider plugin for Mullusi"
 read_when:
   - You are building a new model provider plugin
-  - You want to add an OpenAI-compatible proxy or custom LLM to OpenClaw
+  - You want to add an OpenAI-compatible proxy or custom LLM to Mullusi
   - You need to understand provider auth, catalogs, and runtime hooks
 ---
 
 # Building Provider Plugins
 
 This guide walks through building a provider plugin that adds a model provider
-(LLM) to OpenClaw. By the end you will have a provider with a model catalog,
+(LLM) to Mullusi. By the end you will have a provider with a model catalog,
 API key auth, and dynamic model resolution.
 
 <Info>
-  If you have not built any OpenClaw plugin before, read
+  If you have not built any Mullusi plugin before, read
   [Getting Started](/plugins/building-plugins) first for the basic package
   structure and manifest setup.
 </Info>
@@ -28,10 +28,10 @@ API key auth, and dynamic model resolution.
     <CodeGroup>
     ```json package.json
     {
-      "name": "@myorg/openclaw-acme-ai",
+      "name": "@myorg/mullusi-acme-ai",
       "version": "1.0.0",
       "type": "module",
-      "openclaw": {
+      "mullusi": {
         "extensions": ["./index.ts"],
         "providers": ["acme-ai"],
         "compat": {
@@ -39,14 +39,14 @@ API key auth, and dynamic model resolution.
           "minGatewayVersion": "2026.3.24-beta.2"
         },
         "build": {
-          "openclawVersion": "2026.3.24-beta.2",
+          "mullusiVersion": "2026.3.24-beta.2",
           "pluginSdkVersion": "2026.3.24-beta.2"
         }
       }
     }
     ```
 
-    ```json openclaw.plugin.json
+    ```json mullusi.plugin.json
     {
       "id": "acme-ai",
       "name": "Acme AI",
@@ -79,11 +79,11 @@ API key auth, and dynamic model resolution.
     ```
     </CodeGroup>
 
-    The manifest declares `providerAuthEnvVars` so OpenClaw can detect
+    The manifest declares `providerAuthEnvVars` so Mullusi can detect
     credentials without loading your plugin runtime. `modelSupport` is optional
-    and lets OpenClaw auto-load your provider plugin from shorthand model ids
+    and lets Mullusi auto-load your provider plugin from shorthand model ids
     like `acme-large` before runtime hooks exist. If you publish the
-    provider on ClawHub, those `openclaw.compat` and `openclaw.build` fields
+    provider on ClawHub, those `mullusi.compat` and `mullusi.build` fields
     are required in `package.json`.
 
   </Step>
@@ -92,8 +92,8 @@ API key auth, and dynamic model resolution.
     A minimal provider needs an `id`, `label`, `auth`, and `catalog`:
 
     ```typescript index.ts
-    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-    import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+    import { definePluginEntry } from "mullusi/plugin-sdk/plugin-entry";
+    import { createProviderApiKeyAuthMethod } from "mullusi/plugin-sdk/provider-auth";
 
     export default definePluginEntry({
       id: "acme-ai",
@@ -161,7 +161,7 @@ API key auth, and dynamic model resolution.
     ```
 
     That is a working provider. Users can now
-    `openclaw onboard --acme-ai-api-key <key>` and select
+    `mullusi onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
 
     For bundled providers that only register one text provider with API-key
@@ -169,7 +169,7 @@ API key auth, and dynamic model resolution.
     `defineSingleProviderPluginEntry(...)` helper:
 
     ```typescript
-    import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+    import { defineSingleProviderPluginEntry } from "mullusi/plugin-sdk/provider-entry";
 
     export default defineSingleProviderPluginEntry({
       id: "acme-ai",
@@ -203,14 +203,14 @@ API key auth, and dynamic model resolution.
 
     If your auth flow also needs to patch `models.providers.*`, aliases, and
     the agent default model during onboarding, use the preset helpers from
-    `openclaw/plugin-sdk/provider-onboard`. The narrowest helpers are
+    `mullusi/plugin-sdk/provider-onboard`. The narrowest helpers are
     `createDefaultModelPresetAppliers(...)`,
     `createDefaultModelsPresetAppliers(...)`, and
     `createModelCatalogPresetAppliers(...)`.
 
     When a provider's native endpoint supports streamed usage blocks on the
     normal `openai-completions` transport, prefer the shared catalog helpers in
-    `openclaw/plugin-sdk/provider-catalog-shared` instead of hardcoding
+    `mullusi/plugin-sdk/provider-catalog-shared` instead of hardcoding
     provider-id checks. `supportsNativeStreamingUsageCompat(...)` and
     `applyProviderNativeStreamingUsageCompat(...)` detect support from the
     endpoint capability map, so native Moonshot/DashScope-style endpoints still
@@ -254,9 +254,9 @@ API key auth, and dynamic model resolution.
     families, so plugins usually do not need to hand-wire each hook one by one:
 
     ```typescript
-    import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-    import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
-    import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
+    import { buildProviderReplayFamilyHooks } from "mullusi/plugin-sdk/provider-model-shared";
+    import { buildProviderStreamFamilyHooks } from "mullusi/plugin-sdk/provider-stream";
+    import { buildProviderToolCompatFamilyHooks } from "mullusi/plugin-sdk/provider-tools";
 
     const GOOGLE_FAMILY_HOOKS = {
       ...buildProviderReplayFamilyHooks({ family: "google-gemini" }),
@@ -311,7 +311,7 @@ API key auth, and dynamic model resolution.
     - `openrouter`: `openrouter-thinking`
     - `zai`: `tool-stream-default-on`
 
-    `openclaw/plugin-sdk/provider-model-shared` also exports the replay-family
+    `mullusi/plugin-sdk/provider-model-shared` also exports the replay-family
     enum plus the shared helpers those families are built from. Common public
     exports include:
 
@@ -327,7 +327,7 @@ API key auth, and dynamic model resolution.
       `normalizeProviderId(...)`, `normalizeGooglePreviewModelId(...)`, and
       `normalizeNativeXaiModelId(...)`
 
-    `openclaw/plugin-sdk/provider-stream` exposes both the family builder and
+    `mullusi/plugin-sdk/provider-stream` exposes both the family builder and
     the public wrapper helpers those families reuse. Common public exports
     include:
 
@@ -344,7 +344,7 @@ API key auth, and dynamic model resolution.
       `createToolStreamWrapper(...)`, and `createMinimaxFastModeWrapper(...)`
 
     Some stream helpers stay provider-local on purpose. Current bundled
-    example: `@openclaw/anthropic-provider` exports
+    example: `@mullusi/anthropic-provider` exports
     `wrapAnthropicProviderStream`, `resolveAnthropicBetas`,
     `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`, and the
     lower-level Anthropic wrapper builders from its public `api.ts` /
@@ -358,7 +358,7 @@ API key auth, and dynamic model resolution.
     unsupported strict-tool cleanup, and xAI-specific reasoning-payload
     removal.
 
-    `openclaw/plugin-sdk/provider-tools` currently exposes one shared
+    `mullusi/plugin-sdk/provider-tools` currently exposes one shared
     tool-schema family plus shared schema/compat helpers:
 
     - `ProviderToolCompatFamily` documents the shared family inventory today.
@@ -378,9 +378,9 @@ API key auth, and dynamic model resolution.
 
     The same package-root pattern also backs other bundled providers:
 
-    - `@openclaw/openai-provider`: `api.ts` exports provider builders,
+    - `@mullusi/openai-provider`: `api.ts` exports provider builders,
       default-model helpers, and realtime provider builders
-    - `@openclaw/openrouter-provider`: `api.ts` exports the provider builder
+    - `@mullusi/openrouter-provider`: `api.ts` exports the provider builder
       plus onboarding/config helpers
 
     <Tabs>
@@ -454,7 +454,7 @@ API key auth, and dynamic model resolution.
     </Tabs>
 
     <Accordion title="All available provider hooks">
-      OpenClaw calls hooks in this order. Most providers only use 2-3:
+      Mullusi calls hooks in this order. Most providers only use 2-3:
 
       | # | Hook | When to use |
       | --- | --- | --- |
@@ -620,7 +620,7 @@ API key auth, and dynamic model resolution.
     }
     ```
 
-    OpenClaw classifies this as a **hybrid-capability** plugin. This is the
+    Mullusi classifies this as a **hybrid-capability** plugin. This is the
     recommended pattern for company plugins (one plugin per vendor). See
     [Internals: Capability Ownership](/plugins/architecture#capability-ownership-model).
 
@@ -677,8 +677,8 @@ Do not use the legacy skill-only publish alias here; plugin packages should use
 
 ```
 <bundled-plugin-root>/acme-ai/
-├── package.json              # openclaw.providers metadata
-├── openclaw.plugin.json      # Manifest with providerAuthEnvVars
+├── package.json              # mullusi.providers metadata
+├── mullusi.plugin.json      # Manifest with providerAuthEnvVars
 ├── index.ts                  # definePluginEntry + registerProvider
 └── src/
     ├── provider.test.ts      # Tests

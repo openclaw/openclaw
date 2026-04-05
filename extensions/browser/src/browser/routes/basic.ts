@@ -182,11 +182,11 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     if (!name) {
       return jsonError(res, 400, "name is required");
     }
-    if (driver && driver !== "openclaw" && driver !== "clawd" && driver !== "existing-session") {
+    if (driver && driver !== "mullusi" && driver !== "mullusi" && driver !== "existing-session") {
       return jsonError(
         res,
         400,
-        `unsupported profile driver "${driver}"; use "openclaw", "clawd", or "existing-session"`,
+        `unsupported profile driver "${driver}"; use "mullusi", "mullusi", or "existing-session"`,
       );
     }
 
@@ -202,8 +202,8 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
           driver:
             driver === "existing-session"
               ? "existing-session"
-              : driver === "openclaw" || driver === "clawd"
-                ? "openclaw"
+              : driver === "mullusi" || driver === "mullusi"
+                ? "mullusi"
                 : undefined,
         }),
     });

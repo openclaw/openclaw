@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/browser-support";
+import type { MullusiConfig } from "mullusi/plugin-sdk/browser-support";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
-} from "openclaw/plugin-sdk/browser-support";
+} from "mullusi/plugin-sdk/browser-support";
 
-export function isDefaultBrowserPluginEnabled(cfg: OpenClawConfig): boolean {
+export function isDefaultBrowserPluginEnabled(cfg: MullusiConfig): boolean {
   return resolveEffectiveEnableState({
     id: "browser",
     origin: "bundled",

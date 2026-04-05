@@ -1,5 +1,5 @@
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -27,7 +27,7 @@ function isGatewayStartupSidecar(plugin: PluginManifestRecord): boolean {
 }
 
 export function resolveChannelPluginIds(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
@@ -41,7 +41,7 @@ export function resolveChannelPluginIds(params: {
 }
 
 export function resolveConfiguredChannelPluginIds(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
@@ -55,7 +55,7 @@ export function resolveConfiguredChannelPluginIds(params: {
 }
 
 export function resolveConfiguredDeferredChannelPluginIds(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
@@ -79,8 +79,8 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
 }
 
 export function resolveGatewayStartupPluginIds(params: {
-  config: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
+  config: MullusiConfig;
+  activationSourceConfig?: MullusiConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {

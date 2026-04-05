@@ -16,7 +16,7 @@ import {
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { loadSessionEntry } from "./session-utils.js";
 
-const REQUESTER_SESSION_KEY_HEADER = "x-openclaw-requester-session-key";
+const REQUESTER_SESSION_KEY_HEADER = "x-mullusi-requester-session-key";
 
 function resolveSessionKeyFromPath(pathname: string): string | null {
   const match = pathname.match(/^\/sessions\/([^/]+)\/kill$/);

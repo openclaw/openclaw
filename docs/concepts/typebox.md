@@ -63,7 +63,7 @@ Authoritative advertised **discovery** inventory lives in
 - Server handshake + method dispatch: `src/gateway/server.impl.ts`
 - Node client: `src/gateway/client.ts`
 - Generated JSON Schema: `dist/protocol.schema.json`
-- Generated Swift models: `apps/macos/Sources/OpenClawProtocol/GatewayModels.swift`
+- Generated Swift models: `apps/macos/Sources/MullusiProtocol/GatewayModels.swift`
 
 ## Current pipeline
 
@@ -101,7 +101,7 @@ Connect (first message):
     "minProtocol": 3,
     "maxProtocol": 3,
     "client": {
-      "id": "openclaw-macos",
+      "id": "mullusi-macos",
       "displayName": "macos",
       "version": "1.0.0",
       "platform": "macos 15.1",
@@ -158,7 +158,7 @@ Smallest useful flow: connect + health.
 ```ts
 import { WebSocket } from "ws";
 
-const ws = new WebSocket("ws://127.0.0.1:18789");
+const ws = new WebSocket("ws://127.0.0.1:18790");
 
 ws.on("open", () => {
   ws.send(
@@ -295,7 +295,7 @@ Unknown frame types are preserved as raw payloads for forward compatibility.
 Generated JSON Schema is in the repo at `dist/protocol.schema.json`. The
 published raw file is typically available at:
 
-- [https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json](https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json)
+- [https://raw.githubusercontent.com/mullusi/mullusi/main/dist/protocol.schema.json](https://raw.githubusercontent.com/mullusi/mullusi/main/dist/protocol.schema.json)
 
 ## When you change schemas
 

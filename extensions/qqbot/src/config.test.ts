@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "../../../src/plugins/schema-validator.js";
 import { qqbotPlugin } from "./channel.js";
@@ -10,7 +10,7 @@ import { DEFAULT_ACCOUNT_ID, resolveDefaultQQBotAccountId, resolveQQBotAccount }
 describe("qqbot config", () => {
   it("accepts top-level speech overrides in the manifest schema", () => {
     const manifest = JSON.parse(
-      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
+      fs.readFileSync(new URL("../mullusi.plugin.json", import.meta.url), "utf-8"),
     ) as { configSchema: Record<string, unknown> };
 
     const result = validateJsonSchemaValue({
@@ -43,7 +43,7 @@ describe("qqbot config", () => {
 
   it("accepts defaultAccount in the manifest schema", () => {
     const manifest = JSON.parse(
-      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
+      fs.readFileSync(new URL("../mullusi.plugin.json", import.meta.url), "utf-8"),
     ) as { configSchema: Record<string, unknown> };
 
     const result = validateJsonSchemaValue({
@@ -74,7 +74,7 @@ describe("qqbot config", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     expect(resolveDefaultQQBotAccountId(cfg)).toBe("bot2");
   });
@@ -95,7 +95,7 @@ describe("qqbot config", () => {
         transcodeEnabled: false,
       },
       urlDirectUpload: false,
-      upgradeUrl: "https://docs.openclaw.ai/channels/qqbot",
+      upgradeUrl: "https://docs.mullusi.com/channels/qqbot",
       upgradeMode: "doc",
       accounts: {
         bot2: {
@@ -140,11 +140,11 @@ describe("qqbot config", () => {
             transcodeEnabled: false,
           },
           urlDirectUpload: false,
-          upgradeUrl: "https://docs.openclaw.ai/channels/qqbot",
+          upgradeUrl: "https://docs.mullusi.com/channels/qqbot",
           upgradeMode: "hot-reload",
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const resolved = resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID);
 
@@ -155,7 +155,7 @@ describe("qqbot config", () => {
       transcodeEnabled: false,
     });
     expect(resolved.config.urlDirectUpload).toBe(false);
-    expect(resolved.config.upgradeUrl).toBe("https://docs.openclaw.ai/channels/qqbot");
+    expect(resolved.config.upgradeUrl).toBe("https://docs.mullusi.com/channels/qqbot");
     expect(resolved.config.upgradeMode).toBe("hot-reload");
   });
 
@@ -173,7 +173,7 @@ describe("qqbot config", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const resolved = resolveQQBotAccount(cfg);
 
@@ -195,7 +195,7 @@ describe("qqbot config", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     expect(() => resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID)).toThrow(
       'channels.qqbot.clientSecret: unresolved SecretRef "env:default:QQBOT_CLIENT_SECRET"',
@@ -214,7 +214,7 @@ describe("qqbot config", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const resolved = resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID, {
       allowUnresolvedSecretRef: true,
@@ -242,7 +242,7 @@ describe("qqbot config", () => {
     expect(setup).toBeDefined();
 
     const next = setup!.applyAccountConfig?.({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       accountId: inputAccountId,
       input: {
         token: "102905186:Oi2Mg1Mh2Ni3:Pl7TpBXuHe1OmAYwKi7W",
@@ -273,28 +273,28 @@ describe("qqbot config", () => {
 
     expect(
       runtimeSetup!.validateInput?.({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       }),
     ).toBe("QQBot --token must be in appId:clientSecret format");
     expect(
       lightweightSetup!.validateInput?.({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       }),
     ).toBe("QQBot --token must be in appId:clientSecret format");
     expect(
       runtimeSetup!.applyAccountConfig?.({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       }),
     ).toEqual({});
     expect(
       lightweightSetup!.applyAccountConfig?.({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       }),
@@ -311,7 +311,7 @@ describe("qqbot config", () => {
 
     expect(
       runtimeSetup!.applyAccountConfig?.({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       }),
@@ -326,7 +326,7 @@ describe("qqbot config", () => {
     });
     expect(
       lightweightSetup!.applyAccountConfig?.({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       }),
@@ -356,7 +356,7 @@ describe("qqbot config", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         accountId: undefined,
       } as never),
     ).toBe("bot2");
@@ -372,28 +372,28 @@ describe("qqbot config", () => {
 
     expect(
       runtimeSetup!.validateInput?.({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         accountId: "bot2",
         input,
       }),
     ).toBe("QQBot --use-env only supports the default account");
     expect(
       lightweightSetup!.validateInput?.({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         accountId: "bot2",
         input,
       }),
     ).toBe("QQBot --use-env only supports the default account");
     expect(
       runtimeSetup!.applyAccountConfig?.({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         accountId: "bot2",
         input,
       }),
     ).toEqual({});
     expect(
       lightweightSetup!.applyAccountConfig?.({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         accountId: "bot2",
         input,
       }),

@@ -1,15 +1,15 @@
 import Foundation
 import Testing
-@testable import OpenClaw
+@testable import Mullusi
 
 private struct KeychainEntry: Hashable {
     let service: String
     let account: String
 }
 
-private let gatewayService = "ai.openclaw.gateway"
-private let nodeService = "ai.openclaw.node"
-private let talkService = "ai.openclaw.talk"
+private let gatewayService = "ai.mullusi.gateway"
+private let nodeService = "ai.mullusi.node"
+private let talkService = "ai.mullusi.talk"
 private let instanceIdEntry = KeychainEntry(service: nodeService, account: "instanceId")
 private let preferredGatewayEntry = KeychainEntry(service: gatewayService, account: "preferredStableID")
 private let lastGatewayEntry = KeychainEntry(service: gatewayService, account: "lastDiscoveredStableID")
@@ -156,9 +156,9 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         withLastGatewaySnapshot {
             GatewaySettingsStore.saveLastGatewayConnectionManual(
                 host: "10.0.0.99",
-                port: 18789,
+                port: 18790,
                 useTLS: true,
-                stableID: "manual|10.0.0.99|18789")
+                stableID: "manual|10.0.0.99|18790")
 
             GatewaySettingsStore.saveLastGatewayConnectionDiscovered(stableID: "gw|abc", useTLS: true)
 
@@ -173,13 +173,13 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             applyDefaults([
                 "gateway.last.kind": nil,
                 "gateway.last.host": "example.org",
-                "gateway.last.port": 18789,
+                "gateway.last.port": 18790,
                 "gateway.last.tls": false,
-                "gateway.last.stableID": "manual|example.org|18789",
+                "gateway.last.stableID": "manual|example.org|18790",
             ])
 
             let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-            #expect(loaded == .manual(host: "example.org", port: 18789, useTLS: false, stableID: "manual|example.org|18789"))
+            #expect(loaded == .manual(host: "example.org", port: 18790, useTLS: false, stableID: "manual|example.org|18790"))
 
             // Legacy keys should be cleaned up after migration.
             let defaults = UserDefaults.standard

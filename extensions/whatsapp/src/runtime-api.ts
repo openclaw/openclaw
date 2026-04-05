@@ -1,6 +1,6 @@
-export { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
+export { getChatChannelMeta, type ChannelPlugin } from "mullusi/plugin-sdk/core";
 export { buildChannelConfigSchema, WhatsAppConfigSchema } from "../config-api.js";
-export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+export { DEFAULT_ACCOUNT_ID } from "mullusi/plugin-sdk/account-id";
 export {
   formatWhatsAppConfigAllowFromEntries,
   resolveWhatsAppConfigAllowFrom,
@@ -12,13 +12,13 @@ export {
   readReactionParams,
   readStringParam,
   ToolAuthorizationError,
-} from "openclaw/plugin-sdk/channel-actions";
-export { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/channel-actions";
+export { normalizeE164 } from "mullusi/plugin-sdk/account-resolution";
+export type { DmPolicy, GroupPolicy } from "mullusi/plugin-sdk/config-runtime";
+import type { MullusiConfig as RuntimeMullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 
-export { type ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+export { type ChannelMessageActionName } from "mullusi/plugin-sdk/channel-contract";
+import { loadWebMedia } from "mullusi/plugin-sdk/web-media";
 export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
@@ -40,9 +40,9 @@ export {
 export { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 export { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 
-export type OpenClawConfig = RuntimeOpenClawConfig;
+export type MullusiConfig = RuntimeMullusiConfig;
 export type WhatsAppAccountConfig = NonNullable<
-  NonNullable<NonNullable<RuntimeOpenClawConfig["channels"]>["whatsapp"]>["accounts"]
+  NonNullable<NonNullable<RuntimeMullusiConfig["channels"]>["whatsapp"]>["accounts"]
 >[string];
 
 type MonitorWebChannel = typeof import("./channel.runtime.js").monitorWebChannel;

@@ -7,9 +7,9 @@ function parseArgs(argv) {
     argv,
     {
       config: "vitest.unit.config.ts",
-      maxWallMs: readEnvNumber("OPENCLAW_TEST_PERF_MAX_WALL_MS"),
-      baselineWallMs: readEnvNumber("OPENCLAW_TEST_PERF_BASELINE_WALL_MS"),
-      maxRegressionPct: readEnvNumber("OPENCLAW_TEST_PERF_MAX_REGRESSION_PCT") ?? 10,
+      maxWallMs: readEnvNumber("MULLUSI_TEST_PERF_MAX_WALL_MS"),
+      baselineWallMs: readEnvNumber("MULLUSI_TEST_PERF_BASELINE_WALL_MS"),
+      maxRegressionPct: readEnvNumber("MULLUSI_TEST_PERF_MAX_REGRESSION_PCT") ?? 10,
     },
     [
       stringFlag("--config", "config"),
@@ -24,7 +24,7 @@ const opts = parseArgs(process.argv.slice(2));
 const startedAt = process.hrtime.bigint();
 const reportPath = runVitestJsonReport({
   config: opts.config,
-  prefix: "openclaw-vitest-perf",
+  prefix: "mullusi-vitest-perf",
 });
 const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
 

@@ -1,24 +1,24 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   installModelsConfigTestHooks,
   unsetEnv,
   withModelsTempHome as withTempHome,
   withTempEnv,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureMullusiModelsJson } from "./models-config.js";
 
 installModelsConfigTestHooks();
 
-const TEST_ENV_VAR = "OPENCLAW_MODELS_CONFIG_TEST_ENV";
+const TEST_ENV_VAR = "MULLUSI_MODELS_CONFIG_TEST_ENV";
 
 describe("models-config", () => {
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
     await withTempHome(async () => {
       await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
         unsetEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR]);
-        const cfg: OpenClawConfig = {
+        const cfg: MullusiConfig = {
           models: { providers: {} },
           env: {
             vars: {
@@ -28,7 +28,7 @@ describe("models-config", () => {
           },
         };
 
-        const { agentDir } = await ensureOpenClawModelsJson(cfg);
+        const { agentDir } = await ensureMullusiModelsJson(cfg);
 
         expect(process.env.OPENROUTER_API_KEY).toBeUndefined();
         expect(process.env[TEST_ENV_VAR]).toBeUndefined();
@@ -46,7 +46,7 @@ describe("models-config", () => {
       await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
         process.env.OPENROUTER_API_KEY = "from-host"; // pragma: allowlist secret
         process.env[TEST_ENV_VAR] = "from-host";
-        const cfg: OpenClawConfig = {
+        const cfg: MullusiConfig = {
           models: { providers: {} },
           env: {
             vars: {
@@ -56,7 +56,7 @@ describe("models-config", () => {
           },
         };
 
-        const { agentDir } = await ensureOpenClawModelsJson(cfg);
+        const { agentDir } = await ensureMullusiModelsJson(cfg);
 
         const modelsJson = JSON.parse(await fs.readFile(`${agentDir}/models.json`, "utf8")) as {
           providers?: { openrouter?: { apiKey?: string } };

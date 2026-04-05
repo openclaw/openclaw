@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
+import type { MullusiPluginApi } from "mullusi/plugin-sdk/core";
+import { registerSandboxBackend } from "mullusi/plugin-sdk/sandbox";
 import {
   createOpenShellSandboxBackendFactory,
   createOpenShellSandboxBackendManager,
@@ -11,7 +11,7 @@ const plugin = {
   name: "OpenShell Sandbox",
   description: "OpenShell-backed sandbox runtime for agent exec and file tools.",
   configSchema: createOpenShellPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api: MullusiPluginApi) {
     if (api.registrationMode !== "full") {
       return;
     }

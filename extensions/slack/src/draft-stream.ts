@@ -1,4 +1,4 @@
-import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createDraftStreamLoop } from "mullusi/plugin-sdk/channel-lifecycle";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { sendMessageSlack } from "./send.js";

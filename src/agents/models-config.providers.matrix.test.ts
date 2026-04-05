@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   MINIMAX_OAUTH_MARKER,
   NON_ENV_SECRETREF_MARKER,
@@ -12,7 +12,7 @@ import {
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
 type ProvidersMap = Awaited<ReturnType<typeof resolveImplicitProvidersForTest>>;
-type ExplicitProviders = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+type ExplicitProviders = NonNullable<NonNullable<MullusiConfig["models"]>["providers"]>;
 type MatrixCase = {
   name: string;
   env?: NodeJS.ProcessEnv;
@@ -160,7 +160,7 @@ describe("implicit provider resolution matrix", () => {
   it.each(MATRIX_CASES)(
     "$name",
     async ({ env, authProfiles, explicitProviders, assertProviders }) => {
-      const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+      const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
       await writeAuthProfiles(agentDir, authProfiles);
 
       const providers = await resolveImplicitProvidersForTest({

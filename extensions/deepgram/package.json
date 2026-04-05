@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/deepgram-provider",
+  "name": "@mullusi/deepgram-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Deepgram media-understanding provider",
+  "description": "Mullusi Deepgram media-understanding provider",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

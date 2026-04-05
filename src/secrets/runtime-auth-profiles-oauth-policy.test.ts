@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { prepareSecretsRuntimeSnapshot } from "./runtime.js";
 
-function withAuthProfileMode(mode: "api_key" | "oauth" | "token"): OpenClawConfig {
+function withAuthProfileMode(mode: "api_key" | "oauth" | "token"): MullusiConfig {
   return {
     auth: {
       profiles: {
@@ -18,7 +18,7 @@ function withAuthProfileMode(mode: "api_key" | "oauth" | "token"): OpenClawConfi
         default: { source: "env" },
       },
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
 }
 
 describe("secrets runtime oauth auth-profile SecretRef policy", () => {
@@ -40,7 +40,7 @@ describe("secrets runtime oauth auth-profile SecretRef policy", () => {
         env: { ANTHROPIC_TOKEN: "token-value" } as NodeJS.ProcessEnv,
         loadAuthStore: () => store,
         loadablePluginOrigins: new Map(),
-        agentDirs: ["/tmp/openclaw-secrets-runtime-main"],
+        agentDirs: ["/tmp/mullusi-secrets-runtime-main"],
       }),
     ).rejects.toThrow(/OAuth \+ SecretRef is not supported/i);
   });
@@ -62,7 +62,7 @@ describe("secrets runtime oauth auth-profile SecretRef policy", () => {
       env: { ANTHROPIC_TOKEN: "token-value" } as NodeJS.ProcessEnv,
       loadAuthStore: () => store,
       loadablePluginOrigins: new Map(),
-      agentDirs: ["/tmp/openclaw-secrets-runtime-main"],
+      agentDirs: ["/tmp/mullusi-secrets-runtime-main"],
     });
 
     const resolved = snapshot.authStores[0]?.store.profiles["anthropic:default"];

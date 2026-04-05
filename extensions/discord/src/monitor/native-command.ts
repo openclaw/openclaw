@@ -11,16 +11,16 @@ import {
   type StringSelectMenuInteraction,
 } from "@buape/carbon";
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveHumanDelayConfig } from "mullusi/plugin-sdk/agent-runtime";
+import { createChannelReplyPipeline } from "mullusi/plugin-sdk/channel-reply-pipeline";
 import {
   resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
-} from "openclaw/plugin-sdk/command-auth-native";
-import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+} from "mullusi/plugin-sdk/command-auth-native";
+import type { MullusiConfig, loadConfig } from "mullusi/plugin-sdk/config-runtime";
+import { buildPairingReply } from "mullusi/plugin-sdk/conversation-runtime";
+import { isDangerousNameMatchingEnabled } from "mullusi/plugin-sdk/dangerous-name-runtime";
+import { getAgentScopedMediaLocalRoots } from "mullusi/plugin-sdk/media-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -34,21 +34,21 @@ import {
   type CommandArgValues,
   type CommandArgs,
   type NativeCommandSpec,
-} from "openclaw/plugin-sdk/native-command-registry";
-import * as pluginRuntime from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+} from "mullusi/plugin-sdk/native-command-registry";
+import * as pluginRuntime from "mullusi/plugin-sdk/plugin-runtime";
+import { resolveChunkMode, resolveTextChunkLimit } from "mullusi/plugin-sdk/reply-chunking";
 import {
   dispatchReplyWithDispatcher,
   type ReplyPayload,
-} from "openclaw/plugin-sdk/reply-dispatch-runtime";
+} from "mullusi/plugin-sdk/reply-dispatch-runtime";
 import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
-} from "openclaw/plugin-sdk/reply-payload";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+} from "mullusi/plugin-sdk/reply-payload";
+import { logVerbose } from "mullusi/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "mullusi/plugin-sdk/runtime-env";
+import { resolveOpenProviderRuntimeGroupPolicy } from "mullusi/plugin-sdk/runtime-group-policy";
+import { loadWebMedia } from "mullusi/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
@@ -82,7 +82,7 @@ import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
-type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
+type DiscordConfig = NonNullable<MullusiConfig["channels"]>["discord"];
 const log = createSubsystemLogger("discord/native-command");
 // Discord application command and option descriptions are limited to 1-100 chars.
 // https://discord.com/developers/docs/interactions/application-commands#application-command-object-application-command-structure
@@ -142,7 +142,7 @@ function resolveDiscordCommandLogLabel(command: ChatCommandDefinition): string {
 }
 
 function resolveDiscordNativeCommandAllowlistAccess(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   sender: { id: string; name?: string; tag?: string };
   chatType: "direct" | "group" | "thread" | "channel";

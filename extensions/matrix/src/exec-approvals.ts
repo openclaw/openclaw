@@ -1,16 +1,16 @@
-import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
+import { resolveApprovalApprovers } from "mullusi/plugin-sdk/approval-auth-runtime";
 import {
   createChannelExecApprovalProfile,
   getExecApprovalReplyMetadata,
   isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
   matchesApprovalRequestFilters,
-} from "openclaw/plugin-sdk/approval-client-runtime";
-import { resolveApprovalRequestChannelAccountId } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+} from "mullusi/plugin-sdk/approval-client-runtime";
+import { resolveApprovalRequestChannelAccountId } from "mullusi/plugin-sdk/approval-native-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "mullusi/plugin-sdk/infra-runtime";
+import type { ReplyPayload } from "mullusi/plugin-sdk/reply-runtime";
+import { normalizeAccountId } from "mullusi/plugin-sdk/routing";
 import { listMatrixAccountIds, resolveMatrixAccount } from "./matrix/accounts.js";
 import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 
@@ -27,7 +27,7 @@ function normalizeMatrixExecApproverId(value: string | number): string | undefin
 }
 
 function resolveMatrixExecApprovalConfig(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
 }) {
   const account = resolveMatrixAccount(params);
@@ -42,7 +42,7 @@ function resolveMatrixExecApprovalConfig(params: {
 }
 
 function countMatrixExecApprovalEligibleAccounts(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   request: ApprovalRequest;
 }): number {
   return listMatrixAccountIds(params.cfg).filter((accountId) => {
@@ -78,7 +78,7 @@ function countMatrixExecApprovalEligibleAccounts(params: {
 }
 
 function matchesMatrixRequestAccount(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   request: ApprovalRequest;
 }): boolean {
@@ -104,7 +104,7 @@ function matchesMatrixRequestAccount(params: {
 }
 
 export function getMatrixExecApprovalApprovers(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
 }): string[] {
   const account = resolveMatrixAccount(params).config;
@@ -116,7 +116,7 @@ export function getMatrixExecApprovalApprovers(params: {
 }
 
 export function isMatrixExecApprovalTargetRecipient(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   senderId?: string | null;
   accountId?: string | null;
 }): boolean {
@@ -159,7 +159,7 @@ function buildFilterCheckRequest(params: {
 }
 
 export function shouldSuppressLocalMatrixExecApprovalPrompt(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   payload: ReplyPayload;
 }): boolean {

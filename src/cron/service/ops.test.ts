@@ -120,8 +120,8 @@ describe("cron service ops seam coverage", () => {
     const { storePath } = await makeStorePath();
     const stateRoot = path.dirname(path.dirname(storePath));
     const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateRoot;
+    const originalStateDir = process.env.MULLUSI_STATE_DIR;
+    process.env.MULLUSI_STATE_DIR = stateRoot;
     resetTaskRegistryForTests();
 
     await writeCronStoreSnapshot({
@@ -150,9 +150,9 @@ describe("cron service ops seam coverage", () => {
     });
 
     if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.MULLUSI_STATE_DIR;
     } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      process.env.MULLUSI_STATE_DIR = originalStateDir;
     }
     resetTaskRegistryForTests();
   });
@@ -201,8 +201,8 @@ describe("cron service ops seam coverage", () => {
     const { storePath } = await makeStorePath();
     const stateRoot = path.dirname(path.dirname(storePath));
     const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateRoot;
+    const originalStateDir = process.env.MULLUSI_STATE_DIR;
+    process.env.MULLUSI_STATE_DIR = stateRoot;
     resetTaskRegistryForTests();
 
     await writeCronStoreSnapshot({
@@ -240,9 +240,9 @@ describe("cron service ops seam coverage", () => {
 
     updateTaskRecordSpy.mockRestore();
     if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.MULLUSI_STATE_DIR;
     } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      process.env.MULLUSI_STATE_DIR = originalStateDir;
     }
     resetTaskRegistryForTests();
   });
@@ -251,8 +251,8 @@ describe("cron service ops seam coverage", () => {
     const { storePath } = await makeStorePath();
     const stateRoot = path.dirname(path.dirname(storePath));
     const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateRoot;
+    const originalStateDir = process.env.MULLUSI_STATE_DIR;
+    process.env.MULLUSI_STATE_DIR = stateRoot;
     resetTaskRegistryForTests();
 
     await writeCronStoreSnapshot({
@@ -281,9 +281,9 @@ describe("cron service ops seam coverage", () => {
     });
 
     if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.MULLUSI_STATE_DIR;
     } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      process.env.MULLUSI_STATE_DIR = originalStateDir;
     }
     resetTaskRegistryForTests();
     stop(state);

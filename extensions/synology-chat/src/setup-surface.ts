@@ -9,8 +9,8 @@ import {
   splitSetupEntries,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/setup";
+  type MullusiConfig,
+} from "mullusi/plugin-sdk/setup";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import type { SynologyChatAccountRaw, SynologyChatChannelConfig } from "./types.js";
 
@@ -34,11 +34,11 @@ const SYNOLOGY_ALLOW_FROM_HELP_LINES = [
   `Docs: ${formatDocsLink("/channels/synology-chat", "channels/synology-chat")}`,
 ];
 
-function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig {
+function getChannelConfig(cfg: MullusiConfig): SynologyChatChannelConfig {
   return (cfg.channels?.[channel] as SynologyChatChannelConfig | undefined) ?? {};
 }
 
-function getRawAccountConfig(cfg: OpenClawConfig, accountId: string): SynologyChatAccountRaw {
+function getRawAccountConfig(cfg: MullusiConfig, accountId: string): SynologyChatAccountRaw {
   const channelConfig = getChannelConfig(cfg);
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return channelConfig;
@@ -47,12 +47,12 @@ function getRawAccountConfig(cfg: OpenClawConfig, accountId: string): SynologyCh
 }
 
 function patchSynologyChatAccountConfig(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
   patch: Record<string, unknown>;
   clearFields?: string[];
   enabled?: boolean;
-}): OpenClawConfig {
+}): MullusiConfig {
   const channelConfig = getChannelConfig(params.cfg);
   if (params.accountId === DEFAULT_ACCOUNT_ID) {
     const nextChannelConfig = { ...channelConfig } as Record<string, unknown>;
@@ -99,7 +99,7 @@ function patchSynologyChatAccountConfig(params: {
   };
 }
 
-function isSynologyChatConfigured(cfg: OpenClawConfig, accountId: string): boolean {
+function isSynologyChatConfigured(cfg: MullusiConfig, accountId: string): boolean {
   const account = resolveAccount(cfg, accountId);
   return Boolean(account.token.trim() && account.incomingUrl.trim());
 }
@@ -129,7 +129,7 @@ function parseSynologyUserId(value: string): string | null {
   return /^\d+$/.test(cleaned) ? cleaned : null;
 }
 
-function resolveExistingAllowedUserIds(cfg: OpenClawConfig, accountId: string): string[] {
+function resolveExistingAllowedUserIds(cfg: MullusiConfig, accountId: string): string[] {
   const raw = getRawAccountConfig(cfg, accountId).allowedUserIds;
   if (Array.isArray(raw)) {
     return raw.map((value) => String(value).trim()).filter(Boolean);
@@ -249,7 +249,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
       helpTitle: "Synology Chat incoming webhook",
       helpLines: [
         "Use the incoming webhook URL from Synology Chat integrations.",
-        "This is the URL OpenClaw uses to send replies back to Chat.",
+        "This is the URL Mullusi uses to send replies back to Chat.",
       ],
       currentValue: ({ cfg, accountId }) => getRawAccountConfig(cfg, accountId).incomingUrl?.trim(),
       keepPrompt: (value) => `Incoming webhook URL set (${value}). Keep it?`,

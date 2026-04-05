@@ -12,7 +12,7 @@ const gatherDaemonStatus = vi.fn(
     },
     rpc: {
       ok: true,
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
     },
     extraServices: [],
   }),
@@ -58,7 +58,7 @@ describe("runDaemonStatus", () => {
       },
       rpc: {
         ok: false,
-        url: "ws://127.0.0.1:18789",
+        url: "ws://127.0.0.1:18790",
         error: "gateway closed",
       },
       extraServices: [],

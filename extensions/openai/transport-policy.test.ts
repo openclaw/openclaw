@@ -1,4 +1,4 @@
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderRuntimeModel } from "mullusi/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import {
   resolveOpenAITransportTurnState,
@@ -40,15 +40,15 @@ describe("openai transport policy", () => {
     ).toMatchObject({
       headers: {
         "x-client-request-id": "session-123",
-        "x-openclaw-session-id": "session-123",
-        "x-openclaw-turn-id": "turn-123",
-        "x-openclaw-turn-attempt": "2",
+        "x-mullusi-session-id": "session-123",
+        "x-mullusi-turn-id": "turn-123",
+        "x-mullusi-turn-attempt": "2",
       },
       metadata: {
-        openclaw_session_id: "session-123",
-        openclaw_turn_id: "turn-123",
-        openclaw_turn_attempt: "2",
-        openclaw_transport: "websocket",
+        mullusi_session_id: "session-123",
+        mullusi_turn_id: "turn-123",
+        mullusi_turn_attempt: "2",
+        mullusi_transport: "websocket",
       },
     });
   });
@@ -78,7 +78,7 @@ describe("openai transport policy", () => {
     ).toMatchObject({
       headers: {
         "x-client-request-id": "session-123",
-        "x-openclaw-session-id": "session-123",
+        "x-mullusi-session-id": "session-123",
       },
       degradeCooldownMs: 60_000,
     });
@@ -99,7 +99,7 @@ describe("openai transport policy", () => {
     ).toMatchObject({
       headers: {
         "x-client-request-id": "session-123",
-        "x-openclaw-session-id": "session-123",
+        "x-mullusi-session-id": "session-123",
       },
       degradeCooldownMs: 60_000,
     });

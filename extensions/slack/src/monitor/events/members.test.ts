@@ -8,14 +8,14 @@ let initSlackHarness: typeof import("./system-event-test-harness.js").createSlac
 type MemberOverrides = import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
 async function createChannelRuntimeMock() {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
-    "openclaw/plugin-sdk/infra-runtime",
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/infra-runtime")>(
+    "mullusi/plugin-sdk/infra-runtime",
   );
   return { ...actual, enqueueSystemEvent: memberMocks.enqueue };
 }
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", createChannelRuntimeMock);
-vi.mock("openclaw/plugin-sdk/infra-runtime.js", createChannelRuntimeMock);
+vi.mock("mullusi/plugin-sdk/infra-runtime", createChannelRuntimeMock);
+vi.mock("mullusi/plugin-sdk/infra-runtime.js", createChannelRuntimeMock);
 
 type MemberHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 

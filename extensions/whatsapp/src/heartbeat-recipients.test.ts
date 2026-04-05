@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveWhatsAppHeartbeatRecipients } from "./heartbeat-recipients.js";
-import type { OpenClawConfig } from "./runtime-api.js";
+import type { MullusiConfig } from "./runtime-api.js";
 
 const loadSessionStoreMock = vi.hoisted(() => vi.fn());
 const readChannelAllowFromStoreSyncMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
@@ -23,12 +23,12 @@ vi.mock("./heartbeat-recipients.runtime.js", () => ({
   },
 }));
 
-function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
+function makeCfg(overrides?: Partial<MullusiConfig>): MullusiConfig {
   return {
     bindings: [],
     channels: {},
     ...overrides,
-  } as OpenClawConfig;
+  } as MullusiConfig;
 }
 
 describe("resolveWhatsAppHeartbeatRecipients", () => {
@@ -41,7 +41,7 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
   }
 
   function resolveWith(
-    cfgOverrides: Partial<OpenClawConfig> = {},
+    cfgOverrides: Partial<MullusiConfig> = {},
     opts?: Parameters<typeof resolveWhatsAppHeartbeatRecipients>[1],
   ) {
     return resolveWhatsAppHeartbeatRecipients(makeCfg(cfgOverrides), opts);
@@ -139,7 +139,7 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
       a: { lastChannel: "whatsapp", lastTo: "+15550000001", updatedAt: 2, sessionId: "a" },
     });
     const result = resolveWith({
-      session: { scope: "global" } as OpenClawConfig["session"],
+      session: { scope: "global" } as MullusiConfig["session"],
       channels: { whatsapp: { allowFrom: ["*", "+15550000009"] } as never },
     });
     expect(result).toEqual({ recipients: ["+15550000009"], source: "allowFrom" });

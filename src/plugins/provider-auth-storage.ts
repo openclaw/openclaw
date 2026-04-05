@@ -1,4 +1,4 @@
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { resolveMullusiAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import {
@@ -8,7 +8,7 @@ import {
   type WriteOAuthCredentialsOptions,
 } from "./provider-auth-helpers.js";
 
-const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
+const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveMullusiAgentDir();
 
 type ProviderApiKeySetter = (
   key: SecretInput,

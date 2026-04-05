@@ -1,5 +1,5 @@
-import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
-import * as setupRuntime from "openclaw/plugin-sdk/setup";
+import * as processRuntime from "mullusi/plugin-sdk/process-runtime";
+import * as setupRuntime from "mullusi/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import { imessagePlugin } from "./channel.js";

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { buildAttemptReplayMetadata } from "../pi-embedded-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.js";
 
@@ -32,7 +32,7 @@ export async function cleanupEmbeddedPiRunnerTestWorkspace(
   await fs.rm(workspace.tempRoot, { recursive: true, force: true });
 }
 
-export function createEmbeddedPiRunnerOpenAiConfig(modelIds: string[]): OpenClawConfig {
+export function createEmbeddedPiRunnerOpenAiConfig(modelIds: string[]): MullusiConfig {
   return {
     models: {
       providers: {

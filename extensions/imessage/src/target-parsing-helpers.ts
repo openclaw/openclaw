@@ -11,4 +11,4 @@ export {
   type ParsedChatAllowTarget,
   type ParsedChatTarget,
   type ServicePrefix,
-} from "openclaw/plugin-sdk/channel-targets";
+} from "mullusi/plugin-sdk/channel-targets";

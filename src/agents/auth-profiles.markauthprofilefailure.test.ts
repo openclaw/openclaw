@@ -15,7 +15,7 @@ type AuthProfileStore = ReturnType<typeof ensureAuthProfileStore>;
 async function withAuthProfileStore(
   fn: (ctx: { agentDir: string; store: AuthProfileStore }) => Promise<void>,
 ): Promise<void> {
-  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-auth-"));
   try {
     const authPath = path.join(agentDir, "auth-profiles.json");
     fs.writeFileSync(
@@ -51,7 +51,7 @@ function expectCooldownInRange(remainingMs: number, minMs: number, maxMs: number
 
 describe("markAuthProfileFailure", () => {
   it("does not overwrite fresher on-disk credentials with a stale runtime snapshot", async () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-auth-"));
     try {
       const authPath = path.join(agentDir, "auth-profiles.json");
       fs.writeFileSync(
@@ -244,7 +244,7 @@ describe("markAuthProfileFailure", () => {
     });
   });
   it("resets backoff counters outside the failure window", async () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-auth-"));
     try {
       const authPath = path.join(agentDir, "auth-profiles.json");
       const now = Date.now();
@@ -288,7 +288,7 @@ describe("markAuthProfileFailure", () => {
   });
 
   it("resets error count when previous cooldown has expired to prevent escalation", async () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-auth-"));
     try {
       const authPath = path.join(agentDir, "auth-profiles.json");
       const now = Date.now();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   createDefaultModelPresetAppliers,
@@ -24,13 +24,13 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
   };
 }
 
-function expectPrimaryModel(cfg: OpenClawConfig, primary: string) {
+function expectPrimaryModel(cfg: MullusiConfig, primary: string) {
   expect(cfg.agents?.defaults?.model).toEqual({
     primary,
   });
 }
 
-function expectPrimaryModelAlias(cfg: OpenClawConfig, modelRef: string, alias: string) {
+function expectPrimaryModelAlias(cfg: MullusiConfig, modelRef: string, alias: string) {
   expect(cfg.agents?.defaults?.models).toMatchObject({
     [modelRef]: {
       alias,
@@ -39,7 +39,7 @@ function expectPrimaryModelAlias(cfg: OpenClawConfig, modelRef: string, alias: s
 }
 
 function expectProviderModels(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   providerId: string,
   expected: Record<string, unknown>,
 ) {

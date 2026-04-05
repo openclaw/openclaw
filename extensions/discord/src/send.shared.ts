@@ -9,17 +9,17 @@ import {
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import { Routes, type APIChannel, type APIEmbed } from "discord-api-types/v10";
-import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
+import { buildOutboundMediaLoadOptions } from "mullusi/plugin-sdk/media-runtime";
+import { extensionForMime } from "mullusi/plugin-sdk/media-runtime";
 import {
   normalizePollDurationHours,
   normalizePollInput,
   type PollInput,
-} from "openclaw/plugin-sdk/media-runtime";
-import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
-import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
-import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+} from "mullusi/plugin-sdk/media-runtime";
+import type { ChunkMode } from "mullusi/plugin-sdk/reply-chunking";
+import { resolveTextChunksWithFallback } from "mullusi/plugin-sdk/reply-payload";
+import type { RetryRunner } from "mullusi/plugin-sdk/retry-runtime";
+import { loadWebMedia } from "mullusi/plugin-sdk/web-media";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { createDiscordClient, resolveDiscordRest } from "./client.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";

@@ -56,7 +56,7 @@ async function expectOpenFailure(params: {
   setup: (root: string) => Promise<Parameters<typeof openVerifiedFileSync>[0]>;
   expectedReason: "path" | "validation" | "io";
 }): Promise<void> {
-  await withTempDir("openclaw-safe-open-", async (root) => {
+  await withTempDir("mullusi-safe-open-", async (root) => {
     const opened = openVerifiedFileSync(await params.setup(root));
     expect(opened.ok).toBe(false);
     if (!opened.ok) {
@@ -123,7 +123,7 @@ describe("openVerifiedFileSync", () => {
   });
 
   it("accepts directories when allowedType is directory", async () => {
-    await withTempDir("openclaw-safe-open-", async (root) => {
+    await withTempDir("mullusi-safe-open-", async (root) => {
       const targetDir = path.join(root, "nested");
       await fsp.mkdir(targetDir, { recursive: true });
 

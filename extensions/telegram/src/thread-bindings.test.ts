@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { loadBundledPluginTestApiSync } from "openclaw/plugin-sdk/testing";
+import { getSessionBindingService } from "mullusi/plugin-sdk/conversation-runtime";
+import { resolveStateDir } from "mullusi/plugin-sdk/state-paths";
+import { loadBundledPluginTestApiSync } from "mullusi/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import {
@@ -24,7 +24,7 @@ describe("telegram thread bindings", () => {
     vi.useRealTimers();
     await __testing.resetTelegramThreadBindingsForTests();
     if (stateDirOverride) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.MULLUSI_STATE_DIR;
       fs.rmSync(stateDirOverride, { recursive: true, force: true });
       stateDirOverride = undefined;
     }
@@ -206,8 +206,8 @@ describe("telegram thread bindings", () => {
   });
 
   it("does not persist lifecycle updates when manager persistence is disabled", async () => {
-    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
+    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-telegram-bindings-"));
+    process.env.MULLUSI_STATE_DIR = stateDirOverride;
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
 
@@ -247,8 +247,8 @@ describe("telegram thread bindings", () => {
   });
 
   it("persists unbinds before restart so removed bindings do not come back", async () => {
-    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
+    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-telegram-bindings-"));
+    process.env.MULLUSI_STATE_DIR = stateDirOverride;
 
     createTelegramThreadBindingManager({
       accountId: "default",
@@ -257,7 +257,7 @@ describe("telegram thread bindings", () => {
     });
 
     const bound = await getSessionBindingService().bind({
-      targetSessionKey: "plugin-binding:openclaw-codex-app-server:abc123",
+      targetSessionKey: "plugin-binding:mullusi-codex-app-server:abc123",
       targetKind: "session",
       conversation: {
         channel: "telegram",
@@ -283,8 +283,8 @@ describe("telegram thread bindings", () => {
   });
 
   it("flushes pending lifecycle update persists before test reset", async () => {
-    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
+    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-telegram-bindings-"));
+    process.env.MULLUSI_STATE_DIR = stateDirOverride;
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
 

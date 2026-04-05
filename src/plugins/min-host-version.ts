@@ -1,7 +1,7 @@
 import { isAtLeast, parseSemver } from "../infra/runtime-guard.js";
 
 export const MIN_HOST_VERSION_FORMAT =
-  'openclaw.install.minHostVersion must use a semver floor in the form ">=x.y.z"';
+  'mullusi.install.minHostVersion must use a semver floor in the form ">=x.y.z"';
 const MIN_HOST_VERSION_RE = /^>=(\d+)\.(\d+)\.(\d+)$/;
 
 export type MinHostVersionRequirement = {

@@ -1,4 +1,4 @@
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveHumanDelayConfig } from "mullusi/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
@@ -6,14 +6,14 @@ import {
   logTypingFailure,
   removeAckReactionAfterReply,
   type StatusReactionAdapter,
-} from "openclaw/plugin-sdk/channel-feedback";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
-import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+} from "mullusi/plugin-sdk/channel-feedback";
+import { createChannelReplyPipeline } from "mullusi/plugin-sdk/channel-reply-pipeline";
+import { resolveAgentOutboundIdentity } from "mullusi/plugin-sdk/outbound-runtime";
+import { clearHistoryEntriesIfEnabled } from "mullusi/plugin-sdk/reply-history";
+import { resolveSendableOutboundReplyParts } from "mullusi/plugin-sdk/reply-payload";
+import type { ReplyPayload } from "mullusi/plugin-sdk/reply-runtime";
+import { danger, logVerbose, shouldLogVerbose } from "mullusi/plugin-sdk/runtime-env";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "mullusi/plugin-sdk/security-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";

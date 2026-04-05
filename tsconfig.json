@@ -18,11 +18,11 @@
     "target": "es2023",
     "useDefineForClassFields": false,
     "paths": {
-      "openclaw/extension-api": ["./src/extensionAPI.ts"],
-      "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
-      "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
-      "openclaw/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"],
-      "@openclaw/*": ["./extensions/*"]
+      "mullusi/extension-api": ["./src/extensionAPI.ts"],
+      "mullusi/plugin-sdk": ["./src/plugin-sdk/index.ts"],
+      "mullusi/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
+      "mullusi/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"],
+      "@mullusi/*": ["./extensions/*"]
     }
   },
   "include": ["src/**/*", "ui/**/*", "extensions/**/*", "packages/**/*"],

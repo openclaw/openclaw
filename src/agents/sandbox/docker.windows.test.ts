@@ -5,7 +5,7 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { resolveDockerSpawnInvocation } from "./docker.js";
 
 const tempDirs = createTrackedTempDirs();
-const createTempDir = () => tempDirs.make("openclaw-docker-spawn-test-");
+const createTempDir = () => tempDirs.make("mullusi-docker-spawn-test-");
 
 afterEach(async () => {
   await tempDirs.cleanup();

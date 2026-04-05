@@ -15,9 +15,9 @@ const { withFileLockMock } = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
-    "openclaw/plugin-sdk/infra-runtime",
+vi.mock("mullusi/plugin-sdk/infra-runtime", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/infra-runtime")>(
+    "mullusi/plugin-sdk/infra-runtime",
   );
   return {
     ...actual,
@@ -53,7 +53,7 @@ describe("Matrix IndexedDB persistence lock ordering", () => {
 
   it("captures the snapshot after the file lock is acquired", async () => {
     const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
-    const dbName = "openclaw-matrix-test::matrix-sdk-crypto";
+    const dbName = "mullusi-matrix-test::matrix-sdk-crypto";
     await seedDatabase({
       name: dbName,
       storeName: "sessions",
@@ -69,7 +69,7 @@ describe("Matrix IndexedDB persistence lock ordering", () => {
       return await fn();
     });
 
-    await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
+    await persistIdbToDisk({ snapshotPath, databasePrefix: "mullusi-matrix-test" });
 
     const data = JSON.parse(fs.readFileSync(snapshotPath, "utf8")) as Array<{
       stores: Array<{
@@ -89,7 +89,7 @@ describe("Matrix IndexedDB persistence lock ordering", () => {
       capturedOptions.push(options as CapturedLockOptions);
       return 0;
     });
-    await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
+    await persistIdbToDisk({ snapshotPath, databasePrefix: "mullusi-matrix-test" });
 
     withFileLockMock.mockImplementationOnce(async (_filePath, options) => {
       capturedOptions.push(options as CapturedLockOptions);

@@ -387,9 +387,9 @@ describe("provider request config", () => {
     });
 
     expect(resolved).toMatchObject({
-      originator: "openclaw",
+      originator: "mullusi",
       version: expect.any(String),
-      "User-Agent": expect.stringMatching(/^openclaw\//),
+      "User-Agent": expect.stringMatching(/^mullusi\//),
       "X-Custom": "1",
     });
   });
@@ -408,8 +408,8 @@ describe("provider request config", () => {
     });
 
     expect(resolved).toEqual({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
+      "HTTP-Referer": "https://mullusi.com",
+      "X-OpenRouter-Title": "Mullusi",
       "X-OpenRouter-Categories": "cli-agent",
       "X-Custom": "1",
     });
@@ -431,7 +431,7 @@ describe("provider request config", () => {
     expect(
       Object.keys(resolved ?? {}).filter((key) => key.toLowerCase() === "user-agent"),
     ).toHaveLength(1);
-    expect(resolved?.["User-Agent"]).toMatch(/^openclaw\//);
+    expect(resolved?.["User-Agent"]).toMatch(/^mullusi\//);
   });
 
   it("drops forbidden header keys while merging", () => {
@@ -480,9 +480,9 @@ describe("provider request config", () => {
     expect(resolved.capabilities.allowsResponsesStore).toBe(true);
     expect(resolved.headers).toMatchObject({
       authorization: "Bearer test-key",
-      originator: "openclaw",
+      originator: "mullusi",
       version: expect.any(String),
-      "User-Agent": expect.stringMatching(/^openclaw\//),
+      "User-Agent": expect.stringMatching(/^mullusi\//),
       "X-Custom": "1",
     });
   });

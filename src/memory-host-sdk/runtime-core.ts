@@ -13,7 +13,7 @@ export { resolveStateDir } from "../config/paths.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { parseAgentSessionKey } from "../routing/session-key.js";
-export type { OpenClawConfig } from "../config/config.js";
+export type { MullusiConfig } from "../config/config.js";
 export type { MemoryCitationsMode } from "../config/types.memory.js";
 export type {
   MemoryFlushPlan,
@@ -21,4 +21,4 @@ export type {
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
 } from "../plugins/memory-state.js";
-export type { OpenClawPluginApi } from "../plugins/types.js";
+export type { MullusiPluginApi } from "../plugins/types.js";

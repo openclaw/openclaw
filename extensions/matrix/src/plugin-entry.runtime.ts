@@ -1,4 +1,4 @@
-import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/core";
+import type { GatewayRequestHandlerOptions } from "mullusi/plugin-sdk/core";
 
 function sendError(respond: (ok: boolean, payload?: unknown) => void, err: unknown) {
   respond(false, { error: err instanceof Error ? err.message : String(err) });

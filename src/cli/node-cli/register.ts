@@ -27,13 +27,13 @@ export function registerNodeCli(program: Command) {
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           [
-            "openclaw node run --host 127.0.0.1 --port 18789",
+            "mullusi node run --host 127.0.0.1 --port 18790",
             "Run the node host in the foreground.",
           ],
-          ["openclaw node status", "Check node host service status."],
-          ["openclaw node install", "Install the node host service."],
-          ["openclaw node restart", "Restart the installed node host service."],
-        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.openclaw.ai/cli/node")}\n`,
+          ["mullusi node status", "Check node host service status."],
+          ["mullusi node install", "Install the node host service."],
+          ["mullusi node restart", "Restart the installed node host service."],
+        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.mullusi.com/cli/node")}\n`,
     );
 
   node
@@ -49,7 +49,7 @@ export function registerNodeCli(program: Command) {
       const existing = await loadNodeHostConfig();
       const host =
         (opts.host as string | undefined)?.trim() || existing?.gateway?.host || "127.0.0.1";
-      const port = parsePortWithFallback(opts.port, existing?.gateway?.port ?? 18789);
+      const port = parsePortWithFallback(opts.port, existing?.gateway?.port ?? 18790);
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,

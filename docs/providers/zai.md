@@ -1,7 +1,7 @@
 ---
-summary: "Use Z.AI (GLM models) with OpenClaw"
+summary: "Use Z.AI (GLM models) with Mullusi"
 read_when:
-  - You want Z.AI / GLM models in OpenClaw
+  - You want Z.AI / GLM models in Mullusi
   - You need a simple ZAI_API_KEY setup
 title: "Z.AI"
 ---
@@ -9,26 +9,26 @@ title: "Z.AI"
 # Z.AI
 
 Z.AI is the API platform for **GLM** models. It provides REST APIs for GLM and uses API keys
-for authentication. Create your API key in the Z.AI console. OpenClaw uses the `zai` provider
+for authentication. Create your API key in the Z.AI console. Mullusi uses the `zai` provider
 with a Z.AI API key.
 
 ## CLI setup
 
 ```bash
 # Generic API-key setup with endpoint auto-detection
-openclaw onboard --auth-choice zai-api-key
+mullusi onboard --auth-choice zai-api-key
 
 # Coding Plan Global, recommended for Coding Plan users
-openclaw onboard --auth-choice zai-coding-global
+mullusi onboard --auth-choice zai-coding-global
 
 # Coding Plan CN (China region), recommended for Coding Plan users
-openclaw onboard --auth-choice zai-coding-cn
+mullusi onboard --auth-choice zai-coding-cn
 
 # General API
-openclaw onboard --auth-choice zai-global
+mullusi onboard --auth-choice zai-global
 
 # General API CN (China region)
-openclaw onboard --auth-choice zai-cn
+mullusi onboard --auth-choice zai-cn
 ```
 
 ## Config snippet
@@ -40,13 +40,13 @@ openclaw onboard --auth-choice zai-cn
 }
 ```
 
-`zai-api-key` lets OpenClaw detect the matching Z.AI endpoint from the key and
+`zai-api-key` lets Mullusi detect the matching Z.AI endpoint from the key and
 apply the correct base URL automatically. Use the explicit regional choices when
 you want to force a specific Coding Plan or general API surface.
 
 ## Bundled GLM catalog
 
-OpenClaw currently seeds the bundled `zai` provider with:
+Mullusi currently seeds the bundled `zai` provider with:
 
 - `glm-5.1`
 - `glm-5`

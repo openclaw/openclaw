@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/groq-provider",
+  "name": "@mullusi/groq-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Groq media-understanding provider",
+  "description": "Mullusi Groq media-understanding provider",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

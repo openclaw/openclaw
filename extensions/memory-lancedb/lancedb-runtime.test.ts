@@ -29,12 +29,12 @@ describe("resolveLanceDbDependencySpec", () => {
 
   it("falls back to dist/extensions memory-lancedb manifest for flattened bundles", () => {
     const modulePath = path.join(
-      "/usr/lib/node_modules/openclaw/dist",
+      "/usr/lib/node_modules/mullusi/dist",
       "lancedb-runtime-3m75WU-W.js",
     );
-    const distPackagePath = path.join("/usr/lib/node_modules/openclaw/dist", "package.json");
+    const distPackagePath = path.join("/usr/lib/node_modules/mullusi/dist", "package.json");
     const extensionPackagePath = path.join(
-      "/usr/lib/node_modules/openclaw/dist/extensions/memory-lancedb",
+      "/usr/lib/node_modules/mullusi/dist/extensions/memory-lancedb",
       "package.json",
     );
     const readPackageJson = mapReader([
@@ -52,11 +52,11 @@ describe("resolveLanceDbDependencySpec", () => {
 
   it("walks parent directories to support nested dist chunk paths", () => {
     const modulePath = path.join(
-      "/usr/lib/node_modules/openclaw/dist/chunks/runtime",
+      "/usr/lib/node_modules/mullusi/dist/chunks/runtime",
       "lancedb-runtime-3m75WU-W.js",
     );
     const extensionPackagePath = path.join(
-      "/usr/lib/node_modules/openclaw/dist/extensions/memory-lancedb",
+      "/usr/lib/node_modules/mullusi/dist/extensions/memory-lancedb",
       "package.json",
     );
     const readPackageJson = mapReader([
@@ -73,11 +73,11 @@ describe("resolveLanceDbDependencySpec", () => {
 
   it("throws when no candidate package manifest declares @lancedb/lancedb", () => {
     const modulePath = path.join(
-      "/usr/lib/node_modules/openclaw/dist",
+      "/usr/lib/node_modules/mullusi/dist",
       "lancedb-runtime-3m75WU-W.js",
     );
     const readPackageJson = mapReader([
-      [path.join("/usr/lib/node_modules/openclaw/dist", "package.json"), null],
+      [path.join("/usr/lib/node_modules/mullusi/dist", "package.json"), null],
     ]);
 
     expect(() => resolveLanceDbDependencySpec(modulePath, readPackageJson)).toThrow(

@@ -1,27 +1,27 @@
 import { ChannelType, MessageType, type Message, type User } from "@buape/carbon";
 import { Routes, type APIMessage } from "discord-api-types/v10";
-import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import { formatAllowlistMatchMeta } from "mullusi/plugin-sdk/allow-from";
 import {
   buildMentionRegexes,
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveMentionGatingWithBypass,
-} from "openclaw/plugin-sdk/channel-inbound";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
-import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
-import { enqueueSystemEvent, recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+} from "mullusi/plugin-sdk/channel-inbound";
+import { resolveControlCommandGate } from "mullusi/plugin-sdk/command-auth-native";
+import { hasControlCommand } from "mullusi/plugin-sdk/command-detection";
+import { shouldHandleTextCommands } from "mullusi/plugin-sdk/command-surface";
+import { loadConfig } from "mullusi/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "mullusi/plugin-sdk/config-runtime";
+import type { SessionBindingRecord } from "mullusi/plugin-sdk/conversation-runtime";
+import { enqueueSystemEvent, recordChannelActivity } from "mullusi/plugin-sdk/infra-runtime";
 import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
-import { logDebug } from "openclaw/plugin-sdk/text-runtime";
+} from "mullusi/plugin-sdk/reply-history";
+import { DEFAULT_ACCOUNT_ID } from "mullusi/plugin-sdk/routing";
+import { logVerbose, shouldLogVerbose } from "mullusi/plugin-sdk/runtime-env";
+import { getChildLogger } from "mullusi/plugin-sdk/runtime-env";
+import { logDebug } from "mullusi/plugin-sdk/text-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import {
   isDiscordGroupAllowedByPolicy,
@@ -65,7 +65,7 @@ export type {
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 
 let conversationRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/conversation-runtime")>
+  | Promise<typeof import("mullusi/plugin-sdk/conversation-runtime")>
   | undefined;
 let pluralkitRuntimePromise: Promise<typeof import("../pluralkit.js")> | undefined;
 let discordSendRuntimePromise: Promise<typeof import("../send.js")> | undefined;
@@ -74,7 +74,7 @@ let systemEventsRuntimePromise: Promise<typeof import("./system-events.js")> | u
 let discordThreadingRuntimePromise: Promise<typeof import("./threading.js")> | undefined;
 
 async function loadConversationRuntime() {
-  conversationRuntimePromise ??= import("openclaw/plugin-sdk/conversation-runtime");
+  conversationRuntimePromise ??= import("mullusi/plugin-sdk/conversation-runtime");
   return await conversationRuntimePromise;
 }
 

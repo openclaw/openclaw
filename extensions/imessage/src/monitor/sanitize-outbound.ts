@@ -1,4 +1,4 @@
-import { stripAssistantInternalScaffolding } from "openclaw/plugin-sdk/text-runtime";
+import { stripAssistantInternalScaffolding } from "mullusi/plugin-sdk/text-runtime";
 
 /**
  * Patterns that indicate assistant-internal metadata leaked into text.

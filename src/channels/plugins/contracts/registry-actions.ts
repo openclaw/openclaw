@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { MullusiConfig } from "../../../config/config.js";
 import { requireBundledChannelPlugin } from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
 
@@ -8,7 +8,7 @@ type ActionsContractEntry = {
   unsupportedAction?: string;
   cases: Array<{
     name: string;
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     expectedActions: string[];
     expectedCapabilities?: string[];
     beforeTest?: () => void;
@@ -33,7 +33,7 @@ export function getActionContractRegistry(): ActionsContractEntry[] {
                 appToken: "xapp-test",
               },
             },
-          } as OpenClawConfig,
+          } as MullusiConfig,
           expectedActions: [
             "send",
             "react",
@@ -63,7 +63,7 @@ export function getActionContractRegistry(): ActionsContractEntry[] {
                 },
               },
             },
-          } as OpenClawConfig,
+          } as MullusiConfig,
           expectedActions: [
             "send",
             "react",
@@ -89,7 +89,7 @@ export function getActionContractRegistry(): ActionsContractEntry[] {
                 enabled: true,
               },
             },
-          } as OpenClawConfig,
+          } as MullusiConfig,
           expectedActions: [],
           expectedCapabilities: [],
         },
@@ -110,7 +110,7 @@ export function getActionContractRegistry(): ActionsContractEntry[] {
                 baseUrl: "https://chat.example.com",
               },
             },
-          } as OpenClawConfig,
+          } as MullusiConfig,
           expectedActions: ["send", "react"],
           expectedCapabilities: ["buttons"],
         },
@@ -125,7 +125,7 @@ export function getActionContractRegistry(): ActionsContractEntry[] {
                 actions: { reactions: false },
               },
             },
-          } as OpenClawConfig,
+          } as MullusiConfig,
           expectedActions: ["send"],
           expectedCapabilities: ["buttons"],
         },
@@ -137,7 +137,7 @@ export function getActionContractRegistry(): ActionsContractEntry[] {
                 enabled: true,
               },
             },
-          } as OpenClawConfig,
+          } as MullusiConfig,
           expectedActions: [],
           expectedCapabilities: [],
         },
@@ -155,7 +155,7 @@ export function getActionContractRegistry(): ActionsContractEntry[] {
                 botToken: "123:telegram-test-token",
               },
             },
-          } as OpenClawConfig,
+          } as MullusiConfig,
           expectedActions: [
             "send",
             "poll",
@@ -202,7 +202,7 @@ export function getActionContractRegistry(): ActionsContractEntry[] {
                 },
               },
             },
-          } as OpenClawConfig,
+          } as MullusiConfig,
           expectedActions: ["send", "poll", "react", "reactions", "emoji-list"],
           expectedCapabilities: ["interactive", "components"],
         },

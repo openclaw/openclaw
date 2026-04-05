@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: openclaw-home-pvc
+  name: mullusi-home-pvc
   labels:
-    app: openclaw
+    app: mullusi
 spec:
   accessModes:
     - ReadWriteOnce

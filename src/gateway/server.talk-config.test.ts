@@ -53,7 +53,7 @@ type TalkSpeakPayload = {
 };
 const TALK_CONFIG_DEVICE_PATH = path.join(
   os.tmpdir(),
-  `openclaw-talk-config-device-${process.pid}.json`,
+  `mullusi-talk-config-device-${process.pid}.json`,
 );
 const TALK_CONFIG_DEVICE = loadOrCreateDeviceIdentity(TALK_CONFIG_DEVICE_PATH);
 
@@ -198,7 +198,7 @@ describe("gateway talk.config", () => {
       expectElevenLabsTalkConfig(res.payload?.config?.talk, {
         provider: "elevenlabs",
         voiceId: "voice-123",
-        apiKey: "__OPENCLAW_REDACTED__",
+        apiKey: "__MULLUSI_REDACTED__",
         silenceTimeoutMs: 1500,
       });
       expect(res.payload?.config?.session?.mainKey).toBe("main");
@@ -360,7 +360,7 @@ describe("gateway talk.config", () => {
             apiKey: "elevenlabs-talk-key", // pragma: allowlist secret
             voiceId: "voice-default",
             voiceAliases: {
-              Clawd: "EXAVITQu4vr4xnSDxMaL",
+              Mullusi: "EXAVITQu4vr4xnSDxMaL",
             },
           },
         },
@@ -382,7 +382,7 @@ describe("gateway talk.config", () => {
     try {
       const res = await invokeTalkSpeakDirect({
         text: "Hello from talk mode.",
-        voiceId: "clawd",
+        voiceId: "mullusi",
         outputFormat: "pcm_44100",
         latencyTier: 3,
       });

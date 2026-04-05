@@ -1,5 +1,5 @@
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
@@ -68,7 +68,7 @@ function findEntryBySessionId(
 
 function resolveSessionCapabilityEntry(params: {
   sessionKey: string;
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   store?: Record<string, SessionCapabilityEntry>;
 }): SessionCapabilityEntry | undefined {
   if (params.store) {
@@ -122,7 +122,7 @@ export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDep
 export function resolveStoredSubagentCapabilities(
   sessionKey: string | undefined | null,
   opts?: {
-    cfg?: OpenClawConfig;
+    cfg?: MullusiConfig;
     store?: Record<string, SessionCapabilityEntry>;
   },
 ) {

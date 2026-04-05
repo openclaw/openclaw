@@ -23,7 +23,7 @@ describe("resolveSandboxHostPathViaExistingAncestor", () => {
       return;
     }
 
-    const root = mkdtempSync(join(tmpdir(), "openclaw-host-paths-"));
+    const root = mkdtempSync(join(tmpdir(), "mullusi-host-paths-"));
     const workspace = join(root, "workspace");
     const outside = join(root, "outside");
     mkdirSync(workspace, { recursive: true });

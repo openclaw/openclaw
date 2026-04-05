@@ -2,12 +2,12 @@ import type {
   ChannelDoctorAdapter,
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
-} from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/channel-contract";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   migrateLegacyFlatAllowPrivateNetworkAlias,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+} from "mullusi/plugin-sdk/ssrf-runtime";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -23,7 +23,7 @@ function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
   );
 }
 
-function normalizeNextcloudTalkCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
+function normalizeNextcloudTalkCompatibilityConfig(cfg: MullusiConfig): ChannelDoctorConfigMutation {
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   const nextcloudTalk = isRecord(channels?.["nextcloud-talk"]) ? channels["nextcloud-talk"] : null;
   if (!nextcloudTalk) {
@@ -78,7 +78,7 @@ function normalizeNextcloudTalkCompatibilityConfig(cfg: OpenClawConfig): Channel
       channels: {
         ...cfg.channels,
         "nextcloud-talk":
-          updatedNextcloudTalk as NonNullable<OpenClawConfig["channels"]>["nextcloud-talk"],
+          updatedNextcloudTalk as NonNullable<MullusiConfig["channels"]>["nextcloud-talk"],
       },
     },
     changes,

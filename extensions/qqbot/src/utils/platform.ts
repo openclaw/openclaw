@@ -50,10 +50,10 @@ export function getHomeDir(): string {
 }
 
 /**
- * Return a path under `~/.openclaw/qqbot`, creating it on demand.
+ * Return a path under `~/.mullusi/qqbot`, creating it on demand.
  */
 export function getQQBotDataDir(...subPaths: string[]): string {
-  const dir = path.join(getHomeDir(), ".openclaw", "qqbot", ...subPaths);
+  const dir = path.join(getHomeDir(), ".mullusi", "qqbot", ...subPaths);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -61,13 +61,13 @@ export function getQQBotDataDir(...subPaths: string[]): string {
 }
 
 /**
- * Return a path under `~/.openclaw/media/qqbot`, creating it on demand.
+ * Return a path under `~/.mullusi/media/qqbot`, creating it on demand.
  *
- * Unlike `getQQBotDataDir`, this lives under OpenClaw's core media allowlist so
+ * Unlike `getQQBotDataDir`, this lives under Mullusi's core media allowlist so
  * downloaded images and audio can be accessed by framework media tooling.
  */
 export function getQQBotMediaDir(...subPaths: string[]): string {
-  const dir = path.join(getHomeDir(), ".openclaw", "media", "qqbot", ...subPaths);
+  const dir = path.join(getHomeDir(), ".mullusi", "media", "qqbot", ...subPaths);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -132,7 +132,7 @@ export function resolveQQBotLocalMediaPath(p: string): string {
   const homeDir = getHomeDir();
   const mediaRoot = getQQBotMediaDir();
   const dataRoot = getQQBotDataDir();
-  const workspaceRoot = path.join(homeDir, ".openclaw", "workspace", "qqbot");
+  const workspaceRoot = path.join(homeDir, ".mullusi", "workspace", "qqbot");
   const candidateRoots = [
     { from: workspaceRoot, to: mediaRoot },
     { from: dataRoot, to: mediaRoot },

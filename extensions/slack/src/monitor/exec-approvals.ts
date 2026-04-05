@@ -1,6 +1,6 @@
 import type { App } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   buildApprovalInteractiveReply,
   createChannelNativeApprovalRuntime,
@@ -11,8 +11,8 @@ import {
   type ExecApprovalDecision,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
-} from "openclaw/plugin-sdk/infra-runtime";
-import { logError } from "openclaw/plugin-sdk/text-runtime";
+} from "mullusi/plugin-sdk/infra-runtime";
+import { logError } from "mullusi/plugin-sdk/text-runtime";
 import { slackNativeApprovalAdapter } from "../approval-native.js";
 import {
   getSlackExecApprovalApprovers,
@@ -34,7 +34,7 @@ type SlackPendingDelivery = {
 };
 
 type SlackExecApprovalConfig = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>["execApprovals"]
+  NonNullable<NonNullable<MullusiConfig["channels"]>["slack"]>["execApprovals"]
 >;
 
 type SlackExecApprovalHandlerOpts = {
@@ -42,7 +42,7 @@ type SlackExecApprovalHandlerOpts = {
   accountId: string;
   config: SlackExecApprovalConfig;
   gatewayUrl?: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
 };
 
 function truncateSlackMrkdwn(text: string, maxChars: number): string {

@@ -1,6 +1,6 @@
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
@@ -11,7 +11,7 @@ import { recordInboundSessionAndDispatchReply } from "./inbound-reply-dispatch.j
 import type { OutboundReplyPayload } from "./reply-payload.js";
 
 export type DirectDmCommandAuthorizationRuntime = {
-  shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
+  shouldComputeCommandAuthorized: (rawBody: string, cfg: MullusiConfig) => boolean;
   resolveCommandAuthorizedFromAuthorizers: (params: {
     useAccessGroups: boolean;
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
@@ -33,7 +33,7 @@ export type ResolvedInboundDirectDmAccess = {
 
 /** Resolve direct-DM policy, effective allowlists, and optional command auth in one place. */
 export async function resolveInboundDirectDmAccessWithRuntime(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   channel: ChannelId;
   accountId: string;
   dmPolicy?: string | null;
@@ -195,7 +195,7 @@ type DirectDmRuntime = {
   channel: {
     routing: {
       resolveAgentRoute: (params: {
-        cfg: OpenClawConfig;
+        cfg: MullusiConfig;
         channel: string;
         accountId: string;
         peer: DirectDmRoutePeer;
@@ -211,7 +211,7 @@ type DirectDmRuntime = {
     };
     reply: {
       resolveEnvelopeFormatOptions: (
-        cfg: OpenClawConfig,
+        cfg: MullusiConfig,
       ) => ReturnType<typeof import("../auto-reply/envelope.js").resolveEnvelopeFormatOptions>;
       formatAgentEnvelope: typeof import("../auto-reply/envelope.js").formatAgentEnvelope;
       finalizeInboundContext: typeof import("../auto-reply/reply/inbound-context.js").finalizeInboundContext;
@@ -222,7 +222,7 @@ type DirectDmRuntime = {
 
 /** Route, envelope, record, and dispatch one direct-DM turn through the standard pipeline. */
 export async function dispatchInboundDirectDmWithRuntime(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   runtime: DirectDmRuntime;
   channel: string;
   channelLabel: string;

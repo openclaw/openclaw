@@ -1,14 +1,14 @@
 {
-  "name": "@openclaw/twitch",
+  "name": "@mullusi/twitch",
   "version": "2026.4.4",
-  "description": "OpenClaw Twitch channel plugin",
+  "description": "Mullusi Twitch channel plugin",
   "type": "module",
   "dependencies": {
     "@twurple/api": "^8.1.2",
     "@twurple/auth": "^8.1.2",
     "@twurple/chat": "^8.1.2"
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],

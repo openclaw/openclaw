@@ -5,7 +5,7 @@ import { withTempHome } from "../../../test/helpers/temp-home.js";
 import { runMatrixStartupMaintenance } from "./startup-maintenance.js";
 
 async function seedLegacyMatrixState(home: string) {
-  const stateDir = path.join(home, ".openclaw");
+  const stateDir = path.join(home, ".mullusi");
   await fs.mkdir(path.join(stateDir, "matrix"), { recursive: true });
   await fs.writeFile(path.join(stateDir, "matrix", "bot-storage.json"), '{"legacy":true}');
 }

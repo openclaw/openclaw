@@ -40,7 +40,7 @@ describe("sandbox ssh helpers", () => {
     sessions.push(session);
 
     const config = await fs.readFile(session.configPath, "utf8");
-    expect(config).toContain("Host openclaw-sandbox");
+    expect(config).toContain("Host mullusi-sandbox");
     expect(config).toContain("HostName example.com");
     expect(config).toContain("User peter");
     expect(config).toContain("Port 2222");
@@ -113,7 +113,7 @@ describe("sandbox ssh helpers", () => {
   it.runIf(process.platform !== "win32")(
     "rejects upload trees with symlinks that escape the local workspace",
     async () => {
-      const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-upload-"));
+      const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-ssh-upload-"));
       tempDirs.push(localDir);
       await fs.symlink("/etc", path.join(localDir, "escape"));
 
@@ -121,8 +121,8 @@ describe("sandbox ssh helpers", () => {
         uploadDirectoryToSshTarget({
           session: {
             command: "ssh",
-            configPath: "/tmp/openclaw-test-ssh-config",
-            host: "openclaw-sandbox",
+            configPath: "/tmp/mullusi-test-ssh-config",
+            host: "mullusi-sandbox",
           },
           localDir,
           remoteDir: "/remote/workspace",
@@ -134,7 +134,7 @@ describe("sandbox ssh helpers", () => {
   it.runIf(process.platform !== "win32")(
     "allows in-workspace symlinks that point to hardlinked files",
     async () => {
-      const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-upload-safe-"));
+      const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-ssh-upload-safe-"));
       tempDirs.push(localDir);
       const fakeSsh = path.join(localDir, "fake-ssh.sh");
       await fs.writeFile(fakeSsh, "#!/bin/sh\ncat >/dev/null\n", { mode: 0o755 });
@@ -146,8 +146,8 @@ describe("sandbox ssh helpers", () => {
         uploadDirectoryToSshTarget({
           session: {
             command: fakeSsh,
-            configPath: "/tmp/openclaw-test-ssh-config",
-            host: "openclaw-sandbox",
+            configPath: "/tmp/mullusi-test-ssh-config",
+            host: "mullusi-sandbox",
           },
           localDir,
           remoteDir: "/remote/workspace",

@@ -1,7 +1,7 @@
 import {
   transcribeOpenAiCompatibleAudio,
   type MediaUnderstandingProvider,
-} from "openclaw/plugin-sdk/media-understanding";
+} from "mullusi/plugin-sdk/media-understanding";
 
 const DEFAULT_MISTRAL_AUDIO_BASE_URL = "https://api.mistral.ai/v1";
 const DEFAULT_MISTRAL_AUDIO_MODEL = "voxtral-mini-latest";

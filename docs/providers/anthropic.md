@@ -1,7 +1,7 @@
 ---
-summary: "Use Anthropic Claude via API keys or Claude CLI in OpenClaw"
+summary: "Use Anthropic Claude via API keys or Claude CLI in Mullusi"
 read_when:
-  - You want to use Anthropic models in OpenClaw
+  - You want to use Anthropic models in Mullusi
   - You want to reuse Claude CLI subscription auth on the gateway host
 title: "Anthropic"
 ---
@@ -9,20 +9,20 @@ title: "Anthropic"
 # Anthropic (Claude)
 
 Anthropic builds the **Claude** model family and provides access via an API.
-In OpenClaw, new Anthropic setup should use an API key or the local Claude CLI
+In Mullusi, new Anthropic setup should use an API key or the local Claude CLI
 backend. Existing legacy Anthropic token profiles are still honored at runtime
 if they are already configured.
 
 <Warning>
 Anthropic's public Claude Code docs say direct Claude Code usage is included
-with Claude subscriptions. Separately, Anthropic notified OpenClaw users on
-**April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that **OpenClaw counts as a
-third-party harness**. Their stated policy is that OpenClaw-driven Claude-login
+with Claude subscriptions. Separately, Anthropic notified Mullusi users on
+**April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that **Mullusi counts as a
+third-party harness**. Their stated policy is that Mullusi-driven Claude-login
 traffic no longer uses the included Claude subscription pool and instead
 requires **Extra Usage** (pay-as-you-go, billed separately from the
 subscription).
 
-That policy distinction is about **OpenClaw-driven Claude CLI reuse**, not
+That policy distinction is about **Mullusi-driven Claude CLI reuse**, not
 about running `claude` directly in your own terminal.
 
 Anthropic's current direct-Claude-Code plan docs:
@@ -30,7 +30,7 @@ Anthropic's current direct-Claude-Code plan docs:
 - [Using Claude Code with your Pro or Max plan](https://support.claude.com/en/articles/11145838-using-claude-code-with-your-pro-or-max-plan)
 - [Using Claude Code with your Team or Enterprise plan](https://support.anthropic.com/en/articles/11845131-using-claude-code-with-your-team-or-enterprise-plan/)
 
-If you want a clearer billing path, use an Anthropic API key instead. OpenClaw
+If you want a clearer billing path, use an Anthropic API key instead. Mullusi
 also supports other subscription-style options, including [OpenAI
 Codex](/providers/openai), [Qwen Cloud Coding
 Plan](/providers/qwen), [MiniMax Coding Plan](/providers/minimax),
@@ -45,11 +45,11 @@ Create your API key in the Anthropic Console.
 ### CLI setup
 
 ```bash
-openclaw onboard
+mullusi onboard
 # choose: Anthropic API key
 
 # or non-interactive
-openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
+mullusi onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```
 
 ### Claude CLI config snippet
@@ -63,7 +63,7 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 ## Thinking defaults (Claude 4.6)
 
-- Anthropic Claude 4.6 models default to `adaptive` thinking in OpenClaw when no explicit thinking level is set.
+- Anthropic Claude 4.6 models default to `adaptive` thinking in Mullusi when no explicit thinking level is set.
 - You can override per-message (`/think:<level>`) or in model params:
   `agents.defaults.models["anthropic/<model>"].params.thinking`.
 - Related Anthropic docs:
@@ -72,7 +72,7 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 ## Fast mode (Anthropic API)
 
-OpenClaw's shared `/fast` toggle also supports direct public Anthropic traffic, including API-key and OAuth-authenticated requests sent to `api.anthropic.com`.
+Mullusi's shared `/fast` toggle also supports direct public Anthropic traffic, including API-key and OAuth-authenticated requests sent to `api.anthropic.com`.
 
 - `/fast on` maps to `service_tier: "auto"`
 - `/fast off` maps to `service_tier: "standard_only"`
@@ -94,13 +94,13 @@ OpenClaw's shared `/fast` toggle also supports direct public Anthropic traffic, 
 
 Important limits:
 
-- OpenClaw only injects Anthropic service tiers for direct `api.anthropic.com` requests. If you route `anthropic/*` through a proxy or gateway, `/fast` leaves `service_tier` untouched.
+- Mullusi only injects Anthropic service tiers for direct `api.anthropic.com` requests. If you route `anthropic/*` through a proxy or gateway, `/fast` leaves `service_tier` untouched.
 - Explicit Anthropic `serviceTier` or `service_tier` model params override the `/fast` default when both are set.
 - Anthropic reports the effective tier on the response under `usage.service_tier`. On accounts without Priority Tier capacity, `service_tier: "auto"` may still resolve to `standard`.
 
 ## Prompt caching (Anthropic API)
 
-OpenClaw supports Anthropic's prompt caching feature. This is **API-only**; legacy Anthropic token auth does not honor cache settings.
+Mullusi supports Anthropic's prompt caching feature. This is **API-only**; legacy Anthropic token auth does not honor cache settings.
 
 ### Configuration
 
@@ -128,7 +128,7 @@ Use the `cacheRetention` parameter in your model config:
 
 ### Defaults
 
-When using Anthropic API Key authentication, OpenClaw automatically applies `cacheRetention: "short"` (5-minute cache) for all Anthropic models. You can override this by explicitly setting `cacheRetention` in your config.
+When using Anthropic API Key authentication, Mullusi automatically applies `cacheRetention: "short"` (5-minute cache) for all Anthropic models. You can override this by explicitly setting `cacheRetention` in your config.
 
 ### Per-agent cacheRetention overrides
 
@@ -168,7 +168,7 @@ This lets one agent keep a long-lived cache while another agent on the same mode
 
 ## 1M context window (Anthropic beta)
 
-Anthropic's 1M context window is beta-gated. In OpenClaw, enable it per model
+Anthropic's 1M context window is beta-gated. In Mullusi, enable it per model
 with `params.context1m: true` for supported Opus/Sonnet models.
 
 ```json5
@@ -185,20 +185,20 @@ with `params.context1m: true` for supported Opus/Sonnet models.
 }
 ```
 
-OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on Anthropic
+Mullusi maps this to `anthropic-beta: context-1m-2025-08-07` on Anthropic
 requests.
 
 This only activates when `params.context1m` is explicitly set to `true` for
 that model.
 
 Requirement: Anthropic must allow long-context usage on that credential
-(typically API key billing, or OpenClaw's Claude-login path / legacy token auth
+(typically API key billing, or Mullusi's Claude-login path / legacy token auth
 with Extra Usage enabled). Otherwise Anthropic returns:
 `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
 
 Note: Anthropic currently rejects `context-1m-*` beta requests when using
 legacy Anthropic token auth (`sk-ant-oat-*`). If you configure
-`context1m: true` with that legacy auth mode, OpenClaw logs a warning and
+`context1m: true` with that legacy auth mode, Mullusi logs a warning and
 falls back to the standard context window by skipping the context1m beta
 header while keeping the required OAuth betas.
 
@@ -209,13 +209,13 @@ and signed in with a Claude subscription.
 
 Billing note: Anthropic's public Claude Code docs cover **direct** Claude Code
 usage under Pro/Max or Team/Enterprise plans. Separately, Anthropic told
-OpenClaw users that **OpenClaw-driven** Claude CLI usage is treated as
+Mullusi users that **Mullusi-driven** Claude CLI usage is treated as
 third-party harness traffic. As of **April 4, 2026 at 12:00 PM PT / 8:00 PM
-BST**, Anthropic says this OpenClaw path requires **Extra Usage** instead of
+BST**, Anthropic says this Mullusi path requires **Extra Usage** instead of
 the included Claude subscription limits.
 
 This path uses the local `claude` binary for model inference instead of calling
-the Anthropic API directly. OpenClaw treats it as a **CLI backend provider**
+the Anthropic API directly. Mullusi treats it as a **CLI backend provider**
 with model refs like:
 
 - `claude-cli/claude-sonnet-4-6`
@@ -223,11 +223,11 @@ with model refs like:
 
 How it works:
 
-1. OpenClaw launches `claude -p --output-format stream-json --include-partial-messages ...`
+1. Mullusi launches `claude -p --output-format stream-json --include-partial-messages ...`
    on the **gateway host** and sends the prompt over stdin.
 2. The first turn sends `--session-id <uuid>`.
 3. Follow-up turns reuse the stored Claude session via `--resume <sessionId>`.
-4. Your chat messages still go through the normal OpenClaw message pipeline, but
+4. Your chat messages still go through the normal Mullusi message pipeline, but
    the actual model reply is produced by Claude CLI.
 
 ### Requirements
@@ -240,7 +240,7 @@ How it works:
 claude auth status
 ```
 
-- OpenClaw auto-loads the bundled Anthropic plugin at gateway startup when your
+- Mullusi auto-loads the bundled Anthropic plugin at gateway startup when your
   config explicitly references `claude-cli/...` or `claude-cli` backend config.
 
 ### Config snippet
@@ -280,33 +280,33 @@ If the `claude` binary is not on the gateway host PATH:
 ### What you get
 
 - Claude subscription auth reused from the local CLI
-- Normal OpenClaw message/session routing
+- Normal Mullusi message/session routing
 - Claude CLI session continuity across turns
 
 ### Migrate from Anthropic auth to Claude CLI
 
 If you currently use `anthropic/...` with a legacy token profile or API key and want to
-switch the same gateway host to Claude CLI, OpenClaw supports that as a normal
+switch the same gateway host to Claude CLI, Mullusi supports that as a normal
 provider-auth migration path.
 
 Prerequisites:
 
-- Claude CLI installed on the **same gateway host** that runs OpenClaw
+- Claude CLI installed on the **same gateway host** that runs Mullusi
 - Claude CLI already signed in there: `claude auth login`
 
 Then run:
 
 ```bash
-openclaw models auth login --provider anthropic --method cli --set-default
+mullusi models auth login --provider anthropic --method cli --set-default
 ```
 
 Or in onboarding:
 
 ```bash
-openclaw onboard --auth-choice anthropic-cli
+mullusi onboard --auth-choice anthropic-cli
 ```
 
-Interactive `openclaw onboard` and `openclaw configure` now prefer **Anthropic
+Interactive `mullusi onboard` and `mullusi configure` now prefer **Anthropic
 Claude CLI** first and **Anthropic API key** second.
 
 What this does:
@@ -320,7 +320,7 @@ What this does:
 Quick verification:
 
 ```bash
-openclaw models status
+mullusi models status
 ```
 
 You should see the resolved primary model under `claude-cli/...`.
@@ -337,8 +337,8 @@ you need to.
 ### Important limits
 
 - This is **not** the Anthropic API provider. It is the local CLI runtime.
-- Tools are disabled on the OpenClaw side for CLI backend runs.
-- Text in, text out. No OpenClaw streaming handoff.
+- Tools are disabled on the Mullusi side for CLI backend runs.
+- Text in, text out. No Mullusi streaming handoff.
 - Best fit for a personal gateway host, not shared multi-user billing setups.
 
 More details: [/gateway/cli-backends](/gateway/cli-backends)
@@ -347,10 +347,10 @@ More details: [/gateway/cli-backends](/gateway/cli-backends)
 
 - Anthropic's public Claude Code plan docs still cover direct Claude Code
   terminal use under Claude subscriptions. Anthropic's separate notice to
-  OpenClaw users says the **OpenClaw** Claude-login path is third-party harness
+  Mullusi users says the **Mullusi** Claude-login path is third-party harness
   usage and requires **Extra Usage** (pay-as-you-go billed separately from the
   subscription).
-- Anthropic setup-token is available again in OpenClaw as a legacy/manual path. Anthropic's OpenClaw-specific billing notice still applies, so use it with the expectation that Anthropic requires **Extra Usage** for this path.
+- Anthropic setup-token is available again in Mullusi as a legacy/manual path. Anthropic's Mullusi-specific billing notice still applies, so use it with the expectation that Anthropic requires **Extra Usage** for this path.
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).
 
 ## Troubleshooting
@@ -364,16 +364,16 @@ More details: [/gateway/cli-backends](/gateway/cli-backends)
 
 - Auth is **per agent**. New agents don’t inherit the main agent’s keys.
 - Re-run onboarding for that agent, or configure an API key on the gateway
-  host, then verify with `openclaw models status`.
+  host, then verify with `mullusi models status`.
 
 **No credentials found for profile `anthropic:default`**
 
-- Run `openclaw models status` to see which auth profile is active.
+- Run `mullusi models status` to see which auth profile is active.
 - Re-run onboarding, or configure an API key or Claude CLI for that profile path.
 
 **No available auth profile (all in cooldown/unavailable)**
 
-- Check `openclaw models status --json` for `auth.unusableProfiles`.
+- Check `mullusi models status --json` for `auth.unusableProfiles`.
 - Anthropic rate-limit cooldowns can be model-scoped, so a sibling Anthropic
   model may still be usable even when the current one is cooling down.
 - Add another Anthropic profile or wait for cooldown.

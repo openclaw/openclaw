@@ -3,18 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import { maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
-import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
-import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
-import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
-import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
+import { loadConfig, type MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "mullusi/plugin-sdk/config-runtime";
+import { recordChannelActivity } from "mullusi/plugin-sdk/infra-runtime";
+import { maxBytesForKind } from "mullusi/plugin-sdk/media-runtime";
+import { extensionForMime } from "mullusi/plugin-sdk/media-runtime";
+import { unlinkIfExists } from "mullusi/plugin-sdk/media-runtime";
+import type { PollInput } from "mullusi/plugin-sdk/media-runtime";
+import { resolveChunkMode } from "mullusi/plugin-sdk/reply-chunking";
+import type { RetryConfig } from "mullusi/plugin-sdk/retry-runtime";
+import { resolvePreferredMullusiTmpDir } from "mullusi/plugin-sdk/temp-path";
+import { convertMarkdownTables } from "mullusi/plugin-sdk/text-runtime";
+import { loadWebMediaRaw } from "mullusi/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
 import { resolveDiscordClientAccountContext } from "./client.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
@@ -45,7 +45,7 @@ import {
 } from "./voice-message.js";
 
 type DiscordSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   token?: string;
   accountId?: string;
   mediaUrl?: string;
@@ -328,7 +328,7 @@ export async function sendMessageDiscord(
 }
 
 type DiscordWebhookSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   webhookId: string;
   webhookToken: string;
   accountId?: string;
@@ -493,7 +493,7 @@ export async function sendPollDiscord(
 }
 
 type VoiceMessageOpts = {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   token?: string;
   accountId?: string;
   verbose?: boolean;
@@ -510,7 +510,7 @@ async function materializeVoiceMessageInput(mediaUrl: string): Promise<{ filePat
   const extFromName = media.fileName ? path.extname(media.fileName) : "";
   const extFromMime = media.contentType ? extensionForMime(media.contentType) : "";
   const ext = extFromName || extFromMime || ".bin";
-  const tempDir = resolvePreferredOpenClawTmpDir();
+  const tempDir = resolvePreferredMullusiTmpDir();
   const filePath = path.join(tempDir, `voice-src-${crypto.randomUUID()}${ext}`);
   await fs.writeFile(filePath, media.buffer, { mode: 0o600 });
   return { filePath };

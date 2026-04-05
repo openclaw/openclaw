@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { OpenClawSchema } from "./zod-schema.js";
+import { MullusiSchema } from "./zod-schema.js";
 
 describe("telegram topic agentId schema", () => {
   it("accepts valid agentId in forum group topic config", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = MullusiSchema.safeParse({
       channels: {
         telegram: {
           groups: {
@@ -30,7 +30,7 @@ describe("telegram topic agentId schema", () => {
   });
 
   it("accepts valid agentId in DM topic config", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = MullusiSchema.safeParse({
       channels: {
         telegram: {
           direct: {
@@ -58,7 +58,7 @@ describe("telegram topic agentId schema", () => {
   });
 
   it("accepts empty config without agentId (backward compatible)", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = MullusiSchema.safeParse({
       channels: {
         telegram: {
           groups: {
@@ -85,7 +85,7 @@ describe("telegram topic agentId schema", () => {
   });
 
   it("accepts multiple topics with different agentIds", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = MullusiSchema.safeParse({
       channels: {
         telegram: {
           groups: {
@@ -113,7 +113,7 @@ describe("telegram topic agentId schema", () => {
   });
 
   it("rejects unknown fields in topic config (strict schema)", () => {
-    const res = OpenClawSchema.safeParse({
+    const res = MullusiSchema.safeParse({
       channels: {
         telegram: {
           groups: {

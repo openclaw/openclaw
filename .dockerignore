@@ -1,7 +1,7 @@
 .git
 .worktrees
 
-# Sensitive files – scripts/docker/setup.sh writes .env with OPENCLAW_GATEWAY_TOKEN
+# Sensitive files – scripts/docker/setup.sh writes .env with MULLUSI_GATEWAY_TOKEN
 # into the project root; keep it out of the build context.
 .env
 .env.*
@@ -58,14 +58,14 @@ vendor/
 # Needed for building the Canvas A2UI bundle during Docker image builds.
 # Keep the rest of apps/ and vendor/ excluded to avoid a large build context.
 !apps/shared/
-!apps/shared/OpenClawKit/
-!apps/shared/OpenClawKit/Sources/
-!apps/shared/OpenClawKit/Sources/OpenClawKit/
-!apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/
-!apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json
-!apps/shared/OpenClawKit/Tools/
-!apps/shared/OpenClawKit/Tools/CanvasA2UI/
-!apps/shared/OpenClawKit/Tools/CanvasA2UI/**
+!apps/shared/MullusiKit/
+!apps/shared/MullusiKit/Sources/
+!apps/shared/MullusiKit/Sources/MullusiKit/
+!apps/shared/MullusiKit/Sources/MullusiKit/Resources/
+!apps/shared/MullusiKit/Sources/MullusiKit/Resources/tool-display.json
+!apps/shared/MullusiKit/Tools/
+!apps/shared/MullusiKit/Tools/CanvasA2UI/
+!apps/shared/MullusiKit/Tools/CanvasA2UI/**
 !vendor/a2ui/
 !vendor/a2ui/renderers/
 !vendor/a2ui/renderers/lit/

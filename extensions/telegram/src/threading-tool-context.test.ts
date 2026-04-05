@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 
@@ -6,7 +6,7 @@ describe("buildTelegramThreadingToolContext", () => {
   it("keeps topic thread state in plugin-owned tool context", () => {
     expect(
       buildTelegramThreadingToolContext({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         accountId: "default",
         context: {
           To: "telegram:-1001:topic:77",
@@ -24,7 +24,7 @@ describe("buildTelegramThreadingToolContext", () => {
   it("parses topic thread state from target grammar when MessageThreadId is absent", () => {
     expect(
       buildTelegramThreadingToolContext({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         accountId: "default",
         context: {
           To: "telegram:-1001:topic:77",

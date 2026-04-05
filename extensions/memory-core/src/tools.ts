@@ -3,9 +3,9 @@ import {
   readNumberParam,
   readStringParam,
   type AnyAgentTool,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+  type MullusiConfig,
+} from "mullusi/plugin-sdk/memory-core-host-runtime-core";
+import type { MemorySearchResult } from "mullusi/plugin-sdk/memory-core-host-runtime-files";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   clampResultsByInjectedChars,
@@ -63,7 +63,7 @@ function queueShortTermRecallTracking(params: {
 }
 
 export function createMemorySearchTool(options: {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   agentSessionKey?: string;
 }): AnyAgentTool | null {
   return createMemoryTool({
@@ -126,7 +126,7 @@ export function createMemorySearchTool(options: {
 }
 
 export function createMemoryGetTool(options: {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   agentSessionKey?: string;
 }): AnyAgentTool | null {
   return createMemoryTool({

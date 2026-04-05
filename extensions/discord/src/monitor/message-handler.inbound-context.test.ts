@@ -1,4 +1,4 @@
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { finalizeInboundContext } from "mullusi/plugin-sdk/reply-dispatch-runtime";
 import { describe, expect, it } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/test-helpers.js";
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";

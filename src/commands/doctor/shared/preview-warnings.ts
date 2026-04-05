@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { MullusiConfig } from "../../../config/config.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import {
   collectBundledPluginLoadPathWarnings,
@@ -35,7 +35,7 @@ import {
 } from "./stale-plugin-config.js";
 
 export async function collectDoctorPreviewWarnings(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   doctorFixCommand: string;
 }): Promise<string[]> {
   const warnings: string[] = [];

@@ -4,15 +4,15 @@ import { collectFilesSync, relativeToCwd } from "./check-file-utils.js";
 
 const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
   {
-    pattern: /["']openclaw\/plugin-sdk["']/,
-    hint: "Use openclaw/plugin-sdk/<subpath> instead of the monolithic root entry.",
+    pattern: /["']mullusi\/plugin-sdk["']/,
+    hint: "Use mullusi/plugin-sdk/<subpath> instead of the monolithic root entry.",
   },
   {
-    pattern: /["']openclaw\/plugin-sdk\/test-utils["']/,
-    hint: "Use openclaw/plugin-sdk/testing for the public extension test surface.",
+    pattern: /["']mullusi\/plugin-sdk\/test-utils["']/,
+    hint: "Use mullusi/plugin-sdk/testing for the public extension test surface.",
   },
   {
-    pattern: /["']openclaw\/plugin-sdk\/compat["']/,
+    pattern: /["']mullusi\/plugin-sdk\/compat["']/,
     hint: "Use a focused public plugin-sdk subpath instead of compat.",
   },
   {
@@ -21,7 +21,7 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
   },
   {
     pattern: /["'](?:\.\.\/)+(?:src\/test-utils\/)[^"']+["']/,
-    hint: "Use test/helpers/plugins/* for repo-only helpers, or openclaw/plugin-sdk/testing for public surfaces.",
+    hint: "Use test/helpers/plugins/* for repo-only helpers, or mullusi/plugin-sdk/testing for public surfaces.",
   },
   {
     pattern: /["'](?:\.\.\/)+(?:src\/plugins\/types\.js)["']/,

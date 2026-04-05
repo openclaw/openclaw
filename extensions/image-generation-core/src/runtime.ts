@@ -14,13 +14,13 @@ import {
   type ImageGenerationResolution,
   type ImageGenerationResult,
   type ImageGenerationSourceImage,
-  type OpenClawConfig,
+  type MullusiConfig,
 } from "../api.js";
 
 const log = createSubsystemLogger("image-generation");
 
 export type GenerateImageParams = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   prompt: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
@@ -41,7 +41,7 @@ export type GenerateImageRuntimeResult = {
 };
 
 function resolveImageGenerationCandidates(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   modelOverride?: string;
 }): Array<{ provider: string; model: string }> {
   const candidates: Array<{ provider: string; model: string }> = [];
@@ -87,7 +87,7 @@ function throwImageGenerationFailure(params: {
   });
 }
 
-function buildNoImageGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
+function buildNoImageGenerationModelConfiguredMessage(cfg: MullusiConfig): string {
   const providers = listImageGenerationProviders(cfg);
   const sampleModel =
     providers.find((provider) => provider.defaultModel) ??
@@ -109,7 +109,7 @@ function buildNoImageGenerationModelConfiguredMessage(cfg: OpenClawConfig): stri
   ].join(" ");
 }
 
-export function listRuntimeImageGenerationProviders(params?: { config?: OpenClawConfig }) {
+export function listRuntimeImageGenerationProviders(params?: { config?: MullusiConfig }) {
   return listImageGenerationProviders(params?.config);
 }
 

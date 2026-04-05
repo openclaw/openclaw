@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { ChannelPlugin } from "mullusi/plugin-sdk/core";
 import {
   applyAccountNameToChannelSection,
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk/core";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+} from "mullusi/plugin-sdk/core";
+import { hasConfiguredSecretInput } from "mullusi/plugin-sdk/secret-input";
 import { initApiConfig } from "./api.js";
 import { applyQQBotSetupAccountConfig, validateQQBotSetupInput } from "./channel.setup.js";
 import { qqbotChannelConfigSchema } from "./config-schema.js";
@@ -232,7 +232,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       });
     },
     logoutAccount: async ({ accountId, cfg }) => {
-      const nextCfg = { ...cfg } as OpenClawConfig;
+      const nextCfg = { ...cfg } as MullusiConfig;
       const nextQQBot = cfg.channels?.qqbot ? { ...cfg.channels.qqbot } : undefined;
       let cleared = false;
       let changed = false;
@@ -275,7 +275,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         nextCfg.channels = { ...nextCfg.channels, qqbot: nextQQBot };
         const runtime = getQQBotRuntime();
         const configApi = runtime.config as {
-          writeConfigFile: (cfg: OpenClawConfig) => Promise<void>;
+          writeConfigFile: (cfg: MullusiConfig) => Promise<void>;
         };
         await configApi.writeConfigFile(nextCfg);
       }

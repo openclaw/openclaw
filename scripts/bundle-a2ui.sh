@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HASH_FILE="$ROOT_DIR/src/canvas-host/a2ui/.bundle.hash"
 OUTPUT_FILE="$ROOT_DIR/src/canvas-host/a2ui/a2ui.bundle.js"
 A2UI_RENDERER_DIR="$ROOT_DIR/vendor/a2ui/renderers/lit"
-A2UI_APP_DIR="$ROOT_DIR/apps/shared/OpenClawKit/Tools/CanvasA2UI"
+A2UI_APP_DIR="$ROOT_DIR/apps/shared/MullusiKit/Tools/CanvasA2UI"
 
 # Docker builds exclude vendor/apps via .dockerignore.
 # Sparse local builds can also omit these inputs intentionally.
@@ -20,8 +20,8 @@ if [[ ! -d "$A2UI_RENDERER_DIR" || ! -d "$A2UI_APP_DIR" ]]; then
     echo "A2UI sources missing; keeping prebuilt bundle."
     exit 0
   fi
-  if [[ -n "${OPENCLAW_SPARSE_PROFILE:-}" || "${OPENCLAW_A2UI_SKIP_MISSING:-}" == "1" ]]; then
-    echo "A2UI sources missing; skipping bundle because OPENCLAW_A2UI_SKIP_MISSING=1 or OPENCLAW_SPARSE_PROFILE is set." >&2
+  if [[ -n "${MULLUSI_SPARSE_PROFILE:-}" || "${MULLUSI_A2UI_SKIP_MISSING:-}" == "1" ]]; then
+    echo "A2UI sources missing; skipping bundle because MULLUSI_A2UI_SKIP_MISSING=1 or MULLUSI_SPARSE_PROFILE is set." >&2
     exit 0
   fi
   echo "A2UI sources missing and no prebuilt bundle found at: $OUTPUT_FILE" >&2

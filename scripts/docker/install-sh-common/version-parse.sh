@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-extract_openclaw_semver() {
+extract_mullusi_semver() {
   local raw="${1:-}"
   local parsed=""
   parsed="$(

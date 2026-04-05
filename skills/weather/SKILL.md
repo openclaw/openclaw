@@ -4,7 +4,7 @@ description: "Get current weather and forecasts via wttr.in or Open-Meteo. Use w
 homepage: https://wttr.in/:help
 metadata:
   {
-    "openclaw":
+    "mullusi":
       {
         "emoji": "☔",
         "requires": { "bins": ["curl"] },

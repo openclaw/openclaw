@@ -9,7 +9,7 @@ afterEach(() => {
 describe("bundled channel entry shape guards", () => {
   it("treats missing bundled discovery results as empty", async () => {
     vi.doMock("../../plugins/discovery.js", () => ({
-      discoverOpenClawPlugins: () => ({
+      discoverMullusiPlugins: () => ({
         candidates: [],
         diagnostics: [],
       }),

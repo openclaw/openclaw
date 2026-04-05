@@ -1,9 +1,9 @@
-import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { resolveFetch } from "mullusi/plugin-sdk/fetch-runtime";
 import {
   resolveRetryConfig,
   retryAsync,
   type RetryConfig,
-} from "openclaw/plugin-sdk/retry-runtime";
+} from "mullusi/plugin-sdk/retry-runtime";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_API_RETRY_DEFAULTS = {

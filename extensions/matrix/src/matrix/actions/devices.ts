@@ -10,7 +10,7 @@ export async function pruneMatrixStaleGatewayDevices(opts: MatrixActionClientOpt
   return await withStartedActionClient(opts, async (client) => {
     const devices = await client.listOwnDevices();
     const health = summarizeMatrixDeviceHealth(devices);
-    const staleGatewayDeviceIds = health.staleOpenClawDevices.map((device) => device.deviceId);
+    const staleGatewayDeviceIds = health.staleMullusiDevices.map((device) => device.deviceId);
     const deleted =
       staleGatewayDeviceIds.length > 0
         ? await client.deleteOwnDevices(staleGatewayDeviceIds)

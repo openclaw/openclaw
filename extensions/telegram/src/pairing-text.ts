@@ -1,6 +1,6 @@
-import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
-import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { createPairingPrefixStripper } from "mullusi/plugin-sdk/channel-pairing";
+import { PAIRING_APPROVED_MESSAGE } from "mullusi/plugin-sdk/channel-status";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { resolveTelegramSend, resolveTelegramTokenHelper } from "./outbound-base.js";
 
 export const telegramPairingText = {
@@ -13,7 +13,7 @@ export const telegramPairingText = {
     message,
     accountId,
   }: {
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     id: string;
     message: string;
     accountId?: string | null;

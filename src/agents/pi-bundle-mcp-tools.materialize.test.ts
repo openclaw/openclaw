@@ -21,8 +21,8 @@ afterEach(async () => {
 
 describe("createBundleMcpToolRuntime", () => {
   it("loads bundle MCP tools and executes them", async () => {
-    const workspaceDir = await makeTempDir("openclaw-bundle-mcp-tools-");
-    const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "bundle-probe");
+    const workspaceDir = await makeTempDir("mullusi-bundle-mcp-tools-");
+    const pluginRoot = path.join(workspaceDir, ".mullusi", "extensions", "bundle-probe");
     const serverScriptPath = path.join(pluginRoot, "servers", "bundle-probe.mjs");
     await writeBundleProbeMcpServer(serverScriptPath);
     await writeClaudeBundle({ pluginRoot, serverScriptPath });
@@ -55,8 +55,8 @@ describe("createBundleMcpToolRuntime", () => {
   });
 
   it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
-    const workspaceDir = await makeTempDir("openclaw-bundle-mcp-tools-");
-    const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "bundle-probe");
+    const workspaceDir = await makeTempDir("mullusi-bundle-mcp-tools-");
+    const pluginRoot = path.join(workspaceDir, ".mullusi", "extensions", "bundle-probe");
     const serverScriptPath = path.join(pluginRoot, "servers", "bundle-probe.mjs");
     await writeBundleProbeMcpServer(serverScriptPath);
     await writeClaudeBundle({ pluginRoot, serverScriptPath });
@@ -81,7 +81,7 @@ describe("createBundleMcpToolRuntime", () => {
   });
 
   it("loads configured stdio MCP tools without a bundle", async () => {
-    const workspaceDir = await makeTempDir("openclaw-bundle-mcp-tools-");
+    const workspaceDir = await makeTempDir("mullusi-bundle-mcp-tools-");
     const serverScriptPath = path.join(workspaceDir, "servers", "configured-probe.mjs");
     await writeBundleProbeMcpServer(serverScriptPath);
 
@@ -127,7 +127,7 @@ describe("createBundleMcpToolRuntime", () => {
     const sseServer = await startSseProbeServer();
 
     try {
-      const workspaceDir = await makeTempDir("openclaw-bundle-mcp-sse-");
+      const workspaceDir = await makeTempDir("mullusi-bundle-mcp-sse-");
       const runtime = await createBundleMcpToolRuntime({
         workspaceDir,
         cfg: {
@@ -162,7 +162,7 @@ describe("createBundleMcpToolRuntime", () => {
   });
 
   it("returns tools sorted alphabetically for stable prompt-cache keys", async () => {
-    const workspaceDir = await makeTempDir("openclaw-bundle-mcp-tools-");
+    const workspaceDir = await makeTempDir("mullusi-bundle-mcp-tools-");
     const serverScriptPath = path.join(workspaceDir, "servers", "multi-tool.mjs");
     // Register tools in non-alphabetical order; runtime must sort them.
     await writeExecutable(

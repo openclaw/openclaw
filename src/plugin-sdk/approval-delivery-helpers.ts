@@ -1,7 +1,7 @@
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import type { ChannelApprovalCapability } from "./channel-contract.js";
-import type { OpenClawConfig } from "./config-runtime.js";
+import type { MullusiConfig } from "./config-runtime.js";
 import { normalizeMessageChannel } from "./routing.js";
 
 type ApprovalKind = "exec" | "plugin";
@@ -11,13 +11,13 @@ type NativeApprovalTarget = { to: string; threadId?: string | number | null };
 type NativeApprovalSurface = "origin" | "approver-dm";
 
 type ApprovalAdapterParams = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   senderId?: string | null;
 };
 
 type DeliverySuppressionParams = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   approvalKind: ApprovalKind;
   target: { channel: string; accountId?: string | null };
   request: { request: { turnSourceChannel?: string | null; turnSourceAccountId?: string | null } };
@@ -26,25 +26,25 @@ type DeliverySuppressionParams = {
 type ApproverRestrictedNativeApprovalParams = {
   channel: string;
   channelLabel: string;
-  listAccountIds: (cfg: OpenClawConfig) => string[];
+  listAccountIds: (cfg: MullusiConfig) => string[];
   hasApprovers: (params: ApprovalAdapterParams) => boolean;
   isExecAuthorizedSender: (params: ApprovalAdapterParams) => boolean;
   isPluginAuthorizedSender?: (params: ApprovalAdapterParams) => boolean;
-  isNativeDeliveryEnabled: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
+  isNativeDeliveryEnabled: (params: { cfg: MullusiConfig; accountId?: string | null }) => boolean;
   resolveNativeDeliveryMode: (params: {
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     accountId?: string | null;
   }) => NativeApprovalDeliveryMode;
   requireMatchingTurnSourceChannel?: boolean;
   resolveSuppressionAccountId?: (params: DeliverySuppressionParams) => string | undefined;
   resolveOriginTarget?: (params: {
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     accountId?: string | null;
     approvalKind: ApprovalKind;
     request: NativeApprovalRequest;
   }) => NativeApprovalTarget | null | Promise<NativeApprovalTarget | null>;
   resolveApproverDmTargets?: (params: {
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     accountId?: string | null;
     approvalKind: ApprovalKind;
     request: NativeApprovalRequest;
@@ -68,7 +68,7 @@ function buildApproverRestrictedNativeApprovalCapability(
       senderId,
       approvalKind,
     }: {
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       accountId?: string | null;
       senderId?: string | null;
       action: "approve";
@@ -89,7 +89,7 @@ function buildApproverRestrictedNativeApprovalCapability(
       cfg,
       accountId,
     }: {
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       accountId?: string | null;
       action: "approve";
     }) =>
@@ -98,7 +98,7 @@ function buildApproverRestrictedNativeApprovalCapability(
         : ({ kind: "disabled" } as const),
     approvals: {
       delivery: {
-        hasConfiguredDmRoute: ({ cfg }: { cfg: OpenClawConfig }) =>
+        hasConfiguredDmRoute: ({ cfg }: { cfg: MullusiConfig }) =>
           params.listAccountIds(cfg).some((accountId) => {
             if (!params.hasApprovers({ cfg, accountId })) {
               return false;
@@ -137,7 +137,7 @@ function buildApproverRestrictedNativeApprovalCapability(
                 cfg,
                 accountId,
               }: {
-                cfg: OpenClawConfig;
+                cfg: MullusiConfig;
                 accountId?: string | null;
                 approvalKind: ApprovalKind;
                 request: NativeApprovalRequest;

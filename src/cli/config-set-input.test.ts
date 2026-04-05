@@ -79,7 +79,7 @@ describe("config set input parsing", () => {
 
   it("parses valid --batch-file payloads", () => {
     withBatchFile(
-      "openclaw-config-set-input-",
+      "mullusi-config-set-input-",
       '[{"path":"gateway.auth.mode","value":"token"}]',
       (batchPath) => {
         const parsed = parseBatchSource({
@@ -96,7 +96,7 @@ describe("config set input parsing", () => {
   });
 
   it("rejects malformed --batch-file payloads", () => {
-    withBatchFile("openclaw-config-set-input-invalid-", "{}", (batchPath) => {
+    withBatchFile("mullusi-config-set-input-invalid-", "{}", (batchPath) => {
       expect(() =>
         parseBatchSource({
           batchFile: batchPath,

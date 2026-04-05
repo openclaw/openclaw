@@ -1,14 +1,14 @@
-import { formatTrimmedAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
-import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+import { formatTrimmedAllowFromEntries } from "mullusi/plugin-sdk/channel-config-helpers";
+import type { ChannelStatusIssue } from "mullusi/plugin-sdk/channel-contract";
+import { PAIRING_APPROVED_MESSAGE } from "mullusi/plugin-sdk/channel-status";
 import {
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
   type ChannelPlugin,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/core";
-import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
-import { collectStatusIssuesFromLastError } from "openclaw/plugin-sdk/status-helpers";
+  type MullusiConfig,
+} from "mullusi/plugin-sdk/core";
+import { resolveChannelMediaMaxBytes } from "mullusi/plugin-sdk/media-runtime";
+import { collectStatusIssuesFromLastError } from "mullusi/plugin-sdk/status-helpers";
 import {
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
@@ -28,7 +28,7 @@ export {
   resolveIMessageConfigDefaultTo,
 };
 
-export type { ChannelPlugin, ChannelStatusIssue, OpenClawConfig };
+export type { ChannelPlugin, ChannelStatusIssue, MullusiConfig };
 
 export function chunkTextForOutbound(text: string, limit: number): string[] {
   const chunks: string[] = [];

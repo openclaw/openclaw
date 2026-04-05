@@ -7,7 +7,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
@@ -26,13 +26,13 @@ function safeLogValue(value: string): string {
 }
 
 function maybeWarnTrustedHookSource(source: string): void {
-  if (source === "openclaw-workspace") {
+  if (source === "mullusi-workspace") {
     log.warn(
       "Loading workspace hook code into the gateway process. Workspace hooks are trusted local code.",
     );
     return;
   }
-  if (source === "openclaw-managed") {
+  if (source === "mullusi-managed") {
     log.warn(
       "Loading managed hook code into the gateway process. Managed hooks are trusted local code.",
     );
@@ -46,7 +46,7 @@ function maybeWarnTrustedHookSource(source: string): void {
  * 1. Directory-based discovery (bundled, managed, workspace)
  * 2. Legacy config handlers (backwards compatibility)
  *
- * @param cfg - OpenClaw configuration
+ * @param cfg - Mullusi configuration
  * @param workspaceDir - Workspace directory for hook discovery
  * @returns Number of handlers successfully loaded
  *
@@ -59,7 +59,7 @@ function maybeWarnTrustedHookSource(source: string): void {
  * ```
  */
 export async function loadInternalHooks(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   workspaceDir: string,
   opts?: {
     managedHooksDir?: string;
@@ -208,7 +208,7 @@ export async function loadInternalHooks(
       );
 
       // Legacy handlers are always workspace-relative, so use mtime-based cache busting
-      const importUrl = buildImportUrl(safeModulePath, "openclaw-workspace");
+      const importUrl = buildImportUrl(safeModulePath, "mullusi-workspace");
       const mod = (await import(importUrl)) as Record<string, unknown>;
 
       // Get the handler function

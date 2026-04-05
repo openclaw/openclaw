@@ -8,7 +8,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "mullusi/plugin-sdk/zod";
 import {
   createFixedWindowRateLimiter,
   isBlockedHostnameOrIp,

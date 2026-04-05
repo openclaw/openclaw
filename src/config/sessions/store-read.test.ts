@@ -6,7 +6,7 @@ import { readSessionStoreReadOnly } from "./store-read.js";
 
 describe("readSessionStoreReadOnly", () => {
   it("returns an empty store for malformed or non-object JSON", async () => {
-    await withTempDir("openclaw-session-store-", async (dir) => {
+    await withTempDir("mullusi-session-store-", async (dir) => {
       const storePath = path.join(dir, "sessions.json");
 
       await fs.writeFile(storePath, '["not-an-object"]\n', "utf8");

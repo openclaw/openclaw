@@ -11,7 +11,7 @@ const pr = process.env.PR_NUMBER_FOR_CHANGELOG;
 const path = "CHANGELOG.md";
 const original = fs.readFileSync(path, "utf8");
 const lines = original.split("\n");
-const prPattern = new RegExp(`(?:\\(#${pr}\\)|openclaw#${pr})`, "i");
+const prPattern = new RegExp(`(?:\\(#${pr}\\)|mullusi#${pr})`, "i");
 
 function findActiveSectionIndex(arr) {
   return arr.findIndex((line) => line.trim() === "## Unreleased");
@@ -165,7 +165,7 @@ validate_changelog_entry_for_pr() {
   fi
 
   local pr_pattern
-  pr_pattern="(#$pr|openclaw#$pr)"
+  pr_pattern="(#$pr|mullusi#$pr)"
 
   local with_pr
   with_pr=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" || true)

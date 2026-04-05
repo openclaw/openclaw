@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   isDiagnosticFlagEnabled,
   matchesDiagnosticFlag,
@@ -10,9 +10,9 @@ describe("resolveDiagnosticFlags", () => {
   it("normalizes and dedupes config and env flags", () => {
     const cfg = {
       diagnostics: { flags: [" Telegram.Http ", "cache.*", "CACHE.*"] },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const env = {
-      OPENCLAW_DIAGNOSTICS: " foo, Cache.*  telegram.http  ",
+      MULLUSI_DIAGNOSTICS: " foo, Cache.*  telegram.http  ",
     } as NodeJS.ProcessEnv;
 
     expect(resolveDiagnosticFlags(cfg, env)).toEqual(["telegram.http", "cache.*", "foo"]);
@@ -21,12 +21,12 @@ describe("resolveDiagnosticFlags", () => {
   it("treats false-like env values as no extra flags", () => {
     const cfg = {
       diagnostics: { flags: ["telegram.http"] },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     for (const raw of ["0", "false", "off", "none", "   "]) {
       expect(
         resolveDiagnosticFlags(cfg, {
-          OPENCLAW_DIAGNOSTICS: raw,
+          MULLUSI_DIAGNOSTICS: raw,
         } as NodeJS.ProcessEnv),
       ).toEqual(["telegram.http"]);
     }
@@ -53,9 +53,9 @@ describe("isDiagnosticFlagEnabled", () => {
   it("resolves config and env together before matching", () => {
     const cfg = {
       diagnostics: { flags: ["gateway.*"] },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const env = {
-      OPENCLAW_DIAGNOSTICS: "telegram.http",
+      MULLUSI_DIAGNOSTICS: "telegram.http",
     } as NodeJS.ProcessEnv;
 
     expect(isDiagnosticFlagEnabled("gateway.ws", cfg, env)).toBe(true);

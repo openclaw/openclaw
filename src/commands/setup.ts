@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import JSON5 from "json5";
 import { z } from "zod";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
-import { type OpenClawConfig, createConfigIO, writeConfigFile } from "../config/config.js";
+import { type MullusiConfig, createConfigIO, writeConfigFile } from "../config/config.js";
 import { formatConfigPath, logConfigUpdated } from "../config/logging.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -14,12 +14,12 @@ const JsonRecordSchema = z.record(z.string(), z.unknown());
 
 async function readConfigFileRaw(configPath: string): Promise<{
   exists: boolean;
-  parsed: OpenClawConfig;
+  parsed: MullusiConfig;
 }> {
   try {
     const raw = await fs.readFile(configPath, "utf-8");
     const parsed = safeParseWithSchema(JsonRecordSchema, JSON5.parse(raw));
-    return { exists: true, parsed: (parsed ?? {}) as OpenClawConfig };
+    return { exists: true, parsed: (parsed ?? {}) as MullusiConfig };
   } catch {
     return { exists: false, parsed: {} };
   }
@@ -42,7 +42,7 @@ export async function setupCommand(
 
   const workspace = desiredWorkspace ?? defaults.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
 
-  const next: OpenClawConfig = {
+  const next: MullusiConfig = {
     ...cfg,
     agents: {
       ...cfg.agents,

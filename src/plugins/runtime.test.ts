@@ -221,7 +221,7 @@ describe("setActivePluginRegistry", () => {
       origin: "workspace",
       enabled: true,
       status: "loaded",
-      format: "openclaw",
+      format: "mullusi",
       toolNames: [],
       hookNames: [],
       channelIds: [],

@@ -1,8 +1,8 @@
 import { RequestClient } from "@buape/carbon";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { RetryConfig, RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { loadConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { RetryConfig, RetryRunner } from "mullusi/plugin-sdk/retry-runtime";
+import { normalizeAccountId } from "mullusi/plugin-sdk/routing";
+import type { RuntimeEnv } from "mullusi/plugin-sdk/runtime-env";
 import {
   mergeDiscordAccountConfig,
   resolveDiscordAccount,

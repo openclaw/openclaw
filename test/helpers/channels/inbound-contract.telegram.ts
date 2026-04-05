@@ -1,6 +1,6 @@
 import { it } from "vitest";
 import { expectChannelInboundContextContract } from "../../../src/channels/plugins/contracts/test-helpers.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { MullusiConfig } from "../../../src/config/config.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 const telegramHarnessModuleId = resolveRelativeBundledPluginPublicModuleId({
@@ -10,12 +10,12 @@ const telegramHarnessModuleId = resolveRelativeBundledPluginPublicModuleId({
 });
 
 async function buildTelegramMessageContextForTest(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   message: Record<string, unknown>;
 }) {
   const telegramHarnessModule = (await import(telegramHarnessModuleId)) as {
     buildTelegramMessageContextForTest: (params: {
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       message: Record<string, unknown>;
     }) => Promise<
       { ctxPayload: import("../../../src/auto-reply/templating.js").MsgContext } | null | undefined
@@ -39,7 +39,7 @@ export function installTelegramInboundContractSuite() {
             groups: { "*": { requireMention: false } },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       message: {
         chat: { id: 42, type: "group", title: "Ops" },
         text: "hello",

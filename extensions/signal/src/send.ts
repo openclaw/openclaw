@@ -1,14 +1,14 @@
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
+import { loadConfig, type MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "mullusi/plugin-sdk/config-runtime";
+import { kindFromMime } from "mullusi/plugin-sdk/media-runtime";
+import { resolveOutboundAttachmentFromUrl } from "mullusi/plugin-sdk/media-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   baseUrl?: string;
   account?: string;
   accountId?: string;
@@ -40,11 +40,11 @@ type SignalTarget =
   | { type: "username"; username: string };
 
 let signalConfigRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/config-runtime")>
+  | Promise<typeof import("mullusi/plugin-sdk/config-runtime")>
   | undefined;
 
 async function loadSignalConfigRuntime() {
-  signalConfigRuntimePromise ??= import("openclaw/plugin-sdk/config-runtime");
+  signalConfigRuntimePromise ??= import("mullusi/plugin-sdk/config-runtime");
   return await signalConfigRuntimePromise;
 }
 

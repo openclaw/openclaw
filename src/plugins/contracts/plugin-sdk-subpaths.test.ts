@@ -14,13 +14,13 @@ import type {
   ChannelStatusIssue as ContractChannelStatusIssue,
   ChannelThreadingContext as ContractChannelThreadingContext,
   ChannelThreadingToolContext as ContractChannelThreadingToolContext,
-} from "openclaw/plugin-sdk/channel-contract";
+} from "mullusi/plugin-sdk/channel-contract";
 import type {
   ChannelMessageActionContext as CoreChannelMessageActionContext,
-  OpenClawPluginApi as CoreOpenClawPluginApi,
+  MullusiPluginApi as CoreMullusiPluginApi,
   PluginRuntime as CorePluginRuntime,
-} from "openclaw/plugin-sdk/core";
-import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
+} from "mullusi/plugin-sdk/core";
+import * as providerEntrySdk from "mullusi/plugin-sdk/provider-entry";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../../channels/plugins/types.js";
 import type {
@@ -38,12 +38,12 @@ import type {
 } from "../../channels/plugins/types.js";
 import type {
   ChannelMessageActionContext as SharedChannelMessageActionContext,
-  OpenClawPluginApi as SharedOpenClawPluginApi,
+  MullusiPluginApi as SharedMullusiPluginApi,
   PluginRuntime as SharedPluginRuntime,
 } from "../../plugin-sdk/channel-plugin-common.js";
 import { pluginSdkSubpaths } from "../../plugin-sdk/entrypoints.js";
 import type { PluginRuntime } from "../runtime/types.js";
-import type { OpenClawPluginApi } from "../types.js";
+import type { MullusiPluginApi } from "../types.js";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
@@ -175,7 +175,7 @@ describe("plugin-sdk subpath exports", () => {
     for (const deniedSubpath of [
       "acpx",
       "device-pair",
-      "lobster",
+      "mullusi",
       "pairing-access",
       "provider-model-definitions",
       "reply-prefix",
@@ -375,7 +375,7 @@ describe("plugin-sdk subpath exports", () => {
         resolve(REPO_ROOT, "extensions"),
         resolve(REPO_ROOT, "test"),
       ],
-      pattern: /openclaw\/plugin-sdk\/channel-runtime/u,
+      pattern: /mullusi\/plugin-sdk\/channel-runtime/u,
       exclude: ["src/plugins/sdk-alias.test.ts"],
     });
     expect(matches).toEqual([]);
@@ -797,10 +797,10 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<ContractChannelStatusIssue>().toMatchTypeOf<ChannelStatusIssue>();
     expectTypeOf<ContractChannelThreadingContext>().toMatchTypeOf<ChannelThreadingContext>();
     expectTypeOf<ContractChannelThreadingToolContext>().toMatchTypeOf<ChannelThreadingToolContext>();
-    expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<OpenClawPluginApi>();
+    expectTypeOf<CoreMullusiPluginApi>().toMatchTypeOf<MullusiPluginApi>();
     expectTypeOf<CorePluginRuntime>().toMatchTypeOf<PluginRuntime>();
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
-    expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<SharedOpenClawPluginApi>();
+    expectTypeOf<CoreMullusiPluginApi>().toMatchTypeOf<SharedMullusiPluginApi>();
     expectTypeOf<CorePluginRuntime>().toMatchTypeOf<SharedPluginRuntime>();
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<SharedChannelMessageActionContext>();
   });
@@ -817,16 +817,16 @@ describe("plugin-sdk subpath exports", () => {
       channelReplyPipelineSdk,
       ...representativeModules
     ] = await Promise.all([
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-actions"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/global-singleton"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-lifecycle"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-pairing"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-reply-pipeline"),
+      importResolvedPluginSdkSubpath("mullusi/plugin-sdk/core"),
+      importResolvedPluginSdkSubpath("mullusi/plugin-sdk/channel-actions"),
+      importResolvedPluginSdkSubpath("mullusi/plugin-sdk/global-singleton"),
+      importResolvedPluginSdkSubpath("mullusi/plugin-sdk/text-runtime"),
+      importResolvedPluginSdkSubpath("mullusi/plugin-sdk/plugin-entry"),
+      importResolvedPluginSdkSubpath("mullusi/plugin-sdk/channel-lifecycle"),
+      importResolvedPluginSdkSubpath("mullusi/plugin-sdk/channel-pairing"),
+      importResolvedPluginSdkSubpath("mullusi/plugin-sdk/channel-reply-pipeline"),
       ...representativeRuntimeSmokeSubpaths.map((id) =>
-        importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${id}`),
+        importResolvedPluginSdkSubpath(`mullusi/plugin-sdk/${id}`),
       ),
     ]);
 

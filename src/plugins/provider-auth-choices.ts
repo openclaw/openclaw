@@ -1,5 +1,5 @@
 import { normalizeProviderIdForAuth } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
@@ -32,7 +32,7 @@ export type ProviderOnboardAuthFlag = {
 };
 
 export function resolveManifestProviderAuthChoices(params?: {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
@@ -85,7 +85,7 @@ export function resolveManifestProviderAuthChoices(params?: {
 export function resolveManifestProviderAuthChoice(
   choiceId: string,
   params?: {
-    config?: OpenClawConfig;
+    config?: MullusiConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
     includeUntrustedWorkspacePlugins?: boolean;
@@ -102,7 +102,7 @@ export function resolveManifestProviderAuthChoice(
 
 export function resolveManifestProviderApiKeyChoice(params: {
   providerId: string;
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
@@ -123,7 +123,7 @@ export function resolveManifestProviderApiKeyChoice(params: {
 export function resolveManifestDeprecatedProviderAuthChoice(
   choiceId: string,
   params?: {
-    config?: OpenClawConfig;
+    config?: MullusiConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
     includeUntrustedWorkspacePlugins?: boolean;
@@ -139,7 +139,7 @@ export function resolveManifestDeprecatedProviderAuthChoice(
 }
 
 export function resolveManifestProviderOnboardAuthFlags(params?: {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;

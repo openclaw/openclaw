@@ -1,8 +1,8 @@
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-import { z } from "openclaw/plugin-sdk/zod";
+} from "mullusi/plugin-sdk/ssrf-runtime";
+import { z } from "mullusi/plugin-sdk/zod";
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 

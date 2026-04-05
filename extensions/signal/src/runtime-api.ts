@@ -1,13 +1,13 @@
 // Private runtime barrel for the bundled Signal extension.
 // Prefer narrower SDK subpaths plus local extension seams over the legacy signal barrel.
 
-export type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
+export type { ChannelMessageActionAdapter } from "mullusi/plugin-sdk/channel-contract";
 export { buildChannelConfigSchema, SignalConfigSchema } from "../config-api.js";
-export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-export type { RuntimeOpenClawConfig as OpenClawConfig };
-export type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
-export type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+export { PAIRING_APPROVED_MESSAGE } from "mullusi/plugin-sdk/channel-status";
+import type { MullusiConfig as RuntimeMullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+export type { RuntimeMullusiConfig as MullusiConfig };
+export type { MullusiPluginApi, PluginRuntime } from "mullusi/plugin-sdk/core";
+export type { ChannelPlugin } from "mullusi/plugin-sdk/core";
 export {
   DEFAULT_ACCOUNT_ID,
   applyAccountNameToChannelSection,
@@ -18,22 +18,22 @@ export {
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk/core";
-export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
-export { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-export { chunkText } from "openclaw/plugin-sdk/reply-runtime";
-export { detectBinary } from "openclaw/plugin-sdk/setup-tools";
+} from "mullusi/plugin-sdk/core";
+export { resolveChannelMediaMaxBytes } from "mullusi/plugin-sdk/media-runtime";
+export { formatCliCommand, formatDocsLink } from "mullusi/plugin-sdk/setup-tools";
+export { chunkText } from "mullusi/plugin-sdk/reply-runtime";
+export { detectBinary } from "mullusi/plugin-sdk/setup-tools";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/config-runtime";
 export {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
-} from "openclaw/plugin-sdk/status-helpers";
-export { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+} from "mullusi/plugin-sdk/status-helpers";
+export { normalizeE164 } from "mullusi/plugin-sdk/text-runtime";
 export { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 export {
   listEnabledSignalAccounts,
@@ -50,6 +50,6 @@ export { sendMessageSignal } from "./send.js";
 export { signalMessageActions } from "./message-actions.js";
 export type { ResolvedSignalAccount } from "./accounts.js";
 export type SignalAccountConfig = Omit<
-  Exclude<NonNullable<RuntimeOpenClawConfig["channels"]>["signal"], undefined>,
+  Exclude<NonNullable<RuntimeMullusiConfig["channels"]>["signal"], undefined>,
   "accounts"
 >;

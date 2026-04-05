@@ -130,7 +130,7 @@ describe("sent-message-cache", () => {
   });
 
   it("keeps sent-message ownership across restart", async () => {
-    const persistedStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-restart.json`;
+    const persistedStorePath = `/tmp/mullusi-telegram-send-tests-${process.pid}-restart.json`;
     resolveStorePath.mockReturnValue(persistedStorePath);
 
     recordSentMessage(123, 1);

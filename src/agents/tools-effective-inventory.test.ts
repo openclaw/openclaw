@@ -28,7 +28,7 @@ async function loadHarness(options?: {
         ],
     );
   vi.doMock("./pi-tools.js", () => ({
-    createOpenClawCodingTools: createToolsMock,
+    createMullusiCodingTools: createToolsMock,
   }));
   vi.doMock("./pi-embedded-runner/model.js", () => ({
     resolveModel: vi.fn(() => ({

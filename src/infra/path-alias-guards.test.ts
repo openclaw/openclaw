@@ -6,7 +6,7 @@ import { assertNoPathAliasEscape } from "./path-alias-guards.js";
 
 async function withAliasRoot(cb: (root: string) => Promise<void>): Promise<void> {
   await withTempDir(
-    { prefix: "openclaw-path-alias-", parentDir: process.cwd(), subdir: "root" },
+    { prefix: "mullusi-path-alias-", parentDir: process.cwd(), subdir: "root" },
     cb,
   );
 }

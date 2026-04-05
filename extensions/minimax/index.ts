@@ -3,17 +3,17 @@ import {
   type ProviderAuthContext,
   type ProviderAuthResult,
   type ProviderCatalogContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+} from "mullusi/plugin-sdk/plugin-entry";
 import {
   MINIMAX_OAUTH_MARKER,
   ensureAuthProfileStore,
   listProfilesForProvider,
-} from "openclaw/plugin-sdk/provider-auth";
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
-import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
+} from "mullusi/plugin-sdk/provider-auth";
+import { buildOauthProviderAuthResult } from "mullusi/plugin-sdk/provider-auth";
+import { createProviderApiKeyAuthMethod } from "mullusi/plugin-sdk/provider-auth-api-key";
+import { buildProviderReplayFamilyHooks } from "mullusi/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "mullusi/plugin-sdk/provider-stream";
+import { fetchMinimaxUsage } from "mullusi/plugin-sdk/provider-usage";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import {
   buildMinimaxImageGenerationProvider,

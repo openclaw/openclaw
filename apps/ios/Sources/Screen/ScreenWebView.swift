@@ -1,4 +1,4 @@
-import OpenClawKit
+import MullusiKit
 import SwiftUI
 import WebKit
 
@@ -125,7 +125,7 @@ final class ScreenWebViewCoordinator: NSObject {
 
 // MARK: - Navigation Delegate
 
-/// Handles navigation policy to intercept openclaw:// deep links from canvas
+/// Handles navigation policy to intercept mullusi:// deep links from canvas
 @MainActor
 private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
     weak var controller: ScreenController?
@@ -140,8 +140,8 @@ private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
             return
         }
 
-        // Intercept openclaw:// deep links.
-        if url.scheme?.lowercased() == "openclaw" {
+        // Intercept mullusi:// deep links.
+        if url.scheme?.lowercased() == "mullusi" {
             decisionHandler(.cancel)
             self.controller?.onDeepLink?(url)
             return
@@ -170,7 +170,7 @@ private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
 }
 
 private final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
-    static let messageName = "openclawCanvasA2UIAction"
+    static let messageName = "mullusiCanvasA2UIAction"
     static let handlerNames = [messageName]
 
     weak var controller: ScreenController?

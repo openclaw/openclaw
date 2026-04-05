@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { installedPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
 import { createPluginRecord, createPluginStatusReport } from "../../plugins/status.test-helpers.js";
 
-const WORKSPACE_PLUGIN_ROOT = installedPluginRoot("/tmp/workspace/.openclaw", "superpowers");
+const WORKSPACE_PLUGIN_ROOT = installedPluginRoot("/tmp/workspace/.mullusi", "superpowers");
 
 const {
   readConfigFileSnapshotMock,
@@ -67,7 +67,7 @@ describe("handleCommands /plugins toggle", () => {
     const config = buildCfg();
     readConfigFileSnapshotMock.mockResolvedValue({
       valid: true,
-      path: "/tmp/openclaw.json",
+      path: "/tmp/mullusi.json",
       resolved: config,
     });
     buildPluginDiagnosticsReportMock.mockReturnValue(
@@ -107,7 +107,7 @@ describe("handleCommands /plugins toggle", () => {
     const config = buildCfg();
     readConfigFileSnapshotMock.mockResolvedValue({
       valid: true,
-      path: "/tmp/openclaw.json",
+      path: "/tmp/mullusi.json",
       resolved: config,
     });
     buildPluginDiagnosticsReportMock.mockReturnValue(
@@ -146,7 +146,7 @@ describe("handleCommands /plugins toggle", () => {
     const config = buildCfg();
     readConfigFileSnapshotMock.mockResolvedValue({
       valid: true,
-      path: "/tmp/openclaw.json",
+      path: "/tmp/mullusi.json",
       resolved: config,
     });
     buildPluginSnapshotReportMock.mockReturnValue(

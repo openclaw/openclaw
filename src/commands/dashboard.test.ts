@@ -38,7 +38,7 @@ function mockSnapshot(params?: {
 }) {
   const token = params?.token ?? "abc123";
   mocks.readConfigFileSnapshot.mockResolvedValue({
-    path: "/tmp/openclaw.json",
+    path: "/tmp/mullusi.json",
     exists: true,
     raw: "{}",
     parsed: {},
@@ -53,10 +53,10 @@ function mockSnapshot(params?: {
     issues: [],
     legacyIssues: [],
   });
-  mocks.resolveGatewayPort.mockReturnValue(18789);
+  mocks.resolveGatewayPort.mockReturnValue(18790);
   mocks.resolveControlUiLinks.mockReturnValue({
-    httpUrl: "http://127.0.0.1:18789/",
-    wsUrl: "ws://127.0.0.1:18789",
+    httpUrl: "http://127.0.0.1:18790/",
+    wsUrl: "ws://127.0.0.1:18790",
   });
   mocks.copyToClipboard.mockResolvedValue(true);
 }
@@ -81,7 +81,7 @@ describe("dashboardCommand bind selection", () => {
     await dashboardCommand(runtime, { noOpen: true });
 
     expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({
-      port: 18789,
+      port: 18790,
       bind: "loopback",
       customBindHost: undefined,
       basePath: undefined,
@@ -94,7 +94,7 @@ describe("dashboardCommand bind selection", () => {
     await dashboardCommand(runtime, { noOpen: true });
 
     expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({
-      port: 18789,
+      port: 18790,
       bind: "custom",
       customBindHost: "10.0.0.5",
       basePath: undefined,
@@ -107,7 +107,7 @@ describe("dashboardCommand bind selection", () => {
     await dashboardCommand(runtime, { noOpen: true });
 
     expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({
-      port: 18789,
+      port: 18790,
       bind: "tailnet",
       customBindHost: undefined,
       basePath: undefined,

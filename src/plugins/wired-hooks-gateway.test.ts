@@ -31,13 +31,13 @@ async function expectGatewayHookCall(params: {
 }
 
 describe("gateway hook runner methods", () => {
-  const gatewayCtx = { port: 18789 };
+  const gatewayCtx = { port: 18790 };
 
   it.each([
     {
       name: "runGatewayStart invokes registered gateway_start hooks",
       hookName: "gateway_start" as const,
-      event: { port: 18789 },
+      event: { port: 18790 },
     },
     {
       name: "runGatewayStop invokes registered gateway_stop hooks",

@@ -90,7 +90,7 @@ function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
       return item;
     }
     const { content: _content, ...rest } = a;
-    return { ...rest, content: "__OPENCLAW_REDACTED__" };
+    return { ...rest, content: "__MULLUSI_REDACTED__" };
   });
   return { ...rec, attachments: next };
 }
@@ -143,7 +143,7 @@ function makeMissingToolResult(params: {
     content: [
       {
         type: "text",
-        text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+        text: "[mullusi] missing tool result in session history; inserted synthetic error result for transcript repair.",
       },
     ],
     isError: true,

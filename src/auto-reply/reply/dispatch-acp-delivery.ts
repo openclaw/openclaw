@@ -1,6 +1,6 @@
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { hasOutboundReplyContent } from "mullusi/plugin-sdk/reply-payload";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
@@ -30,7 +30,7 @@ function normalizeDeliveryChannel(value: string | undefined): string | undefined
 }
 
 function resolveDeliveryAccountId(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   channel: string | undefined;
   accountId: string | undefined;
 }): string | undefined {
@@ -105,7 +105,7 @@ export type AcpDispatchDeliveryCoordinator = {
 };
 
 export function createAcpDispatchDeliveryCoordinator(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   ctx: FinalizedMsgContext;
   dispatcher: ReplyDispatcher;
   inboundAudio: boolean;

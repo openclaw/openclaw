@@ -3,22 +3,22 @@ import {
   resolveEnvelopeFormatOptions,
   toLocationContext,
   type NormalizedLocation,
-} from "openclaw/plugin-sdk/channel-inbound";
-import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/channel-inbound";
+import { normalizeCommandBody } from "mullusi/plugin-sdk/command-surface";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { resolveChannelContextVisibilityMode } from "mullusi/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/config-runtime";
 import {
   buildPendingHistoryContextFromMap,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
-import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
+} from "mullusi/plugin-sdk/reply-history";
+import type { ResolvedAgentRoute } from "mullusi/plugin-sdk/routing";
+import { logVerbose, shouldLogVerbose } from "mullusi/plugin-sdk/runtime-env";
+import { evaluateSupplementalContextVisibility } from "mullusi/plugin-sdk/security-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import type {
@@ -43,7 +43,7 @@ type FinalizedTelegramInboundContext = ReturnType<
 >;
 
 export async function buildTelegramInboundContextPayload(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   primaryCtx: TelegramContext;
   msg: TelegramContext["message"];
   allMedia: TelegramMediaRef[];

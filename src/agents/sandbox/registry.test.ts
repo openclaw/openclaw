@@ -5,7 +5,7 @@ const { TEST_STATE_DIR, SANDBOX_REGISTRY_PATH, SANDBOX_BROWSER_REGISTRY_PATH } =
   const path = require("node:path");
   const { mkdtempSync } = require("node:fs");
   const { tmpdir } = require("node:os");
-  const baseDir = mkdtempSync(path.join(tmpdir(), "openclaw-sandbox-registry-"));
+  const baseDir = mkdtempSync(path.join(tmpdir(), "mullusi-sandbox-registry-"));
 
   return {
     TEST_STATE_DIR: baseDir,
@@ -152,7 +152,7 @@ function browserEntry(
     sessionKey: "agent:main",
     createdAtMs: 1,
     lastUsedAtMs: 1,
-    image: "openclaw-browser:test",
+    image: "mullusi-browser:test",
     cdpPort: 9222,
     ...overrides,
   };
@@ -164,7 +164,7 @@ function containerEntry(overrides: Partial<SandboxRegistryEntry> = {}): SandboxR
     sessionKey: "agent:main",
     createdAtMs: 1,
     lastUsedAtMs: 1,
-    image: "openclaw-sandbox:test",
+    image: "mullusi-sandbox:test",
     ...overrides,
   };
 }
@@ -189,7 +189,7 @@ describe("registry race safety", () => {
         sessionKey: "agent:main",
         createdAtMs: 1,
         lastUsedAtMs: 1,
-        image: "openclaw-sandbox:test",
+        image: "mullusi-sandbox:test",
       },
     ]);
 

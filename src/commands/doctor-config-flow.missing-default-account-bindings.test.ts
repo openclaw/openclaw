@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { collectMissingDefaultAccountBindingWarnings } from "./doctor/shared/default-account-warnings.js";
 
 describe("collectMissingDefaultAccountBindingWarnings", () => {
   it("warns when named accounts exist without default and no valid binding exists", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       channels: {
         telegram: {
           accounts: {
@@ -23,7 +23,7 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
   });
 
   it("does not warn when an explicit account binding exists", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       channels: {
         telegram: {
           accounts: {
@@ -38,7 +38,7 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
   });
 
   it("warns when bindings cover only a subset of configured accounts", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       channels: {
         telegram: {
           accounts: {
@@ -57,7 +57,7 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
   });
 
   it("does not warn when wildcard account binding exists", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       channels: {
         telegram: {
           accounts: {
@@ -72,7 +72,7 @@ describe("collectMissingDefaultAccountBindingWarnings", () => {
   });
 
   it("does not warn when default account is present", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       channels: {
         telegram: {
           accounts: {

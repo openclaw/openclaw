@@ -85,9 +85,9 @@ const LOCAL_PINNED_PATH_PYTHON = [
 ].join("\n");
 
 const PINNED_PATH_PYTHON_CANDIDATES = [
-  process.env.OPENCLAW_PINNED_PYTHON,
+  process.env.MULLUSI_PINNED_PYTHON,
   // Keep the write-specific alias for backwards compatibility.
-  process.env.OPENCLAW_PINNED_WRITE_PYTHON,
+  process.env.MULLUSI_PINNED_WRITE_PYTHON,
   "/usr/bin/python3",
   "/opt/homebrew/bin/python3",
   "/usr/local/bin/python3",

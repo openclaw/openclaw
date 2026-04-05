@@ -1,6 +1,6 @@
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import type { PinnedDispatcherPolicy } from "mullusi/plugin-sdk/infra-runtime";
+import { coerceSecretRef } from "mullusi/plugin-sdk/provider-auth";
+import { normalizeResolvedSecretInputString } from "mullusi/plugin-sdk/secret-input";
 import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
@@ -838,7 +838,7 @@ export async function resolveMatrixAuth(params?: {
     identifier: { type: "m.id.user", user: resolved.userId },
     password,
     device_id: resolved.deviceId,
-    initial_device_display_name: resolved.deviceName ?? "OpenClaw Gateway",
+    initial_device_display_name: resolved.deviceName ?? "Mullusi Gateway",
   })) as {
     access_token?: string;
     user_id?: string;

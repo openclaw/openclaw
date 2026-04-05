@@ -27,7 +27,7 @@ function writeExecutable(dir: string, name: string, contents: string): void {
 
 describe("git-hooks/pre-commit (integration)", () => {
   it("does not treat staged filenames as git-add flags (e.g. --all)", () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-"));
+    const dir = mkdtempSync(path.join(os.tmpdir(), "mullusi-pre-commit-"));
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
 
     // Use the real hook script and lightweight helper stubs.
@@ -74,7 +74,7 @@ describe("git-hooks/pre-commit (integration)", () => {
   });
 
   it("skips pnpm check when FAST_COMMIT is enabled", () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-pre-commit-yolo-"));
+    const dir = mkdtempSync(path.join(os.tmpdir(), "mullusi-pre-commit-yolo-"));
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
 
     mkdirSync(path.join(dir, "git-hooks"), { recursive: true });

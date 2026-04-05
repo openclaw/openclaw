@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { resolveEntriesWithActiveFallback, resolveModelEntries } from "./resolve.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
@@ -10,7 +10,7 @@ const providerRegistry = new Map<string, { capabilities: MediaUnderstandingCapab
 
 describe("resolveModelEntries", () => {
   it("uses provider capabilities for shared entries without explicit caps", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         media: {
           models: [{ provider: "openai", model: "gpt-5.4" }],
@@ -34,7 +34,7 @@ describe("resolveModelEntries", () => {
   });
 
   it("keeps per-capability entries even without explicit caps", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         media: {
           image: {
@@ -54,7 +54,7 @@ describe("resolveModelEntries", () => {
   });
 
   it("skips shared CLI entries without capabilities", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         media: {
           models: [{ type: "cli", command: "gemini", args: ["--file", "{{MediaPath}}"] }],
@@ -90,7 +90,7 @@ describe("resolveEntriesWithActiveFallback", () => {
   }
 
   function expectResolvedProviders(params: {
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     capability: ResolveWithFallbackInput["capability"];
     config: ResolveWithFallbackInput["config"];
     providers: string[];
@@ -105,7 +105,7 @@ describe("resolveEntriesWithActiveFallback", () => {
   }
 
   it("uses active model when enabled and no models are configured", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         media: {
           audio: { enabled: true },
@@ -122,7 +122,7 @@ describe("resolveEntriesWithActiveFallback", () => {
   });
 
   it("ignores active model when configured entries exist", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         media: {
           audio: { enabled: true, models: [{ provider: "openai", model: "whisper-1" }] },
@@ -139,7 +139,7 @@ describe("resolveEntriesWithActiveFallback", () => {
   });
 
   it("skips active model when provider lacks capability", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         media: {
           video: { enabled: true },

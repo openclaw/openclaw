@@ -110,7 +110,7 @@ describe("security CLI", () => {
       gateway: {
         auth: {
           mode: "token",
-          token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
+          token: { source: "env", provider: "default", id: "MULLUSI_GATEWAY_TOKEN" },
         },
       },
       secrets: {
@@ -146,7 +146,7 @@ describe("security CLI", () => {
           checkId: "gateway.probe_failed",
           severity: "warn",
           title: "Gateway probe failed (deep)",
-          detail: "connect failed: connect ECONNREFUSED 127.0.0.1:18789",
+          detail: "connect failed: connect ECONNREFUSED 127.0.0.1:18790",
         },
       ],
     });

@@ -54,7 +54,7 @@ jobs:
                 label: "r: support",
                 close: true,
                 message:
-                  "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
+                  "Please use [our support server](https://discord.gg/mullusi) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.mullusi.com/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
               },
               {
                 label: "r: no-ci-pr",
@@ -81,7 +81,7 @@ jobs:
                 label: "r: third-party-extension",
                 close: true,
                 message:
-                  "Please make this as a third-party plugin that you maintain yourself in your own repo. Docs: https://docs.openclaw.ai/plugin. Feel free to open a PR after to add it to our community plugins page: https://docs.openclaw.ai/plugins/community",
+                  "Please make this as a third-party plugin that you maintain yourself in your own repo. Docs: https://docs.mullusi.com/plugin. Feel free to open a PR after to add it to our community plugins page: https://docs.mullusi.com/plugins/community",
               },
               {
                 label: "r: moltbook",
@@ -90,13 +90,13 @@ jobs:
                 lockReason: "off-topic",
                 commentTriggers: ["moltbook"],
                 message:
-                  "OpenClaw is not affiliated with Moltbook, and issues related to Moltbook should not be submitted here.",
+                  "Mullusi is not affiliated with Moltbook, and issues related to Moltbook should not be submitted here.",
               },
             ];
 
             const maintainerTeam = "maintainer";
             const pingWarningMessage =
-              "Please don’t spam-ping multiple maintainers at once. Be patient, or join our community Discord for help: https://discord.gg/clawd";
+              "Please don’t spam-ping multiple maintainers at once. Be patient, or join our community Discord for help: https://discord.gg/mullusi";
             const mentionRegex = /@([A-Za-z0-9-]+)/g;
             const maintainerCache = new Map();
             const normalizeLogin = (login) => login.toLowerCase();

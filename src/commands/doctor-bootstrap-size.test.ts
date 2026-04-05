@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
@@ -50,7 +50,7 @@ describe("noteBootstrapFileSize", () => {
       ],
       contextFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "a".repeat(20_000) }],
     });
-    await noteBootstrapFileSize({} as OpenClawConfig);
+    await noteBootstrapFileSize({} as MullusiConfig);
     expect(note).toHaveBeenCalledTimes(1);
     const [message, title] = note.mock.calls[0] ?? [];
     expect(String(title)).toBe("Bootstrap file size");
@@ -71,7 +71,7 @@ describe("noteBootstrapFileSize", () => {
       ],
       contextFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "a".repeat(1_000) }],
     });
-    await noteBootstrapFileSize({} as OpenClawConfig);
+    await noteBootstrapFileSize({} as MullusiConfig);
     expect(note).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { sanitizeTerminalText } from "../../../../src/terminal/safe-text.js";
 import {
@@ -8,7 +8,7 @@ import {
 import { createSelfChatCache } from "./self-chat-cache.js";
 
 describe("resolveIMessageInboundDecision echo detection", () => {
-  const cfg = {} as OpenClawConfig;
+  const cfg = {} as MullusiConfig;
   type InboundDecisionParams = Parameters<typeof resolveIMessageInboundDecision>[0];
 
   function createInboundDecisionParams(
@@ -179,7 +179,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const createdAt = "2026-03-02T20:58:10.649Z";
 
     expect(
@@ -292,7 +292,7 @@ describe("describeIMessageEchoDropLog", () => {
 });
 
 describe("resolveIMessageInboundDecision command auth", () => {
-  const cfg = {} as OpenClawConfig;
+  const cfg = {} as MullusiConfig;
   const resolveDmCommandDecision = (params: { messageId: number; storeAllowFrom: string[] }) =>
     resolveIMessageInboundDecision({
       cfg,

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 
 const MAX_CONTEXT_CHARS = 3000;
@@ -62,7 +62,7 @@ function formatDateStamp(nowMs: number, timezone: string): string {
  */
 export async function readPostCompactionContext(
   workspaceDir: string,
-  cfg?: OpenClawConfig,
+  cfg?: MullusiConfig,
   nowMs?: number,
 ): Promise<string | null> {
   const agentsPath = path.join(workspaceDir, "AGENTS.md");

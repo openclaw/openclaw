@@ -12,11 +12,11 @@ policy. This page covers per-agent configuration, precedence rules, and
 examples.
 
 - **Sandbox backends and modes**: see [Sandboxing](/gateway/sandboxing).
-- **Debugging blocked tools**: see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) and `openclaw sandbox explain`.
+- **Debugging blocked tools**: see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) and `mullusi sandbox explain`.
 - **Elevated exec**: see [Elevated Mode](/tools/elevated).
 
 Auth is per-agent: each agent reads from its own `agentDir` auth store at
-`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
+`~/.mullusi/agents/<agentId>/agent/auth-profiles.json`.
 Credentials are **not** shared between agents. Never reuse `agentDir` across agents.
 If you want to share creds, copy `auth-profiles.json` into the other agent's `agentDir`.
 
@@ -34,13 +34,13 @@ If you want to share creds, copy `auth-profiles.json` into the other agent's `ag
         "id": "main",
         "default": true,
         "name": "Personal Assistant",
-        "workspace": "~/.openclaw/workspace",
+        "workspace": "~/.mullusi/workspace",
         "sandbox": { "mode": "off" }
       },
       {
         "id": "family",
         "name": "Family Bot",
-        "workspace": "~/.openclaw/workspace-family",
+        "workspace": "~/.mullusi/workspace-family",
         "sandbox": {
           "mode": "all",
           "scope": "agent"
@@ -83,12 +83,12 @@ If you want to share creds, copy `auth-profiles.json` into the other agent's `ag
     "list": [
       {
         "id": "personal",
-        "workspace": "~/.openclaw/workspace-personal",
+        "workspace": "~/.mullusi/workspace-personal",
         "sandbox": { "mode": "off" }
       },
       {
         "id": "work",
-        "workspace": "~/.openclaw/workspace-work",
+        "workspace": "~/.mullusi/workspace-work",
         "sandbox": {
           "mode": "all",
           "scope": "shared",
@@ -143,14 +143,14 @@ If you want to share creds, copy `auth-profiles.json` into the other agent's `ag
     "list": [
       {
         "id": "main",
-        "workspace": "~/.openclaw/workspace",
+        "workspace": "~/.mullusi/workspace",
         "sandbox": {
           "mode": "off" // Override: main never sandboxed
         }
       },
       {
         "id": "public",
-        "workspace": "~/.openclaw/workspace-public",
+        "workspace": "~/.mullusi/workspace-public",
         "sandbox": {
           "mode": "all", // Override: public always sandboxed
           "scope": "agent"
@@ -221,7 +221,7 @@ Per-agent elevated overrides (`agents.list[].tools.elevated`) can further restri
 {
   "agents": {
     "defaults": {
-      "workspace": "~/.openclaw/workspace",
+      "workspace": "~/.mullusi/workspace",
       "sandbox": {
         "mode": "non-main"
       }
@@ -247,7 +247,7 @@ Per-agent elevated overrides (`agents.list[].tools.elevated`) can further restri
       {
         "id": "main",
         "default": true,
-        "workspace": "~/.openclaw/workspace",
+        "workspace": "~/.mullusi/workspace",
         "sandbox": { "mode": "off" }
       }
     ]
@@ -255,7 +255,7 @@ Per-agent elevated overrides (`agents.list[].tools.elevated`) can further restri
 }
 ```
 
-Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defaults` + `agents.list` going forward.
+Legacy `agent.*` configs are migrated by `mullusi doctor`; prefer `agents.defaults` + `agents.list` going forward.
 
 ---
 
@@ -322,13 +322,13 @@ After configuring multi-agent sandbox and tools:
 1. **Check agent resolution:**
 
    ```exec
-   openclaw agents list --bindings
+   mullusi agents list --bindings
    ```
 
 2. **Verify sandbox containers:**
 
    ```exec
-   docker ps --filter "name=openclaw-sbx-"
+   docker ps --filter "name=mullusi-sbx-"
    ```
 
 3. **Test tool restrictions:**
@@ -338,7 +338,7 @@ After configuring multi-agent sandbox and tools:
 4. **Monitor logs:**
 
    ```exec
-   tail -f "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/logs/gateway.log" | grep -E "routing|sandbox|tools"
+   tail -f "${MULLUSI_STATE_DIR:-$HOME/.mullusi}/logs/gateway.log" | grep -E "routing|sandbox|tools"
    ```
 
 ---

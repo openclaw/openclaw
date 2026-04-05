@@ -7,7 +7,7 @@ import {
 } from "../vitest.unit.config.ts";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 
-const patternFiles = createPatternFileHelper("openclaw-vitest-unit-config-");
+const patternFiles = createPatternFileHelper("mullusi-vitest-unit-config-");
 
 afterEach(() => {
   patternFiles.cleanup();
@@ -28,7 +28,7 @@ describe("loadIncludePatternsFromEnv", () => {
 
     expect(
       loadIncludePatternsFromEnv({
-        OPENCLAW_VITEST_INCLUDE_FILE: filePath,
+        MULLUSI_VITEST_INCLUDE_FILE: filePath,
       }),
     ).toEqual(["src/infra/update-runner.test.ts", "ui/src/ui/views/chat.test.ts"]);
   });
@@ -49,7 +49,7 @@ describe("loadExtraExcludePatternsFromEnv", () => {
 
     expect(
       loadExtraExcludePatternsFromEnv({
-        OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE: filePath,
+        MULLUSI_VITEST_EXTRA_EXCLUDE_FILE: filePath,
       }),
     ).toEqual(["src/infra/update-runner.test.ts", "ui/src/ui/views/chat.test.ts"]);
   });
@@ -61,7 +61,7 @@ describe("loadExtraExcludePatternsFromEnv", () => {
 
     expect(() =>
       loadExtraExcludePatternsFromEnv({
-        OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE: filePath,
+        MULLUSI_VITEST_EXTRA_EXCLUDE_FILE: filePath,
       }),
     ).toThrow(/JSON array/u);
   });
@@ -90,11 +90,11 @@ describe("unit vitest config", () => {
     expect(unitConfig.test?.passWithNoTests).toBe(true);
   });
 
-  it("adds the OpenClaw runtime setup hooks on top of the base setup", () => {
+  it("adds the Mullusi runtime setup hooks on top of the base setup", () => {
     const unitConfig = createUnitVitestConfig({});
     expect(unitConfig.test?.setupFiles).toEqual([
       "test/setup.ts",
-      "test/setup-openclaw-runtime.ts",
+      "test/setup-mullusi-runtime.ts",
     ]);
   });
 });

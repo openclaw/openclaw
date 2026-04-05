@@ -33,7 +33,7 @@ const requiredPathGroups = [
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
 ];
-const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/", "docs/.generated/"];
+const forbiddenPrefixes = ["dist-runtime/", "dist/Mullusi.app/", "docs/.generated/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
 // startup/doctor OOM reports. Keep enough headroom for the current pack with
 // restored bundled upgrade surfaces and Control UI assets while still catching
@@ -103,7 +103,7 @@ export function collectBundledExtensionRootDependencyMirrorErrors(
   const errors: string[] = [];
 
   for (const extension of extensions) {
-    const rawReleaseChecks = extension.packageJson.openclaw?.releaseChecks;
+    const rawReleaseChecks = extension.packageJson.mullusi?.releaseChecks;
     const allowlist = (rawReleaseChecks as { rootDependencyMirrorAllowlist?: unknown } | undefined)
       ?.rootDependencyMirrorAllowlist;
 
@@ -112,7 +112,7 @@ export function collectBundledExtensionRootDependencyMirrorErrors(
     }
     if (!Array.isArray(allowlist)) {
       errors.push(
-        `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must be an array`,
+        `bundled extension '${extension.id}' manifest invalid | mullusi.releaseChecks.rootDependencyMirrorAllowlist must be an array`,
       );
       continue;
     }
@@ -122,7 +122,7 @@ export function collectBundledExtensionRootDependencyMirrorErrors(
     for (const entry of allowlist) {
       if (typeof entry !== "string" || entry.trim().length === 0) {
         errors.push(
-          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entries must be non-empty strings`,
+          `bundled extension '${extension.id}' manifest invalid | mullusi.releaseChecks.rootDependencyMirrorAllowlist entries must be non-empty strings`,
         );
         continue;
       }
@@ -130,13 +130,13 @@ export function collectBundledExtensionRootDependencyMirrorErrors(
       const extensionSpec = extensionRuntimeDeps.get(entry);
       if (!extensionSpec) {
         errors.push(
-          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be declared in extension runtime dependencies`,
+          `bundled extension '${extension.id}' manifest invalid | mullusi.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be declared in extension runtime dependencies`,
         );
       }
       const rootSpec = rootRuntimeDeps.get(entry);
       if (!rootSpec) {
         errors.push(
-          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be mirrored in root runtime dependencies`,
+          `bundled extension '${extension.id}' manifest invalid | mullusi.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be mirrored in root runtime dependencies`,
         );
       }
       if (!extensionSpec || !rootSpec) {
@@ -144,7 +144,7 @@ export function collectBundledExtensionRootDependencyMirrorErrors(
       }
       if (extensionSpec !== rootSpec) {
         errors.push(
-          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must match root runtime dependency version (extension '${extensionSpec}', root '${rootSpec}')`,
+          `bundled extension '${extension.id}' manifest invalid | mullusi.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must match root runtime dependency version (extension '${extensionSpec}', root '${rootSpec}')`,
         );
       }
     }
@@ -307,7 +307,7 @@ function checkAppcastSparkleVersions() {
   }
 }
 
-// Critical functions that channel extension plugins import from openclaw/plugin-sdk.
+// Critical functions that channel extension plugins import from mullusi/plugin-sdk.
 // If any are missing from the compiled output, plugins crash at runtime (#27569).
 const requiredPluginSdkExports = [
   "isDangerousNameMatchingEnabled",

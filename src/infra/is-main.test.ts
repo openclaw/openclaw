@@ -39,10 +39,10 @@ describe("isMainModule", () => {
     expect(
       isMainModule({
         currentFile: "/repo/dist/entry.js",
-        argv: ["node", "/repo/openclaw.mjs"],
+        argv: ["node", "/repo/mullusi.mjs"],
         cwd: "/repo",
         env: {},
-        wrapperEntryPairs: [{ wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" }],
+        wrapperEntryPairs: [{ wrapperBasename: "mullusi.mjs", entryBasename: "entry.js" }],
       }),
     ).toBe(true);
   });
@@ -51,7 +51,7 @@ describe("isMainModule", () => {
     expect(
       isMainModule({
         currentFile: "/repo/dist/entry.js",
-        argv: ["node", "/repo/openclaw.mjs"],
+        argv: ["node", "/repo/mullusi.mjs"],
         cwd: "/repo",
         env: {},
       }),
@@ -59,10 +59,10 @@ describe("isMainModule", () => {
     expect(
       isMainModule({
         currentFile: "/repo/dist/index.js",
-        argv: ["node", "/repo/openclaw.mjs"],
+        argv: ["node", "/repo/mullusi.mjs"],
         cwd: "/repo",
         env: {},
-        wrapperEntryPairs: [{ wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" }],
+        wrapperEntryPairs: [{ wrapperBasename: "mullusi.mjs", entryBasename: "entry.js" }],
       }),
     ).toBe(false);
   });
@@ -70,7 +70,7 @@ describe("isMainModule", () => {
   it("returns false when this module is only imported under PM2", () => {
     expect(
       isMainModule({
-        currentFile: "/repo/node_modules/openclaw/dist/index.js",
+        currentFile: "/repo/node_modules/mullusi/dist/index.js",
         argv: ["node", "/repo/app.js"],
         cwd: "/repo",
         env: { pm_exec_path: "/repo/app.js", pm_id: "0" },
@@ -81,7 +81,7 @@ describe("isMainModule", () => {
   it("returns false for another entrypoint with the same basename", () => {
     expect(
       isMainModule({
-        currentFile: "/repo/node_modules/openclaw/dist/index.js",
+        currentFile: "/repo/node_modules/mullusi/dist/index.js",
         argv: ["node", "/repo/dist/index.js"],
         cwd: "/repo",
         env: {},

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { resolveAccountEntry } from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -33,7 +33,7 @@ export type ConfigWriteAuthorizationResult =
     };
 
 export function resolveChannelConfigWrites(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   channelId?: ChannelId | null;
   accountId?: string | null;
 }): boolean {
@@ -47,7 +47,7 @@ export function resolveChannelConfigWrites(params: {
 }
 
 export function authorizeConfigWrite(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   origin?: ConfigWriteScope;
   target?: ConfigWriteTarget;
   allowBypass?: boolean;
@@ -177,7 +177,7 @@ function listConfigWriteTargetScopes(target?: ConfigWriteTarget): ConfigWriteSco
 }
 
 function resolveChannelConfig(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   channelId?: ChannelId | null,
 ): ChannelConfigWithAccounts | undefined {
   if (!channelId) {

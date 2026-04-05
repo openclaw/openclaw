@@ -49,7 +49,7 @@ body:
       label: Steps to reproduce
       description: Provide the shortest deterministic repro path supported by direct observation. If the repro path cannot be grounded from the evidence, respond with exactly `NOT_ENOUGH_INFO`.
       placeholder: |
-        1. Start OpenClaw 2026.2.17 with the attached config.
+        1. Start Mullusi 2026.2.17 with the attached config.
         2. Send a Telegram thread reply in the affected chat.
         3. Observe no reply and confirm the attached `reply target not found` log line.
     validations:
@@ -73,7 +73,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: OpenClaw version
+      label: Mullusi version
       description: Exact version/build tested.
       placeholder: <version such as 2026.2.17>
     validations:
@@ -90,7 +90,7 @@ body:
     id: install_method
     attributes:
       label: Install method
-      description: How OpenClaw was installed or launched.
+      description: How Mullusi was installed or launched.
       placeholder: npm global / pnpm dev / docker / mac app
   - type: input
     id: model
@@ -105,7 +105,7 @@ body:
     attributes:
       label: Provider / routing chain
       description: Effective request path through gateways, proxies, providers, or model routers.
-      placeholder: openclaw -> cloudflare-ai-gateway -> minimax
+      placeholder: mullusi -> cloudflare-ai-gateway -> minimax
     validations:
       required: true
   - type: textarea
@@ -114,9 +114,9 @@ body:
       label: Additional provider/model setup details
       description: Optional. Include redacted routing details, per-agent overrides, auth-profile interactions, env/config context, or anything else needed to explain the effective provider/model setup. Do not include API keys, tokens, or passwords.
       placeholder: |
-        Default route is openclaw -> cloudflare-ai-gateway -> minimax.
-        Previous setup was openclaw -> cloudflare-ai-gateway -> openrouter -> minimax.
-        Relevant config lives in ~/.openclaw/openclaw.json under models.providers.minimax and models.providers.cloudflare-ai-gateway.
+        Default route is mullusi -> cloudflare-ai-gateway -> minimax.
+        Previous setup was mullusi -> cloudflare-ai-gateway -> openrouter -> minimax.
+        Relevant config lives in ~/.mullusi/mullusi.json under models.providers.minimax and models.providers.cloudflare-ai-gateway.
   - type: textarea
     id: logs
     attributes:

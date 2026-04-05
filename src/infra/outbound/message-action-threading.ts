@@ -4,7 +4,7 @@ import type {
   ChannelThreadingAdapter,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import type {
   OutboundSessionRoute,
   ResolveOutboundSessionRouteParams,
@@ -16,7 +16,7 @@ type ResolveAutoThreadId = NonNullable<ChannelThreadingAdapter["resolveAutoThrea
 export function resolveAndApplyOutboundThreadId(
   actionParams: Record<string, unknown>,
   context: {
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     to: string;
     accountId?: string | null;
     toolContext?: ChannelThreadingToolContext;
@@ -40,7 +40,7 @@ export function resolveAndApplyOutboundThreadId(
 }
 
 export async function prepareOutboundMirrorRoute(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   channel: ChannelId;
   to: string;
   actionParams: Record<string, unknown>;
@@ -54,7 +54,7 @@ export async function prepareOutboundMirrorRoute(params: {
     params: ResolveOutboundSessionRouteParams,
   ) => Promise<OutboundSessionRoute | null>;
   ensureOutboundSessionEntry: (params: {
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     agentId: string;
     channel: ChannelId;
     accountId?: string | null;

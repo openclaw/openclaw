@@ -126,8 +126,8 @@ jobs:
           cd apps/ios
           xcodegen generate
           xcodebuild build \
-            -project OpenClaw.xcodeproj \
-            -scheme OpenClaw \
+            -project Mullusi.xcodeproj \
+            -scheme Mullusi \
             -destination "generic/platform=iOS Simulator" \
             CODE_SIGNING_ALLOWED=NO
 

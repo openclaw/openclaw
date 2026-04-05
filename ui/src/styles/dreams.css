@@ -1,5 +1,5 @@
 /* ===========================================
-   Dreams Tab – Sleeping Lobster Animation
+   Dreams Tab – Sleeping Mullusi Animation
    =========================================== */
 
 .dreams {
@@ -13,15 +13,15 @@
   user-select: none;
 }
 
-/* ---- Breathing lobster ---- */
+/* ---- Breathing mullusi ---- */
 
-.dreams__lobster {
+.dreams__mullusi {
   animation: dreams-breathe 4s ease-in-out infinite;
   filter: drop-shadow(0 0 40px rgba(255, 77, 77, 0.25));
   transition: filter 0.6s ease;
 }
 
-.dreams__lobster svg {
+.dreams__mullusi svg {
   width: 160px;
   height: 160px;
 }
@@ -209,7 +209,7 @@
   }
 }
 
-/* ---- Ambient glow under lobster ---- */
+/* ---- Ambient glow under mullusi ---- */
 
 .dreams__glow {
   position: absolute;
@@ -431,7 +431,7 @@
 
 /* ---- Idle / inactive state ---- */
 
-.dreams--idle .dreams__lobster {
+.dreams--idle .dreams__mullusi {
   filter: drop-shadow(0 0 20px rgba(255, 77, 77, 0.1));
 }
 

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { buildMediaUnderstandingRegistry, normalizeMediaProviderId } from "./provider-registry.js";
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
 
@@ -48,14 +48,14 @@ function providerSupportsCapability(
   return Boolean(provider.describeVideo);
 }
 
-function resolveDefaultRegistry(cfg?: OpenClawConfig) {
-  return buildMediaUnderstandingRegistry(undefined, cfg ?? ({} as OpenClawConfig));
+function resolveDefaultRegistry(cfg?: MullusiConfig) {
+  return buildMediaUnderstandingRegistry(undefined, cfg ?? ({} as MullusiConfig));
 }
 
 export function resolveDefaultMediaModel(params: {
   providerId: string;
   capability: MediaUnderstandingCapability;
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): string | undefined {
   const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);
@@ -65,7 +65,7 @@ export function resolveDefaultMediaModel(params: {
 
 export function resolveAutoMediaKeyProviders(params: {
   capability: MediaUnderstandingCapability;
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): string[] {
   const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);
@@ -94,7 +94,7 @@ export function resolveAutoMediaKeyProviders(params: {
 
 export function providerSupportsNativePdfDocument(params: {
   providerId: string;
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): boolean {
   const registry = params.providerRegistry ?? resolveDefaultRegistry(params.cfg);

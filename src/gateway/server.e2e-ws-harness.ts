@@ -20,8 +20,8 @@ export type GatewayServerHarness = {
 };
 
 export async function startGatewayServerHarness(): Promise<GatewayServerHarness> {
-  const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
-  delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  const envSnapshot = captureEnv(["MULLUSI_GATEWAY_TOKEN"]);
+  delete process.env.MULLUSI_GATEWAY_TOKEN;
   const port = await getFreePort();
   const server = await startGatewayServer(port, {
     auth: { mode: "none" },

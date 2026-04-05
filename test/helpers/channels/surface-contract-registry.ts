@@ -8,7 +8,7 @@ import {
   type ChannelPluginSurface,
 } from "../../../src/channels/plugins/contracts/manifest.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { MullusiConfig } from "../../../src/config/config.js";
 import {
   listLineAccountIds,
   resolveDefaultLineAccountId,
@@ -45,7 +45,7 @@ type DirectoryContractEntry = {
   id: string;
   plugin: Pick<ChannelPlugin, "id" | "directory">;
   coverage: "lookups" | "presence";
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   accountId?: string;
 };
 
@@ -61,7 +61,7 @@ setBundledChannelRuntime("line", {
     line: {
       listLineAccountIds,
       resolveDefaultLineAccountId,
-      resolveLineAccount: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
+      resolveLineAccount: ({ cfg, accountId }: { cfg: MullusiConfig; accountId?: string }) =>
         resolveLineAccount({ cfg, accountId }),
     },
   },

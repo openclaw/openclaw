@@ -34,14 +34,14 @@ vi.mock("./cli.host.runtime.js", async () => {
 });
 
 let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
-let defaultRuntime: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").defaultRuntime;
-let isVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").isVerbose;
-let setVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").setVerbose;
+let defaultRuntime: typeof import("mullusi/plugin-sdk/memory-core-host-runtime-cli").defaultRuntime;
+let isVerbose: typeof import("mullusi/plugin-sdk/memory-core-host-runtime-cli").isVerbose;
+let setVerbose: typeof import("mullusi/plugin-sdk/memory-core-host-runtime-cli").setVerbose;
 
 beforeAll(async () => {
   ({ registerMemoryCli } = await import("./cli.js"));
   ({ defaultRuntime, isVerbose, setVerbose } =
-    await import("openclaw/plugin-sdk/memory-core-host-runtime-cli"));
+    await import("mullusi/plugin-sdk/memory-core-host-runtime-cli"));
 });
 
 beforeEach(() => {
@@ -74,7 +74,7 @@ describe("memory cli", () => {
       files: 0,
       chunks: 0,
       dirty: false,
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/mullusi",
       dbPath: "/tmp/memory.sqlite",
       provider: "openai",
       model: "text-embedding-3-small",
@@ -275,15 +275,15 @@ describe("memory cli", () => {
   it("documents memory help examples", () => {
     const helpText = getMemoryHelpText();
 
-    expect(helpText).toContain("openclaw memory status --fix");
+    expect(helpText).toContain("mullusi memory status --fix");
     expect(helpText).toContain("Repair stale recall locks and normalize promotion metadata.");
-    expect(helpText).toContain("openclaw memory status --deep");
+    expect(helpText).toContain("mullusi memory status --deep");
     expect(helpText).toContain("Probe embedding provider readiness.");
-    expect(helpText).toContain('openclaw memory search "meeting notes"');
+    expect(helpText).toContain('mullusi memory search "meeting notes"');
     expect(helpText).toContain("Quick search using positional query.");
-    expect(helpText).toContain('openclaw memory search --query "deployment" --max-results 20');
+    expect(helpText).toContain('mullusi memory search --query "deployment" --max-results 20');
     expect(helpText).toContain("Limit results for focused troubleshooting.");
-    expect(helpText).toContain("openclaw memory promote --apply");
+    expect(helpText).toContain("mullusi memory promote --apply");
     expect(helpText).toContain("Append top-ranked short-term candidates into MEMORY.md.");
   });
 
@@ -439,7 +439,7 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status"]);
       expect(log).toHaveBeenCalledWith(
-        expect.stringContaining("Fix: openclaw memory status --fix --agent main"),
+        expect.stringContaining("Fix: mullusi memory status --fix --agent main"),
       );
 
       log.mockClear();
@@ -450,7 +450,7 @@ describe("memory cli", () => {
       });
       await runMemoryCli(["status", "--fix"]);
       expect(log).not.toHaveBeenCalledWith(
-        expect.stringContaining("Fix: openclaw memory status --fix --agent main"),
+        expect.stringContaining("Fix: mullusi memory status --fix --agent main"),
       );
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
@@ -882,7 +882,7 @@ describe("memory cli", () => {
             startLine: 10,
             endLine: 14,
             score: 0.91,
-            snippet: "Gateway host uses local mode and binds loopback port 18789",
+            snippet: "Gateway host uses local mode and binds loopback port 18790",
             source: "memory",
           },
         ],

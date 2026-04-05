@@ -1,15 +1,15 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: openclaw
+  name: mullusi
   labels:
-    app: openclaw
+    app: mullusi
 spec:
   type: ClusterIP
   selector:
-    app: openclaw
+    app: mullusi
   ports:
     - name: gateway
-      port: 18789
-      targetPort: 18789
+      port: 18790
+      targetPort: 18790
       protocol: TCP

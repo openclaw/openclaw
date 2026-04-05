@@ -33,13 +33,13 @@ Moonshot 提供带有 OpenAI 兼容端点的 Kimi API。配置该
 [//]: # "moonshot-kimi-k2-ids:end"
 
 ```bash
-openclaw onboard --auth-choice moonshot-api-key
+mullusi onboard --auth-choice moonshot-api-key
 ```
 
 Kimi Coding：
 
 ```bash
-openclaw onboard --auth-choice kimi-code-api-key
+mullusi onboard --auth-choice kimi-code-api-key
 ```
 
 注意：Moonshot 和 Kimi Coding 是独立提供商。密钥不可互换，端点不同，模型引用也不同（Moonshot 使用 `moonshot/...`，Kimi Coding 使用 `kimi-coding/...`）。
@@ -174,9 +174,9 @@ Moonshot Kimi 支持二元原生 thinking：
 }
 ```
 
-OpenClaw 还会为 Moonshot 映射运行时 `/think` 级别：
+Mullusi 还会为 Moonshot 映射运行时 `/think` 级别：
 
 - `/think off` -> `thinking.type=disabled`
 - 任何非 off 的 thinking 级别 -> `thinking.type=enabled`
 
-当启用 Moonshot thinking 时，`tool_choice` 必须为 `auto` 或 `none`。为保持兼容性，OpenClaw 会将不兼容的 `tool_choice` 值标准化为 `auto`。
+当启用 Moonshot thinking 时，`tool_choice` 必须为 `auto` 或 `none`。为保持兼容性，Mullusi 会将不兼容的 `tool_choice` 值标准化为 `auto`。

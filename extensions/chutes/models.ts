@@ -1,5 +1,5 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import type { ModelDefinitionConfig } from "mullusi/plugin-sdk/provider-model-shared";
+import { createSubsystemLogger } from "mullusi/plugin-sdk/runtime-env";
 
 const log = createSubsystemLogger("chutes-models");
 

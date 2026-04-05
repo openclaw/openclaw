@@ -12,7 +12,7 @@ describe("vercel-ai-gateway provider resolution", () => {
     const envSnapshot = captureEnv(["AI_GATEWAY_API_KEY"]);
     process.env.AI_GATEWAY_API_KEY = "vercel-gateway-test-key"; // pragma: allowlist secret
     try {
-      const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+      const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
       const providers = await resolveImplicitProvidersForTest({ agentDir });
       const provider = providers?.["vercel-ai-gateway"];
       expect(provider).toBeDefined();
@@ -23,7 +23,7 @@ describe("vercel-ai-gateway provider resolution", () => {
   });
 
   it("prefers env keyRef marker over runtime plaintext for persistence", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const envSnapshot = captureEnv(["AI_GATEWAY_API_KEY"]);
     delete process.env.AI_GATEWAY_API_KEY;
 
@@ -56,7 +56,7 @@ describe("vercel-ai-gateway provider resolution", () => {
   });
 
   it("uses non-env marker for non-env keyRef vercel profiles", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     await writeFile(
       join(agentDir, "auth-profiles.json"),
       JSON.stringify(

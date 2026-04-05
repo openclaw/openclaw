@@ -5,12 +5,12 @@ export type {
   ClawdbotConfig,
 } from "../runtime-api.js";
 
-export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
-export { createActionGate } from "openclaw/plugin-sdk/channel-actions";
-export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
+export { DEFAULT_ACCOUNT_ID } from "mullusi/plugin-sdk/account-resolution";
+export { createActionGate } from "mullusi/plugin-sdk/channel-actions";
+export { buildChannelConfigSchema } from "mullusi/plugin-sdk/channel-config-primitives";
 export {
   buildProbeChannelStatusSummary,
   createDefaultChannelRuntimeState,
-} from "openclaw/plugin-sdk/status-helpers";
-export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+} from "mullusi/plugin-sdk/status-helpers";
+export { PAIRING_APPROVED_MESSAGE } from "mullusi/plugin-sdk/channel-status";
+export { chunkTextForOutbound } from "mullusi/plugin-sdk/text-chunking";

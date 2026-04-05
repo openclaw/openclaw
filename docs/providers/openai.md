@@ -1,7 +1,7 @@
 ---
-summary: "Use OpenAI via API keys or Codex subscription in OpenClaw"
+summary: "Use OpenAI via API keys or Codex subscription in Mullusi"
 read_when:
-  - You want to use OpenAI models in OpenClaw
+  - You want to use OpenAI models in Mullusi
   - You want Codex subscription auth instead of API keys
 title: "OpenAI"
 ---
@@ -10,13 +10,13 @@ title: "OpenAI"
 
 OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in** for subscription
 access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in.
-OpenAI explicitly supports subscription OAuth usage in external tools/workflows like OpenClaw.
+OpenAI explicitly supports subscription OAuth usage in external tools/workflows like Mullusi.
 
 ## Default interaction style
 
-OpenClaw adds a small OpenAI-specific prompt overlay by default for both
+Mullusi adds a small OpenAI-specific prompt overlay by default for both
 `openai/*` and `openai-codex/*` runs. The overlay keeps the assistant warm,
-collaborative, concise, and direct without replacing the base OpenClaw system
+collaborative, concise, and direct without replacing the base Mullusi system
 prompt.
 
 Config key:
@@ -26,7 +26,7 @@ Config key:
 Allowed values:
 
 - `"friendly"`: default; enable the OpenAI-specific overlay.
-- `"off"`: disable the overlay and use the base OpenClaw prompt only.
+- `"off"`: disable the overlay and use the base Mullusi prompt only.
 
 Scope:
 
@@ -52,7 +52,7 @@ This behavior is enabled by default:
 
 ### Disable the OpenAI prompt overlay
 
-If you prefer the unmodified base OpenClaw prompt, turn the overlay off:
+If you prefer the unmodified base Mullusi prompt, turn the overlay off:
 
 ```json5
 {
@@ -71,7 +71,7 @@ If you prefer the unmodified base OpenClaw prompt, turn the overlay off:
 You can also set it directly with the config CLI:
 
 ```bash
-openclaw config set plugins.entries.openai.config.personalityOverlay off
+mullusi config set plugins.entries.openai.config.personalityOverlay off
 ```
 
 ## Option A: OpenAI API key (OpenAI Platform)
@@ -82,9 +82,9 @@ Get your API key from the OpenAI dashboard.
 ### CLI setup
 
 ```bash
-openclaw onboard --auth-choice openai-api-key
+mullusi onboard --auth-choice openai-api-key
 # or non-interactive
-openclaw onboard --openai-api-key "$OPENAI_API_KEY"
+mullusi onboard --openai-api-key "$OPENAI_API_KEY"
 ```
 
 ### Config snippet
@@ -97,13 +97,13 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 ```
 
 OpenAI's current API model docs list `gpt-5.4` and `gpt-5.4-pro` for direct
-OpenAI API usage. OpenClaw forwards both through the `openai/*` Responses path.
-OpenClaw intentionally suppresses the stale `openai/gpt-5.3-codex-spark` row,
+OpenAI API usage. Mullusi forwards both through the `openai/*` Responses path.
+Mullusi intentionally suppresses the stale `openai/gpt-5.3-codex-spark` row,
 because direct OpenAI API calls reject it in live traffic.
 
-OpenClaw does **not** expose `openai/gpt-5.3-codex-spark` on the direct OpenAI
+Mullusi does **not** expose `openai/gpt-5.3-codex-spark` on the direct OpenAI
 API path. `pi-ai` still ships a built-in row for that model, but live OpenAI API
-requests currently reject it. Spark is treated as Codex-only in OpenClaw.
+requests currently reject it. Spark is treated as Codex-only in Mullusi.
 
 ## Option B: OpenAI Code (Codex) subscription
 
@@ -114,10 +114,10 @@ Codex cloud requires ChatGPT sign-in, while the Codex CLI supports ChatGPT or AP
 
 ```bash
 # Run Codex OAuth in the wizard
-openclaw onboard --auth-choice openai-codex
+mullusi onboard --auth-choice openai-codex
 
 # Or run OAuth directly
-openclaw models auth login --provider openai-codex
+mullusi models auth login --provider openai-codex
 ```
 
 ### Config snippet (Codex subscription)
@@ -128,30 +128,30 @@ openclaw models auth login --provider openai-codex
 }
 ```
 
-OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
+OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. Mullusi
 maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
 
 If onboarding reuses an existing Codex CLI login, those credentials stay
-managed by Codex CLI. On expiry, OpenClaw re-reads the external Codex source
+managed by Codex CLI. On expiry, Mullusi re-reads the external Codex source
 first and, when the provider can refresh it, writes the refreshed credential
-back to Codex storage instead of taking ownership in a separate OpenClaw-only
+back to Codex storage instead of taking ownership in a separate Mullusi-only
 copy.
 
-If your Codex account is entitled to Codex Spark, OpenClaw also supports:
+If your Codex account is entitled to Codex Spark, Mullusi also supports:
 
 - `openai-codex/gpt-5.3-codex-spark`
 
-OpenClaw treats Codex Spark as Codex-only. It does not expose a direct
+Mullusi treats Codex Spark as Codex-only. It does not expose a direct
 `openai/gpt-5.3-codex-spark` API-key path.
 
-OpenClaw also preserves `openai-codex/gpt-5.3-codex-spark` when `pi-ai`
+Mullusi also preserves `openai-codex/gpt-5.3-codex-spark` when `pi-ai`
 discovers it. Treat it as entitlement-dependent and experimental: Codex Spark is
 separate from GPT-5.4 `/fast`, and availability depends on the signed-in Codex /
 ChatGPT account.
 
 ### Codex context window cap
 
-OpenClaw treats the Codex model metadata and the runtime context cap as separate
+Mullusi treats the Codex model metadata and the runtime context cap as separate
 values.
 
 For `openai-codex/gpt-5.4`:
@@ -186,31 +186,31 @@ metadata. Use `contextTokens` when you want to limit the runtime context budget.
 
 ### Transport default
 
-OpenClaw uses `pi-ai` for model streaming. For both `openai/*` and
+Mullusi uses `pi-ai` for model streaming. For both `openai/*` and
 `openai-codex/*`, default transport is `"auto"` (WebSocket-first, then SSE
 fallback).
 
-In `"auto"` mode, OpenClaw also retries one early, retryable WebSocket failure
+In `"auto"` mode, Mullusi also retries one early, retryable WebSocket failure
 before it falls back to SSE. Forced `"websocket"` mode still surfaces transport
 errors directly instead of hiding them behind fallback.
 
-After a connect or early-turn WebSocket failure in `"auto"` mode, OpenClaw marks
+After a connect or early-turn WebSocket failure in `"auto"` mode, Mullusi marks
 that session's WebSocket path as degraded for about 60 seconds and sends
 subsequent turns over SSE during the cool-down instead of thrashing between
 transports.
 
 For native OpenAI-family endpoints (`openai/*`, `openai-codex/*`, and Azure
-OpenAI Responses), OpenClaw also attaches stable session and turn identity state
+OpenAI Responses), Mullusi also attaches stable session and turn identity state
 to requests so retries, reconnects, and SSE fallback stay aligned to the same
 conversation identity. On native OpenAI-family routes this includes stable
 session/turn request identity headers plus matching transport metadata.
 
-OpenClaw also normalizes OpenAI usage counters across transport variants before
+Mullusi also normalizes OpenAI usage counters across transport variants before
 they reach session/status surfaces. Native OpenAI/Codex Responses traffic may
 report usage as either `input_tokens` / `output_tokens` or
-`prompt_tokens` / `completion_tokens`; OpenClaw treats those as the same input
+`prompt_tokens` / `completion_tokens`; Mullusi treats those as the same input
 and output counters for `/status`, `/usage`, and session logs. When native
-WebSocket traffic omits `total_tokens` (or reports `0`), OpenClaw falls back to
+WebSocket traffic omits `total_tokens` (or reports `0`), Mullusi falls back to
 the normalized input + output total so session/status displays stay populated.
 
 You can set `agents.defaults.models.<provider/model>.params.transport`:
@@ -219,7 +219,7 @@ You can set `agents.defaults.models.<provider/model>.params.transport`:
 - `"websocket"`: force WebSocket
 - `"auto"`: try WebSocket, then fall back to SSE
 
-For `openai/*` (Responses API), OpenClaw also enables WebSocket warm-up by
+For `openai/*` (Responses API), Mullusi also enables WebSocket warm-up by
 default (`openaiWsWarmup: true`) when WebSocket transport is used.
 
 Related OpenAI docs:
@@ -246,7 +246,7 @@ Related OpenAI docs:
 
 ### OpenAI WebSocket warm-up
 
-OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
+OpenAI docs describe warm-up as optional. Mullusi enables it by default for
 `openai/*` to reduce first-turn latency when using WebSocket transport.
 
 ### Disable warm-up
@@ -288,7 +288,7 @@ OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
 ### OpenAI and Codex priority processing
 
 OpenAI's API exposes priority processing via `service_tier=priority`. In
-OpenClaw, set `agents.defaults.models["<provider>/<model>"].params.serviceTier`
+Mullusi, set `agents.defaults.models["<provider>/<model>"].params.serviceTier`
 to pass that field through on native OpenAI/Codex Responses endpoints.
 
 ```json5
@@ -314,7 +314,7 @@ to pass that field through on native OpenAI/Codex Responses endpoints.
 
 Supported values are `auto`, `default`, `flex`, and `priority`.
 
-OpenClaw forwards `params.serviceTier` to both direct `openai/*` Responses
+Mullusi forwards `params.serviceTier` to both direct `openai/*` Responses
 requests and `openai-codex/*` Codex Responses requests when those models point
 at the native OpenAI/Codex endpoints.
 
@@ -322,17 +322,17 @@ Important behavior:
 
 - direct `openai/*` must target `api.openai.com`
 - `openai-codex/*` must target `chatgpt.com/backend-api`
-- if you route either provider through another base URL or proxy, OpenClaw leaves `service_tier` untouched
+- if you route either provider through another base URL or proxy, Mullusi leaves `service_tier` untouched
 
 ### OpenAI fast mode
 
-OpenClaw exposes a shared fast-mode toggle for both `openai/*` and
+Mullusi exposes a shared fast-mode toggle for both `openai/*` and
 `openai-codex/*` sessions:
 
 - Chat/UI: `/fast status|on|off`
 - Config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
 
-When fast mode is enabled, OpenClaw maps it to OpenAI priority processing:
+When fast mode is enabled, Mullusi maps it to OpenAI priority processing:
 
 - direct `openai/*` Responses calls to `api.openai.com` send `service_tier = "priority"`
 - `openai-codex/*` Responses calls to `chatgpt.com/backend-api` also send `service_tier = "priority"`
@@ -367,13 +367,13 @@ returns the session to the configured default.
 
 ### Native OpenAI versus OpenAI-compatible routes
 
-OpenClaw treats direct OpenAI, Codex, and Azure OpenAI endpoints differently
+Mullusi treats direct OpenAI, Codex, and Azure OpenAI endpoints differently
 from generic OpenAI-compatible `/v1` proxies:
 
 - native `openai/*`, `openai-codex/*`, and Azure OpenAI routes keep
   `reasoning: { effort: "none" }` intact when you explicitly disable reasoning
 - native OpenAI-family routes default tool schemas to strict mode
-- hidden OpenClaw attribution headers (`originator`, `version`, and
+- hidden Mullusi attribution headers (`originator`, `version`, and
   `User-Agent`) are only attached on verified native OpenAI hosts
   (`api.openai.com`) and native Codex hosts (`chatgpt.com/backend-api`)
 - native OpenAI/Codex routes keep OpenAI-only request shaping such as
@@ -392,7 +392,7 @@ OpenAI-compatible shims onto third-party `/v1` backends.
 ### OpenAI Responses server-side compaction
 
 For direct OpenAI Responses models (`openai/*` using `api: "openai-responses"` with
-`baseUrl` on `api.openai.com`), OpenClaw now auto-enables OpenAI server-side
+`baseUrl` on `api.openai.com`), Mullusi now auto-enables OpenAI server-side
 compaction payload hints:
 
 - Forces `store: true` (unless model compat sets `supportsStore: false`)

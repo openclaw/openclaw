@@ -6,7 +6,7 @@ import CryptoKit
 import EventKit
 import Foundation
 import Darwin
-import OpenClawKit
+import MullusiKit
 import Network
 import Observation
 import os
@@ -772,7 +772,7 @@ final class GatewayConnectionController {
         if manualClientId?.isEmpty == false {
             return manualClientId!
         }
-        return "openclaw-ios"
+        return "mullusi-ios"
     }
 
     private func resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
@@ -784,7 +784,7 @@ final class GatewayConnectionController {
         if useTLS && self.shouldForceTLS(host: trimmedHost) {
             return 443
         }
-        return 18789
+        return 18790
     }
 
     private func resolvedDisplayName(defaults: UserDefaults) -> String {
@@ -802,32 +802,32 @@ final class GatewayConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        var caps = [OpenClawCapability.canvas.rawValue, OpenClawCapability.screen.rawValue]
+        var caps = [MullusiCapability.canvas.rawValue, MullusiCapability.screen.rawValue]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         let cameraEnabled =
             UserDefaults.standard.object(forKey: "camera.enabled") == nil
                 ? true
                 : UserDefaults.standard.bool(forKey: "camera.enabled")
-        if cameraEnabled { caps.append(OpenClawCapability.camera.rawValue) }
+        if cameraEnabled { caps.append(MullusiCapability.camera.rawValue) }
 
         let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
-        if voiceWakeEnabled { caps.append(OpenClawCapability.voiceWake.rawValue) }
+        if voiceWakeEnabled { caps.append(MullusiCapability.voiceWake.rawValue) }
 
         let locationModeRaw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
-        let locationMode = OpenClawLocationMode(rawValue: locationModeRaw) ?? .off
-        if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
+        let locationMode = MullusiLocationMode(rawValue: locationModeRaw) ?? .off
+        if locationMode != .off { caps.append(MullusiCapability.location.rawValue) }
 
-        caps.append(OpenClawCapability.device.rawValue)
+        caps.append(MullusiCapability.device.rawValue)
         if WatchMessagingService.isSupportedOnDevice() {
-            caps.append(OpenClawCapability.watch.rawValue)
+            caps.append(MullusiCapability.watch.rawValue)
         }
-        caps.append(OpenClawCapability.photos.rawValue)
-        caps.append(OpenClawCapability.contacts.rawValue)
-        caps.append(OpenClawCapability.calendar.rawValue)
-        caps.append(OpenClawCapability.reminders.rawValue)
+        caps.append(MullusiCapability.photos.rawValue)
+        caps.append(MullusiCapability.contacts.rawValue)
+        caps.append(MullusiCapability.calendar.rawValue)
+        caps.append(MullusiCapability.reminders.rawValue)
         if Self.motionAvailable() {
-            caps.append(OpenClawCapability.motion.rawValue)
+            caps.append(MullusiCapability.motion.rawValue)
         }
 
         return caps
@@ -835,58 +835,58 @@ final class GatewayConnectionController {
 
     private func currentCommands() -> [String] {
         var commands: [String] = [
-            OpenClawCanvasCommand.present.rawValue,
-            OpenClawCanvasCommand.hide.rawValue,
-            OpenClawCanvasCommand.navigate.rawValue,
-            OpenClawCanvasCommand.evalJS.rawValue,
-            OpenClawCanvasCommand.snapshot.rawValue,
-            OpenClawCanvasA2UICommand.push.rawValue,
-            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-            OpenClawCanvasA2UICommand.reset.rawValue,
-            OpenClawScreenCommand.record.rawValue,
-            OpenClawSystemCommand.notify.rawValue,
-            OpenClawChatCommand.push.rawValue,
-            OpenClawTalkCommand.pttStart.rawValue,
-            OpenClawTalkCommand.pttStop.rawValue,
-            OpenClawTalkCommand.pttCancel.rawValue,
-            OpenClawTalkCommand.pttOnce.rawValue,
+            MullusiCanvasCommand.present.rawValue,
+            MullusiCanvasCommand.hide.rawValue,
+            MullusiCanvasCommand.navigate.rawValue,
+            MullusiCanvasCommand.evalJS.rawValue,
+            MullusiCanvasCommand.snapshot.rawValue,
+            MullusiCanvasA2UICommand.push.rawValue,
+            MullusiCanvasA2UICommand.pushJSONL.rawValue,
+            MullusiCanvasA2UICommand.reset.rawValue,
+            MullusiScreenCommand.record.rawValue,
+            MullusiSystemCommand.notify.rawValue,
+            MullusiChatCommand.push.rawValue,
+            MullusiTalkCommand.pttStart.rawValue,
+            MullusiTalkCommand.pttStop.rawValue,
+            MullusiTalkCommand.pttCancel.rawValue,
+            MullusiTalkCommand.pttOnce.rawValue,
         ]
 
         let caps = Set(self.currentCaps())
-        if caps.contains(OpenClawCapability.camera.rawValue) {
-            commands.append(OpenClawCameraCommand.list.rawValue)
-            commands.append(OpenClawCameraCommand.snap.rawValue)
-            commands.append(OpenClawCameraCommand.clip.rawValue)
+        if caps.contains(MullusiCapability.camera.rawValue) {
+            commands.append(MullusiCameraCommand.list.rawValue)
+            commands.append(MullusiCameraCommand.snap.rawValue)
+            commands.append(MullusiCameraCommand.clip.rawValue)
         }
-        if caps.contains(OpenClawCapability.location.rawValue) {
-            commands.append(OpenClawLocationCommand.get.rawValue)
+        if caps.contains(MullusiCapability.location.rawValue) {
+            commands.append(MullusiLocationCommand.get.rawValue)
         }
-        if caps.contains(OpenClawCapability.device.rawValue) {
-            commands.append(OpenClawDeviceCommand.status.rawValue)
-            commands.append(OpenClawDeviceCommand.info.rawValue)
+        if caps.contains(MullusiCapability.device.rawValue) {
+            commands.append(MullusiDeviceCommand.status.rawValue)
+            commands.append(MullusiDeviceCommand.info.rawValue)
         }
-        if caps.contains(OpenClawCapability.watch.rawValue) {
-            commands.append(OpenClawWatchCommand.status.rawValue)
-            commands.append(OpenClawWatchCommand.notify.rawValue)
+        if caps.contains(MullusiCapability.watch.rawValue) {
+            commands.append(MullusiWatchCommand.status.rawValue)
+            commands.append(MullusiWatchCommand.notify.rawValue)
         }
-        if caps.contains(OpenClawCapability.photos.rawValue) {
-            commands.append(OpenClawPhotosCommand.latest.rawValue)
+        if caps.contains(MullusiCapability.photos.rawValue) {
+            commands.append(MullusiPhotosCommand.latest.rawValue)
         }
-        if caps.contains(OpenClawCapability.contacts.rawValue) {
-            commands.append(OpenClawContactsCommand.search.rawValue)
-            commands.append(OpenClawContactsCommand.add.rawValue)
+        if caps.contains(MullusiCapability.contacts.rawValue) {
+            commands.append(MullusiContactsCommand.search.rawValue)
+            commands.append(MullusiContactsCommand.add.rawValue)
         }
-        if caps.contains(OpenClawCapability.calendar.rawValue) {
-            commands.append(OpenClawCalendarCommand.events.rawValue)
-            commands.append(OpenClawCalendarCommand.add.rawValue)
+        if caps.contains(MullusiCapability.calendar.rawValue) {
+            commands.append(MullusiCalendarCommand.events.rawValue)
+            commands.append(MullusiCalendarCommand.add.rawValue)
         }
-        if caps.contains(OpenClawCapability.reminders.rawValue) {
-            commands.append(OpenClawRemindersCommand.list.rawValue)
-            commands.append(OpenClawRemindersCommand.add.rawValue)
+        if caps.contains(MullusiCapability.reminders.rawValue) {
+            commands.append(MullusiRemindersCommand.list.rawValue)
+            commands.append(MullusiRemindersCommand.add.rawValue)
         }
-        if caps.contains(OpenClawCapability.motion.rawValue) {
-            commands.append(OpenClawMotionCommand.activity.rawValue)
-            commands.append(OpenClawMotionCommand.pedometer.rawValue)
+        if caps.contains(MullusiCapability.motion.rawValue) {
+            commands.append(MullusiMotionCommand.activity.rawValue)
+            commands.append(MullusiMotionCommand.pedometer.rawValue)
         }
 
         return commands

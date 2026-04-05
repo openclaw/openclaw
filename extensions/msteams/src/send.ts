@@ -1,6 +1,6 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
+import { resolveMarkdownTableMode } from "mullusi/plugin-sdk/config-runtime";
+import { convertMarkdownTables } from "mullusi/plugin-sdk/text-runtime";
+import { loadOutboundMediaFromUrl, type MullusiConfig } from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
   classifyMSTeamsSendError,
@@ -22,7 +22,7 @@ import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-
 
 export type SendMSTeamsMessageParams = {
   /** Full config (for credentials) */
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   /** Conversation ID or user ID to send to */
   to: string;
   /** Message text */
@@ -53,7 +53,7 @@ const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
 export type SendMSTeamsPollParams = {
   /** Full config (for credentials) */
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   /** Conversation ID or user ID to send to */
   to: string;
   /** Poll question */
@@ -72,7 +72,7 @@ export type SendMSTeamsPollResult = {
 
 export type SendMSTeamsCardParams = {
   /** Full config (for credentials) */
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   /** Conversation ID or user ID to send to */
   to: string;
   /** Adaptive Card JSON object */
@@ -518,7 +518,7 @@ export async function sendAdaptiveCardMSTeams(
 
 export type EditMSTeamsMessageParams = {
   /** Full config (for credentials) */
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   /** Conversation ID or user ID */
   to: string;
   /** Activity ID of the message to edit */
@@ -533,7 +533,7 @@ export type EditMSTeamsMessageResult = {
 
 export type DeleteMSTeamsMessageParams = {
   /** Full config (for credentials) */
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   /** Conversation ID or user ID */
   to: string;
   /** Activity ID of the message to delete */

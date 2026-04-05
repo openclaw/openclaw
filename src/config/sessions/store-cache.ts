@@ -17,7 +17,7 @@ const SESSION_STORE_SERIALIZED_CACHE = new Map<string, string>();
 
 export function getSessionStoreTtl(): number {
   return resolveCacheTtlMs({
-    envValue: process.env.OPENCLAW_SESSION_CACHE_TTL_MS,
+    envValue: process.env.MULLUSI_SESSION_CACHE_TTL_MS,
     defaultTtlMs: DEFAULT_SESSION_STORE_TTL_MS,
   });
 }

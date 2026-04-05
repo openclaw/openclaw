@@ -1,8 +1,8 @@
-import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import { reduceInteractiveReply } from "mullusi/plugin-sdk/interactive-runtime";
 import type {
   InteractiveButtonStyle,
   InteractiveReply,
-} from "openclaw/plugin-sdk/interactive-runtime";
+} from "mullusi/plugin-sdk/interactive-runtime";
 import type { DiscordComponentButtonStyle, DiscordComponentMessageSpec } from "./components.js";
 
 function resolveDiscordInteractiveButtonStyle(

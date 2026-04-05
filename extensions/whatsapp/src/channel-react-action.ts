@@ -3,7 +3,7 @@ import {
   handleWhatsAppAction,
   normalizeWhatsAppTarget,
   readStringParam,
-  type OpenClawConfig,
+  type MullusiConfig,
 } from "./channel-react-action.runtime.js";
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
@@ -11,7 +11,7 @@ const WHATSAPP_CHANNEL = "whatsapp" as const;
 export async function handleWhatsAppReactAction(params: {
   action: string;
   params: Record<string, unknown>;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   toolContext?: {
     currentChannelId?: string | null;

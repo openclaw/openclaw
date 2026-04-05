@@ -2,12 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ChannelType, type AutocompleteInteraction } from "@buape/carbon";
-import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig, loadConfig } from "mullusi/plugin-sdk/config-runtime";
+import { clearSessionStoreCacheForTest } from "mullusi/plugin-sdk/config-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
-type ConversationRuntimeModule = typeof import("openclaw/plugin-sdk/conversation-runtime");
+type ConversationRuntimeModule = typeof import("mullusi/plugin-sdk/conversation-runtime");
 type ResolveConfiguredBindingRoute = ConversationRuntimeModule["resolveConfiguredBindingRoute"];
 type ConfiguredBindingRouteResult = ReturnType<ResolveConfiguredBindingRoute>;
 type EnsureConfiguredBindingRouteReady =
@@ -72,24 +72,24 @@ function createConfiguredRouteResult(
   };
 }
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+vi.mock("mullusi/plugin-sdk/conversation-runtime", async () => {
   const { createConfiguredBindingConversationRuntimeModuleMock } =
     await import("../test-support/configured-binding-runtime.js");
   return await createConfiguredBindingConversationRuntimeModuleMock<
-    typeof import("openclaw/plugin-sdk/conversation-runtime")
+    typeof import("mullusi/plugin-sdk/conversation-runtime")
   >(
     {
       ensureConfiguredBindingRouteReadyMock,
       resolveConfiguredBindingRouteMock,
     },
     () =>
-      vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
-        "openclaw/plugin-sdk/conversation-runtime",
+      vi.importActual<typeof import("mullusi/plugin-sdk/conversation-runtime")>(
+        "mullusi/plugin-sdk/conversation-runtime",
       ),
   );
 });
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+vi.mock("mullusi/plugin-sdk/agent-runtime", () => ({
   normalizeProviderId: (value: string) => value.trim().toLowerCase(),
   resolveDefaultModelForAgent: (params: { cfg: ReturnType<typeof loadConfig> }) => {
     const configuredModel = params.cfg.agents?.defaults?.model;
@@ -111,17 +111,17 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   },
 }));
 
-vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
+vi.mock("mullusi/plugin-sdk/models-provider-runtime", () => ({
   buildModelsProviderData: buildModelsProviderDataMock,
 }));
 
 const STORE_PATH = path.join(
   os.tmpdir(),
-  `openclaw-discord-think-autocomplete-${process.pid}.json`,
+  `mullusi-discord-think-autocomplete-${process.pid}.json`,
 );
 const SESSION_KEY = "agent:main:main";
-let findCommandByNativeName: typeof import("openclaw/plugin-sdk/command-auth").findCommandByNativeName;
-let resolveCommandArgChoices: typeof import("openclaw/plugin-sdk/command-auth").resolveCommandArgChoices;
+let findCommandByNativeName: typeof import("mullusi/plugin-sdk/command-auth").findCommandByNativeName;
+let resolveCommandArgChoices: typeof import("mullusi/plugin-sdk/command-auth").resolveCommandArgChoices;
 let resolveDiscordNativeChoiceContext: typeof import("./native-command-ui.js").resolveDiscordNativeChoiceContext;
 
 async function loadDiscordThinkAutocompleteModulesForTest() {
@@ -131,7 +131,7 @@ async function loadDiscordThinkAutocompleteModulesForTest() {
     resolveProviderDefaultThinkingLevel: providerThinkingMocks.resolveProviderDefaultThinkingLevel,
     resolveProviderXHighThinking: providerThinkingMocks.resolveProviderXHighThinking,
   }));
-  const commandAuth = await import("openclaw/plugin-sdk/command-auth");
+  const commandAuth = await import("mullusi/plugin-sdk/command-auth");
   const nativeCommandUi = await import("./native-command-ui.js");
   return {
     findCommandByNativeName: commandAuth.findCommandByNativeName,

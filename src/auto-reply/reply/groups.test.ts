@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 
 describe("group runtime loading", () => {
@@ -28,7 +28,7 @@ describe("group runtime loading", () => {
     ).toContain('You are in the Whatsapp group chat "Ops".');
     expect(
       groups.buildGroupIntro({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         sessionCtx: { Provider: "whatsapp" },
         defaultActivation: "mention",
         silentToken: "NO_REPLY",

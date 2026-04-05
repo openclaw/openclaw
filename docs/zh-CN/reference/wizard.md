@@ -17,20 +17,20 @@ x-i18n:
 
 # 设置向导参考
 
-这是 `openclaw onboard` CLI 向导的完整参考。
+这是 `mullusi onboard` CLI 向导的完整参考。
 有关高层概览，请参阅 [设置向导](/start/wizard)。
 
 ## 流程详情（本地模式）
 
 <Steps>
   <Step title="现有配置检测">
-    - 如果 `~/.openclaw/openclaw.json` 存在，请选择 **Keep / Modify / Reset**。
+    - 如果 `~/.mullusi/mullusi.json` 存在，请选择 **Keep / Modify / Reset**。
     - 重新运行向导**不会**清除任何内容，除非你明确选择 **Reset**
       （或传入 `--reset`）。
     - CLI `--reset` 默认值为 `config+creds+sessions`；使用 `--reset-scope full`
       可额外移除工作区。
     - 如果配置无效或包含旧版键，向导会停止，并要求
-      你先运行 `openclaw doctor` 再继续。
+      你先运行 `mullusi doctor` 再继续。
     - 重置会使用 `trash`（绝不使用 `rm`），并提供以下范围：
       - 仅配置
       - 配置 + 凭证 + 会话
@@ -64,16 +64,16 @@ x-i18n:
     - 从已检测到的选项中选择默认模型（或手动输入 `provider/model`）。为了获得最佳质量并降低 prompt injection 风险，请选择你在提供商栈中可用的最强最新一代模型。
     - 向导会运行模型检查，并在所配置模型未知或缺少认证时发出警告。
     - API key 存储模式默认为明文 auth-profile 值。使用 `--secret-input-mode ref` 可改为存储基于环境变量的引用（例如 `keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" }`）。
-    - OAuth 凭证保存在 `~/.openclaw/credentials/oauth.json`；auth-profile 保存在 `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`（API key + OAuth）。
+    - OAuth 凭证保存在 `~/.mullusi/credentials/oauth.json`；auth-profile 保存在 `~/.mullusi/agents/<agentId>/agent/auth-profiles.json`（API key + OAuth）。
     - 更多细节： [/concepts/oauth](/concepts/oauth)
     <Note>
     无头/服务器提示：在有浏览器的机器上完成 OAuth，然后将
-    `~/.openclaw/credentials/oauth.json`（或 `$OPENCLAW_STATE_DIR/credentials/oauth.json`）复制到
+    `~/.mullusi/credentials/oauth.json`（或 `$MULLUSI_STATE_DIR/credentials/oauth.json`）复制到
     Gateway 网关主机上。
     </Note>
   </Step>
   <Step title="工作区">
-    - 默认为 `~/.openclaw/workspace`（可配置）。
+    - 默认为 `~/.mullusi/workspace`（可配置）。
     - 为工作区植入智能体引导仪式所需的文件。
     - 完整工作区布局 + 备份指南： [智能体工作区](/concepts/agent-workspace)
   </Step>
@@ -101,13 +101,13 @@ x-i18n:
     - [Signal](/channels/signal)：可选安装 `signal-cli` + 账号配置。
     - [BlueBubbles](/channels/bluebubbles)：**iMessage 推荐方案**；server URL + password + webhook。
     - [iMessage](/channels/imessage)：旧版 `imsg` CLI 路径 + 数据库访问。
-    - 私信安全：默认为 pairing。首次私信会发送一个代码；通过 `openclaw pairing approve <channel> <code>` 批准，或使用允许列表。
+    - 私信安全：默认为 pairing。首次私信会发送一个代码；通过 `mullusi pairing approve <channel> <code>` 批准，或使用允许列表。
   </Step>
   <Step title="Web 搜索">
     - 选择一个提供商：Perplexity、Brave、Gemini、Grok 或 Kimi（也可跳过）。
     - 粘贴你的 API key（QuickStart 会自动从环境变量或现有配置中检测 key）。
     - 使用 `--skip-search` 跳过。
-    - 之后再配置：`openclaw configure --section web`。
+    - 之后再配置：`mullusi configure --section web`。
   </Step>
   <Step title="守护进程安装">
     - macOS：LaunchAgent
@@ -121,8 +121,8 @@ x-i18n:
     - 如果同时配置了 `gateway.auth.token` 和 `gateway.auth.password`，且 `gateway.auth.mode` 未设置，则会阻止守护进程安装，直到显式设置 mode。
   </Step>
   <Step title="健康检查">
-    - 启动 Gateway 网关（如果需要）并运行 `openclaw health`。
-    - 提示：`openclaw status --deep` 会在状态输出中添加 Gateway 网关健康探测（需要能访问到 Gateway 网关）。
+    - 启动 Gateway 网关（如果需要）并运行 `mullusi health`。
+    - 提示：`mullusi status --deep` 会在状态输出中添加 Gateway 网关健康探测（需要能访问到 Gateway 网关）。
   </Step>
   <Step title="Skills（推荐）">
     - 读取可用的 Skills 并检查要求。
@@ -144,11 +144,11 @@ x-i18n:
 使用 `--non-interactive` 自动化或脚本化新手引导：
 
 ```bash
-openclaw onboard --non-interactive \
+mullusi onboard --non-interactive \
   --mode local \
   --auth-choice apiKey \
   --anthropic-api-key "$ANTHROPIC_API_KEY" \
-  --gateway-port 18789 \
+  --gateway-port 18790 \
   --gateway-bind loopback \
   --install-daemon \
   --daemon-runtime node \
@@ -160,12 +160,12 @@ openclaw onboard --non-interactive \
 在非交互模式中使用 Gateway token SecretRef：
 
 ```bash
-export OPENCLAW_GATEWAY_TOKEN="your-token"
-openclaw onboard --non-interactive \
+export MULLUSI_GATEWAY_TOKEN="your-token"
+mullusi onboard --non-interactive \
   --mode local \
   --auth-choice skip \
   --gateway-auth token \
-  --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN
+  --gateway-token-ref-env MULLUSI_GATEWAY_TOKEN
 ```
 
 `--gateway-token` 和 `--gateway-token-ref-env` 互斥。
@@ -180,8 +180,8 @@ openclaw onboard --non-interactive \
 ### 添加智能体（非交互）
 
 ```bash
-openclaw agents add work \
-  --workspace ~/.openclaw/workspace-work \
+mullusi agents add work \
+  --workspace ~/.mullusi/workspace-work \
   --model openai/gpt-5.4 \
   --bind whatsapp:biz \
   --non-interactive \
@@ -198,7 +198,7 @@ Gateway 网关通过 RPC 暴露向导流程（`wizard.start`、`wizard.next`、`
 向导可以从 GitHub releases 安装 `signal-cli`：
 
 - 下载适合的发布资源。
-- 将其存储到 `~/.openclaw/tools/signal-cli/<version>/` 下。
+- 将其存储到 `~/.mullusi/tools/signal-cli/<version>/` 下。
 - 将 `channels.signal.cliPath` 写入你的配置。
 
 说明：
@@ -209,7 +209,7 @@ Gateway 网关通过 RPC 暴露向导流程（`wizard.start`、`wizard.next`、`
 
 ## 向导会写入的内容
 
-`~/.openclaw/openclaw.json` 中的典型字段：
+`~/.mullusi/mullusi.json` 中的典型字段：
 
 - `agents.defaults.workspace`
 - `agents.defaults.model` / `models.providers`（如果选择了 Minimax）
@@ -225,10 +225,10 @@ Gateway 网关通过 RPC 暴露向导流程（`wizard.start`、`wizard.next`、`
 - `wizard.lastRunCommand`
 - `wizard.lastRunMode`
 
-`openclaw agents add` 会写入 `agents.list[]` 和可选的 `bindings`。
+`mullusi agents add` 会写入 `agents.list[]` 和可选的 `bindings`。
 
-WhatsApp 凭证位于 `~/.openclaw/credentials/whatsapp/<accountId>/` 下。
-会话存储在 `~/.openclaw/agents/<agentId>/sessions/` 下。
+WhatsApp 凭证位于 `~/.mullusi/credentials/whatsapp/<accountId>/` 下。
+会话存储在 `~/.mullusi/agents/<agentId>/sessions/` 下。
 
 某些渠道以插件形式提供。当你在设置期间选择其中一个时，向导
 会提示先安装它（npm 或本地路径），然后才能配置。

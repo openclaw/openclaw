@@ -1,1 +1,1 @@
-export { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
+export { getReplyFromConfig } from "mullusi/plugin-sdk/reply-runtime";

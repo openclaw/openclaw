@@ -10,7 +10,7 @@ title: "Browser Login"
 
 ## Manual login (recommended)
 
-When a site requires login, **sign in manually** in the **host** browser profile (the openclaw browser).
+When a site requires login, **sign in manually** in the **host** browser profile (the mullusi browser).
 
 Do **not** give the model your credentials. Automated logins often trigger anti‑bot defenses and can lock the account.
 
@@ -18,11 +18,11 @@ Back to the main browser docs: [Browser](/tools/browser).
 
 ## Which Chrome profile is used?
 
-OpenClaw controls a **dedicated Chrome profile** (named `openclaw`, orange‑tinted UI). This is separate from your daily browser profile.
+Mullusi controls a **dedicated Chrome profile** (named `mullusi`, orange‑tinted UI). This is separate from your daily browser profile.
 
 For agent browser tool calls:
 
-- Default choice: the agent should use its isolated `openclaw` browser.
+- Default choice: the agent should use its isolated `mullusi` browser.
 - Use `profile="user"` only when existing logged-in sessions matter and the user is at the computer to click/approve any attach prompt.
 - If you have multiple user-browser profiles, specify the profile explicitly instead of guessing.
 
@@ -32,11 +32,11 @@ Two easy ways to access it:
 2. **Open it via CLI**:
 
 ```bash
-openclaw browser start
-openclaw browser open https://x.com
+mullusi browser start
+mullusi browser open https://x.com
 ```
 
-If you have multiple profiles, pass `--browser-profile <name>` (the default is `openclaw`).
+If you have multiple profiles, pass `--browser-profile <name>` (the default is `mullusi`).
 
 ## X/Twitter: recommended flow
 
@@ -67,7 +67,7 @@ If the agent is sandboxed, the browser tool defaults to the sandbox. To allow ho
 Then target the host browser:
 
 ```bash
-openclaw browser open https://x.com --browser-profile openclaw --target host
+mullusi browser open https://x.com --browser-profile mullusi --target host
 ```
 
 Or disable sandboxing for the agent that posts updates.

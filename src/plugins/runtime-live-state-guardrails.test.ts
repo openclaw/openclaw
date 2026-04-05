@@ -14,7 +14,7 @@ const LIVE_RUNTIME_STATE_GUARDS: Record<
   }
 > = {
   [bundledPluginFile("whatsapp", "src/active-listener.ts")]: {
-    required: ["globalThis", 'Symbol.for("openclaw.whatsapp.activeListenerState")'],
+    required: ["globalThis", 'Symbol.for("mullusi.whatsapp.activeListenerState")'],
     forbidden: ["resolveGlobalSingleton"],
   },
 };

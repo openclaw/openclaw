@@ -1,5 +1,5 @@
 import { z, type ZodTypeAny } from "zod";
-import type { PluginConfigUiHint, OpenClawPluginConfigSchema } from "./types.js";
+import type { PluginConfigUiHint, MullusiPluginConfigSchema } from "./types.js";
 
 type Issue = { path: Array<string | number>; message: string };
 
@@ -13,7 +13,7 @@ type ZodSchemaWithToJsonSchema = ZodTypeAny & {
 
 type BuildPluginConfigSchemaOptions = {
   uiHints?: Record<string, PluginConfigUiHint>;
-  safeParse?: OpenClawPluginConfigSchema["safeParse"];
+  safeParse?: MullusiPluginConfigSchema["safeParse"];
 };
 
 function error(message: string): SafeParseResult {
@@ -78,7 +78,7 @@ function normalizeJsonSchema(schema: unknown): unknown {
 export function buildPluginConfigSchema(
   schema: ZodTypeAny,
   options?: BuildPluginConfigSchemaOptions,
-): OpenClawPluginConfigSchema {
+): MullusiPluginConfigSchema {
   const schemaWithJson = schema as ZodSchemaWithToJsonSchema;
   const safeParse = options?.safeParse ?? ((value) => safeParseRuntimeSchema(schema, value));
   if (typeof schemaWithJson.toJSONSchema === "function") {
@@ -105,7 +105,7 @@ export function buildPluginConfigSchema(
   };
 }
 
-export function emptyPluginConfigSchema(): OpenClawPluginConfigSchema {
+export function emptyPluginConfigSchema(): MullusiPluginConfigSchema {
   return {
     safeParse(value: unknown): SafeParseResult {
       if (value === undefined) {

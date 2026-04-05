@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { buildSecretRefCredentialMatrix } from "./credential-matrix.js";
 import {
   discoverConfigSecretTargetsByIds,
@@ -95,7 +95,7 @@ describe("secret target registry", () => {
             token: { source: "env", provider: "default", id: "REMOTE_TOKEN" },
           },
         },
-      } as unknown as OpenClawConfig,
+      } as unknown as MullusiConfig,
       new Set(["talk.providers.*.apiKey"]),
     );
 

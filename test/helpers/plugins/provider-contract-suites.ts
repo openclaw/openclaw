@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { MullusiConfig } from "../../../src/config/config.js";
 import type {
   ProviderPlugin,
   WebFetchProviderPlugin,
@@ -124,7 +124,7 @@ export function installWebSearchProviderContractSuite(params: {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const tool = provider.createTool({ config, searchConfig: searchConfigTarget });
 
     expect(tool).not.toBeNull();
@@ -168,13 +168,13 @@ export function installWebFetchProviderContractSuite(params: {
     expect(provider.getCredentialValue(fetchConfigTarget)).toEqual(credentialValue);
 
     if (provider.setConfiguredCredentialValue && provider.getConfiguredCredentialValue) {
-      const configTarget = {} as OpenClawConfig;
+      const configTarget = {} as MullusiConfig;
       provider.setConfiguredCredentialValue(configTarget, credentialValue);
       expect(provider.getConfiguredCredentialValue(configTarget)).toEqual(credentialValue);
     }
 
     if (provider.applySelectionConfig && params.pluginId) {
-      const applied = provider.applySelectionConfig({} as OpenClawConfig);
+      const applied = provider.applySelectionConfig({} as MullusiConfig);
       expect(applied.plugins?.entries?.[params.pluginId]?.enabled).toBe(true);
     }
 
@@ -187,7 +187,7 @@ export function installWebFetchProviderContractSuite(params: {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const tool = provider.createTool({ config, fetchConfig: fetchConfigTarget });
 
     expect(tool).not.toBeNull();

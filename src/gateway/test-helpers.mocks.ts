@@ -7,7 +7,7 @@ import { Mock, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { HooksConfig } from "../config/types.hooks.js";
@@ -31,7 +31,7 @@ type StubChannelOptions = {
 type GetReplyFromConfigFn = (
   ctx: MsgContext,
   opts?: GetReplyOptions,
-  configOverride?: OpenClawConfig,
+  configOverride?: MullusiConfig,
 ) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
 type CronIsolatedRunFn = (...args: unknown[]) => Promise<{ status: string; summary: string }>;
 type AgentCommandFn = (...args: unknown[]) => Promise<void>;
@@ -323,12 +323,12 @@ const createStubPluginRegistry = (): PluginRegistry => ({
 });
 
 const GATEWAY_TEST_PLUGIN_REGISTRY_STATE_KEY = Symbol.for(
-  "openclaw.gatewayTestHelpers.pluginRegistryState",
+  "mullusi.gatewayTestHelpers.pluginRegistryState",
 );
-const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.configRoot");
+const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("mullusi.gatewayTestHelpers.configRoot");
 
 const hoisted = vi.hoisted(() => {
-  const key = Symbol.for("openclaw.gatewayTestHelpers.hoisted");
+  const key = Symbol.for("mullusi.gatewayTestHelpers.hoisted");
   const store = globalThis as Record<PropertyKey, unknown>;
   if (Object.prototype.hasOwnProperty.call(store, key)) {
     return store[key] as {
@@ -450,12 +450,12 @@ export const resetTestPluginRegistry = () => {
 };
 
 const testConfigRoot = resolveGlobalSingleton(GATEWAY_TEST_CONFIG_ROOT_KEY, () => ({
-  value: path.join(os.tmpdir(), `openclaw-gateway-test-${process.pid}-${crypto.randomUUID()}`),
+  value: path.join(os.tmpdir(), `mullusi-gateway-test-${process.pid}-${crypto.randomUUID()}`),
 }));
 
 export const setTestConfigRoot = (root: string) => {
   testConfigRoot.value = root;
-  process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");
+  process.env.MULLUSI_CONFIG_PATH = path.join(root, "mullusi.json");
 };
 
 export const testTailnetIPv4 = hoisted.testTailnetIPv4;
@@ -613,7 +613,7 @@ vi.mock("../config/sessions.js", async () => {
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  const resolveConfigPath = () => path.join(testConfigRoot.value, "openclaw.json");
+  const resolveConfigPath = () => path.join(testConfigRoot.value, "mullusi.json");
   const hashConfigRaw = (raw: string | null) =>
     crypto
       .createHash("sha256")
@@ -635,7 +635,7 @@ vi.mock("../config/config.js", async () => {
         : {};
     const defaults = {
       model: { primary: "anthropic/claude-opus-4-6" },
-      workspace: path.join(os.tmpdir(), "openclaw-gateway-test"),
+      workspace: path.join(os.tmpdir(), "mullusi-gateway-test"),
       ...fileDefaults,
       ...testState.agentConfig,
     };
@@ -750,7 +750,7 @@ vi.mock("../config/config.js", async () => {
       canvasHost,
       hooks,
       cron,
-    } as OpenClawConfig;
+    } as MullusiConfig;
   };
 
   const readConfigFileSnapshot = async () => {
@@ -873,7 +873,7 @@ vi.mock("../config/config.js", async () => {
       config: testState.migrationConfig ?? (raw as Record<string, unknown>),
       changes: testState.migrationChanges,
     }),
-    applyConfigOverrides: (cfg: OpenClawConfig) =>
+    applyConfigOverrides: (cfg: MullusiConfig) =>
       composeTestConfig(cfg as Record<string, unknown>),
     loadConfig: loadRuntimeAwareTestConfig,
     getRuntimeConfig: loadRuntimeAwareTestConfig,
@@ -1018,7 +1018,7 @@ vi.mock("../plugins/loader.js", async () => {
     await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
   return {
     ...actual,
-    loadOpenClawPlugins: () => pluginRegistryState.registry,
+    loadMullusiPlugins: () => pluginRegistryState.registry,
   };
 });
 vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
@@ -1030,7 +1030,7 @@ vi.mock("/src/plugins/runtime/runtime-web-channel-plugin.js", () => ({
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));
 
-process.env.OPENCLAW_SKIP_CHANNELS = "1";
-process.env.OPENCLAW_SKIP_CRON = "1";
-process.env.OPENCLAW_SKIP_CHANNELS = "1";
-process.env.OPENCLAW_SKIP_CRON = "1";
+process.env.MULLUSI_SKIP_CHANNELS = "1";
+process.env.MULLUSI_SKIP_CRON = "1";
+process.env.MULLUSI_SKIP_CHANNELS = "1";
+process.env.MULLUSI_SKIP_CRON = "1";

@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import { createIMessageTestPlugin } from "../../../test/helpers/channels/imessage-test-plugin.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import {
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
@@ -146,7 +146,7 @@ vi.mock("../../logging/subsystem.js", () => ({
   },
 }));
 
-export const whatsappChunkConfig: OpenClawConfig = {
+export const whatsappChunkConfig: MullusiConfig = {
   channels: { whatsapp: { textChunkLimit: 4000 } },
 };
 
@@ -224,7 +224,7 @@ export async function runChunkedWhatsAppDelivery(params: {
     >()
     .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
     .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
-  const cfg: OpenClawConfig = {
+  const cfg: MullusiConfig = {
     channels: { whatsapp: { textChunkLimit: 2 } },
   };
   const results = await params.deliverOutboundPayloads({

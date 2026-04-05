@@ -1,9 +1,9 @@
 {
-  "name": "@openclaw/irc",
+  "name": "@mullusi/irc",
   "version": "2026.4.4",
-  "description": "OpenClaw IRC channel plugin",
+  "description": "Mullusi IRC channel plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],

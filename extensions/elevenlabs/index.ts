@@ -1,4 +1,4 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry } from "mullusi/plugin-sdk/plugin-entry";
 import { buildElevenLabsSpeechProvider } from "./speech-provider.js";
 
 export default definePluginEntry({

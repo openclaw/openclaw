@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { resolvePluginWebSearchProviders } from "./web-search-providers.runtime.js";
 
 function hasConfiguredCredentialValue(value: unknown): boolean {
@@ -9,7 +9,7 @@ function hasConfiguredCredentialValue(value: unknown): boolean {
 }
 
 export function hasBundledWebSearchCredential(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   env?: NodeJS.ProcessEnv;
   searchConfig?: Record<string, unknown>;
 }): boolean {

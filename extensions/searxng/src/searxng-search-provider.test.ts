@@ -70,7 +70,7 @@ describe("searxng web search provider", () => {
     }
 
     const result = await tool.execute({
-      query: "openclaw docs",
+      query: "mullusi docs",
       count: 4,
       categories: "general,news",
       language: "en",
@@ -78,14 +78,14 @@ describe("searxng web search provider", () => {
 
     expect(runSearxngSearch).toHaveBeenCalledWith({
       config: { test: true },
-      query: "openclaw docs",
+      query: "mullusi docs",
       count: 4,
       categories: "general,news",
       language: "en",
     });
     expect(result).toEqual({
       config: { test: true },
-      query: "openclaw docs",
+      query: "mullusi docs",
       count: 4,
       categories: "general,news",
       language: "en",

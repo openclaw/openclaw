@@ -1,10 +1,10 @@
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { normalizeResolvedSecretInputString } from "mullusi/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
-} from "openclaw/plugin-sdk/speech";
+} from "mullusi/plugin-sdk/speech";
 import {
   DEFAULT_OPENAI_BASE_URL,
   isValidOpenAIModel,

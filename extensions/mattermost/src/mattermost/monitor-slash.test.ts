@@ -80,12 +80,12 @@ describe("mattermost monitor slash", () => {
   });
 
   it("registers deduped default and native skill commands across teams", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18888");
+    vi.stubEnv("MULLUSI_GATEWAY_PORT", "18888");
     resolveSlashCommandConfig.mockReturnValue({ enabled: true, nativeSkills: true });
     isSlashCommandsEnabled.mockReturnValue(true);
     parseStrictPositiveInteger.mockReturnValue(18888);
     fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }, { id: "team-2" }]);
-    resolveCallbackUrl.mockReturnValue("https://openclaw.test/slash");
+    resolveCallbackUrl.mockReturnValue("https://mullusi.test/slash");
     listSkillCommandsForAgents.mockReturnValue([
       { name: "skill", description: "Skill run" },
       { name: "oc_ping", description: "Already prefixed" },
@@ -101,7 +101,7 @@ describe("mattermost monitor slash", () => {
 
     await registerMattermostMonitorSlashCommands({
       client: {} as never,
-      cfg: { gateway: { port: 18789 } } as never,
+      cfg: { gateway: { port: 18790 } } as never,
       runtime: runtime as never,
       account: { config: { commands: {} }, accountId: "default" } as never,
       baseUrl: "https://chat.example.com",
@@ -112,7 +112,7 @@ describe("mattermost monitor slash", () => {
     expect(registerSlashCommands.mock.calls[0]?.[0]).toMatchObject({
       teamId: "team-1",
       creatorUserId: "bot-user",
-      callbackUrl: "https://openclaw.test/slash",
+      callbackUrl: "https://mullusi.test/slash",
     });
     expect(registerSlashCommands.mock.calls[0]?.[0].commands).toEqual([
       { trigger: "ping", description: "ping" },
@@ -141,7 +141,7 @@ describe("mattermost monitor slash", () => {
       }),
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "mattermost: slash commands registered (2 commands across 2 teams, callback=https://openclaw.test/slash)",
+      "mattermost: slash commands registered (2 commands across 2 teams, callback=https://mullusi.test/slash)",
     );
   });
 
@@ -150,7 +150,7 @@ describe("mattermost monitor slash", () => {
     isSlashCommandsEnabled.mockReturnValue(true);
     parseStrictPositiveInteger.mockReturnValue(undefined);
     fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }, { id: "team-2" }]);
-    resolveCallbackUrl.mockReturnValue("http://127.0.0.1:18789/slash");
+    resolveCallbackUrl.mockReturnValue("http://127.0.0.1:18790/slash");
     registerSlashCommands
       .mockResolvedValueOnce([{ token: "token-1", trigger: "ping" }])
       .mockRejectedValueOnce(new Error("boom"));
@@ -170,7 +170,7 @@ describe("mattermost monitor slash", () => {
 
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining(
-        "slash commands callbackUrl resolved to http://127.0.0.1:18789/slash",
+        "slash commands callbackUrl resolved to http://127.0.0.1:18790/slash",
       ),
     );
     expect(runtime.error).toHaveBeenCalledWith(

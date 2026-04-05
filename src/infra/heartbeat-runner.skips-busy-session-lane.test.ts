@@ -8,7 +8,7 @@ import {
   seedMainSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 
@@ -40,7 +40,7 @@ beforeEach(() => {
 describe("heartbeat runner skips when target session lane is busy", () => {
   it("returns requests-in-flight when session lane has queued work", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         agents: {
           defaults: {
             heartbeat: { every: "30m" },
@@ -54,7 +54,7 @@ describe("heartbeat runner skips when target session lane is busy", () => {
             allowFrom: ["123"],
           },
         },
-      } as unknown as OpenClawConfig;
+      } as unknown as MullusiConfig;
 
       const sessionKey = await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
@@ -88,7 +88,7 @@ describe("heartbeat runner skips when target session lane is busy", () => {
 
   it("proceeds normally when session lane is idle", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         agents: {
           defaults: {
             heartbeat: { every: "30m" },
@@ -102,7 +102,7 @@ describe("heartbeat runner skips when target session lane is busy", () => {
             allowFrom: ["123"],
           },
         },
-      } as unknown as OpenClawConfig;
+      } as unknown as MullusiConfig;
 
       await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",

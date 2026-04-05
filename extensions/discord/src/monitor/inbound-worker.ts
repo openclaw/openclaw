@@ -1,6 +1,6 @@
-import { createRunStateMachine } from "openclaw/plugin-sdk/channel-lifecycle";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
-import { danger, formatDurationSeconds } from "openclaw/plugin-sdk/runtime-env";
+import { createRunStateMachine } from "mullusi/plugin-sdk/channel-lifecycle";
+import { KeyedAsyncQueue } from "mullusi/plugin-sdk/core";
+import { danger, formatDurationSeconds } from "mullusi/plugin-sdk/runtime-env";
 import { materializeDiscordInboundJob, type DiscordInboundJob } from "./inbound-job.js";
 import type { RuntimeEnv } from "./message-handler.preflight.types.js";
 import { processDiscordMessage } from "./message-handler.process.js";

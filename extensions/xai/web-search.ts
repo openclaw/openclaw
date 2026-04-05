@@ -19,7 +19,7 @@ import {
   type WebSearchProviderSetupContext,
   type WebSearchProviderPlugin,
   writeCache,
-} from "openclaw/plugin-sdk/provider-web-search";
+} from "mullusi/plugin-sdk/provider-web-search";
 import {
   buildXaiWebSearchPayload,
   extractXaiWebSearchContent,
@@ -69,7 +69,7 @@ async function runXaiSearchProviderSetup(
     [
       "x_search lets your agent search X (formerly Twitter) posts via xAI.",
       "It reuses the same xAI API key you just configured for Grok web search.",
-      `You can change this later with ${formatCliCommand("openclaw configure --section web")}.`,
+      `You can change this later with ${formatCliCommand("mullusi configure --section web")}.`,
     ].join("\n"),
     "X search",
   );
@@ -194,7 +194,7 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
     envVars: ["XAI_API_KEY"],
     placeholder: "xai-...",
     signupUrl: "https://console.x.ai/",
-    docsUrl: "https://docs.openclaw.ai/tools/web",
+    docsUrl: "https://docs.mullusi.com/tools/web",
     autoDetectOrder: 30,
     credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.xai.config.webSearch.apiKey"],
@@ -231,7 +231,7 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
               error: "missing_xai_api_key",
               message:
                 "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
-              docs: "https://docs.openclaw.ai/tools/web",
+              docs: "https://docs.mullusi.com/tools/web",
             };
           }
 

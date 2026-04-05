@@ -2,7 +2,7 @@
 read_when:
   - 你想将 Synthetic 用作模型提供商
   - 你需要 Synthetic API key 或 base URL 设置
-summary: 在 OpenClaw 中使用 Synthetic 的 Anthropic 兼容 API
+summary: 在 Mullusi 中使用 Synthetic 的 Anthropic 兼容 API
 title: Synthetic
 x-i18n:
   generated_at: "2026-03-16T06:27:11Z"
@@ -15,7 +15,7 @@ x-i18n:
 
 # Synthetic
 
-Synthetic 提供与 Anthropic 兼容的端点。OpenClaw 将其注册为
+Synthetic 提供与 Anthropic 兼容的端点。Mullusi 将其注册为
 `synthetic` 提供商，并使用 Anthropic Messages API。
 
 ## 快速设置
@@ -24,7 +24,7 @@ Synthetic 提供与 Anthropic 兼容的端点。OpenClaw 将其注册为
 2. 运行新手引导：
 
 ```bash
-openclaw onboard --auth-choice synthetic-api-key
+mullusi onboard --auth-choice synthetic-api-key
 ```
 
 默认模型会设置为：
@@ -68,7 +68,7 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.5
 }
 ```
 
-注意：OpenClaw 的 Anthropic 客户端会将 `/v1` 追加到 base URL 后面，因此请使用
+注意：Mullusi 的 Anthropic 客户端会将 `/v1` 追加到 base URL 后面，因此请使用
 `https://api.synthetic.new/anthropic`（而不是 `/anthropic/v1`）。如果 Synthetic 更改了
 其 base URL，请覆盖 `models.providers.synthetic.baseUrl`。
 

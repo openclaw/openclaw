@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { resetLogger, setLoggerOverride } from "mullusi/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderQrPngBase64 } from "./qr-image.js";
 
@@ -61,7 +61,7 @@ describe("web login", () => {
 
 describe("renderQrPngBase64", () => {
   it("renders a PNG data payload", async () => {
-    const b64 = await renderQrPngBase64("openclaw");
+    const b64 = await renderQrPngBase64("mullusi");
     const buf = Buffer.from(b64, "base64");
     expect(buf.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
   });

@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/stepfun-provider",
+  "name": "@mullusi/stepfun-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw StepFun provider plugin",
+  "description": "Mullusi StepFun provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

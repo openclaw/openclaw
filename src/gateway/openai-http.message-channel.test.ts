@@ -19,16 +19,16 @@ async function runOpenAiMessageChannelRequest(params?: { messageChannelHeader?: 
     async ({ port }) => {
       const headers: Record<string, string> = {
         "content-type": "application/json",
-        "x-openclaw-scopes": "operator.write",
+        "x-mullusi-scopes": "operator.write",
       };
       if (params?.messageChannelHeader) {
-        headers["x-openclaw-message-channel"] = params.messageChannelHeader;
+        headers["x-mullusi-message-channel"] = params.messageChannelHeader;
       }
       const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
         method: "POST",
         headers,
         body: JSON.stringify({
-          model: "openclaw",
+          model: "mullusi",
           messages: [{ role: "user", content: "hi" }],
         }),
       });
@@ -45,7 +45,7 @@ async function runOpenAiMessageChannelRequest(params?: { messageChannelHeader?: 
 }
 
 describe("OpenAI HTTP message channel", () => {
-  it("passes x-openclaw-message-channel through to agentCommand", async () => {
+  it("passes x-mullusi-message-channel through to agentCommand", async () => {
     const firstCall = await runOpenAiMessageChannelRequest({
       messageChannelHeader: "custom-client-channel",
     });

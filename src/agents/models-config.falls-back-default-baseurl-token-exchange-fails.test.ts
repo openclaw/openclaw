@@ -9,7 +9,7 @@ import {
   withUnsetCopilotTokenEnv,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureMullusiModelsJson } from "./models-config.js";
 
 installModelsConfigTestHooks({ restoreFetch: true });
 
@@ -32,7 +32,7 @@ describe("models-config", () => {
         });
         globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-        const { agentDir } = await ensureOpenClawModelsJson({ models: { providers: {} } });
+        const { agentDir } = await ensureMullusiModelsJson({ models: { providers: {} } });
         expect(await readCopilotBaseUrl(agentDir)).toBe(DEFAULT_COPILOT_API_BASE_URL);
       });
     });
@@ -62,7 +62,7 @@ describe("models-config", () => {
           ),
         );
 
-        await ensureOpenClawModelsJson({ models: { providers: {} } }, agentDir);
+        await ensureMullusiModelsJson({ models: { providers: {} } }, agentDir);
 
         expect(await readCopilotBaseUrl(agentDir)).toBe("https://api.copilot.example");
       });

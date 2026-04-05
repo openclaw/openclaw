@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
@@ -32,12 +32,12 @@ vi.mock("./message-action-threading.js", () => ({
     (
       actionParams: Record<string, unknown>,
       context: {
-        cfg: OpenClawConfig;
+        cfg: MullusiConfig;
         to: string;
         accountId?: string | null;
         toolContext?: Record<string, unknown>;
         resolveAutoThreadId?: (params: {
-          cfg: OpenClawConfig;
+          cfg: MullusiConfig;
           accountId?: string | null;
           to: string;
           toolContext?: Record<string, unknown>;
@@ -74,13 +74,13 @@ vi.mock("./message-action-threading.js", () => ({
       resolveAutoThreadId,
     }: {
       actionParams: Record<string, unknown>;
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       to: string;
       accountId?: string | null;
       toolContext?: Record<string, unknown>;
       agentId?: string;
       resolveAutoThreadId?: (params: {
-        cfg: OpenClawConfig;
+        cfg: MullusiConfig;
         accountId?: string | null;
         to: string;
         toolContext?: Record<string, unknown>;
@@ -118,7 +118,7 @@ const telegramConfig = {
       botToken: "telegram-test",
     },
   },
-} as OpenClawConfig;
+} as MullusiConfig;
 
 const telegramPollTestPlugin: ChannelPlugin = {
   id: "telegram",
@@ -165,7 +165,7 @@ const telegramPollTestPlugin: ChannelPlugin = {
 };
 
 async function runPollAction(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
 }) {

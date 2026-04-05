@@ -1,21 +1,21 @@
 import path from "node:path";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/agent-runtime";
-import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveApiKeyForProvider } from "mullusi/plugin-sdk/agent-runtime";
+import type { ModelCatalogEntry } from "mullusi/plugin-sdk/agent-runtime";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
-} from "openclaw/plugin-sdk/agent-runtime";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
-import { resolveAutoImageModel } from "openclaw/plugin-sdk/media-runtime";
+} from "mullusi/plugin-sdk/agent-runtime";
+import { resolveDefaultModelForAgent } from "mullusi/plugin-sdk/agent-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { loadJsonFile, saveJsonFile } from "mullusi/plugin-sdk/json-store";
+import { resolveAutoImageModel } from "mullusi/plugin-sdk/media-runtime";
 import {
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
-} from "openclaw/plugin-sdk/media-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
+} from "mullusi/plugin-sdk/media-runtime";
+import { logVerbose } from "mullusi/plugin-sdk/runtime-env";
+import { STATE_DIR } from "mullusi/plugin-sdk/state-paths";
 import { getTelegramRuntime } from "./runtime.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
@@ -149,7 +149,7 @@ const STICKER_DESCRIPTION_PROMPT =
 
 export interface DescribeStickerParams {
   imagePath: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentDir?: string;
   agentId?: string;
 }

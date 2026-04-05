@@ -100,13 +100,13 @@ function createConfigureInteractiveResult(options?: {
       version: 1,
       protocolVersion: 1,
       generatedAt: "2026-02-26T00:00:00.000Z",
-      generatedBy: "openclaw secrets configure",
+      generatedBy: "mullusi secrets configure",
       targets: options?.targets ?? [],
     },
     preflight: {
       mode: "dry-run" as const,
       changed: options?.changed ?? false,
-      changedFiles: options?.changed ? ["/tmp/openclaw.json"] : [],
+      changedFiles: options?.changed ? ["/tmp/mullusi.json"] : [],
       checks: {
         resolvability: true,
         resolvabilityComplete: options?.resolvabilityComplete ?? true,
@@ -127,7 +127,7 @@ function createSecretsApplyResult(options?: {
   return {
     mode: options?.mode ?? "dry-run",
     changed: options?.changed ?? false,
-    changedFiles: options?.changed ? ["/tmp/openclaw.json"] : [],
+    changedFiles: options?.changed ? ["/tmp/mullusi.json"] : [],
     checks: {
       resolvability: true,
       resolvabilityComplete: options?.resolvabilityComplete ?? true,
@@ -142,7 +142,7 @@ function createSecretsApplyResult(options?: {
 async function withPlanFile(run: (planPath: string) => Promise<void>) {
   const planPath = path.join(
     os.tmpdir(),
-    `openclaw-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    `mullusi-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
   );
   await fs.writeFile(planPath, `${JSON.stringify(createManualSecretsPlan())}\n`, "utf8");
   try {

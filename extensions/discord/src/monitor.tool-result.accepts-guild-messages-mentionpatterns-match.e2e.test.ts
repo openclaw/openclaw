@@ -49,14 +49,14 @@ describe("discord tool result dispatch", () => {
     const cfg = createMentionRequiredGuildConfig({
       messages: {
         inbound: { debounceMs: 0 },
-        groupChat: { mentionPatterns: ["\\bopenclaw\\b"] },
+        groupChat: { mentionPatterns: ["\\bmullusi\\b"] },
       },
     } as Partial<Config>);
 
     const handler = await createHandler(cfg);
     const client = createGuildTextClient();
 
-    await handler(createGuildMessageEvent({ messageId: "m2", content: "openclaw: hello" }), client);
+    await handler(createGuildMessageEvent({ messageId: "m2", content: "mullusi: hello" }), client);
 
     await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
   });
@@ -83,7 +83,7 @@ describe("discord tool result dispatch", () => {
             mentionedEveryone: false,
             mentionedUsers: [],
             mentionedRoles: [],
-            author: { id: "bot-id", bot: true, username: "OpenClaw" },
+            author: { id: "bot-id", bot: true, username: "Mullusi" },
           },
         },
       }),

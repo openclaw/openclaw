@@ -44,7 +44,7 @@ beforeEach(() => {
 
   currentTimeMs = 0;
   resolveLsofCommandSyncMock.mockReturnValue("/usr/sbin/lsof");
-  resolveGatewayPortMock.mockReturnValue(18789);
+  resolveGatewayPortMock.mockReturnValue(18790);
   __testing.setSleepSyncOverride((ms) => {
     currentTimeMs += ms;
   });
@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
-  it("parses lsof output and filters non-openclaw/current processes", () => {
+  it("parses lsof output and filters non-mullusi/current processes", () => {
     const gatewayPidA = process.pid + 1000;
     const gatewayPidB = process.pid + 2000;
     const foreignPid = process.pid + 3000;
@@ -67,22 +67,22 @@ describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => 
       status: 0,
       stdout: [
         `p${process.pid}`,
-        "copenclaw",
+        "cmullusi",
         `p${gatewayPidA}`,
-        "copenclaw-gateway",
+        "cmullusi-gateway",
         `p${foreignPid}`,
         "cnode",
         `p${gatewayPidB}`,
-        "cOpenClaw",
+        "cMullusi",
       ].join("\n"),
     });
 
-    const pids = findGatewayPidsOnPortSync(18789);
+    const pids = findGatewayPidsOnPortSync(18790);
 
     expect(pids).toEqual([gatewayPidA, gatewayPidB]);
     expect(spawnSyncMock).toHaveBeenCalledWith(
       "/usr/sbin/lsof",
-      ["-nP", "-iTCP:18789", "-sTCP:LISTEN", "-Fpc"],
+      ["-nP", "-iTCP:18790", "-sTCP:LISTEN", "-Fpc"],
       expect.objectContaining({ encoding: "utf8", timeout: 2000 }),
     );
   });
@@ -95,7 +95,7 @@ describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => 
       stderr: "lsof failed",
     });
 
-    expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
+    expect(findGatewayPidsOnPortSync(18790)).toEqual([]);
   });
 });
 
@@ -107,7 +107,7 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
       .mockReturnValueOnce({
         error: undefined,
         status: 0,
-        stdout: [`p${stalePidA}`, "copenclaw", `p${stalePidB}`, "copenclaw-gateway"].join("\n"),
+        stdout: [`p${stalePidA}`, "cmullusi", `p${stalePidB}`, "cmullusi-gateway"].join("\n"),
       })
       .mockReturnValue({
         error: undefined,
@@ -132,7 +132,7 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
       .mockReturnValueOnce({
         error: undefined,
         status: 0,
-        stdout: [`p${stalePid}`, "copenclaw"].join("\n"),
+        stdout: [`p${stalePid}`, "cmullusi"].join("\n"),
       })
       .mockReturnValue({
         error: undefined,

@@ -1,7 +1,7 @@
 ---
 read_when:
   - 添加或更改 webhook 端点
-  - 将外部系统接入 OpenClaw
+  - 将外部系统接入 Mullusi
 summary: 用于唤醒和隔离智能体运行的 Webhook 入口
 title: Webhooks
 x-i18n:
@@ -39,7 +39,7 @@ Gateway 网关可以暴露一个小型 HTTP webhook 端点用于外部触发。
 每个请求必须包含 hook 令牌。推荐使用请求头：
 
 - `Authorization: Bearer <token>`（推荐）
-- `x-openclaw-token: <token>`
+- `x-mullusi-token: <token>`
 - `?token=<token>`（已弃用；会记录警告日志，将在未来的主要版本中移除）
 
 ## 端点
@@ -109,7 +109,7 @@ Gateway 网关可以暴露一个小型 HTTP webhook 端点用于外部触发。
 - TS 转换需要 TS 加载器（例如 `bun` 或 `tsx`）或运行时预编译的 `.js`。
 - 在映射上设置 `deliver: true` + `channel`/`to` 可将回复路由到聊天界面（`channel` 默认为 `last`，回退到 WhatsApp）。
 - `allowUnsafeExternalContent: true` 禁用该 hook 的外部内容安全包装（危险；仅用于受信任的内部来源）。
-- `openclaw webhooks gmail setup` 为 `openclaw webhooks gmail run` 写入 `hooks.gmail` 配置。完整的 Gmail 监听流程请参阅 [Gmail Pub/Sub](/automation/gmail-pubsub)。
+- `mullusi webhooks gmail setup` 为 `mullusi webhooks gmail run` 写入 `hooks.gmail` 配置。完整的 Gmail 监听流程请参阅 [Gmail Pub/Sub](/automation/gmail-pubsub)。
 
 ## 响应
 
@@ -122,15 +122,15 @@ Gateway 网关可以暴露一个小型 HTTP webhook 端点用于外部触发。
 ## 示例
 
 ```bash
-curl -X POST http://127.0.0.1:18789/hooks/wake \
+curl -X POST http://127.0.0.1:18790/hooks/wake \
   -H 'Authorization: Bearer SECRET' \
   -H 'Content-Type: application/json' \
   -d '{"text":"New email received","mode":"now"}'
 ```
 
 ```bash
-curl -X POST http://127.0.0.1:18789/hooks/agent \
-  -H 'x-openclaw-token: SECRET' \
+curl -X POST http://127.0.0.1:18790/hooks/agent \
+  -H 'x-mullusi-token: SECRET' \
   -H 'Content-Type: application/json' \
   -d '{"message":"Summarize inbox","name":"Email","wakeMode":"next-heartbeat"}'
 ```
@@ -140,8 +140,8 @@ curl -X POST http://127.0.0.1:18789/hooks/agent \
 在智能体请求体（或映射）中添加 `model` 以覆盖该次运行的模型：
 
 ```bash
-curl -X POST http://127.0.0.1:18789/hooks/agent \
-  -H 'x-openclaw-token: SECRET' \
+curl -X POST http://127.0.0.1:18790/hooks/agent \
+  -H 'x-mullusi-token: SECRET' \
   -H 'Content-Type: application/json' \
   -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4-mini"}'
 ```
@@ -149,7 +149,7 @@ curl -X POST http://127.0.0.1:18789/hooks/agent \
 如果你启用了 `agents.defaults.models` 限制，请确保覆盖的模型包含在其中。
 
 ```bash
-curl -X POST http://127.0.0.1:18789/hooks/gmail \
+curl -X POST http://127.0.0.1:18790/hooks/gmail \
   -H 'Authorization: Bearer SECRET' \
   -H 'Content-Type: application/json' \
   -d '{"source":"gmail","messages":[{"from":"Ada","subject":"Hello","snippet":"Hi"}]}'

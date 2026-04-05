@@ -435,7 +435,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     displaySummary: "Schedule and manage cron jobs and wake events.",
     description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
 
-Main-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in \`openclaw tasks\`.
+Main-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in \`mullusi tasks\`.
 
 ACTIONS:
 - status: Check cron scheduler status
@@ -528,7 +528,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           // job properties to the top level alongside `action` instead of nesting
           // them inside `job`. When `params.job` is missing or empty, reconstruct
           // a synthetic job object from any recognised top-level job fields.
-          // See: https://github.com/openclaw/openclaw/issues/11310
+          // See: https://github.com/mullusi/mullusi/issues/11310
           if (
             !params.job ||
             (typeof params.job === "object" &&

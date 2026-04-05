@@ -23,12 +23,12 @@ describe("backup commands", () => {
 
   async function resetTempHome() {
     await fs.rm(tempHome.home, { recursive: true, force: true });
-    await fs.mkdir(path.join(tempHome.home, ".openclaw"), { recursive: true });
-    delete process.env.OPENCLAW_CONFIG_PATH;
+    await fs.mkdir(path.join(tempHome.home, ".mullusi"), { recursive: true });
+    delete process.env.MULLUSI_CONFIG_PATH;
   }
 
   beforeAll(async () => {
-    tempHome = await createTempHomeEnv("openclaw-backup-test-");
+    tempHome = await createTempHomeEnv("mullusi-backup-test-");
   });
 
   beforeEach(async () => {
@@ -62,17 +62,17 @@ describe("backup commands", () => {
   }
 
   async function withInvalidWorkspaceBackupConfig<T>(fn: (runtime: RuntimeEnv) => Promise<T>) {
-    const stateDir = path.join(tempHome.home, ".openclaw");
+    const stateDir = path.join(tempHome.home, ".mullusi");
     const configPath = path.join(tempHome.home, "custom-config.json");
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    process.env.MULLUSI_CONFIG_PATH = configPath;
+    await fs.writeFile(path.join(stateDir, "mullusi.json"), JSON.stringify({}), "utf8");
     await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
     const runtime = createRuntime();
 
     try {
       return await fn(runtime);
     } finally {
-      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.MULLUSI_CONFIG_PATH;
     }
   }
 
@@ -87,8 +87,8 @@ describe("backup commands", () => {
   }
 
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    const stateDir = path.join(tempHome.home, ".mullusi");
+    await fs.writeFile(path.join(stateDir, "mullusi.json"), JSON.stringify({}), "utf8");
     await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true });
     await fs.writeFile(path.join(stateDir, "credentials", "oauth.json"), "{}", "utf8");
     await fs.mkdir(path.join(stateDir, "workspace"), { recursive: true });
@@ -103,16 +103,16 @@ describe("backup commands", () => {
       return;
     }
 
-    const stateDir = path.join(tempHome.home, ".openclaw");
+    const stateDir = path.join(tempHome.home, ".mullusi");
     const workspaceDir = path.join(stateDir, "workspace");
-    const symlinkDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-link-"));
+    const symlinkDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-workspace-link-"));
     const workspaceLink = path.join(symlinkDir, "ws-link");
     try {
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
       await fs.symlink(workspaceDir, workspaceLink);
       await fs.writeFile(
-        path.join(stateDir, "openclaw.json"),
+        path.join(stateDir, "mullusi.json"),
         JSON.stringify({
           agents: {
             defaults: {
@@ -131,12 +131,12 @@ describe("backup commands", () => {
   });
 
   it("creates an archive with a manifest and external workspace payload", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    const stateDir = path.join(tempHome.home, ".mullusi");
+    const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-workspace-"));
     const configPath = path.join(tempHome.home, "custom-config.json");
-    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-backups-"));
     try {
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      process.env.MULLUSI_CONFIG_PATH = configPath;
       await fs.writeFile(
         configPath,
         JSON.stringify({
@@ -164,7 +164,7 @@ describe("backup commands", () => {
         path.join(backupDir, `${buildBackupArchiveRoot(nowMs)}.tar.gz`),
       );
 
-      const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-extract-"));
+      const extractDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-backup-extract-"));
       try {
         await tar.x({ file: result.archivePath, cwd: extractDir, gzip: true });
         const archiveRoot = path.join(extractDir, buildBackupArchiveRoot(nowMs));
@@ -205,19 +205,19 @@ describe("backup commands", () => {
         await fs.rm(extractDir, { recursive: true, force: true });
       }
     } finally {
-      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.MULLUSI_CONFIG_PATH;
       await fs.rm(externalWorkspace, { recursive: true, force: true });
       await fs.rm(backupDir, { recursive: true, force: true });
     }
   });
 
   it("optionally verifies the archive after writing it", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
+    const stateDir = path.join(tempHome.home, ".mullusi");
     const archiveDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-backup-verify-on-create-"),
+      path.join(os.tmpdir(), "mullusi-backup-verify-on-create-"),
     );
     try {
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "mullusi.json"), JSON.stringify({}), "utf8");
       await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
 
       const runtime = createRuntime();
@@ -238,8 +238,8 @@ describe("backup commands", () => {
   });
 
   it("rejects output paths that would be created inside a backed-up directory", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    const stateDir = path.join(tempHome.home, ".mullusi");
+    await fs.writeFile(path.join(stateDir, "mullusi.json"), JSON.stringify({}), "utf8");
 
     const runtime = createRuntime();
 
@@ -255,11 +255,11 @@ describe("backup commands", () => {
       return;
     }
 
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const symlinkDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-link-"));
+    const stateDir = path.join(tempHome.home, ".mullusi");
+    const symlinkDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-backup-link-"));
     const symlinkPath = path.join(symlinkDir, "linked-state");
     try {
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "mullusi.json"), JSON.stringify({}), "utf8");
       await fs.symlink(stateDir, symlinkPath);
 
       const runtime = createRuntime();
@@ -275,9 +275,9 @@ describe("backup commands", () => {
   });
 
   it("falls back to the home directory when cwd is inside a backed-up source tree", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
+    const stateDir = path.join(tempHome.home, ".mullusi");
     const workspaceDir = path.join(stateDir, "workspace");
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    await fs.writeFile(path.join(stateDir, "mullusi.json"), JSON.stringify({}), "utf8");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
     vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
@@ -298,12 +298,12 @@ describe("backup commands", () => {
       return;
     }
 
-    const stateDir = path.join(tempHome.home, ".openclaw");
+    const stateDir = path.join(tempHome.home, ".mullusi");
     const workspaceDir = path.join(stateDir, "workspace");
-    const linkParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-cwd-link-"));
+    const linkParent = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-backup-cwd-link-"));
     const workspaceLink = path.join(linkParent, "workspace-link");
     try {
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+      await fs.writeFile(path.join(stateDir, "mullusi.json"), JSON.stringify({}), "utf8");
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "# soul\n", "utf8");
       await fs.symlink(workspaceDir, workspaceLink);
@@ -324,9 +324,9 @@ describe("backup commands", () => {
   });
 
   it("allows dry-run preview even when the target archive already exists", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
+    const stateDir = path.join(tempHome.home, ".mullusi");
     const existingArchive = path.join(tempHome.home, "existing-backup.tar.gz");
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
+    await fs.writeFile(path.join(stateDir, "mullusi.json"), JSON.stringify({}), "utf8");
     await fs.writeFile(existingArchive, "already here", "utf8");
 
     const runtime = createRuntime();
@@ -363,8 +363,8 @@ describe("backup commands", () => {
   });
 
   it("backs up only the active config file when --only-config is requested", async () => {
-    const stateDir = path.join(tempHome.home, ".openclaw");
-    const configPath = path.join(stateDir, "openclaw.json");
+    const stateDir = path.join(tempHome.home, ".mullusi");
+    const configPath = path.join(stateDir, "mullusi.json");
     await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true });
     await fs.writeFile(configPath, JSON.stringify({ theme: "config-only" }), "utf8");
     await fs.writeFile(path.join(stateDir, "state.txt"), "state\n", "utf8");
@@ -385,7 +385,7 @@ describe("backup commands", () => {
 
   it("allows config-only backups even when the config file is invalid", async () => {
     const configPath = path.join(tempHome.home, "custom-config.json");
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    process.env.MULLUSI_CONFIG_PATH = configPath;
     await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
 
     const runtime = createRuntime();
@@ -399,7 +399,7 @@ describe("backup commands", () => {
       expect(result.assets).toHaveLength(1);
       expect(result.assets[0]?.kind).toBe("config");
     } finally {
-      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.MULLUSI_CONFIG_PATH;
     }
   });
 });

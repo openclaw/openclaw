@@ -12,11 +12,11 @@ const mocks = vi.hoisted(() => {
     readBestEffortConfig: vi.fn(async () => ({
       gateway: {
         mode: "remote",
-        remote: { url: "wss://remote.example:18789", token: "rtok" },
+        remote: { url: "wss://remote.example:18790", token: "rtok" },
         auth: { token: "ltok" },
       },
     })),
-    resolveGatewayPort: vi.fn((_cfg?: unknown) => 18789),
+    resolveGatewayPort: vi.fn((_cfg?: unknown) => 18790),
     discoverGatewayBeacons: vi.fn(async (_opts?: unknown): Promise<GatewayBonjourBeacon[]> => []),
     pickPrimaryTailnetIPv4: vi.fn(() => "100.64.0.10"),
     sshStop,
@@ -32,8 +32,8 @@ const mocks = vi.hoisted(() => {
     ),
     startSshPortForward: vi.fn(async (_opts?: unknown) => ({
       parsedTarget: { user: "me", host: "studio", port: 22 },
-      localPort: 18789,
-      remotePort: 18789,
+      localPort: 18790,
+      remotePort: 18790,
       pid: 123,
       stderr: [],
       stop: sshStop,
@@ -308,7 +308,7 @@ describe("gateway-status command", () => {
     } as never);
     probeGateway.mockResolvedValueOnce({
       ok: false,
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       connectLatencyMs: 51,
       error: "missing scope: operator.read",
       close: null,
@@ -365,7 +365,7 @@ describe("gateway-status command", () => {
       mockLocalTokenEnvRefConfig();
       probeGateway.mockResolvedValueOnce({
         ok: false,
-        url: "ws://127.0.0.1:18789",
+        url: "ws://127.0.0.1:18790",
         connectLatencyMs: null,
         error: "connection refused",
         close: null,
@@ -387,11 +387,11 @@ describe("gateway-status command", () => {
     expect(unresolvedWarning?.message).not.toContain("missing or empty");
   });
 
-  it("does not resolve local token SecretRef when OPENCLAW_GATEWAY_TOKEN is set", async () => {
+  it("does not resolve local token SecretRef when MULLUSI_GATEWAY_TOKEN is set", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     await withEnvAsync(
       {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        MULLUSI_GATEWAY_TOKEN: "env-token",
         MISSING_GATEWAY_TOKEN: undefined,
       },
       async () => {
@@ -424,7 +424,7 @@ describe("gateway-status command", () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     await withEnvAsync(
       {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        MULLUSI_GATEWAY_TOKEN: "env-token",
         MISSING_GATEWAY_PASSWORD: undefined,
       },
       async () => {
@@ -465,7 +465,7 @@ describe("gateway-status command", () => {
     await withEnvAsync(
       {
         CUSTOM_GATEWAY_TOKEN: "resolved-gateway-token",
-        OPENCLAW_GATEWAY_TOKEN: undefined,
+        MULLUSI_GATEWAY_TOKEN: undefined,
       },
       async () => {
         readBestEffortConfig.mockResolvedValueOnce({
@@ -547,11 +547,11 @@ describe("gateway-status command", () => {
             mode: "remote",
             auth: {
               mode: "token",
-              token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-              password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+              token: { source: "env", provider: "default", id: "MULLUSI_GATEWAY_TOKEN" },
+              password: { source: "env", provider: "default", id: "MULLUSI_GATEWAY_PASSWORD" },
             },
             remote: {
-              url: "wss://remote.example:18789",
+              url: "wss://remote.example:18790",
               token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
               password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
             },
@@ -597,7 +597,7 @@ describe("gateway-status command", () => {
           "port": null,
           "remotePasswordConfigured": true,
           "remoteTokenConfigured": true,
-          "remoteUrl": "wss://remote.example:18789",
+          "remoteUrl": "wss://remote.example:18790",
           "tailscaleMode": null,
         },
         "issues": [],
@@ -644,7 +644,7 @@ describe("gateway-status command", () => {
 
     expect(probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
+        url: "ws://127.0.0.1:18790",
         timeoutMs: 15_000,
       }),
     );
@@ -665,7 +665,7 @@ describe("gateway-status command", () => {
 
     expect(probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
+        url: "ws://127.0.0.1:18790",
         timeoutMs: 800,
       }),
     );
@@ -693,7 +693,7 @@ describe("gateway-status command", () => {
       readBestEffortConfig.mockResolvedValueOnce(makeRemoteGatewayConfig("", "", "ltok"));
       discoverGatewayBeacons.mockResolvedValueOnce([
         { instanceName: "bad", tailnetDns: "-V" },
-        { host: "goodhost", sshPort: 2222, port: 18789, instanceName: "Gateway" },
+        { host: "goodhost", sshPort: 2222, port: 18790, instanceName: "Gateway" },
       ]);
 
       startSshPortForward.mockClear();
@@ -709,7 +709,7 @@ describe("gateway-status command", () => {
     const { runtime } = createRuntimeCapture();
     await withEnvAsync({ USER: "steipete" }, async () => {
       readBestEffortConfig.mockResolvedValueOnce(
-        makeRemoteGatewayConfig("ws://peters-mac-studio-1.sheep-coho.ts.net:18789"),
+        makeRemoteGatewayConfig("ws://peters-mac-studio-1.sheep-coho.ts.net:18790"),
       );
       resolveSshConfig.mockResolvedValueOnce({
         user: "steipete",
@@ -735,7 +735,7 @@ describe("gateway-status command", () => {
     const { runtime } = createRuntimeCapture();
     await withEnvAsync({ USER: "" }, async () => {
       readBestEffortConfig.mockResolvedValueOnce(
-        makeRemoteGatewayConfig("wss://studio.example:18789"),
+        makeRemoteGatewayConfig("wss://studio.example:18790"),
       );
       resolveSshConfig.mockResolvedValueOnce(null);
 
@@ -753,7 +753,7 @@ describe("gateway-status command", () => {
     const { runtime } = createRuntimeCapture();
 
     readBestEffortConfig.mockResolvedValueOnce(
-      makeRemoteGatewayConfig("wss://studio.example:18789"),
+      makeRemoteGatewayConfig("wss://studio.example:18790"),
     );
     resolveSshConfig.mockResolvedValueOnce({
       user: "me",

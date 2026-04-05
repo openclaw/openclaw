@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { discordSetupWizard } from "./setup-surface.js";
 
@@ -18,7 +18,7 @@ describe("discordSetupWizard.dmPolicy", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         "alerts",
       ),
     ).toBe("allowlist");
@@ -44,7 +44,7 @@ describe("discordSetupWizard.dmPolicy", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       "open",
       "alerts",
     );
@@ -73,7 +73,7 @@ describe("discordSetupWizard.status", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     });
 
     expect(configured).toBe(false);

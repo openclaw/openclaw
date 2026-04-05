@@ -67,12 +67,12 @@ describe("createReplyMediaPathNormalizer", () => {
     });
 
     const result = await normalize({
-      mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
+      mediaUrls: ["/Users/peter/.mullusi/media/inbound/photo.png"],
     });
 
     expect(result).toMatchObject({
-      mediaUrl: "/Users/peter/.openclaw/media/inbound/photo.png",
-      mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
+      mediaUrl: "/Users/peter/.mullusi/media/inbound/photo.png",
+      mediaUrls: ["/Users/peter/.mullusi/media/inbound/photo.png"],
     });
   });
 
@@ -89,7 +89,7 @@ describe("createReplyMediaPathNormalizer", () => {
 
     await expect(
       normalize({
-        mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
+        mediaUrls: ["/Users/peter/.mullusi/media/inbound/photo.png"],
       }),
     ).rejects.toThrow(/sandbox root|outside|escapes/i);
   });

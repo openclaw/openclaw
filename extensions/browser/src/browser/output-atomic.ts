@@ -7,7 +7,7 @@ import { sanitizeUntrustedFileName } from "./safe-filename.js";
 function buildSiblingTempPath(targetPath: string): string {
   const id = crypto.randomUUID();
   const safeTail = sanitizeUntrustedFileName(path.basename(targetPath), "output.bin");
-  return path.join(path.dirname(targetPath), `.openclaw-output-${id}-${safeTail}.part`);
+  return path.join(path.dirname(targetPath), `.mullusi-output-${id}-${safeTail}.part`);
 }
 
 export async function writeViaSiblingTempPath(params: {

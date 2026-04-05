@@ -11,20 +11,20 @@ Status: experimental. DMs are supported. The [Capabilities](#capabilities) secti
 
 ## Bundled plugin
 
-Zalo ships as a bundled plugin in current OpenClaw releases, so normal packaged
+Zalo ships as a bundled plugin in current Mullusi releases, so normal packaged
 builds do not need a separate install.
 
 If you are on an older build or a custom install that excludes Zalo, install it
 manually:
 
-- Install via CLI: `openclaw plugins install @openclaw/zalo`
-- Or from a source checkout: `openclaw plugins install ./path/to/local/zalo-plugin`
+- Install via CLI: `mullusi plugins install @mullusi/zalo`
+- Or from a source checkout: `mullusi plugins install ./path/to/local/zalo-plugin`
 - Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
 1. Ensure the Zalo plugin is available.
-   - Current packaged OpenClaw releases already bundle it.
+   - Current packaged Mullusi releases already bundle it.
    - Older/custom installs can add it manually with the commands above.
 2. Set the token:
    - Env: `ZALO_BOT_TOKEN=...`
@@ -55,7 +55,7 @@ Minimal config:
 Zalo is a Vietnam-focused messaging app; its Bot API lets the Gateway run a bot for 1:1 conversations.
 It is a good fit for support or notifications where you want deterministic routing back to Zalo.
 
-This page reflects current OpenClaw behavior for **Zalo Bot Creator / Marketplace bots**.
+This page reflects current Mullusi behavior for **Zalo Bot Creator / Marketplace bots**.
 **Zalo Official Account (OA) bots** are a different Zalo product surface and may behave differently.
 
 - A Zalo Bot API channel owned by the Gateway.
@@ -118,8 +118,8 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
 
 - Default: `channels.zalo.dmPolicy = "pairing"`. Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
-  - `openclaw pairing list zalo`
-  - `openclaw pairing approve zalo <CODE>`
+  - `mullusi pairing list zalo`
+  - `mullusi pairing approve zalo <CODE>`
 - Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
 - `channels.zalo.allowFrom` accepts numeric user IDs (no username lookup available).
 
@@ -170,7 +170,7 @@ For a quick support snapshot, see [Capabilities](#capabilities). The notes below
 
 ## Capabilities
 
-This table summarizes current **Zalo Bot Creator / Marketplace bot** behavior in OpenClaw.
+This table summarizes current **Zalo Bot Creator / Marketplace bot** behavior in Mullusi.
 
 | Feature                     | Status                                  |
 | --------------------------- | --------------------------------------- |
@@ -192,15 +192,15 @@ This table summarizes current **Zalo Bot Creator / Marketplace bot** behavior in
 ## Delivery targets (CLI/cron)
 
 - Use a chat id as the target.
-- Example: `openclaw message send --channel zalo --target 123456789 --message "hi"`.
+- Example: `mullusi message send --channel zalo --target 123456789 --message "hi"`.
 
 ## Troubleshooting
 
 **Bot doesn't respond:**
 
-- Check that the token is valid: `openclaw channels status --probe`
+- Check that the token is valid: `mullusi channels status --probe`
 - Verify the sender is approved (pairing or allowFrom)
-- Check gateway logs: `openclaw logs --follow`
+- Check gateway logs: `mullusi logs --follow`
 
 **Webhook not receiving events:**
 

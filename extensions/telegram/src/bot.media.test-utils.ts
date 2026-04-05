@@ -1,4 +1,4 @@
-import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
+import * as ssrf from "mullusi/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
 import * as harness from "./bot.media.e2e-harness.js";
 

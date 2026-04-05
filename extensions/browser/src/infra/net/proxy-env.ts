@@ -1,1 +1,1 @@
-export { hasProxyEnvConfigured } from "openclaw/plugin-sdk/browser-support";
+export { hasProxyEnvConfigured } from "mullusi/plugin-sdk/browser-support";

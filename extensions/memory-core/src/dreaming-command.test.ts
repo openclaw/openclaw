@@ -1,8 +1,8 @@
 import type {
-  OpenClawPluginCommandDefinition,
+  MullusiPluginCommandDefinition,
   PluginCommandContext,
-} from "openclaw/plugin-sdk/core";
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
+} from "mullusi/plugin-sdk/core";
+import type { MullusiConfig, MullusiPluginApi } from "mullusi/plugin-sdk/memory-core";
 import { describe, expect, it, vi } from "vitest";
 import { registerDreamingCommand } from "./dreaming-command.js";
 
@@ -13,31 +13,31 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function resolveStoredDreaming(config: OpenClawConfig): Record<string, unknown> {
+function resolveStoredDreaming(config: MullusiConfig): Record<string, unknown> {
   const entry = asRecord(config.plugins?.entries?.["memory-core"]);
   const pluginConfig = asRecord(entry?.config);
   return asRecord(pluginConfig?.dreaming) ?? {};
 }
 
-function createHarness(initialConfig: OpenClawConfig = {}) {
-  let command: OpenClawPluginCommandDefinition | undefined;
-  let runtimeConfig: OpenClawConfig = initialConfig;
+function createHarness(initialConfig: MullusiConfig = {}) {
+  let command: MullusiPluginCommandDefinition | undefined;
+  let runtimeConfig: MullusiConfig = initialConfig;
 
   const runtime = {
     config: {
       loadConfig: vi.fn(() => runtimeConfig),
-      writeConfigFile: vi.fn(async (nextConfig: OpenClawConfig) => {
+      writeConfigFile: vi.fn(async (nextConfig: MullusiConfig) => {
         runtimeConfig = nextConfig;
       }),
     },
-  } as unknown as OpenClawPluginApi["runtime"];
+  } as unknown as MullusiPluginApi["runtime"];
 
   const api = {
     runtime,
-    registerCommand: vi.fn((definition: OpenClawPluginCommandDefinition) => {
+    registerCommand: vi.fn((definition: MullusiPluginCommandDefinition) => {
       command = definition;
     }),
-  } as unknown as OpenClawPluginApi;
+  } as unknown as MullusiPluginApi;
 
   registerDreamingCommand(api);
 

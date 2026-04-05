@@ -1,11 +1,11 @@
 import process from "node:process";
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isTruthyEnvValue, isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramNetworkConfig } from "mullusi/plugin-sdk/config-runtime";
+import { isTruthyEnvValue, isWSL2Sync } from "mullusi/plugin-sdk/runtime-env";
 
 export const TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV =
-  "OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY";
-export const TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV = "OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY";
-export const TELEGRAM_DNS_RESULT_ORDER_ENV = "OPENCLAW_TELEGRAM_DNS_RESULT_ORDER";
+  "MULLUSI_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY";
+export const TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV = "MULLUSI_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY";
+export const TELEGRAM_DNS_RESULT_ORDER_ENV = "MULLUSI_TELEGRAM_DNS_RESULT_ORDER";
 
 export type TelegramAutoSelectFamilyDecision = {
   value: boolean | null;
@@ -63,7 +63,7 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
  * Setting "ipv4first" prioritizes IPv4 addresses in DNS resolution.
  *
  * Priority:
- * 1. Environment variable OPENCLAW_TELEGRAM_DNS_RESULT_ORDER
+ * 1. Environment variable MULLUSI_TELEGRAM_DNS_RESULT_ORDER
  * 2. Config: channels.telegram.network.dnsResultOrder
  * 3. Default: "ipv4first" on Node 22+ (to work around common IPv6 issues)
  */

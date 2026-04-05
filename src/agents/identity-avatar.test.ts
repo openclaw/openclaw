@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveAgentAvatar } from "./identity-avatar.js";
 
@@ -12,7 +12,7 @@ async function writeFile(filePath: string, contents = "avatar") {
 }
 
 async function expectLocalAvatarPath(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   workspace: string,
   expectedRelativePath: string,
   opts?: Parameters<typeof resolveAgentAvatar>[2],
@@ -29,7 +29,7 @@ async function expectLocalAvatarPath(
 const tempRoots: string[] = [];
 
 async function createTempAvatarRoot() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-avatar-"));
   tempRoots.push(root);
   return root;
 }
@@ -49,7 +49,7 @@ describe("resolveAgentAvatar", () => {
     const avatarPath = path.join(workspace, "avatars", "main.png");
     await writeFile(avatarPath);
 
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         list: [
           {
@@ -71,7 +71,7 @@ describe("resolveAgentAvatar", () => {
     const outsidePath = path.join(root, "outside.png");
     await writeFile(outsidePath);
 
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         list: [
           {
@@ -102,7 +102,7 @@ describe("resolveAgentAvatar", () => {
       "utf-8",
     );
 
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         list: [{ id: "main", workspace }],
       },
@@ -116,7 +116,7 @@ describe("resolveAgentAvatar", () => {
     const workspace = path.join(root, "work");
     await fs.mkdir(workspace, { recursive: true });
 
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         list: [{ id: "main", workspace, identity: { avatar: "avatars/missing.png" } }],
       },
@@ -136,7 +136,7 @@ describe("resolveAgentAvatar", () => {
     await fs.mkdir(path.dirname(avatarPath), { recursive: true });
     await fs.writeFile(avatarPath, Buffer.alloc(AVATAR_MAX_BYTES + 1));
 
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         list: [{ id: "main", workspace, identity: { avatar: "avatars/too-big.png" } }],
       },
@@ -150,7 +150,7 @@ describe("resolveAgentAvatar", () => {
   });
 
   it("accepts remote and data avatars", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         list: [
           { id: "main", identity: { avatar: "https://example.com/avatar.png" } },
@@ -172,7 +172,7 @@ describe("resolveAgentAvatar", () => {
     const avatarPath = path.join(workspace, "ui-avatar.png");
     await writeFile(avatarPath);
 
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       ui: { assistant: { avatar: "ui-avatar.png" } },
       agents: { list: [{ id: "main", workspace }] },
     };
@@ -188,7 +188,7 @@ describe("resolveAgentAvatar", () => {
     await writeFile(uiAvatarPath);
     await writeFile(cfgAvatarPath);
 
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       ui: { assistant: { avatar: "ui-avatar.png" } },
       agents: { list: [{ id: "main", workspace, identity: { avatar: "cfg-avatar.png" } }] },
     };
@@ -205,7 +205,7 @@ describe("resolveAgentAvatar", () => {
     await writeFile(uiAvatarPath);
     await writeFile(cfgAvatarPath);
 
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       ui: { assistant: { avatar: "ui-avatar.png" } },
       agents: { list: [{ id: "main", workspace, identity: { avatar: "cfg-avatar.png" } }] },
     };
@@ -226,7 +226,7 @@ describe("resolveAgentAvatar", () => {
       "utf-8",
     );
 
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       ui: { assistant: { avatar: "ui-avatar.png" } },
       agents: { list: [{ id: "main", workspace }] },
     };

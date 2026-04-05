@@ -11,7 +11,7 @@ export type {
   VideoGenerationResult,
   VideoGenerationSourceAsset,
 } from "../video-generation/types.js";
-export type { OpenClawConfig } from "../config/config.js";
+export type { MullusiConfig } from "../config/config.js";
 
 export { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 export {

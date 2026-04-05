@@ -1,10 +1,10 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
-import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderWrapStreamFnContext } from "mullusi/plugin-sdk/plugin-entry";
 import {
   composeProviderStreamWrappers,
   createToolStreamWrapper,
-} from "openclaw/plugin-sdk/provider-stream";
+} from "mullusi/plugin-sdk/provider-stream";
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-3", "grok-3-fast"],

@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/deepseek-provider",
+  "name": "@mullusi/deepseek-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw DeepSeek provider plugin",
+  "description": "Mullusi DeepSeek provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

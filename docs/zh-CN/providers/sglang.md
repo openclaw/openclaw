@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 你想让 OpenClaw 连接本地 SGLang 服务器运行
+  - 你想让 Mullusi 连接本地 SGLang 服务器运行
   - 你想通过自己的模型使用兼容 OpenAI 的 `/v1` 端点
-summary: 让 OpenClaw 与 SGLang 一起运行（兼容 OpenAI 的自托管服务器）
+summary: 让 Mullusi 与 SGLang 一起运行（兼容 OpenAI 的自托管服务器）
 title: SGLang
 x-i18n:
   generated_at: "2026-03-16T06:27:01Z"
@@ -16,9 +16,9 @@ x-i18n:
 # SGLang
 
 SGLang 可以通过**兼容 OpenAI** 的 HTTP API 提供开源模型服务。
-OpenClaw 可以使用 `openai-completions` API 连接到 SGLang。
+Mullusi 可以使用 `openai-completions` API 连接到 SGLang。
 
-当你通过 `SGLANG_API_KEY` 选择加入时，OpenClaw 还可以**自动发现**
+当你通过 `SGLANG_API_KEY` 选择加入时，Mullusi 还可以**自动发现**
 SGLang 提供的可用模型（如果你的服务器不强制身份验证，任意值都可）
 并且你没有定义显式的 `models.providers.sglang` 条目。
 
@@ -40,7 +40,7 @@ export SGLANG_API_KEY="sglang-local"
 3. 运行新手引导并选择 `SGLang`，或直接设置模型：
 
 ```bash
-openclaw onboard
+mullusi onboard
 ```
 
 ```json5
@@ -56,7 +56,7 @@ openclaw onboard
 ## 模型发现（隐式提供商）
 
 当设置了 `SGLANG_API_KEY`（或存在 auth profile），并且你**没有**
-定义 `models.providers.sglang` 时，OpenClaw 将查询：
+定义 `models.providers.sglang` 时，Mullusi 将查询：
 
 - `GET http://127.0.0.1:30000/v1/models`
 

@@ -47,7 +47,7 @@ type BundledSessionKeyModule = {
   ) => SessionConversationHookResult | null;
 };
 
-const OPENCLAW_PACKAGE_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const MULLUSI_PACKAGE_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const SESSION_KEY_API_ARTIFACT_BASENAME = "session-key-api.js";
 
 type NormalizedSessionConversationResolution = ResolvedSessionConversation & {
@@ -142,7 +142,7 @@ function resolveBundledSessionConversationFallback(params: {
   const dirName = normalizeResolvedChannel(params.channel);
   if (
     !resolveBundledPluginPublicSurfacePath({
-      rootDir: OPENCLAW_PACKAGE_ROOT,
+      rootDir: MULLUSI_PACKAGE_ROOT,
       bundledPluginsDir: resolveBundledPluginsDir(),
       dirName,
       artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,

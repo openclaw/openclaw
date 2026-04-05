@@ -1,16 +1,16 @@
 ---
-summary: "OpenClaw on DigitalOcean (simple paid VPS option)"
+summary: "Mullusi on DigitalOcean (simple paid VPS option)"
 read_when:
-  - Setting up OpenClaw on DigitalOcean
-  - Looking for cheap VPS hosting for OpenClaw
+  - Setting up Mullusi on DigitalOcean
+  - Looking for cheap VPS hosting for Mullusi
 title: "DigitalOcean (Platform)"
 ---
 
-# OpenClaw on DigitalOcean
+# Mullusi on DigitalOcean
 
 ## Goal
 
-Run a persistent OpenClaw Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
+Run a persistent Mullusi Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
 
 If you want a $0/month option and don’t mind ARM + provider-specific setup, see the [Oracle Cloud guide](/platforms/oracle).
 
@@ -60,7 +60,7 @@ Use a clean base image (Ubuntu 24.04 LTS). Avoid third-party Marketplace 1-click
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) Install OpenClaw
+## 3) Install Mullusi
 
 ```bash
 # Update system
@@ -70,17 +70,17 @@ apt update && apt upgrade -y
 curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
 apt install -y nodejs
 
-# Install OpenClaw
-curl -fsSL https://openclaw.ai/install.sh | bash
+# Install Mullusi
+curl -fsSL https://mullusi.com/install.sh | bash
 
 # Verify
-openclaw --version
+mullusi --version
 ```
 
 ## 4) Run Onboarding
 
 ```bash
-openclaw onboard --install-daemon
+mullusi onboard --install-daemon
 ```
 
 The wizard will walk you through:
@@ -94,13 +94,13 @@ The wizard will walk you through:
 
 ```bash
 # Check status
-openclaw status
+mullusi status
 
 # Check service
-systemctl --user status openclaw-gateway.service
+systemctl --user status mullusi-gateway.service
 
 # View logs
-journalctl --user -u openclaw-gateway.service -f
+journalctl --user -u mullusi-gateway.service -f
 ```
 
 ## 6) Access the Dashboard
@@ -111,9 +111,9 @@ The gateway binds to loopback by default. To access the Control UI:
 
 ```bash
 # From your local machine
-ssh -L 18789:localhost:18789 root@YOUR_DROPLET_IP
+ssh -L 18790:localhost:18790 root@YOUR_DROPLET_IP
 
-# Then open: http://localhost:18789
+# Then open: http://localhost:18790
 ```
 
 **Option B: Tailscale Serve (HTTPS, loopback-only)**
@@ -124,8 +124,8 @@ curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up
 
 # Configure Gateway to use Tailscale Serve
-openclaw config set gateway.tailscale.mode serve
-openclaw gateway restart
+mullusi config set gateway.tailscale.mode serve
+mullusi gateway restart
 ```
 
 Open: `https://<magicdns>/`
@@ -138,25 +138,25 @@ Notes:
 **Option C: Tailnet bind (no Serve)**
 
 ```bash
-openclaw config set gateway.bind tailnet
-openclaw gateway restart
+mullusi config set gateway.bind tailnet
+mullusi gateway restart
 ```
 
-Open: `http://<tailscale-ip>:18789` (token required).
+Open: `http://<tailscale-ip>:18790` (token required).
 
 ## 7) Connect Your Channels
 
 ### Telegram
 
 ```bash
-openclaw pairing list telegram
-openclaw pairing approve telegram <CODE>
+mullusi pairing list telegram
+mullusi pairing approve telegram <CODE>
 ```
 
 ### WhatsApp
 
 ```bash
-openclaw channels login whatsapp
+mullusi channels login whatsapp
 # Scan QR code
 ```
 
@@ -198,13 +198,13 @@ htop
 
 All state lives in:
 
-- `~/.openclaw/` — `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, and session data
-- `~/.openclaw/workspace/` — workspace (SOUL.md, memory, etc.)
+- `~/.mullusi/` — `mullusi.json`, per-agent `auth-profiles.json`, channel/provider state, and session data
+- `~/.mullusi/workspace/` — workspace (SOUL.md, memory, etc.)
 
 These survive reboots. Back them up periodically:
 
 ```bash
-openclaw backup create
+mullusi backup create
 ```
 
 ---
@@ -234,15 +234,15 @@ For the full setup guide, see [Oracle Cloud](/platforms/oracle). For signup tips
 ### Gateway will not start
 
 ```bash
-openclaw gateway status
-openclaw doctor --non-interactive
-journalctl --user -u openclaw-gateway.service --no-pager -n 50
+mullusi gateway status
+mullusi doctor --non-interactive
+journalctl --user -u mullusi-gateway.service --no-pager -n 50
 ```
 
 ### Port already in use
 
 ```bash
-lsof -i :18789
+lsof -i :18790
 kill <PID>
 ```
 

@@ -1,5 +1,5 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/line/runtime-api.js");
+type FacadeModule = typeof import("@mullusi/line/runtime-api.js");
 import {
   createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSync,
@@ -58,9 +58,9 @@ export const resolveExactLineGroupConfigKey: FacadeModule["resolveExactLineGroup
   )) as FacadeModule["resolveExactLineGroupConfigKey"];
 export const resolveLineAccount: FacadeModule["resolveLineAccount"] = ((...args) =>
   loadFacadeModule()["resolveLineAccount"](...args)) as FacadeModule["resolveLineAccount"];
-export type CardAction = import("@openclaw/line/runtime-api.js").CardAction;
-export type LineChannelData = import("@openclaw/line/runtime-api.js").LineChannelData;
-export type LineConfig = import("@openclaw/line/runtime-api.js").LineConfig;
-export type LineProbeResult = import("@openclaw/line/runtime-api.js").LineProbeResult;
-export type ListItem = import("@openclaw/line/runtime-api.js").ListItem;
-export type ResolvedLineAccount = import("@openclaw/line/runtime-api.js").ResolvedLineAccount;
+export type CardAction = import("@mullusi/line/runtime-api.js").CardAction;
+export type LineChannelData = import("@mullusi/line/runtime-api.js").LineChannelData;
+export type LineConfig = import("@mullusi/line/runtime-api.js").LineConfig;
+export type LineProbeResult = import("@mullusi/line/runtime-api.js").LineProbeResult;
+export type ListItem = import("@mullusi/line/runtime-api.js").ListItem;
+export type ResolvedLineAccount = import("@mullusi/line/runtime-api.js").ResolvedLineAccount;

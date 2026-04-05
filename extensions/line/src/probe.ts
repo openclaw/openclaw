@@ -1,5 +1,5 @@
 import { messagingApi } from "@line/bot-sdk";
-import { withTimeout } from "openclaw/plugin-sdk/text-runtime";
+import { withTimeout } from "mullusi/plugin-sdk/text-runtime";
 import type { LineProbeResult } from "./types.js";
 
 export async function probeLineBot(

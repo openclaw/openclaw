@@ -1,4 +1,4 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry } from "mullusi/plugin-sdk/plugin-entry";
 import { registerAmazonBedrockPlugin } from "./register.sync.runtime.js";
 
 export default definePluginEntry({

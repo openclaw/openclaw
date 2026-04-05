@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 你需要了解 `openclaw onboard` 的详细行为
+  - 你需要了解 `mullusi onboard` 的详细行为
   - 你正在调试新手引导结果或集成新手引导客户端
 sidebarTitle: CLI reference
 summary: CLI 设置流程、身份验证/模型设置、输出和内部机制的完整参考
@@ -16,7 +16,7 @@ x-i18n:
 
 # CLI 设置参考
 
-本页是 `openclaw onboard` 的完整参考。
+本页是 `mullusi onboard` 的完整参考。
 简短指南请参见 [设置向导（CLI）](/start/wizard)。
 
 ## 向导会执行什么
@@ -38,10 +38,10 @@ x-i18n:
 
 <Steps>
   <Step title="现有配置检测">
-    - 如果 `~/.openclaw/openclaw.json` 存在，可选择 Keep、Modify 或 Reset。
+    - 如果 `~/.mullusi/mullusi.json` 存在，可选择 Keep、Modify 或 Reset。
     - 重新运行向导不会清除任何内容，除非你明确选择 Reset（或传递 `--reset`）。
     - CLI `--reset` 默认作用于 `config+creds+sessions`；使用 `--reset-scope full` 还会删除工作区。
-    - 如果配置无效或包含旧版键，向导会停止，并要求你先运行 `openclaw doctor` 再继续。
+    - 如果配置无效或包含旧版键，向导会停止，并要求你先运行 `mullusi doctor` 再继续。
     - Reset 使用 `trash`，并提供以下范围：
       - 仅配置
       - 配置 + 凭证 + 会话
@@ -51,7 +51,7 @@ x-i18n:
     - 完整选项矩阵见 [身份验证和模型选项](#auth-and-model-options)。
   </Step>
   <Step title="工作区">
-    - 默认值为 `~/.openclaw/workspace`（可配置）。
+    - 默认值为 `~/.mullusi/workspace`（可配置）。
     - 会植入首次运行 bootstrap 仪式所需的工作区文件。
     - 工作区布局：[智能体工作区](/concepts/agent-workspace)。
   </Step>
@@ -78,7 +78,7 @@ x-i18n:
     - [BlueBubbles](/channels/bluebubbles)：推荐用于 iMessage；服务器 URL + 密码 + webhook
     - [iMessage](/channels/imessage)：旧版 `imsg` CLI 路径 + 数据库访问
     - 私信安全：默认是配对。首次私信会发送一个代码；通过
-      `openclaw pairing approve <channel> <code>` 批准，或使用 allowlist。
+      `mullusi pairing approve <channel> <code>` 批准，或使用 allowlist。
   </Step>
   <Step title="守护进程安装">
     - macOS：LaunchAgent
@@ -89,8 +89,8 @@ x-i18n:
     - 运行时选择：Node（推荐；WhatsApp 和 Telegram 必需）。不建议使用 Bun。
   </Step>
   <Step title="健康检查">
-    - 启动 Gateway 网关（如有需要），并运行 `openclaw health`。
-    - `openclaw status --deep` 会在状态输出中添加 Gateway 网关健康探测。
+    - 启动 Gateway 网关（如有需要），并运行 `mullusi health`。
+    - `mullusi status --deep` 会在状态输出中添加 Gateway 网关健康探测。
   </Step>
   <Step title="Skills">
     - 读取可用的 Skills 并检查要求。
@@ -222,8 +222,8 @@ x-i18n:
 
 凭证和配置档案路径：
 
-- OAuth 凭证：`~/.openclaw/credentials/oauth.json`
-- Auth profile（API 密钥 + OAuth）：`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- OAuth 凭证：`~/.mullusi/credentials/oauth.json`
+- Auth profile（API 密钥 + OAuth）：`~/.mullusi/agents/<agentId>/agent/auth-profiles.json`
 
 凭证存储模式：
 
@@ -249,13 +249,13 @@ x-i18n:
 
 <Note>
 无头和服务器提示：在有浏览器的机器上完成 OAuth，然后复制
-`~/.openclaw/credentials/oauth.json`（或 `$OPENCLAW_STATE_DIR/credentials/oauth.json`）
+`~/.mullusi/credentials/oauth.json`（或 `$MULLUSI_STATE_DIR/credentials/oauth.json`）
 到 Gateway 网关主机。
 </Note>
 
 ## 输出和内部机制
 
-`~/.openclaw/openclaw.json` 中的典型字段：
+`~/.mullusi/mullusi.json` 中的典型字段：
 
 - `agents.defaults.workspace`
 - `agents.defaults.model` / `models.providers`（如果选择了 Minimax）
@@ -271,10 +271,10 @@ x-i18n:
 - `wizard.lastRunCommand`
 - `wizard.lastRunMode`
 
-`openclaw agents add` 会写入 `agents.list[]` 和可选的 `bindings`。
+`mullusi agents add` 会写入 `agents.list[]` 和可选的 `bindings`。
 
-WhatsApp 凭证位于 `~/.openclaw/credentials/whatsapp/<accountId>/`。
-会话存储在 `~/.openclaw/agents/<agentId>/sessions/` 下。
+WhatsApp 凭证位于 `~/.mullusi/credentials/whatsapp/<accountId>/`。
+会话存储在 `~/.mullusi/agents/<agentId>/sessions/` 下。
 
 <Note>
 某些渠道以插件形式交付。在设置期间选择这些渠道时，向导
@@ -293,7 +293,7 @@ Gateway 网关向导 RPC：
 Signal 设置行为：
 
 - 下载适当的发布资源
-- 将其存储在 `~/.openclaw/tools/signal-cli/<version>/`
+- 将其存储在 `~/.mullusi/tools/signal-cli/<version>/`
 - 在配置中写入 `channels.signal.cliPath`
 - JVM 构建需要 Java 21
 - 在可用时使用原生构建
@@ -303,4 +303,4 @@ Signal 设置行为：
 
 - 新手引导中心：[设置向导（CLI）](/start/wizard)
 - 自动化和脚本：[CLI 自动化](/start/wizard-cli-automation)
-- 命令参考：[`openclaw onboard`](/cli/onboard)
+- 命令参考：[`mullusi onboard`](/cli/onboard)

@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/microsoft-foundry",
+  "name": "@mullusi/microsoft-foundry",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Microsoft Foundry provider plugin",
+  "description": "Mullusi Microsoft Foundry provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

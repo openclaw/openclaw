@@ -2,12 +2,12 @@ import type {
   ChannelDoctorAdapter,
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
-} from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime";
+} from "mullusi/plugin-sdk/channel-contract";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { collectProviderDangerousNameMatchingScopes } from "mullusi/plugin-sdk/runtime";
 import { isZalouserMutableGroupEntry } from "./security-audit.js";
 
-type ZalouserChannelsConfig = NonNullable<OpenClawConfig["channels"]>;
+type ZalouserChannelsConfig = NonNullable<MullusiConfig["channels"]>;
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -68,7 +68,7 @@ function normalizeZalouserGroupAllowAliases(params: {
   return { groups: nextGroups, changed };
 }
 
-function normalizeZalouserCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
+function normalizeZalouserCompatibilityConfig(cfg: MullusiConfig): ChannelDoctorConfigMutation {
   const channels = asObjectRecord(cfg.channels);
   const zalouser = asObjectRecord(channels?.zalouser);
   if (!zalouser) {
@@ -156,7 +156,7 @@ const ZALOUSER_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
   },
 ];
 
-export function collectZalouserMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
+export function collectZalouserMutableAllowlistWarnings(cfg: MullusiConfig): string[] {
   const hits: Array<{ path: string; entry: string }> = [];
 
   for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "zalouser")) {

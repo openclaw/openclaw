@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { MullusiConfig } from "mullusi/plugin-sdk/memory-core-host-engine-foundation";
 import { afterAll, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
 import type { MemoryIndexManager, MemorySearchManager } from "./index.js";
 
@@ -19,7 +19,7 @@ export function installEmbeddingManagerFixture(opts: {
     workspaceDir: string;
     indexPath: string;
     tokens: number;
-  }) => OpenClawConfig;
+  }) => MullusiConfig;
   resetIndexEachTest?: boolean;
 }) {
   const resetIndexEachTest = opts.resetIndexEachTest ?? true;

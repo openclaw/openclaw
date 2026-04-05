@@ -1,11 +1,11 @@
-import { formatCliCommand, parseDurationMs } from "openclaw/plugin-sdk/cli-runtime";
+import { formatCliCommand, parseDurationMs } from "mullusi/plugin-sdk/cli-runtime";
 import type {
-  OpenClawPluginApi,
+  MullusiPluginApi,
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/plugin-entry";
+} from "mullusi/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
   createProviderApiKeyAuthMethod,
@@ -13,16 +13,16 @@ import {
   ensureApiKeyFromOptionEnvOrPrompt,
   listProfilesForProvider,
   normalizeApiKeyInput,
-  type OpenClawConfig as ProviderAuthConfig,
+  type MullusiConfig as ProviderAuthConfig,
   suggestOAuthProfileIdForLegacyDefault,
   type AuthProfileStore,
   type ProviderAuthResult,
   upsertAuthProfile,
   validateAnthropicSetupToken,
   validateApiKeyInput,
-} from "openclaw/plugin-sdk/provider-auth";
-import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
-import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
+} from "mullusi/plugin-sdk/provider-auth";
+import { cloneFirstTemplateModel } from "mullusi/plugin-sdk/provider-model-shared";
+import { fetchClaudeUsage } from "mullusi/plugin-sdk/provider-usage";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
 import {
@@ -56,9 +56,9 @@ const ANTHROPIC_OAUTH_ALLOWLIST = [
   "anthropic/claude-haiku-4-5",
 ] as const;
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
-  "Anthropic setup-token auth is a legacy/manual path in OpenClaw.",
-  "Anthropic told OpenClaw users that OpenClaw counts as a third-party harness, so this path requires Extra Usage on the Claude account.",
-  `If you want a direct API billing path instead, use ${formatCliCommand("openclaw models auth login --provider anthropic --method api-key --set-default")} or ${formatCliCommand("openclaw models auth login --provider anthropic --method cli --set-default")}.`,
+  "Anthropic setup-token auth is a legacy/manual path in Mullusi.",
+  "Anthropic told Mullusi users that Mullusi counts as a third-party harness, so this path requires Extra Usage on the Claude account.",
+  `If you want a direct API billing path instead, use ${formatCliCommand("mullusi models auth login --provider anthropic --method api-key --set-default")} or ${formatCliCommand("mullusi models auth login --provider anthropic --method cli --set-default")}.`,
 ] as const;
 
 function normalizeAnthropicSetupTokenInput(value: string): string {
@@ -274,7 +274,7 @@ function buildAnthropicAuthDoctorHint(params: {
     }`,
     `- auth store oauth profiles: ${storeOauthProfiles || "(none)"}`,
     `- suggested profile: ${suggested}`,
-    `Fix: run "${formatCliCommand("openclaw doctor --yes")}"`,
+    `Fix: run "${formatCliCommand("mullusi doctor --yes")}"`,
   ].join("\n");
 }
 
@@ -331,7 +331,7 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   };
 }
 
-export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
+export function registerAnthropicPlugin(api: MullusiPluginApi): void {
   const claudeCliProfileId = "anthropic:claude-cli";
   const providerId = "anthropic";
   const defaultAnthropicModel = "anthropic/claude-sonnet-4-6";
@@ -387,12 +387,12 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
       {
         id: "setup-token",
         label: "Anthropic setup-token",
-        hint: "Legacy/manual bearer token path; requires Extra Usage when used through OpenClaw",
+        hint: "Legacy/manual bearer token path; requires Extra Usage when used through Mullusi",
         kind: "token",
         wizard: {
           choiceId: "setup-token",
           choiceLabel: "Anthropic setup-token",
-          choiceHint: "Legacy/manual path; requires Extra Usage in OpenClaw",
+          choiceHint: "Legacy/manual path; requires Extra Usage in Mullusi",
           assistantPriority: 40,
           groupId: "anthropic",
           groupLabel: "Anthropic",

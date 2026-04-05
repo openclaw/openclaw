@@ -1,19 +1,19 @@
 export type {
   ChannelAccountSnapshot,
   ChannelPlugin,
-  OpenClawConfig,
-  OpenClawPluginApi,
+  MullusiConfig,
+  MullusiPluginApi,
   PluginRuntime,
-} from "openclaw/plugin-sdk/core";
-export type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
-export { clearAccountEntryFields } from "openclaw/plugin-sdk/core";
-export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
-export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
+} from "mullusi/plugin-sdk/core";
+export type { ChannelGatewayContext } from "mullusi/plugin-sdk/channel-contract";
+export { clearAccountEntryFields } from "mullusi/plugin-sdk/core";
+export { buildChannelConfigSchema } from "mullusi/plugin-sdk/channel-config-schema";
+export type { ReplyPayload } from "mullusi/plugin-sdk/reply-runtime";
+export type { ChannelStatusIssue } from "mullusi/plugin-sdk/channel-contract";
 export {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
-} from "openclaw/plugin-sdk/status-helpers";
+} from "mullusi/plugin-sdk/status-helpers";
 export type {
   CardAction,
   LineChannelData,

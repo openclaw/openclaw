@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createConfigIO } from "./io.js";
-import type { OpenClawConfig } from "./types.js";
+import type { MullusiConfig } from "./types.js";
 
 // Mock the plugin manifest registry so we can register a fake channel whose
 // AJV JSON Schema carries a `default` value.  This lets the #56772 regression
@@ -41,8 +41,8 @@ describe("config io write", () => {
       skills: [],
       hooks: [],
       rootDir: "/virtual/plugins/bluebubbles",
-      source: "/virtual/plugins/bluebubbles/openclaw.plugin.json",
-      manifestPath: "/virtual/plugins/bluebubbles/openclaw.plugin.json",
+      source: "/virtual/plugins/bluebubbles/mullusi.plugin.json",
+      manifestPath: "/virtual/plugins/bluebubbles/mullusi.plugin.json",
       channelCatalogMeta: {
         id: "bluebubbles",
         label: "BlueBubbles",
@@ -71,7 +71,7 @@ describe("config io write", () => {
   }
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-io-"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-config-io-"));
 
     // Default: return an empty plugin list so existing tests that don't need
     // plugin-owned channel schemas keep working unchanged.
@@ -105,7 +105,7 @@ describe("config io write", () => {
     env?: NodeJS.ProcessEnv;
     logger?: { warn: (msg: string) => void; error: (msg: string) => void };
   }) {
-    const configPath = path.join(params.home, ".openclaw", "openclaw.json");
+    const configPath = path.join(params.home, ".mullusi", "mullusi.json");
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, JSON.stringify(params.initialConfig, null, 2), "utf-8");
 
@@ -152,7 +152,7 @@ describe("config io write", () => {
         error: vi.fn(),
       },
     });
-    const auditPath = path.join(params.home, ".openclaw", "logs", "config-audit.jsonl");
+    const auditPath = path.join(params.home, ".mullusi", "logs", "config-audit.jsonl");
     const next = structuredClone(snapshot.config);
     const gateway =
       next.gateway && typeof next.gateway === "object"
@@ -201,11 +201,11 @@ describe("config io write", () => {
     await withSuiteHome(async (home) => {
       const { configPath, io, snapshot } = await writeConfigAndCreateIo({
         home,
-        initialConfig: { gateway: { port: 18789 } },
+        initialConfig: { gateway: { port: 18790 } },
       });
       const persisted = await writeTokenAuthAndReadConfig({ io, snapshot, configPath });
       expect(persisted.gateway).toEqual({
-        port: 18789,
+        port: 18790,
         auth: { mode: "token" },
       });
       expect(persisted).not.toHaveProperty("agents.defaults");
@@ -218,7 +218,7 @@ describe("config io write", () => {
     "tightens world-writable state dir when writing the default config",
     async () => {
       await withSuiteHome(async (home) => {
-        const stateDir = path.join(home, ".openclaw");
+        const stateDir = path.join(home, ".mullusi");
         await fs.mkdir(stateDir, { recursive: true, mode: 0o777 });
         await fs.chmod(stateDir, 0o777);
 
@@ -236,25 +236,25 @@ describe("config io write", () => {
     },
   );
 
-  it("keeps writes inside an OPENCLAW_STATE_DIR override even when the real home config exists", async () => {
+  it("keeps writes inside an MULLUSI_STATE_DIR override even when the real home config exists", async () => {
     await withSuiteHome(async (home) => {
-      const liveConfigPath = path.join(home, ".openclaw", "openclaw.json");
+      const liveConfigPath = path.join(home, ".mullusi", "mullusi.json");
       await fs.mkdir(path.dirname(liveConfigPath), { recursive: true });
       await fs.writeFile(
         liveConfigPath,
-        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+        `${JSON.stringify({ gateway: { mode: "local", port: 18790 } }, null, 2)}\n`,
         "utf-8",
       );
 
       const overrideDir = path.join(home, "isolated-state");
-      const env = { OPENCLAW_STATE_DIR: overrideDir } as NodeJS.ProcessEnv;
+      const env = { MULLUSI_STATE_DIR: overrideDir } as NodeJS.ProcessEnv;
       const io = createConfigIO({
         env,
         homedir: () => home,
         logger: silentLogger,
       });
 
-      expect(io.configPath).toBe(path.join(overrideDir, "openclaw.json"));
+      expect(io.configPath).toBe(path.join(overrideDir, "mullusi.json"));
 
       await io.writeConfigFile({
         agents: { list: [{ id: "main", default: true }] },
@@ -265,10 +265,10 @@ describe("config io write", () => {
       const livePersisted = JSON.parse(await fs.readFile(liveConfigPath, "utf-8")) as {
         gateway?: { mode?: unknown; port?: unknown };
       };
-      expect(livePersisted.gateway).toEqual({ mode: "local", port: 18789 });
+      expect(livePersisted.gateway).toEqual({ mode: "local", port: 18790 });
 
       const overridePersisted = JSON.parse(
-        await fs.readFile(path.join(overrideDir, "openclaw.json"), "utf-8"),
+        await fs.readFile(path.join(overrideDir, "mullusi.json"), "utf-8"),
       ) as {
         session?: { store?: unknown };
       };
@@ -284,20 +284,20 @@ describe("config io write", () => {
         logger: silentLogger,
       });
 
-      const invalidConfig: OpenClawConfig = {
+      const invalidConfig: MullusiConfig = {
         channels: {
           telegram: {
             dmPolicy: "open",
             allowFrom: [],
           },
         },
-      } satisfies OpenClawConfig;
+      } satisfies MullusiConfig;
 
       await expect(io.writeConfigFile(invalidConfig)).rejects.toThrow(
-        "openclaw config set channels.telegram.allowFrom '[\"*\"]'",
+        "mullusi config set channels.telegram.allowFrom '[\"*\"]'",
       );
       await expect(io.writeConfigFile(invalidConfig)).rejects.toThrow(
-        'openclaw config set channels.telegram.dmPolicy "pairing"',
+        'mullusi config set channels.telegram.dmPolicy "pairing"',
       );
     });
   });
@@ -332,7 +332,7 @@ describe("config io write", () => {
 
   it("does not mutate caller config when unsetPaths is applied on first write", async () => {
     await withSuiteHome(async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const configPath = path.join(home, ".mullusi", "mullusi.json");
       const io = createConfigIO({
         env: {} as NodeJS.ProcessEnv,
         homedir: () => home,
@@ -434,7 +434,7 @@ describe("config io write", () => {
               },
             },
           },
-          gateway: { port: 18789 },
+          gateway: { port: 18790 },
         },
       });
       const persisted = (await writeTokenAuthAndReadConfig({ io, snapshot, configPath })) as {
@@ -445,7 +445,7 @@ describe("config io write", () => {
         "${OPENAI_API_KEY}",
       );
       expect(persisted.gateway).toEqual({
-        port: 18789,
+        port: 18790,
         auth: { mode: "token" },
       });
     });
@@ -464,7 +464,7 @@ describe("config io write", () => {
       const { configPath, io, snapshot } = await writeConfigAndCreateIo({
         home,
         initialConfig: {
-          gateway: { port: 18789 },
+          gateway: { port: 18790 },
           channels: {
             bluebubbles: {
               serverUrl: "http://localhost:1234",
@@ -493,7 +493,7 @@ describe("config io write", () => {
 
       // The persisted config should contain only explicitly set values.
       expect(persisted.gateway).toEqual({
-        port: 18789,
+        port: 18790,
         auth: { mode: "token" },
       });
 
@@ -528,7 +528,7 @@ describe("config io write", () => {
               dm: { enabled: true, policy: "pairing" },
             },
           },
-          gateway: { port: 18789 },
+          gateway: { port: 18790 },
         },
       });
 
@@ -561,7 +561,7 @@ describe("config io write", () => {
 
   it("keeps env refs in arrays when appending entries", async () => {
     await withSuiteHome(async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const configPath = path.join(home, ".mullusi", "mullusi.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
@@ -637,7 +637,7 @@ describe("config io write", () => {
       const warn = vi.fn();
       const { configPath, io, snapshot } = await writeConfigAndCreateIo({
         home,
-        initialConfig: { gateway: { port: 18789 } },
+        initialConfig: { gateway: { port: 18790 } },
         env: {} as NodeJS.ProcessEnv,
         logger: {
           warn: warn as (msg: string) => void,
@@ -689,7 +689,7 @@ describe("config io write", () => {
     await withSuiteHome(async (home) => {
       const { configPath, lines, last } = await writeGatewayPatchAndReadLastAuditEntry({
         home,
-        initialConfig: { gateway: { port: 18789 } },
+        initialConfig: { gateway: { port: 18790 } },
         gatewayPatch: { mode: "local" },
         env: {} as NodeJS.ProcessEnv,
       });
@@ -718,15 +718,15 @@ describe("config io write", () => {
         env: {
           HOME: "undefined",
           USERPROFILE: "null",
-          OPENCLAW_HOME: "undefined",
+          MULLUSI_HOME: "undefined",
         } as NodeJS.ProcessEnv,
       });
       expect(lines.length).toBeGreaterThan(0);
       await expect(
-        fs.stat(path.join(home, ".openclaw", "logs", "config-audit.jsonl")),
+        fs.stat(path.join(home, ".mullusi", "logs", "config-audit.jsonl")),
       ).resolves.toBeDefined();
       await expect(
-        fs.stat(path.resolve("undefined", ".openclaw", "logs", "config-audit.jsonl")),
+        fs.stat(path.resolve("undefined", ".mullusi", "logs", "config-audit.jsonl")),
       ).rejects.toThrow();
     });
   });
@@ -738,9 +738,9 @@ describe("config io write", () => {
         initialConfig: { gateway: { mode: "local" } },
         gatewayPatch: { bind: "loopback" },
         env: {
-          OPENCLAW_WATCH_MODE: "1",
-          OPENCLAW_WATCH_SESSION: "watch-session-1",
-          OPENCLAW_WATCH_COMMAND: "gateway --force",
+          MULLUSI_WATCH_MODE: "1",
+          MULLUSI_WATCH_SESSION: "watch-session-1",
+          MULLUSI_WATCH_COMMAND: "gateway --force",
         } as NodeJS.ProcessEnv,
       });
       expect(last.watchMode).toBe(true);

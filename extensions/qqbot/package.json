@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/qqbot",
+  "name": "@mullusi/qqbot",
   "version": "2026.4.4",
   "private": false,
-  "description": "OpenClaw QQ Bot channel plugin",
+  "description": "Mullusi QQ Bot channel plugin",
   "type": "module",
   "dependencies": {
     "mpg123-decoder": "^1.0.3",
@@ -11,17 +11,17 @@
   },
   "devDependencies": {
     "@types/ws": "^8.18.1",
-    "openclaw": "workspace:*"
+    "mullusi": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.4"
+    "mullusi": ">=2026.4.4"
   },
   "peerDependenciesMeta": {
-    "openclaw": {
+    "mullusi": {
       "optional": true
     }
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],
@@ -37,7 +37,7 @@
       "systemImage": "bubble.left.and.bubble.right"
     },
     "install": {
-      "npmSpec": "@openclaw/qqbot",
+      "npmSpec": "@mullusi/qqbot",
       "localPath": "extensions/qqbot",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.4"
@@ -46,7 +46,7 @@
       "pluginApi": ">=2026.4.4"
     },
     "build": {
-      "openclawVersion": "2026.4.4"
+      "mullusiVersion": "2026.4.4"
     },
     "bundle": {
       "stageRuntimeDependencies": true

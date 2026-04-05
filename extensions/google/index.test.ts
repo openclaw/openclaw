@@ -3,7 +3,7 @@ import type { Context, Model } from "@mariozechner/pi-ai";
 import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+} from "mullusi/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,

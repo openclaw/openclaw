@@ -1,4 +1,4 @@
-import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
+import { DEFAULT_EMOJIS } from "mullusi/plugin-sdk/channel-feedback";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMocks = vi.hoisted(() => ({
@@ -72,7 +72,7 @@ const recordInboundSession = vi.hoisted(() =>
 const configSessionsMocks = vi.hoisted(() => ({
   readSessionUpdatedAt: vi.fn<(params?: unknown) => number | undefined>(() => undefined),
   resolveStorePath: vi.fn<(path?: unknown, opts?: unknown) => string>(
-    () => "/tmp/openclaw-discord-process-test-sessions.json",
+    () => "/tmp/mullusi-discord-process-test-sessions.json",
   ),
 }));
 const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
@@ -118,7 +118,7 @@ vi.spyOn(replyDeliveryModule, "deliverDiscordReply").mockImplementation(
     deliveryMocks.deliverDiscordReply(params) as never) as never,
 );
 
-const replyRuntimeModule = await import("openclaw/plugin-sdk/reply-runtime");
+const replyRuntimeModule = await import("mullusi/plugin-sdk/reply-runtime");
 vi.spyOn(replyRuntimeModule, "dispatchInboundMessage").mockImplementation(
   ((params: Parameters<typeof replyRuntimeModule.dispatchInboundMessage>[0]) =>
     dispatchInboundMessage(params as DispatchInboundParams) as never) as never,
@@ -145,13 +145,13 @@ vi.spyOn(replyRuntimeModule, "createReplyDispatcherWithTyping").mockImplementati
   markRunComplete: vi.fn(),
 })) as never);
 
-const conversationRuntimeModule = await import("openclaw/plugin-sdk/conversation-runtime");
+const conversationRuntimeModule = await import("mullusi/plugin-sdk/conversation-runtime");
 vi.spyOn(conversationRuntimeModule, "recordInboundSession").mockImplementation(
   ((params: Parameters<typeof conversationRuntimeModule.recordInboundSession>[0]) =>
     recordInboundSession(params) as never) as never,
 );
 
-const configRuntimeModule = await import("openclaw/plugin-sdk/config-runtime");
+const configRuntimeModule = await import("mullusi/plugin-sdk/config-runtime");
 vi.spyOn(configRuntimeModule, "readSessionUpdatedAt").mockImplementation(
   ((params: Parameters<typeof configRuntimeModule.readSessionUpdatedAt>[0]) =>
     configSessionsMocks.readSessionUpdatedAt(params) as never) as never,
@@ -223,7 +223,7 @@ beforeEach(() => {
   dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
   recordInboundSession.mockResolvedValue(undefined);
   readSessionUpdatedAt.mockReturnValue(undefined);
-  resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
+  resolveStorePath.mockReturnValue("/tmp/mullusi-discord-process-test-sessions.json");
   threadBindingTesting.resetThreadBindingsForTests();
 });
 
@@ -469,7 +469,7 @@ describe("processDiscordMessage ack reactions", () => {
             timing: { debounceMs: 0 },
           },
         },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        session: { store: "/tmp/mullusi-discord-process-test-sessions.json" },
       },
     });
 
@@ -496,7 +496,7 @@ describe("processDiscordMessage ack reactions", () => {
             timing: { debounceMs: 0 },
           },
         },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        session: { store: "/tmp/mullusi-discord-process-test-sessions.json" },
       },
     });
 
@@ -523,7 +523,7 @@ describe("processDiscordMessage ack reactions", () => {
             timing: { debounceMs: 0 },
           },
         },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        session: { store: "/tmp/mullusi-discord-process-test-sessions.json" },
       },
     });
 
@@ -552,7 +552,7 @@ describe("processDiscordMessage ack reactions", () => {
           ackReaction: "👀",
           removeAckAfterReply: true,
         },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        session: { store: "/tmp/mullusi-discord-process-test-sessions.json" },
       },
     });
 
@@ -576,7 +576,7 @@ describe("processDiscordMessage ack reactions", () => {
             enabled: false,
           },
         },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        session: { store: "/tmp/mullusi-discord-process-test-sessions.json" },
       },
     });
 
@@ -692,7 +692,7 @@ describe("processDiscordMessage draft streaming", () => {
     return await createBaseContext({
       cfg: {
         messages: { ackReaction: "👀" },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        session: { store: "/tmp/mullusi-discord-process-test-sessions.json" },
         channels: {
           discord: {
             draftChunk: { minChars: 1, maxChars: 5, breakPreference: "newline" },
@@ -736,7 +736,7 @@ describe("processDiscordMessage draft streaming", () => {
     const ctx = await createBaseContext({
       cfg: {
         messages: { ackReaction: "👀" },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        session: { store: "/tmp/mullusi-discord-process-test-sessions.json" },
         channels: {
           discord: {
             maxLinesPerMessage: 120,

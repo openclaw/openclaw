@@ -1,5 +1,5 @@
-import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
+import { defineSingleProviderPluginEntry } from "mullusi/plugin-sdk/provider-entry";
+import { resolveProviderRequestCapabilities } from "mullusi/plugin-sdk/provider-http";
 import { applyMistralModelCompat, MISTRAL_MODEL_COMPAT_PATCH } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";

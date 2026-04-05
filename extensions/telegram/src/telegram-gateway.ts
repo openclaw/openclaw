@@ -1,7 +1,7 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { clearAccountEntryFields } from "openclaw/plugin-sdk/core";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { DEFAULT_ACCOUNT_ID } from "mullusi/plugin-sdk/account-id";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { clearAccountEntryFields } from "mullusi/plugin-sdk/core";
+import type { RuntimeEnv } from "mullusi/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import { getTelegramRuntime } from "./runtime.js";
@@ -45,7 +45,7 @@ async function resolveTelegramMonitor() {
 export const telegramGateway = {
   startAccount: async (ctx: {
     account: ResolvedTelegramAccount;
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     runtime: RuntimeEnv;
     abortSignal: AbortSignal;
     log?: {
@@ -103,9 +103,9 @@ export const telegramGateway = {
       webhookCertPath: account.config.webhookCertPath,
     });
   },
-  logoutAccount: async ({ accountId, cfg }: { accountId: string; cfg: OpenClawConfig }) => {
+  logoutAccount: async ({ accountId, cfg }: { accountId: string; cfg: MullusiConfig }) => {
     const envToken = process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "";
-    const nextCfg = { ...cfg } as OpenClawConfig;
+    const nextCfg = { ...cfg } as MullusiConfig;
     const nextTelegram = cfg.channels?.telegram ? { ...cfg.channels.telegram } : undefined;
     let cleared = false;
     let changed = false;

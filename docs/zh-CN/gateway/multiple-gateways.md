@@ -2,7 +2,7 @@
 read_when:
   - 在同一台机器上运行多个 Gateway 网关
   - 你需要为每个 Gateway 网关隔离配置/状态/端口
-summary: 在一台主机上运行多个 OpenClaw Gateway 网关（隔离、端口和配置档案）
+summary: 在一台主机上运行多个 Mullusi Gateway 网关（隔离、端口和配置档案）
 title: 多个 Gateway 网关
 x-i18n:
   generated_at: "2026-03-16T06:23:07Z"
@@ -19,8 +19,8 @@ x-i18n:
 
 ## 隔离检查清单（必需）
 
-- `OPENCLAW_CONFIG_PATH` — 每个实例单独的配置文件
-- `OPENCLAW_STATE_DIR` — 每个实例单独的会话、凭证、缓存
+- `MULLUSI_CONFIG_PATH` — 每个实例单独的配置文件
+- `MULLUSI_STATE_DIR` — 每个实例单独的会话、凭证、缓存
 - `agents.defaults.workspace` — 每个实例单独的工作区根目录
 - `gateway.port`（或 `--port`）— 每个实例唯一
 - 派生端口（browser/canvas）不得重叠
@@ -29,23 +29,23 @@ x-i18n:
 
 ## 推荐：配置档案（`--profile`）
 
-配置档案会自动限定 `OPENCLAW_STATE_DIR` + `OPENCLAW_CONFIG_PATH`，并为服务名称添加后缀。
+配置档案会自动限定 `MULLUSI_STATE_DIR` + `MULLUSI_CONFIG_PATH`，并为服务名称添加后缀。
 
 ```bash
 # main
-openclaw --profile main setup
-openclaw --profile main gateway --port 18789
+mullusi --profile main setup
+mullusi --profile main gateway --port 18790
 
 # rescue
-openclaw --profile rescue setup
-openclaw --profile rescue gateway --port 19001
+mullusi --profile rescue setup
+mullusi --profile rescue gateway --port 19001
 ```
 
 每个配置档案的服务：
 
 ```bash
-openclaw --profile main gateway install
-openclaw --profile rescue gateway install
+mullusi --profile main gateway install
+mullusi --profile rescue gateway install
 ```
 
 ## 救援机器人指南
@@ -65,25 +65,25 @@ openclaw --profile rescue gateway install
 
 ```bash
 # Main bot（现有或全新，不带 --profile 参数）
-# 运行在端口 18789 + Chrome CDC/Canvas/... 端口
-openclaw onboard
-openclaw gateway install
+# 运行在端口 18790 + Chrome CDC/Canvas/... 端口
+mullusi onboard
+mullusi gateway install
 
 # Rescue bot（隔离的配置档案 + 端口）
-openclaw --profile rescue onboard
+mullusi --profile rescue onboard
 # 说明：
 # - 工作区名称默认会追加 -rescue 后缀
-# - 端口至少应为 18789 + 20 个端口，
+# - 端口至少应为 18790 + 20 个端口，
 #   最好选择完全不同的基础端口，例如 19789，
 # - 其余新手引导与正常情况相同
 
 # 安装服务（如果设置期间未自动完成）
-openclaw --profile rescue gateway install
+mullusi --profile rescue gateway install
 ```
 
 ## 端口映射（派生）
 
-基础端口 = `gateway.port`（或 `OPENCLAW_GATEWAY_PORT` / `--port`）。
+基础端口 = `gateway.port`（或 `MULLUSI_GATEWAY_PORT` / `--port`）。
 
 - browser 控制服务端口 = 基础端口 + 2（仅 loopback）
 - canvas host 由 Gateway 网关 HTTP 服务器提供（与 `gateway.port` 使用相同端口）
@@ -101,19 +101,19 @@ openclaw --profile rescue gateway install
 ## 手动环境变量示例
 
 ```bash
-OPENCLAW_CONFIG_PATH=~/.openclaw/main.json \
-OPENCLAW_STATE_DIR=~/.openclaw-main \
-openclaw gateway --port 18789
+MULLUSI_CONFIG_PATH=~/.mullusi/main.json \
+MULLUSI_STATE_DIR=~/.mullusi-main \
+mullusi gateway --port 18790
 
-OPENCLAW_CONFIG_PATH=~/.openclaw/rescue.json \
-OPENCLAW_STATE_DIR=~/.openclaw-rescue \
-openclaw gateway --port 19001
+MULLUSI_CONFIG_PATH=~/.mullusi/rescue.json \
+MULLUSI_STATE_DIR=~/.mullusi-rescue \
+mullusi gateway --port 19001
 ```
 
 ## 快速检查
 
 ```bash
-openclaw --profile main status
-openclaw --profile rescue status
-openclaw --profile rescue browser status
+mullusi --profile main status
+mullusi --profile rescue status
+mullusi --profile rescue browser status
 ```

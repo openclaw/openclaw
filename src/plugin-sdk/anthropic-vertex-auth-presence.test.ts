@@ -14,7 +14,7 @@ afterEach(async () => {
 
 describe("hasAnthropicVertexAvailableAuth", () => {
   it("preserves unicode GOOGLE_APPLICATION_CREDENTIALS paths", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vertex-auth-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-vertex-auth-"));
     tempDirs.push(root);
     const unicodeDir = path.join(root, "認証情報");
     await fs.mkdir(unicodeDir, { recursive: true });

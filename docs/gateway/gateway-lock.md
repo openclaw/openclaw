@@ -16,7 +16,7 @@ title: "Gateway Lock"
 
 ## Mechanism
 
-- The gateway binds the WebSocket listener (default `ws://127.0.0.1:18789`) immediately on startup using an exclusive TCP listener.
+- The gateway binds the WebSocket listener (default `ws://127.0.0.1:18790`) immediately on startup using an exclusive TCP listener.
 - If the bind fails with `EADDRINUSE`, startup throws `GatewayLockError("another gateway instance is already listening on ws://127.0.0.1:<port>")`.
 - The OS releases the listener automatically on any process exit, including crashes and SIGKILL—no separate lock file or cleanup step is needed.
 - On shutdown the gateway closes the WebSocket server and underlying HTTP server to free the port promptly.
@@ -28,7 +28,7 @@ title: "Gateway Lock"
 
 ## Operational notes
 
-- If the port is occupied by _another_ process, the error is the same; free the port or choose another with `openclaw gateway --port <port>`.
+- If the port is occupied by _another_ process, the error is the same; free the port or choose another with `mullusi gateway --port <port>`.
 - The macOS app still maintains its own lightweight PID guard before spawning the gateway; the runtime lock is enforced by the WebSocket bind.
 
 ## Related

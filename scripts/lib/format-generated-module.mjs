@@ -12,7 +12,7 @@ export function formatGeneratedModule(source, { repoRoot, outputPath, errorLabel
   const directFormatterPath = path.join(resolvedRepoRoot, "node_modules", ".bin", "oxfmt");
   const useDirectFormatter = process.platform !== "win32" && fs.existsSync(directFormatterPath);
   const command = useDirectFormatter ? directFormatterPath : "pnpm";
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-generated-format-"));
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-generated-format-"));
   const tempOutputPath = path.join(tempDir, path.basename(resolvedOutputPath));
 
   try {

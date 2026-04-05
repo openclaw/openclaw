@@ -1,4 +1,4 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelProviderConfig } from "mullusi/plugin-sdk/provider-model-shared";
 import {
   buildBytePlusModelDefinition,
   BYTEPLUS_BASE_URL,

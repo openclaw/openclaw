@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   dispatchInboundMessage,
   dispatchInboundMessageWithBufferedDispatcher,
@@ -87,7 +87,7 @@ describe("withReplyDispatcher", () => {
 
     await dispatchInboundMessage({
       ctx: buildTestCtx(),
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       dispatcher,
       replyResolver: async () => ({ text: "ok" }),
     });
@@ -109,7 +109,7 @@ describe("withReplyDispatcher", () => {
 
     await dispatchInboundMessageWithBufferedDispatcher({
       ctx: buildTestCtx(),
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       dispatcherOptions: {
         deliver: async () => undefined,
       },

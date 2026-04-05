@@ -1,9 +1,9 @@
 import { createJiti } from "jiti";
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
+import { describeAccountSnapshot } from "mullusi/plugin-sdk/account-helpers";
+import { formatAllowFromLowercase } from "mullusi/plugin-sdk/allow-from";
+import { adaptScopedAccountAccessor } from "mullusi/plugin-sdk/channel-config-helpers";
+import { createScopedChannelConfigAdapter } from "mullusi/plugin-sdk/channel-config-helpers";
+import type { ChannelDoctorAdapter } from "mullusi/plugin-sdk/channel-contract";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,

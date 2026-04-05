@@ -2,7 +2,7 @@
 title: "Volcengine (Doubao)"
 summary: "Volcano Engine setup (Doubao models, general + coding endpoints)"
 read_when:
-  - You want to use Volcano Engine or Doubao models with OpenClaw
+  - You want to use Volcano Engine or Doubao models with Mullusi
   - You need the Volcengine API key setup
 ---
 
@@ -21,7 +21,7 @@ workloads.
 1. Set the API key:
 
 ```bash
-openclaw onboard --auth-choice volcengine-api-key
+mullusi onboard --auth-choice volcengine-api-key
 ```
 
 2. Set a default model:
@@ -39,7 +39,7 @@ openclaw onboard --auth-choice volcengine-api-key
 ## Non-interactive example
 
 ```bash
-openclaw onboard --non-interactive \
+mullusi onboard --non-interactive \
   --mode local \
   --auth-choice volcengine-api-key \
   --volcengine-api-key "$VOLCANO_ENGINE_API_KEY"
@@ -78,17 +78,17 @@ Coding provider (`volcengine-plan`):
 | `volcengine-plan/kimi-k2.5`                       | Kimi K2.5 Coding         | text  | 256,000 |
 | `volcengine-plan/doubao-seed-code-preview-251028` | Doubao Seed Code Preview | text  | 256,000 |
 
-`openclaw onboard --auth-choice volcengine-api-key` currently sets
+`mullusi onboard --auth-choice volcengine-api-key` currently sets
 `volcengine-plan/ark-code-latest` as the default model while also registering
 the general `volcengine` catalog.
 
 During onboarding/configure model selection, the Volcengine auth choice prefers
 both `volcengine/*` and `volcengine-plan/*` rows. If those models are not
-loaded yet, OpenClaw falls back to the unfiltered catalog instead of showing an
+loaded yet, Mullusi falls back to the unfiltered catalog instead of showing an
 empty provider-scoped picker.
 
 ## Environment note
 
 If the Gateway runs as a daemon (launchd/systemd), make sure
 `VOLCANO_ENGINE_API_KEY` is available to that process (for example, in
-`~/.openclaw/.env` or via `env.shellEnv`).
+`~/.mullusi/.env` or via `env.shellEnv`).

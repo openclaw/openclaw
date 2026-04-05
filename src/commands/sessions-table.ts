@@ -1,7 +1,7 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MullusiConfig } from "../config/types.mullusi.js";
 import { resolveSessionModelRef } from "../gateway/session-utils.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -70,7 +70,7 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>): Sessi
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
 
-export function resolveSessionDisplayDefaults(cfg: OpenClawConfig): SessionDisplayDefaults {
+export function resolveSessionDisplayDefaults(cfg: MullusiConfig): SessionDisplayDefaults {
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -82,7 +82,7 @@ export function resolveSessionDisplayDefaults(cfg: OpenClawConfig): SessionDispl
 }
 
 export function resolveSessionDisplayModel(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   row: Pick<
     SessionDisplayRow,
     "key" | "model" | "modelProvider" | "modelOverride" | "providerOverride"

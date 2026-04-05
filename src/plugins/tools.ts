@@ -10,7 +10,7 @@ import {
   getActivePluginRegistryKey,
   getActivePluginRuntimeSubagentMode,
 } from "./runtime.js";
-import type { OpenClawPluginToolContext } from "./types.js";
+import type { MullusiPluginToolContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -70,7 +70,7 @@ function resolvePluginToolRegistry(params: {
 }
 
 export function resolvePluginTools(params: {
-  context: OpenClawPluginToolContext;
+  context: MullusiPluginToolContext;
   existingToolNames?: Set<string>;
   toolAllowlist?: string[];
   suppressNameConflicts?: boolean;

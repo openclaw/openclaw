@@ -30,7 +30,7 @@ const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
 
 beforeEach(async () => {
-  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-win-spawn-"));
+  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-qmd-win-spawn-"));
   platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 });
 

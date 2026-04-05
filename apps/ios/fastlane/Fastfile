@@ -4,7 +4,7 @@ require "json"
 
 default_platform(:ios)
 
-BETA_APP_IDENTIFIER = "ai.openclaw.client"
+BETA_APP_IDENTIFIER = "ai.mullusi.client"
 
 def load_env_file(path)
   return unless File.exist?(path)
@@ -56,7 +56,7 @@ end
 
 def read_asc_key_content_from_keychain
   service = ENV["ASC_KEYCHAIN_SERVICE"]
-  service = "openclaw-asc-key" unless env_present?(service)
+  service = "mullusi-asc-key" unless env_present?(service)
 
   account = ENV["ASC_KEYCHAIN_ACCOUNT"]
   account = ENV["USER"] unless env_present?(account)
@@ -163,11 +163,11 @@ end
 def build_beta_release(context)
   version = context[:version]
   output_directory = File.join("build", "beta")
-  archive_path = File.join(output_directory, "OpenClaw-#{version}.xcarchive")
+  archive_path = File.join(output_directory, "Mullusi-#{version}.xcarchive")
 
   build_app(
-    project: "OpenClaw.xcodeproj",
-    scheme: "OpenClaw",
+    project: "Mullusi.xcodeproj",
+    scheme: "Mullusi",
     configuration: "Release",
     export_method: "app-store",
     clean: true,
@@ -175,7 +175,7 @@ def build_beta_release(context)
     build_path: "build",
     archive_path: archive_path,
     output_directory: output_directory,
-    output_name: "OpenClaw-#{version}.ipa",
+    output_name: "Mullusi-#{version}.ipa",
     xcargs: "-allowProvisioningUpdates",
     export_xcargs: "-allowProvisioningUpdates",
     export_options: {

@@ -6,13 +6,13 @@ import {
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "mullusi/plugin-sdk/security-runtime";
 
 export const secretTargetRegistryEntries = [
   {
     id: "channels.nextcloud-talk.accounts.*.apiPassword",
     targetType: "channels.nextcloud-talk.accounts.*.apiPassword",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.nextcloud-talk.accounts.*.apiPassword",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -23,7 +23,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.nextcloud-talk.accounts.*.botSecret",
     targetType: "channels.nextcloud-talk.accounts.*.botSecret",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.nextcloud-talk.accounts.*.botSecret",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -34,7 +34,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.nextcloud-talk.apiPassword",
     targetType: "channels.nextcloud-talk.apiPassword",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.nextcloud-talk.apiPassword",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -45,7 +45,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.nextcloud-talk.botSecret",
     targetType: "channels.nextcloud-talk.botSecret",
-    configFile: "openclaw.json",
+    configFile: "mullusi.json",
     pathPattern: "channels.nextcloud-talk.botSecret",
     secretShape: "secret_input",
     expectedResolvedValue: "string",

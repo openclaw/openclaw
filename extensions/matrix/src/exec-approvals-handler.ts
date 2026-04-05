@@ -2,14 +2,14 @@ import {
   buildExecApprovalPendingReplyPayload,
   getExecApprovalApproverDmNoticeText,
   resolveExecApprovalCommandDisplay,
-} from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/approval-reply-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   createChannelNativeApprovalRuntime,
   type ExecApprovalChannelRuntime,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "mullusi/plugin-sdk/infra-runtime";
 import { matrixNativeApprovalAdapter } from "./approval-native.js";
 import {
   isMatrixExecApprovalClientEnabled,
@@ -39,7 +39,7 @@ type PreparedMatrixTarget = {
 export type MatrixExecApprovalHandlerOpts = {
   client: MatrixClient;
   accountId: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   gatewayUrl?: string;
 };
 
@@ -51,7 +51,7 @@ export type MatrixExecApprovalHandlerDeps = {
   repairDirectRooms?: typeof repairMatrixDirectRooms;
 };
 
-function isHandlerConfigured(params: { cfg: OpenClawConfig; accountId: string }): boolean {
+function isHandlerConfigured(params: { cfg: MullusiConfig; accountId: string }): boolean {
   return isMatrixExecApprovalClientEnabled(params);
 }
 

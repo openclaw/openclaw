@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { resolvePluginWebSearchConfig } from "../../config/legacy-web-search.js";
 
 type ConfiguredWebSearchProvider = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]
+  NonNullable<NonNullable<MullusiConfig["tools"]>["web"]>["search"]
 >["provider"];
 
-export type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
+export type WebSearchConfig = NonNullable<MullusiConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
     ? Search
     : undefined
@@ -20,9 +20,9 @@ function cloneWithDescriptors<T extends object>(value: T | undefined): T {
 }
 
 export function withForcedProvider(
-  config: OpenClawConfig | undefined,
+  config: MullusiConfig | undefined,
   provider: ConfiguredWebSearchProvider,
-): OpenClawConfig {
+): MullusiConfig {
   const next = cloneWithDescriptors(config ?? {});
   const tools = cloneWithDescriptors(next.tools ?? {});
   const web = cloneWithDescriptors(tools.web ?? {});
@@ -102,7 +102,7 @@ export function mergeScopedSearchConfig(
   return next;
 }
 
-export function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
+export function resolveSearchConfig(cfg?: MullusiConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") {
     return undefined;
@@ -111,7 +111,7 @@ export function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
 }
 
 export function resolveProviderWebSearchPluginConfig(
-  config: OpenClawConfig | undefined,
+  config: MullusiConfig | undefined,
   pluginId: string,
 ): Record<string, unknown> | undefined {
   return resolvePluginWebSearchConfig(config, pluginId);
@@ -128,7 +128,7 @@ function ensureObject(target: Record<string, unknown>, key: string): Record<stri
 }
 
 export function setProviderWebSearchPluginConfigValue(
-  configTarget: OpenClawConfig,
+  configTarget: MullusiConfig,
   pluginId: string,
   key: string,
   value: unknown,

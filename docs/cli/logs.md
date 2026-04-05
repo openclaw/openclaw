@@ -1,12 +1,12 @@
 ---
-summary: "CLI reference for `openclaw logs` (tail gateway logs via RPC)"
+summary: "CLI reference for `mullusi logs` (tail gateway logs via RPC)"
 read_when:
   - You need to tail Gateway logs remotely (without SSH)
   - You want JSON log lines for tooling
 title: "logs"
 ---
 
-# `openclaw logs`
+# `mullusi logs`
 
 Tail Gateway file logs over RPC (works in remote mode).
 
@@ -28,7 +28,7 @@ Related:
 
 ## Shared Gateway RPC options
 
-`openclaw logs` also accepts the standard Gateway client flags:
+`mullusi logs` also accepts the standard Gateway client flags:
 
 - `--url <url>`: Gateway WebSocket URL
 - `--token <token>`: Gateway token
@@ -40,20 +40,20 @@ When you pass `--url`, the CLI does not auto-apply config or environment credent
 ## Examples
 
 ```bash
-openclaw logs
-openclaw logs --follow
-openclaw logs --follow --interval 2000
-openclaw logs --limit 500 --max-bytes 500000
-openclaw logs --json
-openclaw logs --plain
-openclaw logs --no-color
-openclaw logs --limit 500
-openclaw logs --local-time
-openclaw logs --follow --local-time
-openclaw logs --url ws://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
+mullusi logs
+mullusi logs --follow
+mullusi logs --follow --interval 2000
+mullusi logs --limit 500 --max-bytes 500000
+mullusi logs --json
+mullusi logs --plain
+mullusi logs --no-color
+mullusi logs --limit 500
+mullusi logs --local-time
+mullusi logs --follow --local-time
+mullusi logs --url ws://127.0.0.1:18790 --token "$MULLUSI_GATEWAY_TOKEN"
 ```
 
 ## Notes
 
 - Use `--local-time` to render timestamps in your local timezone.
-- If the local loopback Gateway asks for pairing, `openclaw logs` falls back to the configured local log file automatically. Explicit `--url` targets do not use this fallback.
+- If the local loopback Gateway asks for pairing, `mullusi logs` falls back to the configured local log file automatically. Explicit `--url` targets do not use this fallback.

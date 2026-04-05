@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "./config.js";
+import type { MullusiConfig } from "./config.js";
 import { listLegacyWebFetchConfigPaths, migrateLegacyWebFetchConfig } from "./legacy-web-fetch.js";
 
 describe("legacy web fetch config", () => {
@@ -18,7 +18,7 @@ describe("legacy web fetch config", () => {
           },
         },
       },
-    } as OpenClawConfig);
+    } as MullusiConfig);
 
     expect(res.config.tools?.web?.fetch).toEqual({
       provider: "firecrawl",
@@ -52,7 +52,7 @@ describe("legacy web fetch config", () => {
           },
         },
       },
-    } as OpenClawConfig);
+    } as MullusiConfig);
 
     expect(res.config.plugins?.entries?.firecrawl).toEqual({
       enabled: true,

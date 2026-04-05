@@ -1,4 +1,4 @@
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
+import type { MullusiConfig, MullusiPluginApi } from "mullusi/plugin-sdk/memory-core";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 
 type DreamingMode = "off" | "core" | "rem" | "deep";
@@ -34,7 +34,7 @@ function normalizeDreamingMode(value: unknown): DreamingMode | null {
   return null;
 }
 
-function resolveMemoryCorePluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
+function resolveMemoryCorePluginConfig(cfg: MullusiConfig): Record<string, unknown> {
   const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
   return asRecord(entry?.config) ?? {};
 }
@@ -44,7 +44,7 @@ function resolveDreamingModeFromConfig(pluginConfig: Record<string, unknown>): D
   return normalizeDreamingMode(dreaming?.mode) ?? DEFAULT_DREAMING_MODE;
 }
 
-function updateDreamingModeInConfig(cfg: OpenClawConfig, mode: DreamingMode): OpenClawConfig {
+function updateDreamingModeInConfig(cfg: MullusiConfig, mode: DreamingMode): MullusiConfig {
   const entries = { ...(cfg.plugins?.entries ?? {}) };
   const existingEntry = asRecord(entries["memory-core"]) ?? {};
   const existingConfig = asRecord(existingEntry.config) ?? {};
@@ -91,7 +91,7 @@ function formatModeGuide(): string {
   return DREAMING_MODE_LIST.map((mode) => formatModeGuideLine(mode)).join("\n");
 }
 
-function formatStatus(cfg: OpenClawConfig): string {
+function formatStatus(cfg: MullusiConfig): string {
   const pluginConfig = resolveMemoryCorePluginConfig(cfg);
   const mode = resolveDreamingModeFromConfig(pluginConfig);
   const resolved = resolveShortTermPromotionDreamingConfig({
@@ -122,7 +122,7 @@ function formatUsage(includeStatus: string): string {
   ].join("\n");
 }
 
-export function registerDreamingCommand(api: OpenClawPluginApi): void {
+export function registerDreamingCommand(api: MullusiPluginApi): void {
   api.registerCommand({
     name: "dreaming",
     description: "Configure memory dreaming mode (off|core|rem|deep).",

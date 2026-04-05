@@ -4,7 +4,7 @@ import path from "node:path";
 import type { AssistantMessage, Message, Tool } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   buildAssistantHistoryTurn as buildTypedAssistantHistoryTurn,
   buildStableCachePrefix,
@@ -230,7 +230,7 @@ function buildEmbeddedRunnerConfig(
     cacheRetention: "none" | "short" | "long";
     transport?: "sse" | "websocket";
   },
-): OpenClawConfig {
+): MullusiConfig {
   const provider = params.model.provider;
   const modelKey = `${provider}/${params.model.id}`;
   const providerBaseUrl =
@@ -749,32 +749,32 @@ async function runAnthropicImageCacheProbe(params: {
 
 describeCacheLive("pi embedded runner prompt caching (live)", () => {
   beforeAll(async () => {
-    liveRunnerRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cache-"));
+    liveRunnerRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-live-cache-"));
     liveCacheTraceFile = path.join(liveRunnerRootDir, "cache-trace.jsonl");
     liveTestPngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
     previousCacheTraceEnv = {
-      enabled: process.env.OPENCLAW_CACHE_TRACE,
-      file: process.env.OPENCLAW_CACHE_TRACE_FILE,
-      messages: process.env.OPENCLAW_CACHE_TRACE_MESSAGES,
-      prompt: process.env.OPENCLAW_CACHE_TRACE_PROMPT,
-      system: process.env.OPENCLAW_CACHE_TRACE_SYSTEM,
+      enabled: process.env.MULLUSI_CACHE_TRACE,
+      file: process.env.MULLUSI_CACHE_TRACE_FILE,
+      messages: process.env.MULLUSI_CACHE_TRACE_MESSAGES,
+      prompt: process.env.MULLUSI_CACHE_TRACE_PROMPT,
+      system: process.env.MULLUSI_CACHE_TRACE_SYSTEM,
     };
-    process.env.OPENCLAW_CACHE_TRACE = "1";
-    process.env.OPENCLAW_CACHE_TRACE_FILE = liveCacheTraceFile;
-    process.env.OPENCLAW_CACHE_TRACE_MESSAGES = "0";
-    process.env.OPENCLAW_CACHE_TRACE_PROMPT = "0";
-    process.env.OPENCLAW_CACHE_TRACE_SYSTEM = "0";
+    process.env.MULLUSI_CACHE_TRACE = "1";
+    process.env.MULLUSI_CACHE_TRACE_FILE = liveCacheTraceFile;
+    process.env.MULLUSI_CACHE_TRACE_MESSAGES = "0";
+    process.env.MULLUSI_CACHE_TRACE_PROMPT = "0";
+    process.env.MULLUSI_CACHE_TRACE_SYSTEM = "0";
   }, 120_000);
 
   afterAll(async () => {
     if (previousCacheTraceEnv) {
       const restore = (
         key:
-          | "OPENCLAW_CACHE_TRACE"
-          | "OPENCLAW_CACHE_TRACE_FILE"
-          | "OPENCLAW_CACHE_TRACE_MESSAGES"
-          | "OPENCLAW_CACHE_TRACE_PROMPT"
-          | "OPENCLAW_CACHE_TRACE_SYSTEM",
+          | "MULLUSI_CACHE_TRACE"
+          | "MULLUSI_CACHE_TRACE_FILE"
+          | "MULLUSI_CACHE_TRACE_MESSAGES"
+          | "MULLUSI_CACHE_TRACE_PROMPT"
+          | "MULLUSI_CACHE_TRACE_SYSTEM",
         value: string | undefined,
       ) => {
         if (value === undefined) {
@@ -783,11 +783,11 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
           process.env[key] = value;
         }
       };
-      restore("OPENCLAW_CACHE_TRACE", previousCacheTraceEnv.enabled);
-      restore("OPENCLAW_CACHE_TRACE_FILE", previousCacheTraceEnv.file);
-      restore("OPENCLAW_CACHE_TRACE_MESSAGES", previousCacheTraceEnv.messages);
-      restore("OPENCLAW_CACHE_TRACE_PROMPT", previousCacheTraceEnv.prompt);
-      restore("OPENCLAW_CACHE_TRACE_SYSTEM", previousCacheTraceEnv.system);
+      restore("MULLUSI_CACHE_TRACE", previousCacheTraceEnv.enabled);
+      restore("MULLUSI_CACHE_TRACE_FILE", previousCacheTraceEnv.file);
+      restore("MULLUSI_CACHE_TRACE_MESSAGES", previousCacheTraceEnv.messages);
+      restore("MULLUSI_CACHE_TRACE_PROMPT", previousCacheTraceEnv.prompt);
+      restore("MULLUSI_CACHE_TRACE_SYSTEM", previousCacheTraceEnv.system);
     }
     previousCacheTraceEnv = null;
     liveCacheTraceFile = undefined;
@@ -804,7 +804,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
       fixture = await resolveLiveDirectModel({
         provider: "openai",
         api: "openai-responses",
-        envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
+        envVar: "MULLUSI_LIVE_OPENAI_CACHE_MODEL",
         preferredModelIds: ["gpt-5.4-mini", "gpt-5.4", "gpt-5.4"],
       });
       logLiveCache(`openai model=${fixture.model.provider}/${fixture.model.id}`);
@@ -1060,7 +1060,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
       fixture = await resolveLiveDirectModel({
         provider: "anthropic",
         api: "anthropic-messages",
-        envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
+        envVar: "MULLUSI_LIVE_ANTHROPIC_CACHE_MODEL",
         preferredModelIds: ["claude-sonnet-4-6", "claude-sonnet-4-6", "claude-haiku-3-5"],
       });
       logLiveCache(`anthropic model=${fixture.model.provider}/${fixture.model.id}`);

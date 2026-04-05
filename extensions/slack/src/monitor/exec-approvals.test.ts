@@ -1,5 +1,5 @@
 import type { App } from "@slack/bolt";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
@@ -12,8 +12,8 @@ let SlackExecApprovalHandler: typeof import("./exec-approvals.js").SlackExecAppr
 
 function buildConfig(
   target: "dm" | "channel" | "both" = "dm",
-  slackOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>>,
-): OpenClawConfig {
+  slackOverrides?: Partial<NonNullable<NonNullable<MullusiConfig["channels"]>["slack"]>>,
+): MullusiConfig {
   const configuredExecApprovals = slackOverrides?.execApprovals;
   return {
     channels: {
@@ -28,7 +28,7 @@ function buildConfig(
         },
       },
     },
-  } as OpenClawConfig;
+  } as MullusiConfig;
 }
 
 function buildApp(): App {
@@ -219,7 +219,7 @@ describe("SlackExecApprovalHandler", () => {
         execApprovals: { enabled: true, target: "dm" },
       }),
       commands: { ownerAllowFrom: ["slack:U123APPROVER"] },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const handler = new SlackExecApprovalHandler({
       app,
       accountId: "default",

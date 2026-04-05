@@ -12,8 +12,8 @@ const dotenvState = vi.hoisted(() => {
   return {
     state,
     loadDotEnv: vi.fn(() => {
-      state.profileAtDotenvLoad = process.env.OPENCLAW_PROFILE;
-      state.containerAtDotenvLoad = process.env.OPENCLAW_CONTAINER;
+      state.profileAtDotenvLoad = process.env.MULLUSI_PROFILE;
+      state.containerAtDotenvLoad = process.env.MULLUSI_CONTAINER;
     }),
   };
 });
@@ -49,7 +49,7 @@ vi.mock("../infra/runtime-guard.js", () => ({
 }));
 
 vi.mock("../infra/path-env.js", () => ({
-  ensureOpenClawCliOnPath: vi.fn(),
+  ensureMullusiCliOnPath: vi.fn(),
 }));
 
 vi.mock("./route.js", () => ({
@@ -72,24 +72,24 @@ vi.mock("./container-target.js", async () => {
 import { runCli } from "./run-main.js";
 
 describe("runCli profile env bootstrap", () => {
-  const originalProfile = process.env.OPENCLAW_PROFILE;
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-  const originalContainer = process.env.OPENCLAW_CONTAINER;
-  const originalGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
-  const originalGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
-  const originalGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-  const originalGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+  const originalProfile = process.env.MULLUSI_PROFILE;
+  const originalStateDir = process.env.MULLUSI_STATE_DIR;
+  const originalConfigPath = process.env.MULLUSI_CONFIG_PATH;
+  const originalContainer = process.env.MULLUSI_CONTAINER;
+  const originalGatewayPort = process.env.MULLUSI_GATEWAY_PORT;
+  const originalGatewayUrl = process.env.MULLUSI_GATEWAY_URL;
+  const originalGatewayToken = process.env.MULLUSI_GATEWAY_TOKEN;
+  const originalGatewayPassword = process.env.MULLUSI_GATEWAY_PASSWORD;
 
   beforeEach(() => {
-    delete process.env.OPENCLAW_PROFILE;
-    delete process.env.OPENCLAW_STATE_DIR;
-    delete process.env.OPENCLAW_CONFIG_PATH;
-    delete process.env.OPENCLAW_CONTAINER;
-    delete process.env.OPENCLAW_GATEWAY_PORT;
-    delete process.env.OPENCLAW_GATEWAY_URL;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.MULLUSI_PROFILE;
+    delete process.env.MULLUSI_STATE_DIR;
+    delete process.env.MULLUSI_CONFIG_PATH;
+    delete process.env.MULLUSI_CONTAINER;
+    delete process.env.MULLUSI_GATEWAY_PORT;
+    delete process.env.MULLUSI_GATEWAY_URL;
+    delete process.env.MULLUSI_GATEWAY_TOKEN;
+    delete process.env.MULLUSI_GATEWAY_PASSWORD;
     dotenvState.state.profileAtDotenvLoad = undefined;
     dotenvState.state.containerAtDotenvLoad = undefined;
     dotenvState.loadDotEnv.mockClear();
@@ -99,131 +99,131 @@ describe("runCli profile env bootstrap", () => {
 
   afterEach(() => {
     if (originalProfile === undefined) {
-      delete process.env.OPENCLAW_PROFILE;
+      delete process.env.MULLUSI_PROFILE;
     } else {
-      process.env.OPENCLAW_PROFILE = originalProfile;
+      process.env.MULLUSI_PROFILE = originalProfile;
     }
     if (originalContainer === undefined) {
-      delete process.env.OPENCLAW_CONTAINER;
+      delete process.env.MULLUSI_CONTAINER;
     } else {
-      process.env.OPENCLAW_CONTAINER = originalContainer;
+      process.env.MULLUSI_CONTAINER = originalContainer;
     }
     if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.MULLUSI_STATE_DIR;
     } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      process.env.MULLUSI_STATE_DIR = originalStateDir;
     }
     if (originalConfigPath === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.MULLUSI_CONFIG_PATH;
     } else {
-      process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+      process.env.MULLUSI_CONFIG_PATH = originalConfigPath;
     }
     if (originalGatewayPort === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_PORT;
+      delete process.env.MULLUSI_GATEWAY_PORT;
     } else {
-      process.env.OPENCLAW_GATEWAY_PORT = originalGatewayPort;
+      process.env.MULLUSI_GATEWAY_PORT = originalGatewayPort;
     }
     if (originalGatewayUrl === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_URL;
+      delete process.env.MULLUSI_GATEWAY_URL;
     } else {
-      process.env.OPENCLAW_GATEWAY_URL = originalGatewayUrl;
+      process.env.MULLUSI_GATEWAY_URL = originalGatewayUrl;
     }
     if (originalGatewayToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.MULLUSI_GATEWAY_TOKEN;
     } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = originalGatewayToken;
+      process.env.MULLUSI_GATEWAY_TOKEN = originalGatewayToken;
     }
     if (originalGatewayPassword === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      delete process.env.MULLUSI_GATEWAY_PASSWORD;
     } else {
-      process.env.OPENCLAW_GATEWAY_PASSWORD = originalGatewayPassword;
+      process.env.MULLUSI_GATEWAY_PASSWORD = originalGatewayPassword;
     }
   });
 
   it("applies --profile before dotenv loading", async () => {
     fileState.hasCliDotEnv = true;
-    await runCli(["node", "openclaw", "--profile", "rawdog", "status"]);
+    await runCli(["node", "mullusi", "--profile", "rawdog", "status"]);
 
     expect(dotenvState.loadDotEnv).toHaveBeenCalledOnce();
     expect(dotenvState.state.profileAtDotenvLoad).toBe("rawdog");
-    expect(process.env.OPENCLAW_PROFILE).toBe("rawdog");
+    expect(process.env.MULLUSI_PROFILE).toBe("rawdog");
   });
 
   it("rejects --container combined with --profile", async () => {
     await expect(
-      runCli(["node", "openclaw", "--container", "demo", "--profile", "rawdog", "status"]),
+      runCli(["node", "mullusi", "--container", "demo", "--profile", "rawdog", "status"]),
     ).rejects.toThrow("--container cannot be combined with --profile/--dev");
 
     expect(dotenvState.loadDotEnv).not.toHaveBeenCalled();
-    expect(process.env.OPENCLAW_PROFILE).toBe("rawdog");
+    expect(process.env.MULLUSI_PROFILE).toBe("rawdog");
   });
 
   it("rejects --container combined with interleaved --profile", async () => {
     await expect(
-      runCli(["node", "openclaw", "status", "--container", "demo", "--profile", "rawdog"]),
+      runCli(["node", "mullusi", "status", "--container", "demo", "--profile", "rawdog"]),
     ).rejects.toThrow("--container cannot be combined with --profile/--dev");
   });
 
   it("rejects --container combined with interleaved --dev", async () => {
     await expect(
-      runCli(["node", "openclaw", "status", "--container", "demo", "--dev"]),
+      runCli(["node", "mullusi", "status", "--container", "demo", "--dev"]),
     ).rejects.toThrow("--container cannot be combined with --profile/--dev");
   });
 
   it("does not let dotenv change container target resolution", async () => {
     fileState.hasCliDotEnv = true;
     dotenvState.loadDotEnv.mockImplementationOnce(() => {
-      process.env.OPENCLAW_CONTAINER = "demo";
-      dotenvState.state.profileAtDotenvLoad = process.env.OPENCLAW_PROFILE;
-      dotenvState.state.containerAtDotenvLoad = process.env.OPENCLAW_CONTAINER;
+      process.env.MULLUSI_CONTAINER = "demo";
+      dotenvState.state.profileAtDotenvLoad = process.env.MULLUSI_PROFILE;
+      dotenvState.state.containerAtDotenvLoad = process.env.MULLUSI_CONTAINER;
     });
 
-    await runCli(["node", "openclaw", "status"]);
+    await runCli(["node", "mullusi", "status"]);
 
     expect(dotenvState.loadDotEnv).toHaveBeenCalledOnce();
-    expect(process.env.OPENCLAW_CONTAINER).toBe("demo");
+    expect(process.env.MULLUSI_CONTAINER).toBe("demo");
     expect(dotenvState.state.containerAtDotenvLoad).toBe("demo");
-    expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+    expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "mullusi", "status"]);
     expect(maybeRunCliInContainerMock).toHaveReturnedWith({
       handled: false,
-      argv: ["node", "openclaw", "status"],
+      argv: ["node", "mullusi", "status"],
     });
   });
 
-  it("allows container mode when OPENCLAW_PROFILE is already set in env", async () => {
-    process.env.OPENCLAW_PROFILE = "work";
+  it("allows container mode when MULLUSI_PROFILE is already set in env", async () => {
+    process.env.MULLUSI_PROFILE = "work";
 
     await expect(
-      runCli(["node", "openclaw", "--container", "demo", "status"]),
+      runCli(["node", "mullusi", "--container", "demo", "status"]),
     ).resolves.toBeUndefined();
   });
 
   it.each([
-    ["OPENCLAW_GATEWAY_PORT", "19001"],
-    ["OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789"],
-    ["OPENCLAW_GATEWAY_TOKEN", "demo-token"],
-    ["OPENCLAW_GATEWAY_PASSWORD", "demo-password"],
+    ["MULLUSI_GATEWAY_PORT", "19001"],
+    ["MULLUSI_GATEWAY_URL", "ws://127.0.0.1:18790"],
+    ["MULLUSI_GATEWAY_TOKEN", "demo-token"],
+    ["MULLUSI_GATEWAY_PASSWORD", "demo-password"],
   ])("allows container mode when %s is set in env", async (key, value) => {
     process.env[key] = value;
 
     await expect(
-      runCli(["node", "openclaw", "--container", "demo", "status"]),
+      runCli(["node", "mullusi", "--container", "demo", "status"]),
     ).resolves.toBeUndefined();
   });
 
-  it("allows container mode when only OPENCLAW_STATE_DIR is set in env", async () => {
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-host-state";
+  it("allows container mode when only MULLUSI_STATE_DIR is set in env", async () => {
+    process.env.MULLUSI_STATE_DIR = "/tmp/mullusi-host-state";
 
     await expect(
-      runCli(["node", "openclaw", "--container", "demo", "status"]),
+      runCli(["node", "mullusi", "--container", "demo", "status"]),
     ).resolves.toBeUndefined();
   });
 
-  it("allows container mode when only OPENCLAW_CONFIG_PATH is set in env", async () => {
-    process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-host-state/openclaw.json";
+  it("allows container mode when only MULLUSI_CONFIG_PATH is set in env", async () => {
+    process.env.MULLUSI_CONFIG_PATH = "/tmp/mullusi-host-state/mullusi.json";
 
     await expect(
-      runCli(["node", "openclaw", "--container", "demo", "status"]),
+      runCli(["node", "mullusi", "--container", "demo", "status"]),
     ).resolves.toBeUndefined();
   });
 });

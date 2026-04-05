@@ -37,7 +37,7 @@ describe("plugin-sdk bundled exports", () => {
     const bundleCacheRoot = path.join(process.cwd(), "node_modules", ".cache");
     await fs.mkdir(bundleCacheRoot, { recursive: true });
     const bundleTempRoot = await fs.mkdtemp(
-      path.join(bundleCacheRoot, "openclaw-plugin-sdk-build-"),
+      path.join(bundleCacheRoot, "mullusi-plugin-sdk-build-"),
     );
     const outDir = path.join(bundleTempRoot, "bundle");
     await fs.rm(outDir, { recursive: true, force: true });

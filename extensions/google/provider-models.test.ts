@@ -2,7 +2,7 @@ import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/plugin-entry";
+} from "mullusi/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
 import { resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 

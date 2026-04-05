@@ -11,7 +11,7 @@ import {
   collectZalouserSecurityAuditFindings,
 } from "../../test/helpers/channels/security-audit-contract.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { saveExecApprovals } from "../infra/exec-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -29,9 +29,9 @@ const pathResolutionEnvKeys = [
   "USERPROFILE",
   "HOMEDRIVE",
   "HOMEPATH",
-  "OPENCLAW_HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "MULLUSI_HOME",
+  "MULLUSI_STATE_DIR",
+  "MULLUSI_BUNDLED_PLUGINS_DIR",
 ] as const;
 const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawFn"]> = async () => {
   return {
@@ -44,15 +44,15 @@ const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawF
 function stubChannelPlugin(params: {
   id: "discord" | "feishu" | "slack" | "synology-chat" | "telegram" | "zalouser";
   label: string;
-  resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
-  inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
-  listAccountIds?: (cfg: OpenClawConfig) => string[];
-  isConfigured?: (account: unknown, cfg: OpenClawConfig) => boolean;
-  isEnabled?: (account: unknown, cfg: OpenClawConfig) => boolean;
+  resolveAccount: (cfg: MullusiConfig, accountId: string | null | undefined) => unknown;
+  inspectAccount?: (cfg: MullusiConfig, accountId: string | null | undefined) => unknown;
+  listAccountIds?: (cfg: MullusiConfig) => string[];
+  isConfigured?: (account: unknown, cfg: MullusiConfig) => boolean;
+  isEnabled?: (account: unknown, cfg: MullusiConfig) => boolean;
   collectAuditFindings?: NonNullable<ChannelPlugin["security"]>["collectAuditFindings"];
   commands?: ChannelPlugin["commands"];
 }): ChannelPlugin {
-  const channelConfigured = (cfg: OpenClawConfig) =>
+  const channelConfigured = (cfg: MullusiConfig) =>
     Boolean((cfg.channels as Record<string, unknown> | undefined)?.[params.id]);
   const defaultCollectAuditFindings =
     params.collectAuditFindings ??
@@ -272,7 +272,7 @@ function successfulProbeResult(url: string) {
 }
 
 async function audit(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   extra?: Omit<SecurityAuditOptions, "config"> & { preserveExecApprovals?: boolean },
 ): Promise<SecurityAuditReport> {
   if (!extra?.preserveExecApprovals) {
@@ -299,7 +299,7 @@ async function runAuditCases<T>(
   );
 }
 
-async function runConfigAuditCases<T extends { cfg: OpenClawConfig }>(
+async function runConfigAuditCases<T extends { cfg: MullusiConfig }>(
   cases: readonly T[],
   assert: (res: SecurityAuditReport, testCase: T) => void,
   options?: (
@@ -362,7 +362,7 @@ async function expectSeverityByExposureCases(params: {
   checkId: string;
   cases: Array<{
     name: string;
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     expectedSeverity: "warn" | "critical";
   }>;
 }) {
@@ -375,7 +375,7 @@ async function expectSeverityByExposureCases(params: {
 }
 
 async function runChannelSecurityAudit(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   plugins: ChannelPlugin[],
 ): Promise<SecurityAuditReport> {
   return withActiveAuditChannelPlugins(plugins, () =>
@@ -408,7 +408,7 @@ async function withActiveAuditChannelPlugins<T>(
 }
 
 async function runInstallMetadataAudit(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   stateDir: string,
 ): Promise<SecurityAuditReport> {
   return runSecurityAudit({
@@ -416,7 +416,7 @@ async function runInstallMetadataAudit(
     includeFilesystem: true,
     includeChannelSecurity: false,
     stateDir,
-    configPath: path.join(stateDir, "openclaw.json"),
+    configPath: path.join(stateDir, "mullusi.json"),
     execDockerRawFn: execDockerRawUnavailable,
   });
 }
@@ -443,7 +443,7 @@ describe("security audit", () => {
     const tmp = await makeTmpDir(label);
     const stateDir = path.join(tmp, "state");
     await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
-    const configPath = path.join(stateDir, "openclaw.json");
+    const configPath = path.join(stateDir, "mullusi.json");
     await fs.writeFile(configPath, "{}\n", "utf-8");
     if (!isWindows) {
       await fs.chmod(configPath, 0o600);
@@ -455,7 +455,7 @@ describe("security audit", () => {
     const credentialsDir = path.join(sharedChannelSecurityStateDir, "credentials");
     await fs.rm(credentialsDir, { recursive: true, force: true }).catch(() => undefined);
     await fs.mkdir(credentialsDir, { recursive: true, mode: 0o700 });
-    await withEnvAsync({ OPENCLAW_STATE_DIR: sharedChannelSecurityStateDir }, () =>
+    await withEnvAsync({ MULLUSI_STATE_DIR: sharedChannelSecurityStateDir }, () =>
       fn(sharedChannelSecurityStateDir),
     );
   };
@@ -469,20 +469,20 @@ describe("security audit", () => {
     }
   };
 
-  const runSharedExtensionsAudit = async (config: OpenClawConfig) => {
+  const runSharedExtensionsAudit = async (config: MullusiConfig) => {
     return runSecurityAudit({
       config,
       includeFilesystem: true,
       includeChannelSecurity: false,
       stateDir: sharedExtensionsStateDir,
-      configPath: path.join(sharedExtensionsStateDir, "openclaw.json"),
+      configPath: path.join(sharedExtensionsStateDir, "mullusi.json"),
       execDockerRawFn: execDockerRawUnavailable,
     });
   };
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-security-audit-"));
     isolatedHome = path.join(fixtureRoot, "home");
-    const isolatedEnv = createPathResolutionEnv(isolatedHome, { OPENCLAW_HOME: isolatedHome });
+    const isolatedEnv = createPathResolutionEnv(isolatedHome, { MULLUSI_HOME: isolatedHome });
     for (const key of pathResolutionEnvKeys) {
       previousPathResolutionEnv[key] = process.env[key];
       const value = isolatedEnv[key];
@@ -527,7 +527,7 @@ describe("security audit", () => {
   });
 
   it("includes an attack surface summary (info)", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       channels: { whatsapp: { groupPolicy: "open" }, telegram: { groupPolicy: "allowlist" } },
       tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
       hooks: { enabled: true },
@@ -552,8 +552,8 @@ describe("security audit", () => {
         run: async () =>
           withEnvAsync(
             {
-              OPENCLAW_GATEWAY_TOKEN: undefined,
-              OPENCLAW_GATEWAY_PASSWORD: undefined,
+              MULLUSI_GATEWAY_TOKEN: undefined,
+              MULLUSI_GATEWAY_PASSWORD: undefined,
             },
             async () =>
               audit({
@@ -578,7 +578,7 @@ describe("security audit", () => {
                   password: {
                     source: "env",
                     provider: "default",
-                    id: "OPENCLAW_GATEWAY_PASSWORD",
+                    id: "MULLUSI_GATEWAY_PASSWORD",
                   },
                 },
               },
@@ -592,14 +592,14 @@ describe("security audit", () => {
       {
         name: "does not flag missing gateway auth when read-only scrubbed config omits unavailable auth SecretRefs",
         run: async () => {
-          const sourceConfig: OpenClawConfig = {
+          const sourceConfig: MullusiConfig = {
             gateway: {
               bind: "lan",
               auth: {
                 token: {
                   source: "env",
                   provider: "default",
-                  id: "OPENCLAW_GATEWAY_TOKEN",
+                  id: "MULLUSI_GATEWAY_TOKEN",
                 },
               },
             },
@@ -609,7 +609,7 @@ describe("security audit", () => {
               },
             },
           };
-          const resolvedConfig: OpenClawConfig = {
+          const resolvedConfig: MullusiConfig = {
             gateway: {
               bind: "lan",
               auth: {},
@@ -672,7 +672,7 @@ describe("security audit", () => {
   it("scores dangerous gateway.tools.allow over HTTP by exposure", async () => {
     const cases: Array<{
       name: string;
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       expectedSeverity: "warn" | "critical";
     }> = [
       {
@@ -724,7 +724,7 @@ describe("security audit", () => {
   it("warns when sandbox exec host is selected while sandbox mode is off", async () => {
     const cases: Array<{
       name: string;
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       checkId:
         | "tools.exec.host_sandbox_no_sandbox_defaults"
         | "tools.exec.host_sandbox_no_sandbox_agents";
@@ -784,7 +784,7 @@ describe("security audit", () => {
   it("warns for interpreter safeBins only when explicit profiles are missing", async () => {
     const cases: Array<{
       name: string;
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       expected: boolean;
     }> = [
       {
@@ -855,7 +855,7 @@ describe("security audit", () => {
   it("warns when risky broad-behavior bins are explicitly added to safeBins", async () => {
     const cases: Array<{
       name: string;
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       expected: boolean;
     }> = [
       {
@@ -892,7 +892,7 @@ describe("security audit", () => {
     const riskyGlobalTrustedDirs =
       process.platform === "win32"
         ? [String.raw`C:\Users\ci-user\bin`, String.raw`C:\Users\ci-user\.local\bin`]
-        : ["/usr/local/bin", "/tmp/openclaw-safe-bins"];
+        : ["/usr/local/bin", "/tmp/mullusi-safe-bins"];
     const cases = [
       {
         name: "warns for risky global and relative trusted dirs",
@@ -914,7 +914,7 @@ describe("security audit", () => {
               },
             ],
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           const finding = res.findings.find(
             (f) => f.checkId === "tools.exec.safe_bin_trusted_dirs_risky",
@@ -933,7 +933,7 @@ describe("security audit", () => {
               safeBinTrustedDirs: ["/usr/libexec"],
             },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           expectNoFinding(res, "tools.exec.safe_bin_trusted_dirs_risky");
         },
@@ -1047,7 +1047,7 @@ describe("security audit", () => {
   it("evaluates loopback control UI and logging exposure findings", async () => {
     const cases: Array<{
       name: string;
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       checkId:
         | "gateway.trusted_proxies_missing"
         | "gateway.loopback_no_auth"
@@ -1155,7 +1155,7 @@ describe("security audit", () => {
           const tmp = await makeTmpDir(testCase.label);
           const stateDir = path.join(tmp, "state");
           await fs.mkdir(stateDir, { recursive: true });
-          const configPath = path.join(stateDir, "openclaw.json");
+          const configPath = path.join(stateDir, "mullusi.json");
           await fs.writeFile(configPath, "{}\n", "utf-8");
 
           return runSecurityAudit({
@@ -1192,20 +1192,20 @@ describe("security audit", () => {
               if (args[0] === "ps") {
                 return {
                   stdout: Buffer.from(
-                    "openclaw-sbx-browser-old\nopenclaw-sbx-browser-missing-hash\n",
+                    "mullusi-sbx-browser-old\nmullusi-sbx-browser-missing-hash\n",
                   ),
                   stderr: Buffer.alloc(0),
                   code: 0,
                 };
               }
-              if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-old") {
+              if (args[0] === "inspect" && args.at(-1) === "mullusi-sbx-browser-old") {
                 return {
                   stdout: Buffer.from("abc123\tepoch-v0\n"),
                   stderr: Buffer.alloc(0),
                   code: 0,
                 };
               }
-              if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-missing-hash") {
+              if (args[0] === "inspect" && args.at(-1) === "mullusi-sbx-browser-missing-hash") {
                 return {
                   stdout: Buffer.from("<no value>\t<no value>\n"),
                   stderr: Buffer.alloc(0),
@@ -1228,7 +1228,7 @@ describe("security audit", () => {
           const staleEpoch = res.findings.find(
             (f) => f.checkId === "sandbox.browser_container.hash_epoch_stale",
           );
-          expect(staleEpoch?.detail).toContain("openclaw-sbx-browser-old");
+          expect(staleEpoch?.detail).toContain("mullusi-sbx-browser-old");
         },
       },
       {
@@ -1268,19 +1268,19 @@ describe("security audit", () => {
             execDockerRawFn: (async (args: string[]) => {
               if (args[0] === "ps") {
                 return {
-                  stdout: Buffer.from("openclaw-sbx-browser-exposed\n"),
+                  stdout: Buffer.from("mullusi-sbx-browser-exposed\n"),
                   stderr: Buffer.alloc(0),
                   code: 0,
                 };
               }
-              if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-exposed") {
+              if (args[0] === "inspect" && args.at(-1) === "mullusi-sbx-browser-exposed") {
                 return {
                   stdout: Buffer.from("hash123\t2026-02-21-novnc-auth-default\n"),
                   stderr: Buffer.alloc(0),
                   code: 0,
                 };
               }
-              if (args[0] === "port" && args.at(-1) === "openclaw-sbx-browser-exposed") {
+              if (args[0] === "port" && args.at(-1) === "mullusi-sbx-browser-exposed") {
                 return {
                   stdout: Buffer.from("6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n"),
                   stderr: Buffer.alloc(0),
@@ -1353,11 +1353,11 @@ describe("security audit", () => {
     const stateDir = path.join(tmp, "state");
     await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
 
-    const targetConfigPath = path.join(tmp, "managed-openclaw.json");
+    const targetConfigPath = path.join(tmp, "managed-mullusi.json");
     await fs.writeFile(targetConfigPath, "{}\n", "utf-8");
     await fs.chmod(targetConfigPath, 0o444);
 
-    const configPath = path.join(stateDir, "openclaw.json");
+    const configPath = path.join(stateDir, "mullusi.json");
     await fs.symlink(targetConfigPath, configPath);
 
     const res = await runSecurityAudit({
@@ -1435,7 +1435,7 @@ describe("security audit", () => {
         .map((testCase) => ({
           run: async () => {
             const fixture = await testCase.setup();
-            const configPath = path.join(fixture.stateDir, "openclaw.json");
+            const configPath = path.join(fixture.stateDir, "mullusi.json");
             await fs.writeFile(configPath, "{}\n", "utf-8");
             if (!isWindows) {
               await fs.chmod(configPath, 0o600);
@@ -1468,7 +1468,7 @@ describe("security audit", () => {
   it("scores small-model risk by tool/sandbox exposure", async () => {
     const cases: Array<{
       name: string;
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       expectedSeverity: "info" | "critical";
       detailIncludes: string[];
     }> = [
@@ -1519,7 +1519,7 @@ describe("security audit", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         expectedFindings: [{ checkId: "sandbox.docker_config_mode_off" }],
       },
       {
@@ -1534,7 +1534,7 @@ describe("security audit", () => {
             },
             list: [{ id: "ops", sandbox: { mode: "all" } }],
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         expectedFindings: [],
         expectedAbsent: ["sandbox.docker_config_mode_off"],
       },
@@ -1554,7 +1554,7 @@ describe("security audit", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         expectedFindings: [
           { checkId: "sandbox.dangerous_bind_mount", severity: "critical" },
           { checkId: "sandbox.dangerous_network_mode", severity: "critical" },
@@ -1575,7 +1575,7 @@ describe("security audit", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         expectedFindings: [
           {
             checkId: "sandbox.dangerous_bind_mount",
@@ -1597,7 +1597,7 @@ describe("security audit", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         expectedFindings: [
           {
             checkId: "sandbox.dangerous_network_mode",
@@ -1634,7 +1634,7 @@ describe("security audit", () => {
               denyCommands: ["system.*", "system.runx"],
             },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         detailIncludes: ["system.*", "system.runx", "did you mean", "system.run"],
       },
       {
@@ -1645,7 +1645,7 @@ describe("security audit", () => {
               denyCommands: ["system.run.prep"],
             },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         detailIncludes: ["system.run.prep", "did you mean", "system.run.prepare"],
       },
       {
@@ -1656,7 +1656,7 @@ describe("security audit", () => {
               denyCommands: ["zzzzzzzzzzzzzz"],
             },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         detailIncludes: ["zzzzzzzzzzzzzz"],
         detailExcludes: ["did you mean"],
       },
@@ -1685,7 +1685,7 @@ describe("security audit", () => {
             bind: "loopback",
             nodes: { allowCommands: ["camera.snap", "screen.record"] },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         expectedSeverity: "warn" as const,
       },
       {
@@ -1695,7 +1695,7 @@ describe("security audit", () => {
             bind: "lan",
             nodes: { allowCommands: ["camera.snap", "screen.record"] },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         expectedSeverity: "critical" as const,
       },
       {
@@ -1707,7 +1707,7 @@ describe("security audit", () => {
               denyCommands: ["camera.snap", "screen.record"],
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         expectedAbsent: true,
       },
     ] as const;
@@ -1736,7 +1736,7 @@ describe("security audit", () => {
   });
 
   it("flags agent profile overrides when global tools.profile is minimal", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         profile: "minimal",
       },
@@ -1756,7 +1756,7 @@ describe("security audit", () => {
   });
 
   it("flags tools.elevated allowFrom wildcard as critical", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       tools: {
         elevated: {
           allowFrom: { whatsapp: ["*"] },
@@ -1780,7 +1780,7 @@ describe("security audit", () => {
         browser: {
           enabled: true,
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedFinding: { checkId: "browser.control_no_auth", severity: "critical" },
     },
     {
@@ -1793,7 +1793,7 @@ describe("security audit", () => {
         browser: {
           enabled: true,
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedNoFinding: "browser.control_no_auth",
     },
     {
@@ -1805,14 +1805,14 @@ describe("security audit", () => {
             password: {
               source: "env",
               provider: "default",
-              id: "OPENCLAW_GATEWAY_PASSWORD",
+              id: "MULLUSI_GATEWAY_PASSWORD",
             },
           },
         },
         browser: {
           enabled: true,
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedNoFinding: "browser.control_no_auth",
     },
     {
@@ -1823,7 +1823,7 @@ describe("security audit", () => {
             remote: { cdpUrl: "http://example.com:9222", color: "#0066CC" },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedFinding: { checkId: "browser.remote_cdp_http", severity: "warn" },
     },
     {
@@ -1838,7 +1838,7 @@ describe("security audit", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedFinding: {
         checkId: "browser.remote_cdp_private_host",
         severity: "warn",
@@ -1866,7 +1866,7 @@ describe("security audit", () => {
           gateway: {
             controlUi: { allowInsecureAuth: true },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         expectedFinding: {
           checkId: "gateway.control_ui.insecure_auth",
           severity: "warn",
@@ -1879,7 +1879,7 @@ describe("security audit", () => {
           gateway: {
             controlUi: { dangerouslyDisableDeviceAuth: true },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         expectedFinding: {
           checkId: "gateway.control_ui.device_auth_disabled",
           severity: "critical",
@@ -1900,7 +1900,7 @@ describe("security audit", () => {
               },
             },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         expectedDangerousDetails: [
           "hooks.gmail.allowUnsafeExternalContent=true",
           "hooks.mappings[0].allowUnsafeExternalContent=true",
@@ -1920,7 +1920,7 @@ describe("security audit", () => {
               },
             },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         expectedDangerousDetails: ["plugins.entries.acpx.config.permissionMode=approve-all"],
       },
     ] as const;
@@ -1950,7 +1950,7 @@ describe("security audit", () => {
           bind: "lan",
           auth: { mode: "token", token: "very-long-browser-token-0123456789" },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedFinding: {
         checkId: "gateway.control_ui.allowed_origins_required",
         severity: "critical",
@@ -1963,7 +1963,7 @@ describe("security audit", () => {
           bind: "loopback",
           controlUi: { allowedOrigins: ["*"] },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedFinding: {
         checkId: "gateway.control_ui.allowed_origins_wildcard",
         severity: "warn",
@@ -1977,7 +1977,7 @@ describe("security audit", () => {
           auth: { mode: "token", token: "very-long-browser-token-0123456789" },
           controlUi: { allowedOrigins: ["*"] },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedFinding: {
         checkId: "gateway.control_ui.allowed_origins_wildcard",
         severity: "critical",
@@ -1995,7 +1995,7 @@ describe("security audit", () => {
   });
 
   it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       gateway: {
         bind: "lan",
         auth: { mode: "token", token: "very-long-browser-token-0123456789" },
@@ -2024,7 +2024,7 @@ describe("security audit", () => {
             appSecret: "secret_test", // pragma: allowlist secret
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedFinding: "channels.feishu.doc_owner_open_id",
     },
     {
@@ -2040,7 +2040,7 @@ describe("security audit", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedFinding: "channels.feishu.doc_owner_open_id",
     },
     {
@@ -2053,7 +2053,7 @@ describe("security audit", () => {
             tools: { doc: false },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedNoFinding: "channels.feishu.doc_owner_open_id",
     },
   ])("$name", async (testCase) => {
@@ -2067,7 +2067,7 @@ describe("security audit", () => {
   });
 
   it("scores X-Real-IP fallback risk by gateway exposure", async () => {
-    const trustedProxyCfg = (trustedProxies: string[]): OpenClawConfig => ({
+    const trustedProxyCfg = (trustedProxies: string[]): MullusiConfig => ({
       gateway: {
         bind: "loopback",
         allowRealIpFallback: true,
@@ -2083,7 +2083,7 @@ describe("security audit", () => {
 
     const cases: Array<{
       name: string;
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       expectedSeverity: "warn" | "critical";
     }> = [
       {
@@ -2147,7 +2147,7 @@ describe("security audit", () => {
   it("scores mDNS full mode risk by gateway bind mode", async () => {
     const cases: Array<{
       name: string;
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       expectedSeverity: "warn" | "critical";
     }> = [
       {
@@ -2193,7 +2193,7 @@ describe("security audit", () => {
   it("evaluates trusted-proxy auth guardrails", async () => {
     const cases: Array<{
       name: string;
-      cfg: OpenClawConfig;
+      cfg: MullusiConfig;
       expectedCheckId: string;
       expectedSeverity: "warn" | "critical";
       suppressesGenericSharedSecretFindings?: boolean;
@@ -2280,7 +2280,7 @@ describe("security audit", () => {
   });
 
   it("warns when multiple DM senders share the main session", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       session: { dmScope: "main" },
       channels: { whatsapp: { enabled: true } },
     };
@@ -2352,7 +2352,7 @@ describe("security audit", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         expectFinding: true,
       },
       {
@@ -2373,7 +2373,7 @@ describe("security audit", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         expectFinding: false,
       },
     ] as const;
@@ -2416,7 +2416,7 @@ describe("security audit", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         resolvedConfig: {
           channels: {
             discord: {
@@ -2431,7 +2431,7 @@ describe("security audit", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         plugin: () =>
           stubChannelPlugin({
             id: "discord",
@@ -2481,7 +2481,7 @@ describe("security audit", () => {
               slashCommand: { enabled: true },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         resolvedConfig: {
           channels: {
             slack: {
@@ -2491,8 +2491,8 @@ describe("security audit", () => {
               slashCommand: { enabled: true },
             },
           },
-        } as OpenClawConfig,
-        plugin: (sourceConfig: OpenClawConfig) =>
+        } as MullusiConfig,
+        plugin: (sourceConfig: MullusiConfig) =>
           stubChannelPlugin({
             id: "slack",
             label: "Slack",
@@ -2539,7 +2539,7 @@ describe("security audit", () => {
               slashCommand: { enabled: true },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         resolvedConfig: {
           channels: {
             slack: {
@@ -2549,8 +2549,8 @@ describe("security audit", () => {
               slashCommand: { enabled: true },
             },
           },
-        } as OpenClawConfig,
-        plugin: (sourceConfig: OpenClawConfig) =>
+        } as MullusiConfig,
+        plugin: (sourceConfig: MullusiConfig) =>
           stubChannelPlugin({
             id: "slack",
             label: "Slack",
@@ -2621,7 +2621,7 @@ describe("security audit", () => {
       },
     });
 
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       channels: {
         zalouser: {
           enabled: true,
@@ -2674,14 +2674,14 @@ describe("security audit", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       plugins: [discordPlugin],
       expectNameBasedSeverity: "warn",
       detailIncludes: [
         "channels.discord.allowFrom:Alice#1234",
         "channels.discord.guilds.123.users:trusted.operator",
         "channels.discord.guilds.123.channels.general.users:security-team",
-        "~/.openclaw/credentials/discord-allowFrom.json:team.owner",
+        "~/.mullusi/credentials/discord-allowFrom.json:team.owner",
       ],
       detailExcludes: ["<@123456789012345678>"],
     },
@@ -2696,7 +2696,7 @@ describe("security audit", () => {
             allowFrom: ["Alice#1234"],
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       plugins: [discordPlugin],
       expectNameBasedSeverity: "info",
       detailIncludes: ["out-of-scope"],
@@ -2721,7 +2721,7 @@ describe("security audit", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       plugins: [discordPlugin],
       expectNoNameBasedFinding: true,
       expectFindingMatch: {
@@ -2749,7 +2749,7 @@ describe("security audit", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       plugins: [discordPlugin],
       expectNameBasedSeverity: "warn",
       detailIncludes: ["channels.discord.accounts.beta.allowFrom:Alice#1234"],
@@ -2780,7 +2780,7 @@ describe("security audit", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       plugins: [discordPlugin],
       expectNoNameBasedFinding: true,
     },
@@ -2830,7 +2830,7 @@ describe("security audit", () => {
             dangerouslyAllowNameMatching: true,
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedMatch: {
         checkId: "channels.synology-chat.reply.dangerous_name_matching_enabled",
         severity: "info",
@@ -2857,7 +2857,7 @@ describe("security audit", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedMatch: {
         checkId: "channels.synology-chat.reply.dangerous_name_matching_enabled",
         severity: "info",
@@ -2875,7 +2875,7 @@ describe("security audit", () => {
 
   it("does not treat prototype properties as explicit Discord account config paths", async () => {
     await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         channels: {
           discord: {
             enabled: true,
@@ -2933,7 +2933,7 @@ describe("security audit", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedSeverity: "warn",
       detailIncludes: ["channels.zalouser.groups:Ops Room"],
       detailExcludes: ["group:g-123"],
@@ -2950,7 +2950,7 @@ describe("security audit", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedSeverity: "info",
       detailIncludes: ["out-of-scope"],
       expectFindingMatch: {
@@ -3000,7 +3000,7 @@ describe("security audit", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       plugins: [discordPlugin],
       expectedFinding: {
         checkId: "channels.discord.commands.native.unrestricted",
@@ -3019,7 +3019,7 @@ describe("security audit", () => {
             slashCommand: { enabled: true },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       plugins: [slackPlugin],
       expectedFinding: {
         checkId: "channels.slack.commands.slash.no_allowlists",
@@ -3039,7 +3039,7 @@ describe("security audit", () => {
             slashCommand: { enabled: true },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       plugins: [slackPlugin],
       expectedFinding: {
         checkId: "channels.slack.commands.slash.useAccessGroups_off",
@@ -3057,7 +3057,7 @@ describe("security audit", () => {
             groups: { "-100123": {} },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       plugins: [telegramPlugin],
       expectedFinding: {
         checkId: "channels.telegram.groups.allowFrom.missing",
@@ -3076,7 +3076,7 @@ describe("security audit", () => {
             groups: { "-100123": {} },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       plugins: [telegramPlugin],
       expectedFinding: {
         checkId: "channels.telegram.allowFrom.invalid_entries",
@@ -3094,7 +3094,7 @@ describe("security audit", () => {
   });
 
   it("adds probe_failed warnings for deep probe failure modes", async () => {
-    const cfg: OpenClawConfig = { gateway: { mode: "local" } };
+    const cfg: MullusiConfig = { gateway: { mode: "local" } };
     const cases: Array<{
       name: string;
       probeGatewayFn: NonNullable<SecurityAuditOptions["probeGatewayFn"]>;
@@ -3104,7 +3104,7 @@ describe("security audit", () => {
         name: "probe returns failed result",
         probeGatewayFn: async () => ({
           ok: false,
-          url: "ws://127.0.0.1:18789",
+          url: "ws://127.0.0.1:18790",
           connectLatencyMs: null,
           error: "connect failed",
           close: null,
@@ -3170,7 +3170,7 @@ describe("security audit", () => {
         ...testCase,
         cfg: {
           agents: { defaults: { model: { primary: testCase.model } } },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
       })),
       (res, testCase) => {
         for (const expected of testCase.expectedFindings ?? []) {
@@ -3188,17 +3188,17 @@ describe("security audit", () => {
       enabled: true,
       token: "shared-gateway-token-1234567890",
       defaultSessionKey: "hook:ingress",
-    } satisfies NonNullable<OpenClawConfig["hooks"]>;
+    } satisfies NonNullable<MullusiConfig["hooks"]>;
     const requestSessionKeyHooks = {
       ...unrestrictedBaseHooks,
       allowRequestSessionKey: true,
-    } satisfies NonNullable<OpenClawConfig["hooks"]>;
+    } satisfies NonNullable<MullusiConfig["hooks"]>;
     const cases = [
       {
         name: "warns when hooks token looks short",
         cfg: {
           hooks: { enabled: true, token: "short" },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         expectedFinding: "hooks.token_too_short",
         expectedSeverity: "warn" as const,
       },
@@ -3206,9 +3206,9 @@ describe("security audit", () => {
         name: "flags hooks token reuse of the gateway env token as critical",
         cfg: {
           hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         env: {
-          OPENCLAW_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
+          MULLUSI_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
         },
         expectedFinding: "hooks.token_reuse_gateway_token",
         expectedSeverity: "critical" as const,
@@ -3217,7 +3217,7 @@ describe("security audit", () => {
         name: "warns when hooks.defaultSessionKey is unset",
         cfg: {
           hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         expectedFinding: "hooks.default_session_key_unset",
         expectedSeverity: "warn" as const,
       },
@@ -3230,25 +3230,25 @@ describe("security audit", () => {
             defaultSessionKey: "hook:ingress",
             allowedAgentIds: ["*"],
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         expectedFinding: "hooks.allowed_agent_ids_unrestricted",
         expectedSeverity: "warn" as const,
       },
       {
         name: "scores unrestricted hooks.allowedAgentIds by local exposure",
-        cfg: { hooks: unrestrictedBaseHooks } satisfies OpenClawConfig,
+        cfg: { hooks: unrestrictedBaseHooks } satisfies MullusiConfig,
         expectedFinding: "hooks.allowed_agent_ids_unrestricted",
         expectedSeverity: "warn" as const,
       },
       {
         name: "scores unrestricted hooks.allowedAgentIds by remote exposure",
-        cfg: { gateway: { bind: "lan" }, hooks: unrestrictedBaseHooks } satisfies OpenClawConfig,
+        cfg: { gateway: { bind: "lan" }, hooks: unrestrictedBaseHooks } satisfies MullusiConfig,
         expectedFinding: "hooks.allowed_agent_ids_unrestricted",
         expectedSeverity: "critical" as const,
       },
       {
         name: "scores hooks request sessionKey override by local exposure",
-        cfg: { hooks: requestSessionKeyHooks } satisfies OpenClawConfig,
+        cfg: { hooks: requestSessionKeyHooks } satisfies MullusiConfig,
         expectedFinding: "hooks.request_session_key_enabled",
         expectedSeverity: "warn" as const,
         expectedExtraFinding: {
@@ -3261,7 +3261,7 @@ describe("security audit", () => {
         cfg: {
           gateway: { bind: "lan" },
           hooks: requestSessionKeyHooks,
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         expectedFinding: "hooks.request_session_key_enabled",
         expectedSeverity: "critical" as const,
       },
@@ -3295,7 +3295,7 @@ describe("security audit", () => {
           auth: { mode: "none" },
           http: { endpoints: { chatCompletions: { enabled: true } } },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedFinding: { checkId: "gateway.http.no_auth", severity: "warn" },
       detailIncludes: ["/tools/invoke", "/v1/chat/completions"],
       auditOptions: { env: {} },
@@ -3308,7 +3308,7 @@ describe("security audit", () => {
           auth: { mode: "none" },
           http: { endpoints: { responses: { enabled: true } } },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedFinding: { checkId: "gateway.http.no_auth", severity: "critical" },
       auditOptions: { env: {} },
     },
@@ -3325,7 +3325,7 @@ describe("security audit", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedNoFinding: "gateway.http.no_auth",
       auditOptions: { env: {} },
     },
@@ -3340,7 +3340,7 @@ describe("security audit", () => {
             },
           },
         },
-      } satisfies OpenClawConfig,
+      } satisfies MullusiConfig,
       expectedFinding: { checkId: "gateway.http.session_key_override_enabled", severity: "info" },
     },
   ])("$name", async (testCase) => {
@@ -3365,11 +3365,11 @@ describe("security audit", () => {
   });
 
   it("warns when state/config look like a synced folder", async () => {
-    const cfg: OpenClawConfig = {};
+    const cfg: MullusiConfig = {};
 
     const res = await audit(cfg, {
-      stateDir: "/Users/test/Dropbox/.openclaw",
-      configPath: "/Users/test/Dropbox/.openclaw/openclaw.json",
+      stateDir: "/Users/test/Dropbox/.mullusi",
+      configPath: "/Users/test/Dropbox/.mullusi/mullusi.json",
     });
 
     expectFinding(res, "fs.synced_dir", "warn");
@@ -3390,11 +3390,11 @@ describe("security audit", () => {
       await fs.chmod(includePath, 0o644);
     }
 
-    const configPath = path.join(stateDir, "openclaw.json");
+    const configPath = path.join(stateDir, "mullusi.json");
     await fs.writeFile(configPath, `{ "$include": "./extra.json5" }\n`, "utf-8");
     await fs.chmod(configPath, 0o600);
 
-    const cfg: OpenClawConfig = { logging: { redactSensitive: "off" } };
+    const cfg: MullusiConfig = { logging: { redactSensitive: "off" } };
     const user = "DESKTOP-TEST\\Tester";
     const execIcacls = isWindows
       ? async (_cmd: string, args: string[]) => {
@@ -3447,7 +3447,7 @@ describe("security audit", () => {
                 installs: {
                   "voice-call": {
                     source: "npm",
-                    spec: "@openclaw/voice-call",
+                    spec: "@mullusi/voice-call",
                   },
                 },
               },
@@ -3456,12 +3456,12 @@ describe("security audit", () => {
                   installs: {
                     "test-hooks": {
                       source: "npm",
-                      spec: "@openclaw/test-hooks",
+                      spec: "@mullusi/test-hooks",
                     },
                   },
                 },
               },
-            } satisfies OpenClawConfig,
+            } satisfies MullusiConfig,
             sharedInstallMetadataStateDir,
           ),
         expectedPresent: [
@@ -3480,7 +3480,7 @@ describe("security audit", () => {
                 installs: {
                   "voice-call": {
                     source: "npm",
-                    spec: "@openclaw/voice-call@1.2.3",
+                    spec: "@mullusi/voice-call@1.2.3",
                     integrity: "sha512-plugin",
                   },
                 },
@@ -3490,13 +3490,13 @@ describe("security audit", () => {
                   installs: {
                     "test-hooks": {
                       source: "npm",
-                      spec: "@openclaw/test-hooks@1.2.3",
+                      spec: "@mullusi/test-hooks@1.2.3",
                       integrity: "sha512-hook",
                     },
                   },
                 },
               },
-            } satisfies OpenClawConfig,
+            } satisfies MullusiConfig,
             sharedInstallMetadataStateDir,
           ),
         expectedAbsent: [
@@ -3517,12 +3517,12 @@ describe("security audit", () => {
           await fs.mkdir(hookDir, { recursive: true });
           await fs.writeFile(
             path.join(pluginDir, "package.json"),
-            JSON.stringify({ name: "@openclaw/voice-call", version: "9.9.9" }),
+            JSON.stringify({ name: "@mullusi/voice-call", version: "9.9.9" }),
             "utf-8",
           );
           await fs.writeFile(
             path.join(hookDir, "package.json"),
-            JSON.stringify({ name: "@openclaw/test-hooks", version: "8.8.8" }),
+            JSON.stringify({ name: "@mullusi/test-hooks", version: "8.8.8" }),
             "utf-8",
           );
 
@@ -3532,7 +3532,7 @@ describe("security audit", () => {
                 installs: {
                   "voice-call": {
                     source: "npm",
-                    spec: "@openclaw/voice-call@1.2.3",
+                    spec: "@mullusi/voice-call@1.2.3",
                     integrity: "sha512-plugin",
                     resolvedVersion: "1.2.3",
                   },
@@ -3543,7 +3543,7 @@ describe("security audit", () => {
                   installs: {
                     "test-hooks": {
                       source: "npm",
-                      spec: "@openclaw/test-hooks@1.2.3",
+                      spec: "@mullusi/test-hooks@1.2.3",
                       integrity: "sha512-hook",
                       resolvedVersion: "1.2.3",
                     },
@@ -3577,7 +3577,7 @@ describe("security audit", () => {
     const cases = [
       {
         name: "flags extensions without plugins.allow",
-        cfg: {} satisfies OpenClawConfig,
+        cfg: {} satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           expect(res.findings).toEqual(
             expect.arrayContaining([
@@ -3593,7 +3593,7 @@ describe("security audit", () => {
         name: "flags enabled extensions when tool policy can expose plugin tools",
         cfg: {
           plugins: { allow: ["some-plugin"] },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           expect(res.findings).toEqual(
             expect.arrayContaining([
@@ -3610,7 +3610,7 @@ describe("security audit", () => {
         cfg: {
           plugins: { allow: ["some-plugin"] },
           tools: { profile: "coding" },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           expect(
             res.findings.some((f) => f.checkId === "plugins.tools_reachable_permissive_policy"),
@@ -3623,7 +3623,7 @@ describe("security audit", () => {
           channels: {
             discord: { enabled: true, token: "t" },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           expect(res.findings).toEqual(
             expect.arrayContaining([
@@ -3648,7 +3648,7 @@ describe("security audit", () => {
               } as unknown as string,
             },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           expect(res.findings).toEqual(
             expect.arrayContaining([
@@ -3688,7 +3688,7 @@ describe("security audit", () => {
       path.join(pluginDir, "package.json"),
       JSON.stringify({
         name: "evil-plugin",
-        openclaw: { extensions: [".hidden/index.js"] },
+        mullusi: { extensions: [".hidden/index.js"] },
       }),
       "utf-8",
     );
@@ -3717,7 +3717,7 @@ describe("security audit", () => {
         cfg: {
           tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
           channels: { whatsapp: { groupPolicy: "open" } },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           expect(res.findings).toEqual(
             expect.arrayContaining([
@@ -3734,7 +3734,7 @@ describe("security audit", () => {
         cfg: {
           channels: { whatsapp: { groupPolicy: "open" } },
           tools: { elevated: { enabled: false } },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           expect(res.findings).toEqual(
             expect.arrayContaining([
@@ -3759,7 +3759,7 @@ describe("security audit", () => {
               sandbox: { mode: "all" },
             },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           expect(
             res.findings.some(
@@ -3778,7 +3778,7 @@ describe("security audit", () => {
             deny: ["group:runtime"],
             fs: { workspaceOnly: true },
           },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           expect(
             res.findings.some(
@@ -3803,7 +3803,7 @@ describe("security audit", () => {
             },
           },
           tools: { elevated: { enabled: false } },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           const finding = res.findings.find(
             (f) => f.checkId === "security.trust_model.multi_user_heuristic",
@@ -3825,7 +3825,7 @@ describe("security audit", () => {
             },
           },
           tools: { elevated: { enabled: false } },
-        } satisfies OpenClawConfig,
+        } satisfies MullusiConfig,
         assert: (res: SecurityAuditReport) => {
           expectNoFinding(res, "security.trust_model.multi_user_heuristic");
         },
@@ -3858,10 +3858,10 @@ describe("security audit", () => {
     const makeProbeEnv = (env?: { token?: string; password?: string }) => {
       const probeEnv: NodeJS.ProcessEnv = {};
       if (env?.token !== undefined) {
-        probeEnv.OPENCLAW_GATEWAY_TOKEN = env.token;
+        probeEnv.MULLUSI_GATEWAY_TOKEN = env.token;
       }
       if (env?.password !== undefined) {
-        probeEnv.OPENCLAW_GATEWAY_PASSWORD = env.password;
+        probeEnv.MULLUSI_GATEWAY_PASSWORD = env.password;
       }
       return probeEnv;
     };
@@ -3869,7 +3869,7 @@ describe("security audit", () => {
     it("applies gateway auth precedence across local/remote modes", async () => {
       const cases: Array<{
         name: string;
-        cfg: OpenClawConfig;
+        cfg: MullusiConfig;
         env?: { token?: string; password?: string };
         expectedAuth: { token?: string; password?: string };
       }> = [
@@ -3895,7 +3895,7 @@ describe("security audit", () => {
             gateway: {
               mode: "remote",
               auth: { token: "local-token-should-not-use" },
-              remote: { url: "wss://remote.example.com:18789", token: "remote-token-xyz789" },
+              remote: { url: "wss://remote.example.com:18790", token: "remote-token-xyz789" },
             },
           },
           expectedAuth: { token: "remote-token-xyz789" },
@@ -3906,7 +3906,7 @@ describe("security audit", () => {
             gateway: {
               mode: "remote",
               auth: { token: "local-token-should-not-use" },
-              remote: { url: "wss://remote.example.com:18789", token: "remote-token" },
+              remote: { url: "wss://remote.example.com:18790", token: "remote-token" },
             },
           },
           env: { token: "env-token" },
@@ -3928,7 +3928,7 @@ describe("security audit", () => {
           cfg: {
             gateway: {
               mode: "remote",
-              remote: { url: "wss://remote.example.com:18789", password: "remote-pass" },
+              remote: { url: "wss://remote.example.com:18790", password: "remote-pass" },
             },
           },
           expectedAuth: { password: "remote-pass" },
@@ -3938,7 +3938,7 @@ describe("security audit", () => {
           cfg: {
             gateway: {
               mode: "remote",
-              remote: { url: "wss://remote.example.com:18789", password: "remote-pass" },
+              remote: { url: "wss://remote.example.com:18790", password: "remote-pass" },
             },
           },
           env: { password: "env-pass" },
@@ -3966,7 +3966,7 @@ describe("security audit", () => {
     });
 
     it("adds warning finding when probe auth SecretRef is unavailable", async () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         gateway: {
           mode: "local",
           auth: {

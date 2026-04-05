@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { TelegramAccountConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { RuntimeEnv } from "mullusi/plugin-sdk/runtime-env";
+import { STATE_DIR } from "mullusi/plugin-sdk/state-paths";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
@@ -32,7 +32,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("scopes skill commands when account binding exists", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "butler" }],
       },
@@ -53,7 +53,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("scopes skill commands to default agent without a matching binding (#15599)", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "butler" }],
       },
@@ -68,7 +68,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("truncates Telegram command registration to 100 commands", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       commands: { native: false },
     };
     const customCommands = Array.from({ length: 120 }, (_, index) => ({
@@ -102,7 +102,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("keeps sub-100 commands by shortening long descriptions to fit Telegram payload budget", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       commands: { native: false },
     };
     const customCommands = Array.from({ length: 92 }, (_, index) => ({
@@ -230,7 +230,7 @@ describe("registerTelegramNativeCommands", () => {
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
     const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
     const sendMessage = vi.fn().mockResolvedValue(undefined);
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "work" }],
       },
@@ -274,7 +274,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(firstDeliverRepliesCall?.[0]).toEqual(
       expect.objectContaining({
         mediaLocalRoots: expect.arrayContaining([
-          expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/),
+          expect.stringMatching(/[\\/]\.mullusi[\\/]workspace-work$/),
         ]),
       }),
     );
@@ -530,7 +530,7 @@ describe("registerTelegramNativeCommands", () => {
 
   it("sends plugin command error replies silently when silentErrorReplies is enabled", async () => {
     const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
-    const cfg: OpenClawConfig = {
+    const cfg: MullusiConfig = {
       channels: {
         telegram: {
           silentErrorReplies: true,

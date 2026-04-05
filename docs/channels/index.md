@@ -1,14 +1,14 @@
 ---
-summary: "Messaging platforms OpenClaw can connect to"
+summary: "Messaging platforms Mullusi can connect to"
 read_when:
-  - You want to choose a chat channel for OpenClaw
+  - You want to choose a chat channel for Mullusi
   - You need a quick overview of supported messaging platforms
 title: "Chat Channels"
 ---
 
 # Chat Channels
 
-OpenClaw can talk to you on any chat app you already use. Each channel connects via the Gateway.
+Mullusi can talk to you on any chat app you already use. Each channel connects via the Gateway.
 Text is supported everywhere; media and reactions vary by channel.
 
 ## Supported channels
@@ -34,14 +34,14 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Twitch](/channels/twitch) — Twitch chat via IRC connection (bundled plugin).
 - [Voice Call](/plugins/voice-call) — Telephony via Plivo or Twilio (plugin, installed separately).
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
-- [WeChat](https://www.npmjs.com/package/@tencent-weixin/openclaw-weixin) — Tencent iLink Bot plugin via QR login; private chats only.
+- [WeChat](https://www.npmjs.com/package/@tencent-weixin/mullusi-weixin) — Tencent iLink Bot plugin via QR login; private chats only.
 - [WhatsApp](/channels/whatsapp) — Most popular; uses Baileys and requires QR pairing.
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (bundled plugin).
 - [Zalo Personal](/channels/zalouser) — Zalo personal account via QR login (bundled plugin).
 
 ## Notes
 
-- Channels can run simultaneously; configure multiple and OpenClaw will route per chat.
+- Channels can run simultaneously; configure multiple and Mullusi will route per chat.
 - Fastest setup is usually **Telegram** (simple bot token). WhatsApp requires QR pairing and
   stores more state on disk.
 - Group behavior varies by channel; see [Groups](/channels/groups).

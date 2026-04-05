@@ -5,13 +5,13 @@ read_when:
 title: "Agent Loop"
 ---
 
-# Agent Loop (OpenClaw)
+# Agent Loop (Mullusi)
 
 An agentic loop is the full “real” run of an agent: intake → context assembly → model inference →
 tool execution → streaming replies → persistence. It’s the authoritative path that turns a message
 into actions and a final reply, while keeping session state consistent.
 
-In OpenClaw, a loop is a single, serialized run per session that emits lifecycle and stream events
+In Mullusi, a loop is a single, serialized run per session that emits lifecycle and stream events
 as the model thinks, calls tools, and streams output. This doc explains how that authentic loop is
 wired end-to-end.
 
@@ -26,7 +26,7 @@ wired end-to-end.
 2. `agentCommand` runs the agent:
    - resolves model + thinking/verbose defaults
    - loads skills snapshot
-   - calls `runEmbeddedPiAgent` (pi-agent-core runtime)
+   - calls `runEmbeddedPiAgent` (mullusi-kernel runtime)
    - emits **lifecycle end/error** if the embedded loop does not emit one
 3. `runEmbeddedPiAgent`:
    - serializes runs via per-session + global queues
@@ -34,7 +34,7 @@ wired end-to-end.
    - subscribes to pi events and streams assistant/tool deltas
    - enforces timeout -> aborts run if exceeded
    - returns payloads + usage metadata
-4. `subscribeEmbeddedPiSession` bridges pi-agent-core events to OpenClaw `agent` stream:
+4. `subscribeEmbeddedPiSession` bridges mullusi-kernel events to Mullusi `agent` stream:
    - tool events => `stream: "tool"`
    - assistant deltas => `stream: "assistant"`
    - lifecycle events => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
@@ -58,13 +58,13 @@ wired end-to-end.
 
 ## Prompt assembly + system prompt
 
-- System prompt is built from OpenClaw’s base prompt, skills prompt, bootstrap context, and per-run overrides.
+- System prompt is built from Mullusi’s base prompt, skills prompt, bootstrap context, and per-run overrides.
 - Model-specific limits and compaction reserve tokens are enforced.
 - See [System prompt](/concepts/system-prompt) for what the model sees.
 
 ## Hook points (where you can intercept)
 
-OpenClaw has two hook systems:
+Mullusi has two hook systems:
 
 - **Internal hooks** (Gateway hooks): event-driven scripts for commands and lifecycle events.
 - **Plugin hooks**: extension points inside the agent/tool lifecycle and gateway pipeline.
@@ -107,7 +107,7 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
 
 ## Streaming + partial replies
 
-- Assistant deltas are streamed from pi-agent-core and emitted as `assistant` events.
+- Assistant deltas are streamed from mullusi-kernel and emitted as `assistant` events.
 - Block streaming can emit partial replies either on `text_end` or `message_end`.
 - Reasoning streaming can be emitted as a separate stream or as block replies.
 - See [Streaming](/concepts/streaming) for chunking and block reply behavior.
@@ -139,8 +139,8 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
 ## Event streams (today)
 
 - `lifecycle`: emitted by `subscribeEmbeddedPiSession` (and as a fallback by `agentCommand`)
-- `assistant`: streamed deltas from pi-agent-core
-- `tool`: streamed tool events from pi-agent-core
+- `assistant`: streamed deltas from mullusi-kernel
+- `tool`: streamed tool events from mullusi-kernel
 
 ## Chat channel handling
 

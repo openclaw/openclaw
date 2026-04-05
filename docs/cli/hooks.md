@@ -1,16 +1,16 @@
 ---
-summary: "CLI reference for `openclaw hooks` (agent hooks)"
+summary: "CLI reference for `mullusi hooks` (agent hooks)"
 read_when:
   - You want to manage agent hooks
   - You want to inspect hook availability or enable workspace hooks
 title: "hooks"
 ---
 
-# `openclaw hooks`
+# `mullusi hooks`
 
 Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, and gateway startup).
 
-Running `openclaw hooks` with no subcommand is equivalent to `openclaw hooks list`.
+Running `mullusi hooks` with no subcommand is equivalent to `mullusi hooks list`.
 
 Related:
 
@@ -20,7 +20,7 @@ Related:
 ## List All Hooks
 
 ```bash
-openclaw hooks list
+mullusi hooks list
 ```
 
 List all discovered hooks from workspace, managed, extra, and bundled directories.
@@ -46,7 +46,7 @@ Ready:
 **Example (verbose):**
 
 ```bash
-openclaw hooks list --verbose
+mullusi hooks list --verbose
 ```
 
 Shows missing requirements for ineligible hooks.
@@ -54,7 +54,7 @@ Shows missing requirements for ineligible hooks.
 **Example (JSON):**
 
 ```bash
-openclaw hooks list --json
+mullusi hooks list --json
 ```
 
 Returns structured JSON for programmatic use.
@@ -62,7 +62,7 @@ Returns structured JSON for programmatic use.
 ## Get Hook Information
 
 ```bash
-openclaw hooks info <name>
+mullusi hooks info <name>
 ```
 
 Show detailed information about a specific hook.
@@ -78,7 +78,7 @@ Show detailed information about a specific hook.
 **Example:**
 
 ```bash
-openclaw hooks info session-memory
+mullusi hooks info session-memory
 ```
 
 **Output:**
@@ -89,10 +89,10 @@ openclaw hooks info session-memory
 Save session context to memory when /new or /reset command is issued
 
 Details:
-  Source: openclaw-bundled
-  Path: /path/to/openclaw/hooks/bundled/session-memory/HOOK.md
-  Handler: /path/to/openclaw/hooks/bundled/session-memory/handler.ts
-  Homepage: https://docs.openclaw.ai/automation/hooks#session-memory
+  Source: mullusi-bundled
+  Path: /path/to/mullusi/hooks/bundled/session-memory/HOOK.md
+  Handler: /path/to/mullusi/hooks/bundled/session-memory/handler.ts
+  Homepage: https://docs.mullusi.com/automation/hooks#session-memory
   Events: command:new, command:reset
 
 Requirements:
@@ -102,7 +102,7 @@ Requirements:
 ## Check Hooks Eligibility
 
 ```bash
-openclaw hooks check
+mullusi hooks check
 ```
 
 Show summary of hook eligibility status (how many are ready vs. not ready).
@@ -124,12 +124,12 @@ Not ready: 0
 ## Enable a Hook
 
 ```bash
-openclaw hooks enable <name>
+mullusi hooks enable <name>
 ```
 
-Enable a specific hook by adding it to your config (`~/.openclaw/openclaw.json` by default).
+Enable a specific hook by adding it to your config (`~/.mullusi/mullusi.json` by default).
 
-**Note:** Workspace hooks are disabled by default until enabled here or in config. Hooks managed by plugins show `plugin:<id>` in `openclaw hooks list` and can’t be enabled/disabled here. Enable/disable the plugin instead.
+**Note:** Workspace hooks are disabled by default until enabled here or in config. Hooks managed by plugins show `plugin:<id>` in `mullusi hooks list` and can’t be enabled/disabled here. Enable/disable the plugin instead.
 
 **Arguments:**
 
@@ -138,7 +138,7 @@ Enable a specific hook by adding it to your config (`~/.openclaw/openclaw.json` 
 **Example:**
 
 ```bash
-openclaw hooks enable session-memory
+mullusi hooks enable session-memory
 ```
 
 **Output:**
@@ -163,7 +163,7 @@ the Gateway will load it.
 ## Disable a Hook
 
 ```bash
-openclaw hooks disable <name>
+mullusi hooks disable <name>
 ```
 
 Disable a specific hook by updating your config.
@@ -175,7 +175,7 @@ Disable a specific hook by updating your config.
 **Example:**
 
 ```bash
-openclaw hooks disable command-logger
+mullusi hooks disable command-logger
 ```
 
 **Output:**
@@ -190,33 +190,33 @@ openclaw hooks disable command-logger
 
 ## Notes
 
-- `openclaw hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
+- `mullusi hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
 - Plugin-managed hooks cannot be enabled or disabled here; enable or disable the owning plugin instead.
 
 ## Install Hook Packs
 
 ```bash
-openclaw plugins install <package>        # ClawHub first, then npm
-openclaw plugins install <package> --pin  # pin version
-openclaw plugins install <path>           # local path
+mullusi plugins install <package>        # ClawHub first, then npm
+mullusi plugins install <package> --pin  # pin version
+mullusi plugins install <path>           # local path
 ```
 
 Install hook packs through the unified plugins installer.
 
-`openclaw hooks install` still works as a compatibility alias, but it prints a
-deprecation warning and forwards to `openclaw plugins install`.
+`mullusi hooks install` still works as a compatibility alias, but it prints a
+deprecation warning and forwards to `mullusi plugins install`.
 
 Npm specs are **registry-only** (package name + optional **exact version** or
 **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
 installs run with `--ignore-scripts` for safety.
 
 Bare specs and `@latest` stay on the stable track. If npm resolves either of
-those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
+those to a prerelease, Mullusi stops and asks you to opt in explicitly with a
 prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
 
 **What it does:**
 
-- Copies the hook pack into `~/.openclaw/hooks/<id>`
+- Copies the hook pack into `~/.mullusi/hooks/<id>`
 - Enables the installed hooks in `hooks.internal.entries.*`
 - Records the install under `hooks.internal.installs`
 
@@ -231,16 +231,16 @@ prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
 
 ```bash
 # Local directory
-openclaw plugins install ./my-hook-pack
+mullusi plugins install ./my-hook-pack
 
 # Local archive
-openclaw plugins install ./my-hook-pack.zip
+mullusi plugins install ./my-hook-pack.zip
 
 # NPM package
-openclaw plugins install @openclaw/my-hook-pack
+mullusi plugins install @mullusi/my-hook-pack
 
 # Link a local directory without copying
-openclaw plugins install -l ./my-hook-pack
+mullusi plugins install -l ./my-hook-pack
 ```
 
 Linked hook packs are treated as managed hooks from an operator-configured
@@ -249,14 +249,14 @@ directory, not as workspace hooks.
 ## Update Hook Packs
 
 ```bash
-openclaw plugins update <id>
-openclaw plugins update --all
+mullusi plugins update <id>
+mullusi plugins update --all
 ```
 
 Update tracked npm-based hook packs through the unified plugins updater.
 
-`openclaw hooks update` still works as a compatibility alias, but it prints a
-deprecation warning and forwards to `openclaw plugins update`.
+`mullusi hooks update` still works as a compatibility alias, but it prints a
+deprecation warning and forwards to `mullusi plugins update`.
 
 **Options:**
 
@@ -264,7 +264,7 @@ deprecation warning and forwards to `openclaw plugins update`.
 - `--dry-run`: Show what would change without writing
 
 When a stored integrity hash exists and the fetched artifact hash changes,
-OpenClaw prints a warning and asks for confirmation before proceeding. Use
+Mullusi prints a warning and asks for confirmation before proceeding. Use
 global `--yes` to bypass prompts in CI/non-interactive runs.
 
 ## Bundled Hooks
@@ -276,10 +276,10 @@ Saves session context to memory when you issue `/new` or `/reset`.
 **Enable:**
 
 ```bash
-openclaw hooks enable session-memory
+mullusi hooks enable session-memory
 ```
 
-**Output:** `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md`
+**Output:** `~/.mullusi/workspace/memory/YYYY-MM-DD-slug.md`
 
 **See:** [session-memory documentation](/automation/hooks#session-memory)
 
@@ -290,7 +290,7 @@ Injects additional bootstrap files (for example monorepo-local `AGENTS.md` / `TO
 **Enable:**
 
 ```bash
-openclaw hooks enable bootstrap-extra-files
+mullusi hooks enable bootstrap-extra-files
 ```
 
 **See:** [bootstrap-extra-files documentation](/automation/hooks#bootstrap-extra-files)
@@ -302,22 +302,22 @@ Logs all command events to a centralized audit file.
 **Enable:**
 
 ```bash
-openclaw hooks enable command-logger
+mullusi hooks enable command-logger
 ```
 
-**Output:** `~/.openclaw/logs/commands.log`
+**Output:** `~/.mullusi/logs/commands.log`
 
 **View logs:**
 
 ```bash
 # Recent commands
-tail -n 20 ~/.openclaw/logs/commands.log
+tail -n 20 ~/.mullusi/logs/commands.log
 
 # Pretty-print
-cat ~/.openclaw/logs/commands.log | jq .
+cat ~/.mullusi/logs/commands.log | jq .
 
 # Filter by action
-grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
+grep '"action":"new"' ~/.mullusi/logs/commands.log | jq .
 ```
 
 **See:** [command-logger documentation](/automation/hooks#command-logger)
@@ -331,7 +331,7 @@ Runs `BOOT.md` when the gateway starts (after channels start).
 **Enable**:
 
 ```bash
-openclaw hooks enable boot-md
+mullusi hooks enable boot-md
 ```
 
 **See:** [boot-md documentation](/automation/hooks#boot-md)

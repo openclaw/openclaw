@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/together-provider",
+  "name": "@mullusi/together-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Together provider plugin",
+  "description": "Mullusi Together provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

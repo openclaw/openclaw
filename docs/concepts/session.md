@@ -1,5 +1,5 @@
 ---
-summary: "How OpenClaw manages conversation sessions"
+summary: "How Mullusi manages conversation sessions"
 read_when:
   - You want to understand session routing and isolation
   - You want to configure DM scope for multi-user setups
@@ -8,7 +8,7 @@ title: "Session Management"
 
 # Session Management
 
-OpenClaw organizes conversations into **sessions**. Each message is routed to a
+Mullusi organizes conversations into **sessions**. Each message is routed to a
 session based on where it came from -- DMs, group chats, cron jobs, etc.
 
 ## How messages are routed
@@ -54,7 +54,7 @@ If the same person contacts you from multiple channels, use
 `session.identityLinks` to link their identities so they share one session.
 </Tip>
 
-Verify your setup with `openclaw security audit`.
+Verify your setup with `mullusi security audit`.
 
 ## Session lifecycle
 
@@ -74,12 +74,12 @@ When both daily and idle resets are configured, whichever expires first wins.
 All session state is owned by the **gateway**. UI clients query the gateway for
 session data.
 
-- **Store:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
-- **Transcripts:** `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
+- **Store:** `~/.mullusi/agents/<agentId>/sessions/sessions.json`
+- **Transcripts:** `~/.mullusi/agents/<agentId>/sessions/<sessionId>.jsonl`
 
 ## Session maintenance
 
-OpenClaw automatically bounds session storage over time. By default, it runs
+Mullusi automatically bounds session storage over time. By default, it runs
 in `warn` mode (reports what would be cleaned). Set `session.maintenance.mode`
 to `"enforce"` for automatic cleanup:
 
@@ -95,12 +95,12 @@ to `"enforce"` for automatic cleanup:
 }
 ```
 
-Preview with `openclaw sessions cleanup --dry-run`.
+Preview with `mullusi sessions cleanup --dry-run`.
 
 ## Inspecting sessions
 
-- `openclaw status` -- session store path and recent activity.
-- `openclaw sessions --json` -- all sessions (filter with `--active <minutes>`).
+- `mullusi status` -- session store path and recent activity.
+- `mullusi sessions --json` -- all sessions (filter with `--active <minutes>`).
 - `/status` in chat -- context usage, model, and toggles.
 - `/context list` -- what is in the system prompt.
 

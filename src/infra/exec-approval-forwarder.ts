@@ -1,6 +1,6 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin, resolveChannelApprovalAdapter } from "../channels/plugins/index.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import type {
   ExecApprovalForwardingConfig,
@@ -40,7 +40,7 @@ export type { ExecApprovalRequest, ExecApprovalResolved };
 type DeliverOutboundPayloads = typeof import("./outbound/deliver.js").deliverOutboundPayloads;
 type MaybePromise<T> = T | Promise<T>;
 type ResolveSessionTargetFn = (params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   request: ExecApprovalRequest;
 }) => MaybePromise<ExecApprovalForwardTarget | null>;
 
@@ -63,7 +63,7 @@ type PendingApproval<TRouteRequest extends ApprovalRouteRequest> = {
 };
 
 type ApprovalRenderContext<TRouteRequest extends ApprovalRouteRequest> = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   target: ForwardTarget;
   routeRequest: TRouteRequest;
 };
@@ -89,7 +89,7 @@ type ApprovalStrategy<
   TRouteRequest extends ApprovalRouteRequest = ApprovalRouteRequest,
 > = {
   kind: ApprovalKind;
-  config: (cfg: OpenClawConfig) => ExecApprovalForwardingConfig | undefined;
+  config: (cfg: MullusiConfig) => ExecApprovalForwardingConfig | undefined;
   getRequestId: (request: TRequest) => string;
   getResolvedId: (resolved: TResolved) => string;
   getExpiresAtMs: (request: TRequest) => number;
@@ -113,7 +113,7 @@ export type ExecApprovalForwarder = {
 };
 
 export type ExecApprovalForwarderDeps = {
-  getConfig?: () => OpenClawConfig;
+  getConfig?: () => MullusiConfig;
   deliver?: DeliverOutboundPayloads;
   nowMs?: () => number;
   resolveSessionTarget?: ResolveSessionTargetFn;
@@ -181,7 +181,7 @@ function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): Exec
 function shouldSkipForwardingFallback(params: {
   approvalKind: "exec" | "plugin";
   target: ExecApprovalForwardTarget;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   routeRequest: ApprovalRouteRequest;
 }): boolean {
   const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
@@ -279,7 +279,7 @@ function normalizeTurnSourceChannel(value?: string | null): DeliverableMessageCh
 }
 
 function defaultResolveSessionTarget(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   request: ExecApprovalRequest;
 }): Promise<ExecApprovalForwardTarget | null> {
   return loadExecApprovalForwarderRuntime().then(({ resolveExecApprovalSessionTarget }) => {
@@ -308,7 +308,7 @@ function defaultResolveSessionTarget(params: {
 }
 
 async function deliverToTargets(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   targets: ForwardTarget[];
   buildPayload: (target: ForwardTarget) => ReplyPayload;
   deliver: DeliverOutboundPayloads;
@@ -342,7 +342,7 @@ async function deliverToTargets(params: {
 }
 
 function buildExecPendingPayload(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   request: ExecApprovalRequest;
   target: ForwardTarget;
   nowMs: number;
@@ -372,7 +372,7 @@ function buildExecPendingPayload(params: {
 }
 
 function buildExecResolvedPayload(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   resolved: ExecApprovalResolved;
   target: ForwardTarget;
 }): ReplyPayload {
@@ -397,7 +397,7 @@ function buildExecResolvedPayload(params: {
 }
 
 function buildPluginPendingPayload(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   request: PluginApprovalRequest;
   target: ForwardTarget;
   nowMs: number;
@@ -424,7 +424,7 @@ function buildPluginPendingPayload(params: {
 }
 
 function buildPluginResolvedPayload(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   resolved: PluginApprovalResolved;
   target: ForwardTarget;
 }): ReplyPayload {
@@ -447,7 +447,7 @@ function buildPluginResolvedPayload(params: {
 }
 
 async function resolveForwardTargets(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   config?: ExecApprovalForwardingConfig;
   routeRequest: ApprovalRouteRequest;
   resolveSessionTarget: ResolveSessionTargetFn;
@@ -491,7 +491,7 @@ function createApprovalHandlers<
   TRouteRequest extends ApprovalRouteRequest = ApprovalRouteRequest,
 >(params: {
   strategy: ApprovalStrategy<TRequest, TResolved, TRouteRequest>;
-  getConfig: () => OpenClawConfig;
+  getConfig: () => MullusiConfig;
   deliver: DeliverOutboundPayloads;
   nowMs: () => number;
   resolveSessionTarget: ResolveSessionTargetFn;

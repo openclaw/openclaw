@@ -4,7 +4,7 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
 } from "../../../test/helpers/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { MullusiConfig } from "../runtime-api.js";
 import "./zalo-js.test-mocks.js";
 import { zalouserPlugin } from "./channel.js";
 import { zalouserSetupWizard } from "./setup-surface.js";
@@ -12,14 +12,14 @@ import { zalouserSetupWizard } from "./setup-surface.js";
 const zalouserConfigure = createPluginSetupWizardConfigure(zalouserPlugin);
 
 async function runSetup(params: {
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   prompter: ReturnType<typeof createTestWizardPrompter>;
   options?: Record<string, unknown>;
   forceAllowFrom?: boolean;
 }) {
   return await runSetupWizardConfigure({
     configure: zalouserConfigure,
-    cfg: params.cfg as OpenClawConfig | undefined,
+    cfg: params.cfg as MullusiConfig | undefined,
     prompter: params.prompter,
     options: params.options,
     forceAllowFrom: params.forceAllowFrom,
@@ -232,7 +232,7 @@ describe("zalouser setup wizard", () => {
         plugins: {
           allow: ["telegram"],
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       prompter,
     });
 
@@ -255,14 +255,14 @@ describe("zalouser setup wizard", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         "work",
       ),
     ).toBe("allowlist");
   });
 
   it("reports account-scoped config keys for named accounts", () => {
-    expect(zalouserSetupWizard.dmPolicy?.resolveConfigKeys?.({} as OpenClawConfig, "work")).toEqual(
+    expect(zalouserSetupWizard.dmPolicy?.resolveConfigKeys?.({} as MullusiConfig, "work")).toEqual(
       {
         policyKey: "channels.zalouser.accounts.work.dmPolicy",
         allowFromKey: "channels.zalouser.accounts.work.allowFrom",
@@ -285,7 +285,7 @@ describe("zalouser setup wizard", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     expect(zalouserSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
     expect(zalouserSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
@@ -311,7 +311,7 @@ describe("zalouser setup wizard", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       "open",
       "work",
     );
@@ -340,7 +340,7 @@ describe("zalouser setup wizard", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       prompter,
       options: { quickstartDefaults: true },
       accountOverrides: { zalouser: "work" },

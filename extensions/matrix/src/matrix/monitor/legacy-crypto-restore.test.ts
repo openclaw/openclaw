@@ -48,7 +48,7 @@ async function runLegacyRestoreScenario(params: {
   restoreRoomKeyBackup: () => Promise<MatrixRoomKeyBackupRestoreResult>;
 }) {
   return withTempHome(async (home) => {
-    const stateDir = path.join(home, ".openclaw");
+    const stateDir = path.join(home, ".mullusi");
     const auth = params.auth ?? BASE_AUTH;
     const sourceAuth = params.sourceAuth ?? auth;
     const { rootDir } = resolveMatrixAccountStorageRoot({
@@ -72,7 +72,7 @@ async function runLegacyRestoreScenario(params: {
       stateDir,
       env: {
         ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
+        MULLUSI_STATE_DIR: stateDir,
         HOME: home,
       },
     });

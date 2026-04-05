@@ -1,7 +1,7 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
+import { DEFAULT_ACCOUNT_ID } from "mullusi/plugin-sdk/setup";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
-import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
+import type { MullusiConfig, MullusiPluginApi } from "../runtime-api.js";
 
 vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
   getBundledChannelRuntimeMap: () => new Map(),
@@ -13,7 +13,7 @@ const normalizeMattermostBaseUrl = vi.hoisted(() => vi.fn((value: string | undef
 const hasConfiguredSecretInput = vi.hoisted(() => vi.fn((value: unknown) => Boolean(value)));
 
 vi.mock("./setup.accounts.runtime.js", () => ({
-  listMattermostAccountIds: vi.fn((cfg: OpenClawConfig) => {
+  listMattermostAccountIds: vi.fn((cfg: MullusiConfig) => {
     const accounts = cfg.channels?.mattermost?.accounts;
     const ids = accounts ? Object.keys(accounts) : [];
     return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
@@ -47,15 +47,15 @@ vi.mock("./setup.secret-input.runtime.js", () => ({
 }));
 
 function createApi(
-  registrationMode: OpenClawPluginApi["registrationMode"],
+  registrationMode: MullusiPluginApi["registrationMode"],
   registerHttpRoute = vi.fn(),
-): OpenClawPluginApi {
+): MullusiPluginApi {
   return createTestPluginApi({
     id: "mattermost",
     name: "Mattermost",
     source: "test",
     config: {},
-    runtime: {} as OpenClawPluginApi["runtime"],
+    runtime: {} as MullusiPluginApi["runtime"],
     registrationMode,
     registerHttpRoute,
   });
@@ -251,7 +251,7 @@ describe("mattermost setup", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     });
 
     expect(configured).toBe(true);
@@ -276,7 +276,7 @@ describe("mattermost setup", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       accountId: undefined,
     });
 
@@ -290,7 +290,7 @@ describe("mattermost setup", () => {
           channels: {
             mattermost: {},
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         accountId: "default",
       } as never),
     ).toBe(true);
@@ -308,7 +308,7 @@ describe("mattermost setup", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
         accountId: "default",
       } as never),
     ).toBe(false);
@@ -320,14 +320,14 @@ describe("mattermost setup", () => {
 
     expect(
       mattermostSetupWizard.envShortcut?.isAvailable?.({
-        cfg: { channels: { mattermost: {} } } as OpenClawConfig,
+        cfg: { channels: { mattermost: {} } } as MullusiConfig,
         accountId: "default",
       } as never),
     ).toBe(true);
 
     expect(
       mattermostSetupWizard.envShortcut?.isAvailable?.({
-        cfg: { channels: { mattermost: {} } } as OpenClawConfig,
+        cfg: { channels: { mattermost: {} } } as MullusiConfig,
         accountId: "work",
       } as never),
     ).toBe(false);
@@ -336,7 +336,7 @@ describe("mattermost setup", () => {
   it("keeps env shortcut as a no-op patch for the selected account", () => {
     expect(
       mattermostSetupWizard.envShortcut?.apply?.({
-        cfg: { channels: { mattermost: { enabled: false } } } as OpenClawConfig,
+        cfg: { channels: { mattermost: { enabled: false } } } as MullusiConfig,
         accountId: "default",
       } as never),
     ).toEqual({

@@ -76,9 +76,9 @@ curl http://localhost:3456/v1/chat/completions \
   }'
 ```
 
-### With OpenClaw
+### With Mullusi
 
-You can point OpenClaw at the proxy as a custom OpenAI-compatible endpoint:
+You can point Mullusi at the proxy as a custom OpenAI-compatible endpoint:
 
 ```json5
 {
@@ -100,7 +100,7 @@ This path uses the same proxy-style OpenAI-compatible route as other custom
 - native OpenAI-only request shaping does not apply
 - no `service_tier`, no Responses `store`, no prompt-cache hints, and no
   OpenAI reasoning-compat payload shaping
-- hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
+- hidden Mullusi attribution headers (`originator`, `version`, `User-Agent`)
   are not injected on the proxy URL
 
 ## Available Models
@@ -152,12 +152,12 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-max-api.plist
 
 ## Notes
 
-- This is a **community tool**, not officially supported by Anthropic or OpenClaw
+- This is a **community tool**, not officially supported by Anthropic or Mullusi
 - Requires an active Claude Max/Pro subscription with Claude Code CLI authenticated
 - The proxy runs locally and does not send data to any third-party servers
 - Streaming responses are fully supported
 
 ## See Also
 
-- [Anthropic provider](/providers/anthropic) - Native OpenClaw integration with Claude CLI or API keys
+- [Anthropic provider](/providers/anthropic) - Native Mullusi integration with Claude CLI or API keys
 - [OpenAI provider](/providers/openai) - For OpenAI/Codex subscriptions

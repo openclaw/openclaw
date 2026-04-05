@@ -14,15 +14,15 @@ vi.mock("./install-source-utils.js", async () => {
   return {
     ...actual,
     withTempDir: vi.fn(async (_prefix: string, fn: (tmpDir: string) => Promise<unknown>) => {
-      return await fn("/tmp/openclaw-npm-pack-install-test");
+      return await fn("/tmp/mullusi-npm-pack-install-test");
     }),
     packNpmSpecToArchive: vi.fn(),
   };
 });
 
 describe("installFromNpmSpecArchive", () => {
-  const baseSpec = "@openclaw/test@1.0.0";
-  const baseArchivePath = "/tmp/openclaw-test.tgz";
+  const baseSpec = "@mullusi/test@1.0.0";
+  const baseArchivePath = "/tmp/mullusi-test.tgz";
 
   const mockPackedSuccess = (overrides?: {
     resolvedSpec?: string;
@@ -51,7 +51,7 @@ describe("installFromNpmSpecArchive", () => {
     }) => Promise<{ ok: boolean; [k: string]: unknown }>;
   }) =>
     await installFromNpmSpecArchive({
-      tempDirPrefix: "openclaw-test-",
+      tempDirPrefix: "mullusi-test-",
       spec: baseSpec,
       timeoutMs: 1000,
       expectedIntegrity: overrides.expectedIntegrity,
@@ -82,23 +82,23 @@ describe("installFromNpmSpecArchive", () => {
     const installFromArchive = vi.fn(async () => ({ ok: true as const }));
 
     const result = await installFromNpmSpecArchive({
-      tempDirPrefix: "openclaw-test-",
-      spec: "@openclaw/test@1.0.0",
+      tempDirPrefix: "mullusi-test-",
+      spec: "@mullusi/test@1.0.0",
       timeoutMs: 1000,
       installFromArchive,
     });
 
     expect(result).toEqual({ ok: false, error: "pack failed" });
     expect(installFromArchive).not.toHaveBeenCalled();
-    expect(withTempDir).toHaveBeenCalledWith("openclaw-test-", expect.any(Function));
+    expect(withTempDir).toHaveBeenCalledWith("mullusi-test-", expect.any(Function));
   });
 
   it("rejects unsupported npm specs before packing", async () => {
     const installFromArchive = vi.fn(async () => ({ ok: true as const }));
 
     const result = await installFromNpmSpecArchive({
-      tempDirPrefix: "openclaw-test-",
-      spec: "file:/tmp/openclaw.tgz",
+      tempDirPrefix: "mullusi-test-",
+      spec: "file:/tmp/mullusi.tgz",
       timeoutMs: 1000,
       installFromArchive,
     });
@@ -112,7 +112,7 @@ describe("installFromNpmSpecArchive", () => {
   });
 
   it("returns resolution metadata and installer result on success", async () => {
-    mockPackedSuccess({ name: "@openclaw/test", version: "1.0.0" });
+    mockPackedSuccess({ name: "@mullusi/test", version: "1.0.0" });
     const installFromArchive = vi.fn(async () => ({ ok: true as const, target: "done" }));
 
     const result = await runInstall({
@@ -122,9 +122,9 @@ describe("installFromNpmSpecArchive", () => {
 
     const okResult = expectWrappedOkResult(result, { ok: true, target: "done" });
     expect(okResult.integrityDrift).toBeUndefined();
-    expect(okResult.npmResolution.resolvedSpec).toBe("@openclaw/test@1.0.0");
+    expect(okResult.npmResolution.resolvedSpec).toBe("@mullusi/test@1.0.0");
     expect(okResult.npmResolution.resolvedAt).toBeTruthy();
-    expect(installFromArchive).toHaveBeenCalledWith({ archivePath: "/tmp/openclaw-test.tgz" });
+    expect(installFromArchive).toHaveBeenCalledWith({ archivePath: "/tmp/mullusi-test.tgz" });
   });
 
   it("proceeds when integrity drift callback accepts drift", async () => {
@@ -158,7 +158,7 @@ describe("installFromNpmSpecArchive", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "aborted: npm package integrity drift detected for @openclaw/test@1.0.0",
+      error: "aborted: npm package integrity drift detected for @mullusi/test@1.0.0",
     });
     expect(installFromArchive).not.toHaveBeenCalled();
   });
@@ -180,7 +180,7 @@ describe("installFromNpmSpecArchive", () => {
       actualIntegrity: "sha512-new",
     });
     expect(warn).toHaveBeenCalledWith(
-      "Integrity drift detected for @openclaw/test@1.0.0: expected sha512-old, got sha512-new",
+      "Integrity drift detected for @mullusi/test@1.0.0: expected sha512-old, got sha512-new",
     );
   });
 
@@ -202,7 +202,7 @@ describe("installFromNpmSpecArchive", () => {
       ok: true,
       archivePath: baseArchivePath,
       metadata: {
-        resolvedSpec: "@openclaw/test@latest",
+        resolvedSpec: "@mullusi/test@latest",
         integrity: "sha512-same",
         version: "1.1.0-beta.1",
       },
@@ -210,8 +210,8 @@ describe("installFromNpmSpecArchive", () => {
     const installFromArchive = vi.fn(async () => ({ ok: true as const }));
 
     const result = await installFromNpmSpecArchive({
-      tempDirPrefix: "openclaw-test-",
-      spec: "@openclaw/test@latest",
+      tempDirPrefix: "mullusi-test-",
+      spec: "@mullusi/test@latest",
       timeoutMs: 1000,
       installFromArchive,
     });
@@ -229,7 +229,7 @@ describe("installFromNpmSpecArchive", () => {
       ok: true,
       archivePath: baseArchivePath,
       metadata: {
-        resolvedSpec: "@openclaw/test@beta",
+        resolvedSpec: "@mullusi/test@beta",
         integrity: "sha512-same",
         version: "1.1.0-beta.1",
       },
@@ -237,8 +237,8 @@ describe("installFromNpmSpecArchive", () => {
     const installFromArchive = vi.fn(async () => ({ ok: true as const, pluginId: "beta-plugin" }));
 
     const result = await installFromNpmSpecArchive({
-      tempDirPrefix: "openclaw-test-",
-      spec: "@openclaw/test@beta",
+      tempDirPrefix: "mullusi-test-",
+      spec: "@mullusi/test@beta",
       timeoutMs: 1000,
       installFromArchive,
     });
@@ -256,9 +256,9 @@ describe("installFromNpmSpecArchiveWithInstaller", () => {
   it("passes archive path and installer params to installFromArchive", async () => {
     vi.mocked(packNpmSpecToArchive).mockResolvedValue({
       ok: true,
-      archivePath: "/tmp/openclaw-plugin.tgz",
+      archivePath: "/tmp/mullusi-plugin.tgz",
       metadata: {
-        resolvedSpec: "@openclaw/voice-call@1.0.0",
+        resolvedSpec: "@mullusi/voice-call@1.0.0",
         integrity: "sha512-same",
       },
     });
@@ -268,8 +268,8 @@ describe("installFromNpmSpecArchiveWithInstaller", () => {
     );
 
     const result = await installFromNpmSpecArchiveWithInstaller({
-      tempDirPrefix: "openclaw-test-",
-      spec: "@openclaw/voice-call@1.0.0",
+      tempDirPrefix: "mullusi-test-",
+      spec: "@mullusi/voice-call@1.0.0",
       timeoutMs: 1000,
       installFromArchive,
       archiveInstallParams: { pluginId: "voice-call" },
@@ -280,7 +280,7 @@ describe("installFromNpmSpecArchiveWithInstaller", () => {
       return;
     }
     expect(installFromArchive).toHaveBeenCalledWith({
-      archivePath: "/tmp/openclaw-plugin.tgz",
+      archivePath: "/tmp/mullusi-plugin.tgz",
       pluginId: "voice-call",
     });
     expect(result.installResult).toEqual({ ok: true, pluginId: "voice-call" });
@@ -302,7 +302,7 @@ describe("finalizeNpmSpecArchiveInstall", () => {
       ok: true,
       installResult: { ok: false, error: "install failed" },
       npmResolution: {
-        resolvedSpec: "@openclaw/test@1.0.0",
+        resolvedSpec: "@mullusi/test@1.0.0",
         integrity: "sha512-same",
         resolvedAt: "2026-01-01T00:00:00.000Z",
       },
@@ -318,7 +318,7 @@ describe("finalizeNpmSpecArchiveInstall", () => {
       ok: true,
       installResult: { ok: true, pluginId: "voice-call" },
       npmResolution: {
-        resolvedSpec: "@openclaw/voice-call@1.0.0",
+        resolvedSpec: "@mullusi/voice-call@1.0.0",
         integrity: "sha512-same",
         resolvedAt: "2026-01-01T00:00:00.000Z",
       },
@@ -332,7 +332,7 @@ describe("finalizeNpmSpecArchiveInstall", () => {
       ok: true,
       pluginId: "voice-call",
       npmResolution: {
-        resolvedSpec: "@openclaw/voice-call@1.0.0",
+        resolvedSpec: "@mullusi/voice-call@1.0.0",
         integrity: "sha512-same",
         resolvedAt: "2026-01-01T00:00:00.000Z",
       },

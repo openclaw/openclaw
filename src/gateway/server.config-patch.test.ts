@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { resolveMullusiAgentDir } from "../agents/agent-paths.js";
 import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
 import {
   connectOk,
@@ -26,7 +26,7 @@ function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
 }
 
 beforeAll(async () => {
-  sharedTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-config-"));
+  sharedTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-sessions-config-"));
   startedServer = await startServerWithClient(undefined, { controlUiEnabled: true });
   await connectOk(requireWs());
 });
@@ -65,7 +65,7 @@ async function expectSchemaLookupInvalid(path: unknown) {
 
 describe("gateway config methods", () => {
   it("rejects config.set when SecretRef resolution fails", async () => {
-    const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_${Date.now()}`;
+    const missingEnvVar = `MULLUSI_MISSING_SECRETREF_${Date.now()}`;
     delete process.env[missingEnvVar];
     const current = await rpcReq<{
       hash?: string;
@@ -123,10 +123,10 @@ describe("gateway config methods", () => {
   });
 
   it("does not reject config.set for unresolved auth-profile refs outside submitted config", async () => {
-    const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_${Date.now()}`;
+    const missingEnvVar = `MULLUSI_MISSING_AUTH_PROFILE_REF_${Date.now()}`;
     delete process.env[missingEnvVar];
 
-    const authStorePath = path.join(resolveOpenClawAgentDir(), AUTH_PROFILE_FILENAME);
+    const authStorePath = path.join(resolveMullusiAgentDir(), AUTH_PROFILE_FILENAME);
     await fs.mkdir(path.dirname(authStorePath), { recursive: true });
     await fs.writeFile(
       authStorePath,
@@ -286,7 +286,7 @@ describe("gateway config methods", () => {
   });
 
   it("rejects config.patch when merged SecretRefs cannot resolve", async () => {
-    const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_PATCH_${Date.now()}`;
+    const missingEnvVar = `MULLUSI_MISSING_SECRETREF_PATCH_${Date.now()}`;
     delete process.env[missingEnvVar];
     const beforeHash = await getConfigHash();
     const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(

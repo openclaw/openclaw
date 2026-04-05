@@ -33,10 +33,10 @@ async function writeWorkspacePlugin(params: {
   id: string;
   body: string;
 }): Promise<void> {
-  const pluginDir = path.join(params.workspaceDir, ".openclaw", "extensions", params.id);
+  const pluginDir = path.join(params.workspaceDir, ".mullusi", "extensions", params.id);
   await fs.mkdir(pluginDir, { recursive: true });
   await fs.writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
+    path.join(pluginDir, "mullusi.plugin.json"),
     `${JSON.stringify(
       {
         id: params.id,
@@ -95,39 +95,39 @@ describe("gateway e2e", () => {
     async () => {
       const envSnapshot = captureEnv([
         "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_GATEWAY_TOKEN",
-        "OPENCLAW_SKIP_CHANNELS",
-        "OPENCLAW_SKIP_GMAIL_WATCHER",
-        "OPENCLAW_SKIP_CRON",
-        "OPENCLAW_SKIP_CANVAS_HOST",
-        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-        "OPENCLAW_TEST_MINIMAL_GATEWAY",
+        "MULLUSI_STATE_DIR",
+        "MULLUSI_CONFIG_PATH",
+        "MULLUSI_GATEWAY_TOKEN",
+        "MULLUSI_SKIP_CHANNELS",
+        "MULLUSI_SKIP_GMAIL_WATCHER",
+        "MULLUSI_SKIP_CRON",
+        "MULLUSI_SKIP_CANVAS_HOST",
+        "MULLUSI_SKIP_BROWSER_CONTROL_SERVER",
+        "MULLUSI_TEST_MINIMAL_GATEWAY",
       ]);
 
       const { baseUrl: openaiBaseUrl, restore } = installOpenAiResponsesMock();
 
-      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-mock-home-"));
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-gw-mock-home-"));
       process.env.HOME = tempHome;
-      process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
-      delete process.env.OPENCLAW_CONFIG_PATH;
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
+      process.env.MULLUSI_STATE_DIR = path.join(tempHome, ".mullusi");
+      delete process.env.MULLUSI_CONFIG_PATH;
+      process.env.MULLUSI_SKIP_CHANNELS = "1";
+      process.env.MULLUSI_SKIP_GMAIL_WATCHER = "1";
+      process.env.MULLUSI_SKIP_CRON = "1";
+      process.env.MULLUSI_SKIP_CANVAS_HOST = "1";
+      process.env.MULLUSI_SKIP_BROWSER_CONTROL_SERVER = "1";
+      process.env.MULLUSI_TEST_MINIMAL_GATEWAY = "1";
 
       const token = nextGatewayId("test-token");
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
+      process.env.MULLUSI_GATEWAY_TOKEN = token;
 
-      const workspaceDir = path.join(tempHome, "openclaw");
+      const workspaceDir = path.join(tempHome, "mullusi");
       await fs.mkdir(workspaceDir, { recursive: true });
 
-      const configDir = path.join(tempHome, ".openclaw");
+      const configDir = path.join(tempHome, ".mullusi");
       await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
+      const configPath = path.join(configDir, "mullusi.json");
       const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
 
       const cfg = {
@@ -197,30 +197,30 @@ describe("gateway e2e", () => {
     async () => {
       const envSnapshot = captureEnv([
         "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_GATEWAY_TOKEN",
-        "OPENCLAW_SKIP_CHANNELS",
-        "OPENCLAW_SKIP_GMAIL_WATCHER",
-        "OPENCLAW_SKIP_CRON",
-        "OPENCLAW_SKIP_CANVAS_HOST",
-        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+        "MULLUSI_STATE_DIR",
+        "MULLUSI_CONFIG_PATH",
+        "MULLUSI_GATEWAY_TOKEN",
+        "MULLUSI_SKIP_CHANNELS",
+        "MULLUSI_SKIP_GMAIL_WATCHER",
+        "MULLUSI_SKIP_CRON",
+        "MULLUSI_SKIP_CANVAS_HOST",
+        "MULLUSI_SKIP_BROWSER_CONTROL_SERVER",
       ]);
 
-      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-http-tools-home-"));
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-gw-http-tools-home-"));
       process.env.HOME = tempHome;
-      process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
-      delete process.env.OPENCLAW_CONFIG_PATH;
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+      process.env.MULLUSI_STATE_DIR = path.join(tempHome, ".mullusi");
+      delete process.env.MULLUSI_CONFIG_PATH;
+      process.env.MULLUSI_SKIP_CHANNELS = "1";
+      process.env.MULLUSI_SKIP_GMAIL_WATCHER = "1";
+      process.env.MULLUSI_SKIP_CRON = "1";
+      process.env.MULLUSI_SKIP_CANVAS_HOST = "1";
+      process.env.MULLUSI_SKIP_BROWSER_CONTROL_SERVER = "1";
 
       const token = nextGatewayId("http-tools-token");
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
+      process.env.MULLUSI_GATEWAY_TOKEN = token;
 
-      const workspaceDir = path.join(tempHome, "openclaw");
+      const workspaceDir = path.join(tempHome, "mullusi");
       await fs.mkdir(workspaceDir, { recursive: true });
       const registerCountPath = path.join(tempHome, "workspace-plugin-register-count.txt");
       await writeWorkspacePlugin({
@@ -241,9 +241,9 @@ module.exports = {
 `.trimStart(),
       });
 
-      const configDir = path.join(tempHome, ".openclaw");
+      const configDir = path.join(tempHome, ".mullusi");
       await fs.mkdir(configDir, { recursive: true });
-      const configPath = path.join(configDir, "openclaw.json");
+      const configPath = path.join(configDir, "mullusi.json");
       const cfg = {
         agents: {
           defaults: { workspace: workspaceDir },
@@ -255,7 +255,7 @@ module.exports = {
         gateway: { auth: { token } },
       };
       await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      process.env.MULLUSI_CONFIG_PATH = configPath;
 
       const port = await getFreeGatewayPort();
       const server = await startGatewayServer(port, {
@@ -303,29 +303,29 @@ module.exports = {
     async () => {
       const envSnapshot = captureEnv([
         "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_GATEWAY_TOKEN",
-        "OPENCLAW_SKIP_CHANNELS",
-        "OPENCLAW_SKIP_GMAIL_WATCHER",
-        "OPENCLAW_SKIP_CRON",
-        "OPENCLAW_SKIP_CANVAS_HOST",
-        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-        "OPENCLAW_TEST_MINIMAL_GATEWAY",
+        "MULLUSI_STATE_DIR",
+        "MULLUSI_CONFIG_PATH",
+        "MULLUSI_GATEWAY_TOKEN",
+        "MULLUSI_SKIP_CHANNELS",
+        "MULLUSI_SKIP_GMAIL_WATCHER",
+        "MULLUSI_SKIP_CRON",
+        "MULLUSI_SKIP_CANVAS_HOST",
+        "MULLUSI_SKIP_BROWSER_CONTROL_SERVER",
+        "MULLUSI_TEST_MINIMAL_GATEWAY",
       ]);
 
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      process.env.MULLUSI_SKIP_CHANNELS = "1";
+      process.env.MULLUSI_SKIP_GMAIL_WATCHER = "1";
+      process.env.MULLUSI_SKIP_CRON = "1";
+      process.env.MULLUSI_SKIP_CANVAS_HOST = "1";
+      process.env.MULLUSI_SKIP_BROWSER_CONTROL_SERVER = "1";
+      process.env.MULLUSI_TEST_MINIMAL_GATEWAY = "1";
+      delete process.env.MULLUSI_GATEWAY_TOKEN;
 
-      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wizard-home-"));
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-wizard-home-"));
       process.env.HOME = tempHome;
-      delete process.env.OPENCLAW_STATE_DIR;
-      delete process.env.OPENCLAW_CONFIG_PATH;
+      delete process.env.MULLUSI_STATE_DIR;
+      delete process.env.MULLUSI_CONFIG_PATH;
 
       const wizardToken = nextGatewayId("wiz-token");
       const port = await getFreeGatewayPort();

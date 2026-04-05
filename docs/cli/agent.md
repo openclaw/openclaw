@@ -1,11 +1,11 @@
 ---
-summary: "CLI reference for `openclaw agent` (send one agent turn via the Gateway)"
+summary: "CLI reference for `mullusi agent` (send one agent turn via the Gateway)"
 read_when:
   - You want to run one agent turn from scripts (optionally deliver reply)
 title: "agent"
 ---
 
-# `openclaw agent`
+# `mullusi agent`
 
 Run an agent turn via the Gateway (use `--local` for embedded).
 Use `--agent <id>` to target a configured agent directly.
@@ -40,12 +40,12 @@ Related:
 ## Examples
 
 ```bash
-openclaw agent --to +15555550123 --message "status update" --deliver
-openclaw agent --agent ops --message "Summarize logs"
-openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium
-openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json
-openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"
-openclaw agent --agent ops --message "Run locally" --local
+mullusi agent --to +15555550123 --message "status update" --deliver
+mullusi agent --agent ops --message "Summarize logs"
+mullusi agent --session-id 1234 --message "Summarize inbox" --thinking medium
+mullusi agent --to +15555550123 --message "Trace logs" --verbose on --json
+mullusi agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"
+mullusi agent --agent ops --message "Run locally" --local
 ```
 
 ## Notes
@@ -54,4 +54,4 @@ openclaw agent --agent ops --message "Run locally" --local
 - `--local` still preloads the plugin registry first, so plugin-provided providers, tools, and channels stay available during embedded runs.
 - `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery, not session routing.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), not resolved secret plaintext.
-- Marker writes are source-authoritative: OpenClaw persists markers from the active source config snapshot, not from resolved runtime secret values.
+- Marker writes are source-authoritative: Mullusi persists markers from the active source config snapshot, not from resolved runtime secret values.

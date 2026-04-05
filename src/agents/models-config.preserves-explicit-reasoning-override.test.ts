@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   installModelsConfigTestHooks,
   withModelsTempHome as withTempHome,
@@ -14,7 +14,7 @@ installModelsConfigTestHooks();
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles/store.js").clearRuntimeAuthProfileStoreSnapshots;
-let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+let ensureMullusiModelsJson: typeof import("./models-config.js").ensureMullusiModelsJson;
 let resetModelsJsonReadyCacheForTest: typeof import("./models-config.js").resetModelsJsonReadyCacheForTest;
 let readGeneratedModelsJson: typeof import("./models-config.test-utils.js").readGeneratedModelsJson;
 
@@ -22,7 +22,7 @@ beforeEach(async () => {
   vi.resetModules();
   ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
   ({ clearRuntimeAuthProfileStoreSnapshots } = await import("./auth-profiles/store.js"));
-  ({ ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
+  ({ ensureMullusiModelsJson, resetModelsJsonReadyCacheForTest } =
     await import("./models-config.js"));
   ({ readGeneratedModelsJson } = await import("./models-config.test-utils.js"));
   clearRuntimeAuthProfileStoreSnapshots();
@@ -71,8 +71,8 @@ async function withMinimaxApiKey(run: () => Promise<void>) {
   }
 }
 
-async function generateAndReadMinimaxModel(cfg: OpenClawConfig): Promise<ModelEntry | undefined> {
-  await ensureOpenClawModelsJson(cfg);
+async function generateAndReadMinimaxModel(cfg: MullusiConfig): Promise<ModelEntry | undefined> {
+  await ensureMullusiModelsJson(cfg);
   const parsed = await readGeneratedModelsJson<ModelsJson>();
   return parsed.providers.minimax?.models?.find((model) => model.id === MINIMAX_MODEL_ID);
 }
@@ -83,7 +83,7 @@ describe("models-config: explicit reasoning override", () => {
     // User explicitly sets reasoning:false to avoid message-ordering conflicts.
     await withTempHome(async () => {
       await withMinimaxApiKey(async () => {
-        const cfg: OpenClawConfig = {
+        const cfg: MullusiConfig = {
           models: {
             providers: {
               minimax: {
@@ -126,7 +126,7 @@ describe("models-config: explicit reasoning override", () => {
           contextWindow: 1_000_000,
           maxTokens: 8192,
         };
-        const cfg: OpenClawConfig = {
+        const cfg: MullusiConfig = {
           models: {
             providers: {
               minimax: {

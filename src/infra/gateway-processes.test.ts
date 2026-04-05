@@ -164,14 +164,14 @@ describe("gateway-processes", () => {
   it("dedupes and filters verified gateway listener pids on unix and windows", () => {
     setPlatform("linux");
     findGatewayPidsOnPortSyncMock.mockReturnValue([process.pid, 200, 200, 300, -1]);
-    readFileSyncMock.mockReturnValueOnce("openclaw-gateway\0gateway\0");
+    readFileSyncMock.mockReturnValueOnce("mullusi-gateway\0gateway\0");
     readFileSyncMock.mockReturnValueOnce("python\0-m\0http.server\0");
     parseProcCmdlineMock
-      .mockReturnValueOnce(["openclaw-gateway", "gateway"])
+      .mockReturnValueOnce(["mullusi-gateway", "gateway"])
       .mockReturnValueOnce(["python", "-m", "http.server"]);
     isGatewayArgvMock.mockReturnValueOnce(true).mockReturnValueOnce(false);
 
-    expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([200]);
+    expect(findVerifiedGatewayListenerPidsOnPortSync(18790)).toEqual([200]);
     setPlatform("win32");
     spawnSyncMock
       .mockReturnValueOnce({
@@ -187,7 +187,7 @@ describe("gateway-processes", () => {
     parseCmdScriptCommandLineMock.mockReturnValue(["node.exe", "gateway", "run"]);
     isGatewayArgvMock.mockReturnValue(true);
 
-    expect(findVerifiedGatewayListenerPidsOnPortSync(18789)).toEqual([200]);
+    expect(findVerifiedGatewayListenerPidsOnPortSync(18790)).toEqual([200]);
   });
 
   it("formats pid lists as comma-separated output", () => {

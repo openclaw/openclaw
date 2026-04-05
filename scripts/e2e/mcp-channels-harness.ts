@@ -178,7 +178,7 @@ export async function connectGateway(params: {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
         client: {
-          id: "openclaw-tui",
+          id: "mullusi-tui",
           displayName: "docker-mcp-channels",
           version: "1.0.0",
           platform: process.platform,
@@ -291,7 +291,7 @@ export async function connectMcpClient(params: {
   const transport = new StdioClientTransport({
     command: "node",
     args: [
-      "/app/openclaw.mjs",
+      "/app/mullusi.mjs",
       "mcp",
       "serve",
       "--url",
@@ -304,13 +304,13 @@ export async function connectMcpClient(params: {
     cwd: "/app",
     env: {
       ...process.env,
-      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",
-      OPENCLAW_STATE_DIR: "/tmp/openclaw-mcp-client",
+      MULLUSI_ALLOW_INSECURE_PRIVATE_WS: "1",
+      MULLUSI_STATE_DIR: "/tmp/mullusi-mcp-client",
     },
     stderr: "pipe",
   });
   transport.stderr?.on("data", (chunk) => {
-    process.stderr.write(`[openclaw mcp] ${String(chunk)}`);
+    process.stderr.write(`[mullusi mcp] ${String(chunk)}`);
   });
   const rawMessages: unknown[] = [];
   // The MCP stdio transport here exposes a writable onmessage callback at

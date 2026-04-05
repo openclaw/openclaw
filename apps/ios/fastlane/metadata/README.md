@@ -24,7 +24,7 @@ The `ios metadata` lane uses App Store Connect API key auth from `apps/ios/fastl
 - Keychain-backed (recommended on macOS):
   - `ASC_KEY_ID`
   - `ASC_ISSUER_ID`
-  - `ASC_KEYCHAIN_SERVICE` (default: `openclaw-asc-key`)
+  - `ASC_KEYCHAIN_SERVICE` (default: `mullusi-asc-key`)
   - `ASC_KEYCHAIN_ACCOUNT` (default: current user)
 - File/path fallback:
   - `ASC_KEY_ID`
@@ -36,7 +36,7 @@ Or set `APP_STORE_CONNECT_API_KEY_PATH`.
 ## Notes
 
 - Locale files live under `metadata/en-US/`.
-- `privacy_url.txt` is set to `https://openclaw.ai/privacy`.
+- `privacy_url.txt` is set to `https://mullusi.com/privacy`.
 - If app lookup fails in `deliver`, set one of:
   - `ASC_APP_IDENTIFIER` (bundle ID)
   - `ASC_APP_ID` (numeric App Store Connect app ID, e.g. from `/apps/<id>/...` URL)

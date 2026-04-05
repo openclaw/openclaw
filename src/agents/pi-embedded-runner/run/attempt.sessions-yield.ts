@@ -1,9 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { log } from "../logger.js";
 
-const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
-const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
-const SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 250 : 2_000;
+const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "mullusi.sessions_yield_interrupt";
+const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "mullusi.sessions_yield";
+const SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS = process.env.MULLUSI_TEST_FAST === "1" ? 250 : 2_000;
 
 // Persist a hidden context reminder so the next turn knows why the runner stopped.
 export function buildSessionsYieldContextMessage(message: string): string {
@@ -43,7 +43,7 @@ export async function waitForSessionsYieldAbortSettle(params: {
   }
 }
 
-// Return a synthetic aborted response so pi-agent-core unwinds without a real provider call.
+// Return a synthetic aborted response so mullusi-kernel unwinds without a real provider call.
 export function createYieldAbortedResponse(model: {
   api?: string;
   provider?: string;
@@ -103,7 +103,7 @@ export function createYieldAbortedResponse(model: {
   };
 }
 
-// Queue a hidden steering message so pi-agent-core injects it before the next
+// Queue a hidden steering message so mullusi-kernel injects it before the next
 // LLM call once the current assistant turn finishes executing its tool calls.
 export function queueSessionsYieldInterruptMessage(activeSession: {
   agent: { steer: (message: AgentMessage) => void };

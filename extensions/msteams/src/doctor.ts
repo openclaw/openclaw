@@ -1,4 +1,4 @@
-import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "mullusi/plugin-sdk/channel-policy";
 
 function isMSTeamsMutableAllowEntry(raw: string): boolean {
   const text = raw.trim();

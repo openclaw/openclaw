@@ -2,13 +2,13 @@ import type {
   ChannelDoctorAdapter,
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
-} from "openclaw/plugin-sdk/channel-contract";
-import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/channel-contract";
+import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "mullusi/plugin-sdk/channel-policy";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   migrateLegacyFlatAllowPrivateNetworkAlias,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+} from "mullusi/plugin-sdk/ssrf-runtime";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -74,7 +74,7 @@ export const MATTERMOST_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
   },
 ];
 
-export function normalizeMattermostCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
+export function normalizeMattermostCompatibilityConfig(cfg: MullusiConfig): ChannelDoctorConfigMutation {
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   const mattermost = isRecord(channels?.mattermost) ? channels.mattermost : null;
   if (!mattermost) {
@@ -128,7 +128,7 @@ export function normalizeMattermostCompatibilityConfig(cfg: OpenClawConfig): Cha
       ...cfg,
       channels: {
         ...cfg.channels,
-        mattermost: updatedMattermost as NonNullable<OpenClawConfig["channels"]>["mattermost"],
+        mattermost: updatedMattermost as NonNullable<MullusiConfig["channels"]>["mattermost"],
       },
     },
     changes,

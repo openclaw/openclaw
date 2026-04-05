@@ -1,7 +1,7 @@
-summary: "Use Qwen Cloud via OpenClaw's bundled qwen provider"
+summary: "Use Qwen Cloud via Mullusi's bundled qwen provider"
 read_when:
 
-- You want to use Qwen with OpenClaw
+- You want to use Qwen with Mullusi
 - You previously used Qwen OAuth
   title: "Qwen"
 
@@ -13,14 +13,14 @@ read_when:
 
 **Qwen OAuth has been removed.** The free-tier OAuth integration
 (`qwen-portal`) that used `portal.qwen.ai` endpoints is no longer available.
-See [Issue #49557](https://github.com/openclaw/openclaw/issues/49557) for
+See [Issue #49557](https://github.com/mullusi/mullusi/issues/49557) for
 background.
 
 </Warning>
 
 ## Recommended: Qwen Cloud
 
-OpenClaw now treats Qwen as a first-class bundled provider with canonical id
+Mullusi now treats Qwen as a first-class bundled provider with canonical id
 `qwen`. The bundled provider targets the Qwen Cloud / Alibaba DashScope and
 Coding Plan endpoints and keeps legacy `modelstudio` ids working as a
 compatibility alias.
@@ -35,16 +35,16 @@ Coding Plan support can lag behind the public catalog.
 
 ```bash
 # Global Coding Plan endpoint
-openclaw onboard --auth-choice qwen-api-key
+mullusi onboard --auth-choice qwen-api-key
 
 # China Coding Plan endpoint
-openclaw onboard --auth-choice qwen-api-key-cn
+mullusi onboard --auth-choice qwen-api-key-cn
 
 # Global Standard (pay-as-you-go) endpoint
-openclaw onboard --auth-choice qwen-standard-api-key
+mullusi onboard --auth-choice qwen-standard-api-key
 
 # China Standard (pay-as-you-go) endpoint
-openclaw onboard --auth-choice qwen-standard-api-key-cn
+mullusi onboard --auth-choice qwen-standard-api-key-cn
 ```
 
 Legacy `modelstudio-*` auth-choice ids and `modelstudio/...` model refs still
@@ -94,7 +94,7 @@ Coding Plan endpoints.
 - Global/Intl Standard base URL: `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`
 - China Standard base URL: `https://dashscope.aliyuncs.com/compatible-mode/v1`
 
-For video generation, OpenClaw maps the configured Qwen region to the matching
+For video generation, Mullusi maps the configured Qwen region to the matching
 DashScope AIGC host before submitting the job:
 
 - Global/Intl: `https://dashscope-intl.aliyuncs.com`

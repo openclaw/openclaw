@@ -51,13 +51,13 @@ export type CronServiceDeps = {
   /**
    * Delay in ms between missed job executions on startup.
    * Prevents overwhelming the gateway when many jobs are overdue.
-   * See: https://github.com/openclaw/openclaw/issues/18892
+   * See: https://github.com/mullusi/mullusi/issues/18892
    */
   missedJobStaggerMs?: number;
   /**
    * Maximum number of missed jobs to run immediately on startup.
    * Additional missed jobs will be rescheduled to fire gradually.
-   * See: https://github.com/openclaw/openclaw/issues/18892
+   * See: https://github.com/mullusi/mullusi/issues/18892
    */
   maxMissedJobsPerRestart?: number;
   enqueueSystemEvent: (
@@ -92,7 +92,7 @@ export type CronServiceDeps = {
       /**
        * `true` when the isolated run already delivered its output to the target
        * channel (including matching messaging-tool sends). See:
-       * https://github.com/openclaw/openclaw/issues/15692
+       * https://github.com/mullusi/mullusi/issues/15692
        */
       delivered?: boolean;
       /**

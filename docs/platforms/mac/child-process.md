@@ -10,7 +10,7 @@ title: "Gateway Lifecycle"
 The macOS app **manages the Gateway via launchd** by default and does not spawn
 the Gateway as a child process. It first tries to attach to an already‑running
 Gateway on the configured port; if none is reachable, it enables the launchd
-service via the external `openclaw` CLI (no embedded runtime). This gives you
+service via the external `mullusi` CLI (no embedded runtime). This gives you
 reliable auto‑start at login and restart on crashes.
 
 Child‑process mode (Gateway spawned directly by the app) is **not in use** today.
@@ -18,8 +18,8 @@ If you need tighter coupling to the UI, run the Gateway manually in a terminal.
 
 ## Default behavior (launchd)
 
-- The app installs a per‑user LaunchAgent labeled `ai.openclaw.gateway`
-  (or `ai.openclaw.<profile>` when using `--profile`/`OPENCLAW_PROFILE`; legacy `com.openclaw.*` is supported).
+- The app installs a per‑user LaunchAgent labeled `ai.mullusi.gateway`
+  (or `ai.mullusi.<profile>` when using `--profile`/`MULLUSI_PROFILE`; legacy `com.mullusi.*` is supported).
 - When Local mode is enabled, the app ensures the LaunchAgent is loaded and
   starts the Gateway if needed.
 - Logs are written to the launchd gateway log path (visible in Debug Settings).
@@ -27,30 +27,30 @@ If you need tighter coupling to the UI, run the Gateway manually in a terminal.
 Common commands:
 
 ```bash
-launchctl kickstart -k gui/$UID/ai.openclaw.gateway
-launchctl bootout gui/$UID/ai.openclaw.gateway
+launchctl kickstart -k gui/$UID/ai.mullusi.gateway
+launchctl bootout gui/$UID/ai.mullusi.gateway
 ```
 
-Replace the label with `ai.openclaw.<profile>` when running a named profile.
+Replace the label with `ai.mullusi.<profile>` when running a named profile.
 
 ## Unsigned dev builds
 
 `scripts/restart-mac.sh --no-sign` is for fast local builds when you don’t have
 signing keys. To prevent launchd from pointing at an unsigned relay binary, it:
 
-- Writes `~/.openclaw/disable-launchagent`.
+- Writes `~/.mullusi/disable-launchagent`.
 
 Signed runs of `scripts/restart-mac.sh` clear this override if the marker is
 present. To reset manually:
 
 ```bash
-rm ~/.openclaw/disable-launchagent
+rm ~/.mullusi/disable-launchagent
 ```
 
 ## Attach-only mode
 
 To force the macOS app to **never install or manage launchd**, launch it with
-`--attach-only` (or `--no-launchd`). This sets `~/.openclaw/disable-launchagent`,
+`--attach-only` (or `--no-launchd`). This sets `~/.mullusi/disable-launchagent`,
 so the app only attaches to an already running Gateway. You can toggle the same
 behavior in Debug Settings.
 

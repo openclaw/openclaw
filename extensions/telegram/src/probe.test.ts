@@ -1,4 +1,4 @@
-import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
+import { withFetchPreconnect } from "mullusi/plugin-sdk/testing";
 import { afterEach, beforeAll, beforeEach, type Mock, describe, expect, it, vi } from "vitest";
 
 const resolveTelegramFetch = vi.hoisted(() => vi.fn());

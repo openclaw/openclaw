@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/chutes-provider",
+  "name": "@mullusi/chutes-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Chutes.ai provider plugin",
+  "description": "Mullusi Chutes.ai provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

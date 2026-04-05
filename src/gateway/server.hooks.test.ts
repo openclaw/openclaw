@@ -186,7 +186,7 @@ describe("gateway server hooks", () => {
         port,
         "/hooks/wake",
         { text: "Header auth" },
-        { token: null, headers: { "x-openclaw-token": HOOK_TOKEN } },
+        { token: null, headers: { "x-mullusi-token": HOOK_TOKEN } },
       );
       expect(resHeader.status).toBe(200);
       const headerEvents = await waitForSystemEvent();
@@ -425,7 +425,7 @@ describe("gateway server hooks", () => {
 
   test("dedupes hook retries even when trusted-proxy client IP changes", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    const configPath = process.env.MULLUSI_CONFIG_PATH;
     expect(configPath).toBeTruthy();
     await fs.writeFile(
       configPath!,

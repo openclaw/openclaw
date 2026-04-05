@@ -12,7 +12,7 @@ The Gateway dashboard is the browser Control UI served at `/` by default
 
 Quick open (local Gateway):
 
-- [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/))
+- [http://127.0.0.1:18790/](http://127.0.0.1:18790/) (or [http://localhost:18790/](http://localhost:18790/))
 
 Key references:
 
@@ -38,26 +38,26 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
 ## Fast path (recommended)
 
 - After onboarding, the CLI auto-opens the dashboard and prints a clean (non-tokenized) link.
-- Re-open anytime: `openclaw dashboard` (copies link, opens browser if possible, shows SSH hint if headless).
+- Re-open anytime: `mullusi dashboard` (copies link, opens browser if possible, shows SSH hint if headless).
 - If the UI prompts for shared-secret auth, paste the configured token or
   password into Control UI settings.
 
 ## Auth basics (local vs remote)
 
-- **Localhost**: open `http://127.0.0.1:18789/`.
+- **Localhost**: open `http://127.0.0.1:18790/`.
 - **Shared-secret token source**: `gateway.auth.token` (or
-  `OPENCLAW_GATEWAY_TOKEN`); `openclaw dashboard` can pass it via URL fragment
+  `MULLUSI_GATEWAY_TOKEN`); `mullusi dashboard` can pass it via URL fragment
   for one-time bootstrap, and the Control UI keeps it in sessionStorage for the
   current browser tab session and selected gateway URL instead of localStorage.
-- If `gateway.auth.token` is SecretRef-managed, `openclaw dashboard`
+- If `gateway.auth.token` is SecretRef-managed, `mullusi dashboard`
   prints/copies/opens a non-tokenized URL by design. This avoids exposing
   externally managed tokens in shell logs, clipboard history, or browser-launch
   arguments.
 - If `gateway.auth.token` is configured as a SecretRef and is unresolved in your
-  current shell, `openclaw dashboard` still prints a non-tokenized URL plus
+  current shell, `mullusi dashboard` still prints a non-tokenized URL plus
   actionable auth setup guidance.
 - **Shared-secret password**: use the configured `gateway.auth.password` (or
-  `OPENCLAW_GATEWAY_PASSWORD`). The dashboard does not persist passwords across
+  `MULLUSI_GATEWAY_PASSWORD`). The dashboard does not persist passwords across
   reloads.
 - **Identity-bearing modes**: Tailscale Serve can satisfy Control UI/WebSocket
   auth via identity headers when `gateway.auth.allowTailscale: true`, and a
@@ -75,7 +75,7 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
 
 ## If you see "unauthorized" / 1008
 
-- Ensure the gateway is reachable (local: `openclaw status`; remote: SSH tunnel `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`).
+- Ensure the gateway is reachable (local: `mullusi status`; remote: SSH tunnel `ssh -N -L 18790:127.0.0.1:18790 user@host` then open `http://127.0.0.1:18790/`).
 - For `AUTH_TOKEN_MISMATCH`, clients may do one trusted retry with a cached device token when the gateway returns retry hints. That cached-token retry reuses the token's cached approved scopes; explicit `deviceToken` / explicit `scopes` callers keep their requested scope set. If auth still fails after that retry, resolve token drift manually.
 - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
 - On the async Tailscale Serve Control UI path, failed attempts for the same
@@ -83,11 +83,11 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
   the second concurrent bad retry can already show `retry later`.
 - For token drift repair steps, follow [Token drift recovery checklist](/cli/devices#token-drift-recovery-checklist).
 - Retrieve or supply the shared secret from the gateway host:
-  - Token: `openclaw config get gateway.auth.token`
+  - Token: `mullusi config get gateway.auth.token`
   - Password: resolve the configured `gateway.auth.password` or
-    `OPENCLAW_GATEWAY_PASSWORD`
+    `MULLUSI_GATEWAY_PASSWORD`
   - SecretRef-managed token: resolve the external secret provider or export
-    `OPENCLAW_GATEWAY_TOKEN` in this shell, then rerun `openclaw dashboard`
-  - No shared secret configured: `openclaw doctor --generate-gateway-token`
+    `MULLUSI_GATEWAY_TOKEN` in this shell, then rerun `mullusi dashboard`
+  - No shared secret configured: `mullusi doctor --generate-gateway-token`
 - In the dashboard settings, paste the token or password into the auth field,
   then connect.

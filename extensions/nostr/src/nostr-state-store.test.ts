@@ -13,19 +13,19 @@ import {
 import { setNostrRuntime } from "./runtime.js";
 
 async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
-  const previous = process.env.OPENCLAW_STATE_DIR;
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nostr-"));
-  process.env.OPENCLAW_STATE_DIR = dir;
+  const previous = process.env.MULLUSI_STATE_DIR;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-nostr-"));
+  process.env.MULLUSI_STATE_DIR = dir;
   setNostrRuntime({
     state: {
       resolveStateDir: (env, homedir) => {
         const stateEnv = env ?? process.env;
-        const override = stateEnv.OPENCLAW_STATE_DIR?.trim();
+        const override = stateEnv.MULLUSI_STATE_DIR?.trim();
         if (override) {
           return override;
         }
         const resolveHome = homedir ?? os.homedir;
-        return path.join(resolveHome(), ".openclaw");
+        return path.join(resolveHome(), ".mullusi");
       },
     },
   } as PluginRuntime);
@@ -33,9 +33,9 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
     return await fn(dir);
   } finally {
     if (previous === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.MULLUSI_STATE_DIR;
     } else {
-      process.env.OPENCLAW_STATE_DIR = previous;
+      process.env.MULLUSI_STATE_DIR = previous;
     }
     await fs.rm(dir, { recursive: true, force: true });
   }

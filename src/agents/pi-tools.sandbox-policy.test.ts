@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBundledBrowserPluginFixture } from "../../test/helpers/browser-bundled-plugin-fixture.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { createOpenClawCodingTools } from "./pi-tools.js";
+import { createMullusiCodingTools } from "./pi-tools.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
@@ -18,12 +18,12 @@ function resetPluginState() {
 }
 
 function listToolNames(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentId?: string;
   sessionKey?: string;
   sandboxAgentId?: string;
 }): string[] {
-  const workspaceDir = "/tmp/openclaw-sandbox-policy";
+  const workspaceDir = "/tmp/mullusi-sandbox-policy";
   const sessionKey = params.sessionKey ?? "agent:tavern:main";
   const sandboxAgentId = params.sandboxAgentId ?? params.agentId ?? "tavern";
   const sandbox = createPiToolsSandboxContext({
@@ -32,7 +32,7 @@ function listToolNames(params: {
     sessionKey,
     tools: resolveSandboxConfigForAgent(params.cfg, sandboxAgentId).tools,
   });
-  return createOpenClawCodingTools({
+  return createMullusiCodingTools({
     config: params.cfg,
     agentId: params.agentId,
     sessionKey,
@@ -48,7 +48,7 @@ describe("pi-tools sandbox policy", () => {
 
   beforeEach(() => {
     bundledFixture = createBundledBrowserPluginFixture();
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledFixture.rootDir);
+    vi.stubEnv("MULLUSI_BUNDLED_PLUGINS_DIR", bundledFixture.rootDir);
     resetPluginState();
   });
 
@@ -79,7 +79,7 @@ describe("pi-tools sandbox policy", () => {
             },
           ],
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     });
 
     expect(names).toContain("message");
@@ -105,7 +105,7 @@ describe("pi-tools sandbox policy", () => {
         plugins: {
           allow: ["browser"],
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     });
 
     expect(names).toContain("browser");
@@ -135,7 +135,7 @@ describe("pi-tools sandbox policy", () => {
       plugins: {
         allow: ["browser"],
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const names = listToolNames({
       cfg,
@@ -167,7 +167,7 @@ describe("pi-tools sandbox policy", () => {
         plugins: {
           allow: ["browser"],
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     });
 
     expect(names).toContain("browser");
@@ -194,7 +194,7 @@ describe("pi-tools sandbox policy", () => {
         plugins: {
           allow: ["browser"],
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
     });
 
     expect(names).not.toContain("browser");

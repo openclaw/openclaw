@@ -29,7 +29,7 @@ const {
 
 let handlersByAccount = new Map<string, Record<string, (data: unknown) => Promise<void>>>();
 let runtimesByAccount = new Map<string, RuntimeEnv>();
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+const originalStateDir = process.env.MULLUSI_STATE_DIR;
 
 function createLifecycleConfig(): ClawdbotConfig {
   return {
@@ -136,7 +136,7 @@ describe("Feishu broadcast reply-once lifecycle", () => {
     vi.clearAllMocks();
     handlersByAccount = new Map();
     runtimesByAccount = new Map();
-    setFeishuLifecycleStateDir("openclaw-feishu-broadcast");
+    setFeishuLifecycleStateDir("mullusi-feishu-broadcast");
 
     createFeishuReplyDispatcherMock.mockReturnValue(createFeishuLifecycleReplyDispatcher());
 

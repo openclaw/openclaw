@@ -1,6 +1,6 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
   AUTHORIZED_WHATSAPP_COMMAND,
@@ -253,7 +253,7 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        makeRestrictedElevatedDisabledConfig(home) as unknown as OpenClawConfig,
+        makeRestrictedElevatedDisabledConfig(home) as unknown as MullusiConfig,
       );
       const deniedText = replyText(deniedRes);
       expect(deniedText).toContain("agents.list[].tools.elevated.enabled");
@@ -269,7 +269,7 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        makeRestrictedElevatedDisabledConfig(home) as unknown as OpenClawConfig,
+        makeRestrictedElevatedDisabledConfig(home) as unknown as MullusiConfig,
       );
       const statusText = replyText(statusRes);
       expect(statusText).not.toContain("elevated");

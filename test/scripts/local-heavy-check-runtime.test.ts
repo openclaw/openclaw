@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 function makeTempDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-heavy-check-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-local-heavy-check-"));
   tempDirs.push(dir);
   return dir;
 }
@@ -25,7 +25,7 @@ function makeTempDir() {
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
   return {
     ...process.env,
-    OPENCLAW_LOCAL_CHECK: "1",
+    MULLUSI_LOCAL_CHECK: "1",
     ...overrides,
   };
 }
@@ -45,7 +45,7 @@ describe("local-heavy-check-runtime", () => {
       makeEnv({
         GOGC: "80",
         GOMEMLIMIT: "5GiB",
-        OPENCLAW_TSGO_PPROF_DIR: "/tmp/profile",
+        MULLUSI_TSGO_PPROF_DIR: "/tmp/profile",
       }),
     );
 
@@ -63,7 +63,7 @@ describe("local-heavy-check-runtime", () => {
   it("reclaims stale local heavy-check locks from dead pids", () => {
     const cwd = makeTempDir();
     const commonDir = path.join(cwd, ".git");
-    const lockDir = path.join(commonDir, "openclaw-local-checks", "heavy-check.lock");
+    const lockDir = path.join(commonDir, "mullusi-local-checks", "heavy-check.lock");
     fs.mkdirSync(lockDir, { recursive: true });
     fs.writeFileSync(
       path.join(lockDir, "owner.json"),

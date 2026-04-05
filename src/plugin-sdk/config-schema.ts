@@ -1,2 +1,2 @@
-/** Root OpenClaw configuration Zod schema — the full `openclaw.json` shape. */
-export { OpenClawSchema } from "../config/zod-schema.js";
+/** Root Mullusi configuration Zod schema — the full `mullusi.json` shape. */
+export { MullusiSchema } from "../config/zod-schema.js";

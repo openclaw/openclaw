@@ -5,7 +5,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 }
 
 const rootEntries = [
-  "openclaw.mjs!",
+  "mullusi.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
@@ -95,7 +95,7 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       entry: ["index.ts!"],
       project: ["index.ts!", "src/**/*.ts!"],
-      ignoreDependencies: ["openclaw"],
+      ignoreDependencies: ["mullusi"],
     },
   },
 } as const;

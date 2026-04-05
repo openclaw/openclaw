@@ -45,7 +45,7 @@ describe("config view", () => {
     borderRadius: 50,
     setBorderRadius: vi.fn(),
     gatewayUrl: "",
-    assistantName: "OpenClaw",
+    assistantName: "Mullusi",
   });
 
   function findActionButtons(container: HTMLElement): {
@@ -417,7 +417,7 @@ describe("config view", () => {
       formValue: {
         channels: {
           discord: {
-            token: { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" },
+            token: { source: "env", provider: "default", id: "__MULLUSI_REDACTED__" },
           },
         },
       },
@@ -473,7 +473,7 @@ describe("config view", () => {
       formValue: {
         channels: {
           discord: {
-            token: { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" },
+            token: { source: "env", provider: "default", id: "__MULLUSI_REDACTED__" },
           },
         },
       },

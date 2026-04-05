@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/moonshot-provider",
+  "name": "@mullusi/moonshot-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Moonshot provider plugin",
+  "description": "Mullusi Moonshot provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

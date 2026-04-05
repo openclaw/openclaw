@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { messagingApi } from "@line/bot-sdk";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { buildRandomTempFilePath } from "openclaw/plugin-sdk/temp-path";
+import { logVerbose } from "mullusi/plugin-sdk/runtime-env";
+import { buildRandomTempFilePath } from "mullusi/plugin-sdk/temp-path";
 
 interface DownloadResult {
   path: string;

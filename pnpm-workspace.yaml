@@ -8,7 +8,7 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "acpx"
-  - "openclaw"
+  - "mullusi"
   - "@mariozechner/*"
   - "@typescript/native-preview*"
   - "@oxlint/*"

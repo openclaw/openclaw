@@ -8,7 +8,7 @@ const gatewayRuntimeHoisted = vi.hoisted(() => ({
   createClientSpy: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
+vi.mock("mullusi/plugin-sdk/gateway-runtime", () => ({
   createOperatorApprovalsGatewayClient: gatewayRuntimeHoisted.createClientSpy,
 }));
 

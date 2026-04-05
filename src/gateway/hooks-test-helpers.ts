@@ -29,7 +29,7 @@ export function createGatewayRequest(params: {
   headers?: Record<string, string>;
 }): IncomingMessage {
   const headers: Record<string, string> = {
-    host: params.host ?? "localhost:18789",
+    host: params.host ?? "localhost:18790",
     ...params.headers,
   };
   if (params.authorization) {

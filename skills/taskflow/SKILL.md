@@ -1,6 +1,6 @@
 name: taskflow
-description: Use when work should span one or more detached tasks but still behave like one job with a single owner context. TaskFlow is the durable flow substrate under authoring layers like Lobster, ACPX, plugins, or plain code. Keep conditional logic in the caller; use TaskFlow for flow identity, child-task linkage, waiting state, revision-checked mutations, and user-facing emergence.
-metadata: { "openclaw": { "emoji": "🪝" } }
+description: Use when work should span one or more detached tasks but still behave like one job with a single owner context. TaskFlow is the durable flow substrate under authoring layers like Mullusi, ACPX, plugins, or plain code. Keep conditional logic in the caller; use TaskFlow for flow identity, child-task linkage, waiting state, revision-checked mutations, and user-facing emergence.
+metadata: { "mullusi": { "emoji": "🪝" } }
 
 ---
 
@@ -25,7 +25,7 @@ Use TaskFlow when a job needs to outlive one prompt or one detached run, but you
 - finish, fail, cancel, waiting, and blocked state
 - revision tracking for conflict-safe mutations
 
-It does **not** own branching or business logic. Put that in Lobster, acpx, or the calling code.
+It does **not** own branching or business logic. Put that in Mullusi, acpx, or the calling code.
 
 ## Current runtime shape
 
@@ -144,6 +144,6 @@ Use the flow runtime for state and task linkage. Keep decisions in the authoring
 
 ## Examples
 
-- See `skills/taskflow/examples/inbox-triage.lobster`
-- See `skills/taskflow/examples/pr-intake.lobster`
+- See `skills/taskflow/examples/inbox-triage.mullusi`
+- See `skills/taskflow/examples/pr-intake.mullusi`
 - See `skills/taskflow-inbox-triage/SKILL.md` for a concrete routing pattern

@@ -1,4 +1,4 @@
-import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
+import type { ExecApprovalReplyDecision } from "mullusi/plugin-sdk/approval-reply-runtime";
 import { sanitizeTelegramCallbackData } from "./approval-callback-data.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 

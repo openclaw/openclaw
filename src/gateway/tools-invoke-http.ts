@@ -223,11 +223,11 @@ export async function handleToolsInvokeHttpRequest(
 
   // Resolve message channel/account hints (optional headers) for policy inheritance.
   const messageChannel = normalizeMessageChannel(
-    getHeader(req, "x-openclaw-message-channel") ?? "",
+    getHeader(req, "x-mullusi-message-channel") ?? "",
   );
-  const accountId = getHeader(req, "x-openclaw-account-id")?.trim() || undefined;
-  const agentTo = getHeader(req, "x-openclaw-message-to")?.trim() || undefined;
-  const agentThreadId = getHeader(req, "x-openclaw-thread-id")?.trim() || undefined;
+  const accountId = getHeader(req, "x-mullusi-account-id")?.trim() || undefined;
+  const agentTo = getHeader(req, "x-mullusi-message-to")?.trim() || undefined;
+  const agentThreadId = getHeader(req, "x-mullusi-thread-id")?.trim() || undefined;
   const { agentId, tools } = resolveGatewayScopedTools({
     cfg,
     sessionKey,

@@ -4,7 +4,7 @@ import {
   normalizeAccountId,
   normalizeSecretInputString,
   type ChannelSetupInput,
-} from "openclaw/plugin-sdk/setup";
+} from "mullusi/plugin-sdk/setup";
 import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import type { CoreConfig } from "./types.js";

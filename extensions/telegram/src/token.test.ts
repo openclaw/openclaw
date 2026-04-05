@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import { resolveTelegramToken } from "./token.js";
@@ -11,7 +11,7 @@ describe("resolveTelegramToken", () => {
   const tempDirs: string[] = [];
 
   function createTempDir(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-token-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-telegram-token-"));
     tempDirs.push(dir);
     return dir;
   }
@@ -23,7 +23,7 @@ describe("resolveTelegramToken", () => {
     return tokenFile;
   }
 
-  function createUnknownAccountConfig(): OpenClawConfig {
+  function createUnknownAccountConfig(): MullusiConfig {
     return {
       channels: {
         telegram: {
@@ -33,10 +33,10 @@ describe("resolveTelegramToken", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
   }
 
-  function expectNoTokenForUnknownAccount(cfg: OpenClawConfig) {
+  function expectNoTokenForUnknownAccount(cfg: MullusiConfig) {
     const res = resolveTelegramToken(cfg, { accountId: "unknownBot" });
     expect(res.token).toBe("");
     expect(res.source).toBe("none");
@@ -55,7 +55,7 @@ describe("resolveTelegramToken", () => {
       envToken: "env-token",
       cfg: {
         channels: { telegram: { botToken: "cfg-token" } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       expected: { token: "cfg-token", source: "config" },
     },
     {
@@ -63,7 +63,7 @@ describe("resolveTelegramToken", () => {
       envToken: "env-token",
       cfg: {
         channels: { telegram: {} },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       expected: { token: "env-token", source: "env" },
     },
     {
@@ -71,11 +71,11 @@ describe("resolveTelegramToken", () => {
       envToken: "",
       cfg: {
         channels: { telegram: { tokenFile: "" } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       resolveCfg: () =>
         ({
           channels: { telegram: { tokenFile: createTokenFile("token.txt") } },
-        }) as OpenClawConfig,
+        }) as MullusiConfig,
       expected: { token: "file-token", source: "tokenFile" },
     },
     {
@@ -83,7 +83,7 @@ describe("resolveTelegramToken", () => {
       envToken: "",
       cfg: {
         channels: { telegram: { botToken: "cfg-token" } },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       expected: { token: "cfg-token", source: "config" },
     },
   ])("$name", ({ envToken, cfg, resolveCfg, expected }) => {
@@ -100,7 +100,7 @@ describe("resolveTelegramToken", () => {
     fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
     fs.symlinkSync(tokenFile, tokenLink);
 
-    const cfg = { channels: { telegram: { tokenFile: tokenLink } } } as OpenClawConfig;
+    const cfg = { channels: { telegram: { tokenFile: tokenLink } } } as MullusiConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("");
     expect(res.source).toBe("none");
@@ -112,7 +112,7 @@ describe("resolveTelegramToken", () => {
     const tokenFile = path.join(dir, "missing-token.txt");
     const cfg = {
       channels: { telegram: { tokenFile, botToken: "cfg-token" } },
-    } as OpenClawConfig;
+    } as MullusiConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("");
     expect(res.source).toBe("none");
@@ -129,7 +129,7 @@ describe("resolveTelegramToken", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const res = resolveTelegramToken(cfg, { accountId: "careynotifications" });
     expect(res.token).toBe("acct-token");
@@ -146,7 +146,7 @@ describe("resolveTelegramToken", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const res = resolveTelegramToken(cfg, { accountId: "carey-notifications" });
     expect(res.token).toBe("acct-token");
@@ -163,7 +163,7 @@ describe("resolveTelegramToken", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const res = resolveTelegramToken(cfg, { accountId: "work" });
     expect(res.token).toBe("top-level-token");
@@ -183,7 +183,7 @@ describe("resolveTelegramToken", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const res = resolveTelegramToken(cfg, { accountId: "work" });
     expect(res.token).toBe("account-file-token");
@@ -200,7 +200,7 @@ describe("resolveTelegramToken", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const res = resolveTelegramToken(cfg, { accountId: "work" });
     expect(res.token).toBe("file-token");
@@ -217,7 +217,7 @@ describe("resolveTelegramToken", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const res = resolveTelegramToken(cfg, { accountId: "work" });
     expect(res.token).toBe("");
@@ -236,14 +236,14 @@ describe("resolveTelegramToken", () => {
           botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
 
     expect(() => resolveTelegramToken(cfg)).toThrow(
       /channels\.telegram\.botToken: unresolved SecretRef/i,
     );
   });
 
-  // Regression: https://github.com/openclaw/openclaw/issues/53876
+  // Regression: https://github.com/mullusi/mullusi/issues/53876
   // Binding-created accountIds should inherit the channel-level token in
   // single-bot setups (no accounts section).
   it("falls through to channel-level token for binding-created accountId without accounts section", () => {
@@ -254,7 +254,7 @@ describe("resolveTelegramToken", () => {
           enabled: true,
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     const res = resolveTelegramToken(cfg, { accountId: "bot-main" });
     expect(res.token).toBe("channel-level-token");
@@ -269,7 +269,7 @@ describe("resolveTelegramToken", () => {
 
 describe("telegram update offset store", () => {
   it("persists and reloads the last update id", async () => {
-    await withStateDirEnv("openclaw-telegram-", async () => {
+    await withStateDirEnv("mullusi-telegram-", async () => {
       expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
 
       await writeTelegramUpdateOffset({

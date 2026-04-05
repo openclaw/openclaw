@@ -2,12 +2,12 @@ import type {
   ChannelDoctorAdapter,
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
-} from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/channel-contract";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   migrateLegacyFlatAllowPrivateNetworkAlias,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+} from "mullusi/plugin-sdk/ssrf-runtime";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -23,7 +23,7 @@ function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
   );
 }
 
-function normalizeBlueBubblesCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
+function normalizeBlueBubblesCompatibilityConfig(cfg: MullusiConfig): ChannelDoctorConfigMutation {
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   const bluebubbles = isRecord(channels?.bluebubbles) ? channels.bluebubbles : null;
   if (!bluebubbles) {
@@ -77,7 +77,7 @@ function normalizeBlueBubblesCompatibilityConfig(cfg: OpenClawConfig): ChannelDo
       ...cfg,
       channels: {
         ...cfg.channels,
-        bluebubbles: updatedBluebubbles as NonNullable<OpenClawConfig["channels"]>["bluebubbles"],
+        bluebubbles: updatedBluebubbles as NonNullable<MullusiConfig["channels"]>["bluebubbles"],
       },
     },
     changes,

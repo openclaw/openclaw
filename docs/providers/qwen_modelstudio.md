@@ -10,7 +10,7 @@ read_when:
 
 # Qwen / Model Studio (Alibaba Cloud)
 
-This page documents the endpoint mapping behind OpenClaw's bundled `qwen`
+This page documents the endpoint mapping behind Mullusi's bundled `qwen`
 provider. The provider keeps `modelstudio` provider ids, auth-choice ids, and
 model refs working as compatibility aliases while `qwen` becomes the canonical
 surface.
@@ -35,20 +35,20 @@ model list.
 
 ```bash
 # China endpoint
-openclaw onboard --auth-choice qwen-standard-api-key-cn
+mullusi onboard --auth-choice qwen-standard-api-key-cn
 
 # Global/Intl endpoint
-openclaw onboard --auth-choice qwen-standard-api-key
+mullusi onboard --auth-choice qwen-standard-api-key
 ```
 
 ### Coding Plan (subscription)
 
 ```bash
 # China endpoint
-openclaw onboard --auth-choice qwen-api-key-cn
+mullusi onboard --auth-choice qwen-api-key-cn
 
 # Global/Intl endpoint
-openclaw onboard --auth-choice qwen-api-key
+mullusi onboard --auth-choice qwen-api-key
 ```
 
 Legacy `modelstudio-*` auth-choice ids still work as compatibility aliases, but
@@ -81,7 +81,7 @@ You can
 override with a custom `baseUrl` in config.
 
 Native Model Studio endpoints advertise streaming usage compatibility on the
-shared `openai-completions` transport. OpenClaw keys that off endpoint
+shared `openai-completions` transport. Mullusi keys that off endpoint
 capabilities now, so DashScope-compatible custom provider ids targeting the
 same native hosts inherit the same streaming-usage behavior instead of
 requiring the built-in `qwen` provider id specifically.
@@ -93,7 +93,7 @@ requiring the built-in `qwen` provider id specifically.
 
 ## Built-in catalog
 
-OpenClaw currently ships this bundled Qwen catalog:
+Mullusi currently ships this bundled Qwen catalog:
 
 | Model ref                   | Input       | Context   | Notes                                              |
 | --------------------------- | ----------- | --------- | -------------------------------------------------- |
@@ -134,4 +134,4 @@ endpoint/key pair.
 
 If the Gateway runs as a daemon (launchd/systemd), make sure
 `QWEN_API_KEY` is available to that process (for example, in
-`~/.openclaw/.env` or via `env.shellEnv`).
+`~/.mullusi/.env` or via `env.shellEnv`).

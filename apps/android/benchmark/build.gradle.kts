@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "ai.openclaw.app.benchmark"
+    namespace = "ai.mullusi.app.benchmark"
     compileSdk = 36
 
     defaultConfig {

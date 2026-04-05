@@ -81,15 +81,15 @@ export function clearActiveMcpLoopbackRuntime(token: string): void {
 export function createMcpLoopbackServerConfig(port: number) {
   return {
     mcpServers: {
-      openclaw: {
+      mullusi: {
         type: "http",
         url: `http://127.0.0.1:${port}/mcp`,
         headers: {
-          Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-          "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
-          "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
-          "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
-          "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+          Authorization: "Bearer ${MULLUSI_MCP_TOKEN}",
+          "x-session-key": "${MULLUSI_MCP_SESSION_KEY}",
+          "x-mullusi-agent-id": "${MULLUSI_MCP_AGENT_ID}",
+          "x-mullusi-account-id": "${MULLUSI_MCP_ACCOUNT_ID}",
+          "x-mullusi-message-channel": "${MULLUSI_MCP_MESSAGE_CHANNEL}",
         },
       },
     },

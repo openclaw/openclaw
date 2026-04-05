@@ -4,7 +4,7 @@ import { expect, vi, type Mock } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { handleBlueBubblesWebhookRequest } from "./monitor.js";
 import { registerBlueBubblesWebhookTarget } from "./monitor.js";
-import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import type { MullusiConfig, PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 
 export type WebhookRequestParams = {
@@ -272,7 +272,7 @@ export function trackWebhookRegistrationForTest<T extends { unregister: () => vo
 export function registerWebhookTargetForTest(params: {
   core: PluginRuntime;
   account?: ResolvedBlueBubblesAccount;
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   path?: string;
   statusSink?: (event: unknown) => void;
   runtime?: {
@@ -298,7 +298,7 @@ export function registerWebhookTargetsForTest(params: {
     account: ResolvedBlueBubblesAccount;
     statusSink?: (event: unknown) => void;
   }>;
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   path?: string;
   runtime?: {
     log: (...args: unknown[]) => unknown;
@@ -321,7 +321,7 @@ export function setupWebhookTargetForTest(params: {
   createCore: () => PluginRuntime;
   core?: PluginRuntime;
   account?: ResolvedBlueBubblesAccount;
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   path?: string;
   statusSink?: (event: unknown) => void;
   runtime?: {
@@ -350,7 +350,7 @@ export function setupWebhookTargetsForTest(params: {
     account: ResolvedBlueBubblesAccount;
     statusSink?: (event: unknown) => void;
   }>;
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   path?: string;
   runtime?: {
     log: (...args: unknown[]) => unknown;

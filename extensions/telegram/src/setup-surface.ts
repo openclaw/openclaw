@@ -6,13 +6,13 @@ import {
   type ChannelSetupDmPolicy,
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
-  type OpenClawConfig,
+  type MullusiConfig,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
   splitSetupEntries,
-} from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+} from "mullusi/plugin-sdk/setup";
+import type { ChannelSetupWizard } from "mullusi/plugin-sdk/setup";
+import { formatCliCommand, formatDocsLink } from "mullusi/plugin-sdk/setup-tools";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
@@ -32,9 +32,9 @@ import {
 const channel = "telegram" as const;
 
 function ensureTelegramDefaultGroupMentionGate(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId: string,
-): OpenClawConfig {
+): MullusiConfig {
   const resolved = resolveTelegramAccount({ cfg, accountId });
   const wildcardGroup = resolved.config.groups?.["*"];
   if (wildcardGroup?.requireMention !== undefined) {
@@ -56,7 +56,7 @@ function ensureTelegramDefaultGroupMentionGate(
   });
 }
 
-function shouldShowTelegramDmAccessWarning(cfg: OpenClawConfig, accountId: string): boolean {
+function shouldShowTelegramDmAccessWarning(cfg: MullusiConfig, accountId: string): boolean {
   const merged = mergeTelegramAccountConfig(cfg, accountId);
   const policy = merged.dmPolicy ?? "pairing";
   const hasAllowFrom =
@@ -73,8 +73,8 @@ function buildTelegramDmAccessWarningLines(accountId: string): string[] {
     "Your bot is using DM policy: pairing.",
     "Any Telegram user who discovers the bot can send pairing requests.",
     "For private use, configure an allowlist with your Telegram user id:",
-    "  " + formatCliCommand(`openclaw config set ${configBase}.dmPolicy "allowlist"`),
-    "  " + formatCliCommand(`openclaw config set ${configBase}.allowFrom '["YOUR_USER_ID"]'`),
+    "  " + formatCliCommand(`mullusi config set ${configBase}.dmPolicy "allowlist"`),
+    "  " + formatCliCommand(`mullusi config set ${configBase}.allowFrom '["YOUR_USER_ID"]'`),
     `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
   ];
 }

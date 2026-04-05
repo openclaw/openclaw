@@ -38,17 +38,17 @@ type DotEnvFixture = {
 };
 
 async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>) {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-dotenv-test-"));
   const cwdDir = path.join(base, "cwd");
   const stateDir = path.join(base, "state");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  process.env.MULLUSI_STATE_DIR = stateDir;
   await fs.mkdir(cwdDir, { recursive: true });
   await fs.mkdir(stateDir, { recursive: true });
   await run({ base, cwdDir, stateDir });
 }
 
 describe("loadDotEnv", () => {
-  it("loads ~/.openclaw/.env as fallback without overriding CWD .env", async () => {
+  it("loads ~/.mullusi/.env as fallback without overriding CWD .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
         await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\nBAR=1\n");
@@ -97,15 +97,15 @@ describe("loadDotEnv", () => {
     });
   });
 
-  it("loads the Ubuntu gateway.env compatibility fallback after ~/.openclaw/.env", async () => {
+  it("loads the Ubuntu gateway.env compatibility fallback after ~/.mullusi/.env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
         process.env.HOME = base;
-        const defaultStateDir = path.join(base, ".openclaw");
-        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+        const defaultStateDir = path.join(base, ".mullusi");
+        process.env.MULLUSI_STATE_DIR = defaultStateDir;
         await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
         await writeEnvFile(
-          path.join(base, ".config", "openclaw", "gateway.env"),
+          path.join(base, ".config", "mullusi", "gateway.env"),
           ["FOO=from-gateway", "BAR=from-gateway"].join("\n"),
         );
 
@@ -131,7 +131,7 @@ describe("loadDotEnv", () => {
         process.env.FOO = "from-shell";
         await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
         await writeEnvFile(
-          path.join(base, ".config", "openclaw", "gateway.env"),
+          path.join(base, ".config", "mullusi", "gateway.env"),
           "FOO=from-gateway\n",
         );
 
@@ -154,8 +154,8 @@ describe("loadDotEnv", () => {
           [
             "SAFE_KEY=from-cwd",
             "NODE_OPTIONS=--require ./evil.js",
-            "OPENCLAW_STATE_DIR=./evil-state",
-            "OPENCLAW_CONFIG_PATH=./evil-config.json",
+            "MULLUSI_STATE_DIR=./evil-state",
+            "MULLUSI_CONFIG_PATH=./evil-config.json",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
             "HTTP_PROXY=http://evil-proxy:8080",
             "UV_PYTHON=./attacker-python",
@@ -167,7 +167,7 @@ describe("loadDotEnv", () => {
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.SAFE_KEY;
         delete process.env.NODE_OPTIONS;
-        delete process.env.OPENCLAW_CONFIG_PATH;
+        delete process.env.MULLUSI_CONFIG_PATH;
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.HTTP_PROXY;
         delete process.env.UV_PYTHON;
@@ -178,8 +178,8 @@ describe("loadDotEnv", () => {
         expect(process.env.SAFE_KEY).toBe("from-cwd");
         expect(process.env.BAR).toBe("from-global");
         expect(process.env.NODE_OPTIONS).toBeUndefined();
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
-        expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+        expect(process.env.MULLUSI_STATE_DIR).toBe(stateDir);
+        expect(process.env.MULLUSI_CONFIG_PATH).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
         expect(process.env.UV_PYTHON).toBeUndefined();
@@ -200,13 +200,13 @@ describe("loadDotEnv", () => {
             "OPENAI_API_KEY=sk-openai-attacker-key",
             "OPENAI_API_KEYS=sk-openai-a,sk-openai-b",
             "OPENAI_API_KEY_SECONDARY=sk-openai-secondary",
-            "OPENCLAW_LIVE_ANTHROPIC_KEY=sk-ant-live",
-            "OPENCLAW_LIVE_ANTHROPIC_KEYS=sk-ant-live-a,sk-ant-live-b",
-            "OPENCLAW_LIVE_GEMINI_KEY=sk-gemini-live",
-            "OPENCLAW_LIVE_OPENAI_KEY=sk-openai-live",
-            "OPENCLAW_GATEWAY_TOKEN=attacker-token",
-            "OPENCLAW_GATEWAY_PASSWORD=attacker-password",
-            "OPENCLAW_GATEWAY_SECRET=attacker-secret",
+            "MULLUSI_LIVE_ANTHROPIC_KEY=sk-ant-live",
+            "MULLUSI_LIVE_ANTHROPIC_KEYS=sk-ant-live-a,sk-ant-live-b",
+            "MULLUSI_LIVE_GEMINI_KEY=sk-gemini-live",
+            "MULLUSI_LIVE_OPENAI_KEY=sk-openai-live",
+            "MULLUSI_GATEWAY_TOKEN=attacker-token",
+            "MULLUSI_GATEWAY_PASSWORD=attacker-password",
+            "MULLUSI_GATEWAY_SECRET=attacker-secret",
           ].join("\n"),
         );
 
@@ -216,13 +216,13 @@ describe("loadDotEnv", () => {
         delete process.env.OPENAI_API_KEY;
         delete process.env.OPENAI_API_KEYS;
         delete process.env.OPENAI_API_KEY_SECONDARY;
-        delete process.env.OPENCLAW_LIVE_ANTHROPIC_KEY;
-        delete process.env.OPENCLAW_LIVE_ANTHROPIC_KEYS;
-        delete process.env.OPENCLAW_LIVE_GEMINI_KEY;
-        delete process.env.OPENCLAW_LIVE_OPENAI_KEY;
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-        delete process.env.OPENCLAW_GATEWAY_SECRET;
+        delete process.env.MULLUSI_LIVE_ANTHROPIC_KEY;
+        delete process.env.MULLUSI_LIVE_ANTHROPIC_KEYS;
+        delete process.env.MULLUSI_LIVE_GEMINI_KEY;
+        delete process.env.MULLUSI_LIVE_OPENAI_KEY;
+        delete process.env.MULLUSI_GATEWAY_TOKEN;
+        delete process.env.MULLUSI_GATEWAY_PASSWORD;
+        delete process.env.MULLUSI_GATEWAY_SECRET;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
@@ -232,78 +232,78 @@ describe("loadDotEnv", () => {
         expect(process.env.OPENAI_API_KEY).toBeUndefined();
         expect(process.env.OPENAI_API_KEYS).toBeUndefined();
         expect(process.env.OPENAI_API_KEY_SECONDARY).toBeUndefined();
-        expect(process.env.OPENCLAW_LIVE_ANTHROPIC_KEY).toBeUndefined();
-        expect(process.env.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBeUndefined();
-        expect(process.env.OPENCLAW_LIVE_GEMINI_KEY).toBeUndefined();
-        expect(process.env.OPENCLAW_LIVE_OPENAI_KEY).toBeUndefined();
-        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-        expect(process.env.OPENCLAW_GATEWAY_PASSWORD).toBeUndefined();
-        expect(process.env.OPENCLAW_GATEWAY_SECRET).toBeUndefined();
+        expect(process.env.MULLUSI_LIVE_ANTHROPIC_KEY).toBeUndefined();
+        expect(process.env.MULLUSI_LIVE_ANTHROPIC_KEYS).toBeUndefined();
+        expect(process.env.MULLUSI_LIVE_GEMINI_KEY).toBeUndefined();
+        expect(process.env.MULLUSI_LIVE_OPENAI_KEY).toBeUndefined();
+        expect(process.env.MULLUSI_GATEWAY_TOKEN).toBeUndefined();
+        expect(process.env.MULLUSI_GATEWAY_PASSWORD).toBeUndefined();
+        expect(process.env.MULLUSI_GATEWAY_SECRET).toBeUndefined();
       });
     });
   });
 
-  it("blocks OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
+  it("blocks MULLUSI_STATE_DIR from workspace .env even when unset in process env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
-          "OPENCLAW_STATE_DIR=./evil-state\nOPENCLAW_CONFIG_PATH=./evil-config.json\n",
+          "MULLUSI_STATE_DIR=./evil-state\nMULLUSI_CONFIG_PATH=./evil-config.json\n",
         );
 
-        delete process.env.OPENCLAW_STATE_DIR;
-        delete process.env.OPENCLAW_CONFIG_PATH;
+        delete process.env.MULLUSI_STATE_DIR;
+        delete process.env.MULLUSI_CONFIG_PATH;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
-        expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+        expect(process.env.MULLUSI_STATE_DIR).toBeUndefined();
+        expect(process.env.MULLUSI_CONFIG_PATH).toBeUndefined();
       });
     });
   });
 
-  it("blocks path-override vars (OPENCLAW_AGENT_DIR, OPENCLAW_BUNDLED_PLUGINS_DIR, PI_CODING_AGENT_DIR, OPENCLAW_OAUTH_DIR) from workspace .env", async () => {
+  it("blocks path-override vars (MULLUSI_AGENT_DIR, MULLUSI_BUNDLED_PLUGINS_DIR, PI_CODING_AGENT_DIR, MULLUSI_OAUTH_DIR) from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
         const bundledPluginsDir = path.join(base, "attacker-bundled");
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
-            "OPENCLAW_AGENT_DIR=./evil-agent",
-            `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
+            "MULLUSI_AGENT_DIR=./evil-agent",
+            `MULLUSI_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
             "PI_CODING_AGENT_DIR=./evil-coding",
-            "OPENCLAW_OAUTH_DIR=./evil-oauth",
+            "MULLUSI_OAUTH_DIR=./evil-oauth",
           ].join("\n"),
         );
 
-        delete process.env.OPENCLAW_AGENT_DIR;
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+        delete process.env.MULLUSI_AGENT_DIR;
+        delete process.env.MULLUSI_BUNDLED_PLUGINS_DIR;
         delete process.env.PI_CODING_AGENT_DIR;
-        delete process.env.OPENCLAW_OAUTH_DIR;
+        delete process.env.MULLUSI_OAUTH_DIR;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
-        expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
+        expect(process.env.MULLUSI_AGENT_DIR).toBeUndefined();
+        expect(process.env.MULLUSI_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
+        expect(process.env.MULLUSI_OAUTH_DIR).toBeUndefined();
       });
     });
   });
 
-  it("blocks OPENCLAW_TEST_TAILSCALE_BINARY from workspace .env", async () => {
+  it("blocks MULLUSI_TEST_TAILSCALE_BINARY from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
-          "OPENCLAW_TEST_TAILSCALE_BINARY=/tmp/attacker-tailscale\n",
+          "MULLUSI_TEST_TAILSCALE_BINARY=/tmp/attacker-tailscale\n",
         );
 
-        delete process.env.OPENCLAW_TEST_TAILSCALE_BINARY;
+        delete process.env.MULLUSI_TEST_TAILSCALE_BINARY;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
-        expect(process.env.OPENCLAW_TEST_TAILSCALE_BINARY).toBeUndefined();
+        expect(process.env.MULLUSI_TEST_TAILSCALE_BINARY).toBeUndefined();
       });
     });
   });
@@ -314,18 +314,18 @@ describe("loadDotEnv", () => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
-            "OPENCLAW_PINNED_PYTHON=./attacker-python",
-            "OPENCLAW_PINNED_WRITE_PYTHON=./attacker-write-python",
+            "MULLUSI_PINNED_PYTHON=./attacker-python",
+            "MULLUSI_PINNED_WRITE_PYTHON=./attacker-write-python",
           ].join("\n"),
         );
 
-        delete process.env.OPENCLAW_PINNED_PYTHON;
-        delete process.env.OPENCLAW_PINNED_WRITE_PYTHON;
+        delete process.env.MULLUSI_PINNED_PYTHON;
+        delete process.env.MULLUSI_PINNED_WRITE_PYTHON;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
-        expect(process.env.OPENCLAW_PINNED_PYTHON).toBeUndefined();
-        expect(process.env.OPENCLAW_PINNED_WRITE_PYTHON).toBeUndefined();
+        expect(process.env.MULLUSI_PINNED_PYTHON).toBeUndefined();
+        expect(process.env.MULLUSI_PINNED_WRITE_PYTHON).toBeUndefined();
       });
     });
   });
@@ -336,21 +336,21 @@ describe("loadDotEnv", () => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
-            "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
-            "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
-            "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
+            "MULLUSI_BUNDLED_HOOKS_DIR=./attacker-hooks",
+            "MULLUSI_BUNDLED_PLUGINS_DIR=./attacker-plugins",
+            "MULLUSI_BUNDLED_SKILLS_DIR=./attacker-skills",
           ].join("\n"),
         );
 
-        delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+        delete process.env.MULLUSI_BUNDLED_HOOKS_DIR;
+        delete process.env.MULLUSI_BUNDLED_PLUGINS_DIR;
+        delete process.env.MULLUSI_BUNDLED_SKILLS_DIR;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
-        expect(process.env.OPENCLAW_BUNDLED_HOOKS_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_SKILLS_DIR).toBeUndefined();
+        expect(process.env.MULLUSI_BUNDLED_HOOKS_DIR).toBeUndefined();
+        expect(process.env.MULLUSI_BUNDLED_PLUGINS_DIR).toBeUndefined();
+        expect(process.env.MULLUSI_BUNDLED_SKILLS_DIR).toBeUndefined();
       });
     });
   });
@@ -363,22 +363,22 @@ describe("loadDotEnv", () => {
           [
             "ANTHROPIC_BASE_URL=https://trusted.example.com/v1",
             "HTTP_PROXY=http://proxy.test:8080",
-            "OPENCLAW_PINNED_PYTHON=/trusted/python",
-            "OPENCLAW_PINNED_WRITE_PYTHON=/trusted/write-python",
+            "MULLUSI_PINNED_PYTHON=/trusted/python",
+            "MULLUSI_PINNED_WRITE_PYTHON=/trusted/write-python",
           ].join("\n"),
         );
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.HTTP_PROXY;
-        delete process.env.OPENCLAW_PINNED_PYTHON;
-        delete process.env.OPENCLAW_PINNED_WRITE_PYTHON;
+        delete process.env.MULLUSI_PINNED_PYTHON;
+        delete process.env.MULLUSI_PINNED_WRITE_PYTHON;
 
         loadDotEnv({ quiet: true });
 
         expect(process.env.ANTHROPIC_BASE_URL).toBe("https://trusted.example.com/v1");
         expect(process.env.HTTP_PROXY).toBe("http://proxy.test:8080");
-        expect(process.env.OPENCLAW_PINNED_PYTHON).toBe("/trusted/python");
-        expect(process.env.OPENCLAW_PINNED_WRITE_PYTHON).toBe("/trusted/write-python");
+        expect(process.env.MULLUSI_PINNED_PYTHON).toBe("/trusted/python");
+        expect(process.env.MULLUSI_PINNED_WRITE_PYTHON).toBe("/trusted/write-python");
       });
     });
   });
@@ -395,13 +395,13 @@ describe("loadDotEnv", () => {
             "OPENAI_API_KEY=sk-openai-trusted-key",
             "OPENAI_API_KEYS=sk-openai-a,sk-openai-b",
             "OPENAI_API_KEY_SECONDARY=sk-openai-secondary",
-            "OPENCLAW_LIVE_ANTHROPIC_KEY=sk-ant-live",
-            "OPENCLAW_LIVE_ANTHROPIC_KEYS=sk-ant-live-a,sk-ant-live-b",
-            "OPENCLAW_LIVE_GEMINI_KEY=sk-gemini-live",
-            "OPENCLAW_LIVE_OPENAI_KEY=sk-openai-live",
-            "OPENCLAW_GATEWAY_TOKEN=trusted-token",
-            "OPENCLAW_GATEWAY_PASSWORD=trusted-password",
-            "OPENCLAW_GATEWAY_SECRET=trusted-secret",
+            "MULLUSI_LIVE_ANTHROPIC_KEY=sk-ant-live",
+            "MULLUSI_LIVE_ANTHROPIC_KEYS=sk-ant-live-a,sk-ant-live-b",
+            "MULLUSI_LIVE_GEMINI_KEY=sk-gemini-live",
+            "MULLUSI_LIVE_OPENAI_KEY=sk-openai-live",
+            "MULLUSI_GATEWAY_TOKEN=trusted-token",
+            "MULLUSI_GATEWAY_PASSWORD=trusted-password",
+            "MULLUSI_GATEWAY_SECRET=trusted-secret",
           ].join("\n"),
         );
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
@@ -411,13 +411,13 @@ describe("loadDotEnv", () => {
         delete process.env.OPENAI_API_KEY;
         delete process.env.OPENAI_API_KEYS;
         delete process.env.OPENAI_API_KEY_SECONDARY;
-        delete process.env.OPENCLAW_LIVE_ANTHROPIC_KEY;
-        delete process.env.OPENCLAW_LIVE_ANTHROPIC_KEYS;
-        delete process.env.OPENCLAW_LIVE_GEMINI_KEY;
-        delete process.env.OPENCLAW_LIVE_OPENAI_KEY;
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-        delete process.env.OPENCLAW_GATEWAY_SECRET;
+        delete process.env.MULLUSI_LIVE_ANTHROPIC_KEY;
+        delete process.env.MULLUSI_LIVE_ANTHROPIC_KEYS;
+        delete process.env.MULLUSI_LIVE_GEMINI_KEY;
+        delete process.env.MULLUSI_LIVE_OPENAI_KEY;
+        delete process.env.MULLUSI_GATEWAY_TOKEN;
+        delete process.env.MULLUSI_GATEWAY_PASSWORD;
+        delete process.env.MULLUSI_GATEWAY_SECRET;
 
         loadDotEnv({ quiet: true });
 
@@ -427,13 +427,13 @@ describe("loadDotEnv", () => {
         expect(process.env.OPENAI_API_KEY).toBe("sk-openai-trusted-key");
         expect(process.env.OPENAI_API_KEYS).toBe("sk-openai-a,sk-openai-b");
         expect(process.env.OPENAI_API_KEY_SECONDARY).toBe("sk-openai-secondary");
-        expect(process.env.OPENCLAW_LIVE_ANTHROPIC_KEY).toBe("sk-ant-live");
-        expect(process.env.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBe("sk-ant-live-a,sk-ant-live-b");
-        expect(process.env.OPENCLAW_LIVE_GEMINI_KEY).toBe("sk-gemini-live");
-        expect(process.env.OPENCLAW_LIVE_OPENAI_KEY).toBe("sk-openai-live");
-        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("trusted-token");
-        expect(process.env.OPENCLAW_GATEWAY_PASSWORD).toBe("trusted-password");
-        expect(process.env.OPENCLAW_GATEWAY_SECRET).toBe("trusted-secret");
+        expect(process.env.MULLUSI_LIVE_ANTHROPIC_KEY).toBe("sk-ant-live");
+        expect(process.env.MULLUSI_LIVE_ANTHROPIC_KEYS).toBe("sk-ant-live-a,sk-ant-live-b");
+        expect(process.env.MULLUSI_LIVE_GEMINI_KEY).toBe("sk-gemini-live");
+        expect(process.env.MULLUSI_LIVE_OPENAI_KEY).toBe("sk-openai-live");
+        expect(process.env.MULLUSI_GATEWAY_TOKEN).toBe("trusted-token");
+        expect(process.env.MULLUSI_GATEWAY_PASSWORD).toBe("trusted-password");
+        expect(process.env.MULLUSI_GATEWAY_SECRET).toBe("trusted-secret");
       });
     });
   });
@@ -442,7 +442,7 @@ describe("loadDotEnv", () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
         const evilStateDir = path.join(base, "evil-state");
-        await writeEnvFile(path.join(cwdDir, ".env"), "OPENCLAW_STATE_DIR=./evil-state\n");
+        await writeEnvFile(path.join(cwdDir, ".env"), "MULLUSI_STATE_DIR=./evil-state\n");
         await writeEnvFile(path.join(stateDir, ".env"), "SAFE_KEY=trusted-global\n");
         await writeEnvFile(path.join(evilStateDir, ".env"), "SAFE_KEY=evil-global\n");
 
@@ -451,7 +451,7 @@ describe("loadDotEnv", () => {
 
         loadDotEnv({ quiet: true });
 
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
+        expect(process.env.MULLUSI_STATE_DIR).toBe(stateDir);
         expect(process.env.SAFE_KEY).toBe("trusted-global");
       });
     });
@@ -459,19 +459,19 @@ describe("loadDotEnv", () => {
 });
 
 describe("loadCliDotEnv", () => {
-  it("blocks OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
+  it("blocks MULLUSI_STATE_DIR from workspace .env even when unset in process env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
-        await writeEnvFile(path.join(cwdDir, ".env"), "OPENCLAW_STATE_DIR=./evil-state\n");
+        await writeEnvFile(path.join(cwdDir, ".env"), "MULLUSI_STATE_DIR=./evil-state\n");
 
         // Delete the fixture-provided value so the blocking must come from
         // the workspace blocklist, not the "already set" skip.
-        delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.MULLUSI_STATE_DIR;
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
         loadCliDotEnv({ quiet: true });
 
-        expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+        expect(process.env.MULLUSI_STATE_DIR).toBeUndefined();
       });
     });
   });
@@ -480,11 +480,11 @@ describe("loadCliDotEnv", () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
         process.env.HOME = base;
-        const defaultStateDir = path.join(base, ".openclaw");
-        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+        const defaultStateDir = path.join(base, ".mullusi");
+        process.env.MULLUSI_STATE_DIR = defaultStateDir;
         await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
         await writeEnvFile(
-          path.join(base, ".config", "openclaw", "gateway.env"),
+          path.join(base, ".config", "mullusi", "gateway.env"),
           "BAR=from-gateway\n",
         );
 
@@ -500,14 +500,14 @@ describe("loadCliDotEnv", () => {
     });
   });
 
-  it("does not load gateway.env when OPENCLAW_STATE_DIR is explicitly set", async () => {
+  it("does not load gateway.env when MULLUSI_STATE_DIR is explicitly set", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
         const customStateDir = path.join(base, "custom-state");
         process.env.HOME = base;
-        process.env.OPENCLAW_STATE_DIR = customStateDir;
+        process.env.MULLUSI_STATE_DIR = customStateDir;
         await writeEnvFile(
-          path.join(base, ".config", "openclaw", "gateway.env"),
+          path.join(base, ".config", "mullusi", "gateway.env"),
           "FOO=from-gateway\n",
         );
 
@@ -517,7 +517,7 @@ describe("loadCliDotEnv", () => {
         loadCliDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBeUndefined();
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(customStateDir);
+        expect(process.env.MULLUSI_STATE_DIR).toBe(customStateDir);
         expect(process.env.BAR).toBeUndefined();
       });
     });
@@ -525,12 +525,12 @@ describe("loadCliDotEnv", () => {
 
   it("keeps the legacy state-dir fallback for CLI dotenv loading", async () => {
     await withIsolatedEnvAndCwd(async () => {
-      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-legacy-"));
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-dotenv-legacy-"));
       const cwdDir = path.join(base, "cwd");
-      const legacyStateDir = path.join(base, ".clawdbot");
+      const legacyStateDir = path.join(base, ".mullusi");
       process.env.HOME = base;
-      delete process.env.OPENCLAW_STATE_DIR;
-      delete process.env.OPENCLAW_TEST_FAST;
+      delete process.env.MULLUSI_STATE_DIR;
+      delete process.env.MULLUSI_TEST_FAST;
       await fs.mkdir(cwdDir, { recursive: true });
       await writeEnvFile(path.join(legacyStateDir, ".env"), "LEGACY_ONLY=from-legacy\n");
 
@@ -549,22 +549,22 @@ describe("loadCliDotEnv", () => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
-            "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
-            "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
-            "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
+            "MULLUSI_BUNDLED_HOOKS_DIR=./attacker-hooks",
+            "MULLUSI_BUNDLED_PLUGINS_DIR=./attacker-plugins",
+            "MULLUSI_BUNDLED_SKILLS_DIR=./attacker-skills",
           ].join("\n"),
         );
 
-        delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+        delete process.env.MULLUSI_BUNDLED_HOOKS_DIR;
+        delete process.env.MULLUSI_BUNDLED_PLUGINS_DIR;
+        delete process.env.MULLUSI_BUNDLED_SKILLS_DIR;
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
         loadCliDotEnv({ quiet: true });
 
-        expect(process.env.OPENCLAW_BUNDLED_HOOKS_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_SKILLS_DIR).toBeUndefined();
+        expect(process.env.MULLUSI_BUNDLED_HOOKS_DIR).toBeUndefined();
+        expect(process.env.MULLUSI_BUNDLED_PLUGINS_DIR).toBeUndefined();
+        expect(process.env.MULLUSI_BUNDLED_SKILLS_DIR).toBeUndefined();
       });
     });
   });
@@ -577,9 +577,9 @@ describe("loadCliDotEnv", () => {
           path.join(cwdDir, ".env"),
           [
             "SAFE_KEY=from-cwd",
-            "OPENCLAW_STATE_DIR=./evil-state",
-            "OPENCLAW_CONFIG_PATH=./evil-config.json",
-            `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
+            "MULLUSI_STATE_DIR=./evil-state",
+            "MULLUSI_CONFIG_PATH=./evil-config.json",
+            `MULLUSI_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
             "NODE_OPTIONS=--require ./evil.js",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
             "UV_PYTHON=./attacker-python",
@@ -590,8 +590,8 @@ describe("loadCliDotEnv", () => {
 
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.SAFE_KEY;
-        delete process.env.OPENCLAW_CONFIG_PATH;
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+        delete process.env.MULLUSI_CONFIG_PATH;
+        delete process.env.MULLUSI_BUNDLED_PLUGINS_DIR;
         delete process.env.NODE_OPTIONS;
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.UV_PYTHON;
@@ -602,9 +602,9 @@ describe("loadCliDotEnv", () => {
 
         expect(process.env.SAFE_KEY).toBe("from-cwd");
         expect(process.env.BAR).toBe("from-global");
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
-        expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
+        expect(process.env.MULLUSI_STATE_DIR).toBe(stateDir);
+        expect(process.env.MULLUSI_CONFIG_PATH).toBeUndefined();
+        expect(process.env.MULLUSI_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.NODE_OPTIONS).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
         expect(process.env.UV_PYTHON).toBeUndefined();

@@ -6,7 +6,7 @@ import {
   isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
   type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-policy";
+} from "mullusi/plugin-sdk/ssrf-policy";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =

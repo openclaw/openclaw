@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 
 const { transcribeAudioFileFromRuntime } = vi.hoisted(() => {
   const transcribeAudioFileFromRuntime = vi.fn();
@@ -22,12 +22,12 @@ describe("transcribeAudioFile", () => {
 
     const result = await transcribeAudioFile({
       filePath: "/tmp/note.mp3",
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
     });
 
     expect(transcribeAudioFileFromRuntime).toHaveBeenCalledWith({
       filePath: "/tmp/note.mp3",
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
     });
     expect(result).toEqual({ text: "hello" });
   });
@@ -37,7 +37,7 @@ describe("transcribeAudioFile", () => {
 
     const result = await transcribeAudioFile({
       filePath: "/tmp/missing.wav",
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
     });
 
     expect(result).toEqual({ text: undefined });
@@ -46,7 +46,7 @@ describe("transcribeAudioFile", () => {
   it("propagates helper errors", async () => {
     const cfg = {
       tools: { media: { audio: { timeoutSeconds: 10 } } },
-    } as unknown as OpenClawConfig;
+    } as unknown as MullusiConfig;
     transcribeAudioFileFromRuntime.mockRejectedValue(new Error("boom"));
 
     await expect(

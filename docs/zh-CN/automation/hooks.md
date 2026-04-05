@@ -15,14 +15,14 @@ x-i18n:
 
 # Hooks
 
-Hooks 提供了一个可扩展的事件驱动系统，用于在响应智能体命令和事件时自动执行操作。Hooks 会从目录中自动发现，并且可以通过 CLI 命令进行管理，方式与 OpenClaw 中的 Skills 类似。
+Hooks 提供了一个可扩展的事件驱动系统，用于在响应智能体命令和事件时自动执行操作。Hooks 会从目录中自动发现，并且可以通过 CLI 命令进行管理，方式与 Mullusi 中的 Skills 类似。
 
 ## 熟悉基础
 
 Hooks 是在某些事情发生时运行的小脚本。它们有两种类型：
 
 - **Hooks**（本页）：当智能体事件触发时，在 Gateway 网关内运行，例如 `/new`、`/reset`、`/stop` 或生命周期事件。
-- **Webhooks**：外部 HTTP webhook，可让其他系统在 OpenClaw 中触发工作。请参阅 [Webhook Hooks](/automation/webhook)，或使用 `openclaw webhooks` 获取 Gmail 辅助命令。
+- **Webhooks**：外部 HTTP webhook，可让其他系统在 Mullusi 中触发工作。请参阅 [Webhook Hooks](/automation/webhook)，或使用 `mullusi webhooks` 获取 Gmail 辅助命令。
 
 Hooks 也可以打包在插件中；请参阅 [Plugins](/tools/plugin#plugin-hooks)。
 
@@ -42,54 +42,54 @@ Hooks 系统允许你：
 - 当发出 `/new` 时，将会话上下文保存到 memory
 - 记录所有命令以供审计
 - 在智能体生命周期事件上触发自定义自动化
-- 在不修改核心代码的情况下扩展 OpenClaw 的行为
+- 在不修改核心代码的情况下扩展 Mullusi 的行为
 
 ## 入门指南
 
 ### 内置 Hooks
 
-OpenClaw 自带四个会被自动发现的内置 hook：
+Mullusi 自带四个会被自动发现的内置 hook：
 
-- **💾 session-memory**：当你发出 `/new` 时，将会话上下文保存到你的智能体工作区（默认是 `~/.openclaw/workspace/memory/`）
+- **💾 session-memory**：当你发出 `/new` 时，将会话上下文保存到你的智能体工作区（默认是 `~/.mullusi/workspace/memory/`）
 - **📎 bootstrap-extra-files**：在 `agent:bootstrap` 期间，从已配置的 glob/路径模式中注入额外的工作区引导文件
-- **📝 command-logger**：将所有命令事件记录到 `~/.openclaw/logs/commands.log`
+- **📝 command-logger**：将所有命令事件记录到 `~/.mullusi/logs/commands.log`
 - **🚀 boot-md**：当 Gateway 网关启动时运行 `BOOT.md`（需要启用内部 hooks）
 
 列出可用 hooks：
 
 ```bash
-openclaw hooks list
+mullusi hooks list
 ```
 
 启用一个 hook：
 
 ```bash
-openclaw hooks enable session-memory
+mullusi hooks enable session-memory
 ```
 
 检查 hook 状态：
 
 ```bash
-openclaw hooks check
+mullusi hooks check
 ```
 
 获取详细信息：
 
 ```bash
-openclaw hooks info session-memory
+mullusi hooks info session-memory
 ```
 
 ### 新手引导
 
-在新手引导期间（`openclaw onboard`），系统会提示你启用推荐的 hooks。向导会自动发现符合条件的 hooks 并供你选择。
+在新手引导期间（`mullusi onboard`），系统会提示你启用推荐的 hooks。向导会自动发现符合条件的 hooks 并供你选择。
 
 ## Hook 发现
 
 Hooks 会从三个目录中自动发现（按优先级顺序）：
 
 1. **工作区 hooks**：`<workspace>/hooks/`（每个智能体单独配置，优先级最高）
-2. **托管 hooks**：`~/.openclaw/hooks/`（用户安装，在各工作区之间共享）
-3. **内置 hooks**：`<openclaw>/dist/hooks/bundled/`（随 OpenClaw 一起提供）
+2. **托管 hooks**：`~/.mullusi/hooks/`（用户安装，在各工作区之间共享）
+3. **内置 hooks**：`<mullusi>/dist/hooks/bundled/`（随 Mullusi 一起提供）
 
 托管 hook 目录既可以是 **单个 hook**，也可以是 **hook 包**（包目录）。
 
@@ -103,16 +103,16 @@ my-hook/
 
 ## Hook 包（npm/归档）
 
-Hook 包是标准的 npm 包，它们通过 `package.json` 中的 `openclaw.hooks` 导出一个或多个 hook。使用以下命令安装它们：
+Hook 包是标准的 npm 包，它们通过 `package.json` 中的 `mullusi.hooks` 导出一个或多个 hook。使用以下命令安装它们：
 
 ```bash
-openclaw hooks install <path-or-spec>
+mullusi hooks install <path-or-spec>
 ```
 
 npm spec 仅支持注册表形式（包名 + 可选的精确版本或 dist-tag）。
 Git/URL/file spec 和 semver 范围会被拒绝。
 
-裸 spec 和 `@latest` 会保持在稳定轨道上。如果 npm 将其中任意一种解析为预发布版本，OpenClaw 会停止并要求你通过预发布标签（例如 `@beta`/`@rc`）或精确的预发布版本显式选择加入。
+裸 spec 和 `@latest` 会保持在稳定轨道上。如果 npm 将其中任意一种解析为预发布版本，Mullusi 会停止并要求你通过预发布标签（例如 `@beta`/`@rc`）或精确的预发布版本显式选择加入。
 
 `package.json` 示例：
 
@@ -120,17 +120,17 @@ Git/URL/file spec 和 semver 范围会被拒绝。
 {
   "name": "@acme/my-hooks",
   "version": "0.1.0",
-  "openclaw": {
+  "mullusi": {
     "hooks": ["./hooks/my-hook", "./hooks/other-hook"]
   }
 }
 ```
 
 每个条目都指向一个包含 `HOOK.md` 和 `handler.ts`（或 `index.ts`）的 hook 目录。
-Hook 包可以携带依赖；它们会安装到 `~/.openclaw/hooks/<id>` 下。
-每个 `openclaw.hooks` 条目在解析符号链接后都必须保持在包目录内部；超出目录范围的条目会被拒绝。
+Hook 包可以携带依赖；它们会安装到 `~/.mullusi/hooks/<id>` 下。
+每个 `mullusi.hooks` 条目在解析符号链接后都必须保持在包目录内部；超出目录范围的条目会被拒绝。
 
-安全说明：`openclaw hooks install` 会使用 `npm install --ignore-scripts` 安装依赖
+安全说明：`mullusi hooks install` 会使用 `npm install --ignore-scripts` 安装依赖
 （不运行生命周期脚本）。请保持 hook 包依赖树为“纯 JS/TS”，并避免依赖 `postinstall` 构建的包。
 
 ## Hook 结构
@@ -143,9 +143,9 @@ Hook 包可以携带依赖；它们会安装到 `~/.openclaw/hooks/<id>` 下。
 ---
 name: my-hook
 description: "关于此 hook 功能的简短描述"
-homepage: https://docs.openclaw.ai/automation/hooks#my-hook
+homepage: https://docs.mullusi.com/automation/hooks#my-hook
 metadata:
-  { "openclaw": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
+  { "mullusi": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
 ---
 
 # My Hook
@@ -169,7 +169,7 @@ metadata:
 
 ### 元数据字段
 
-`metadata.openclaw` 对象支持：
+`metadata.mullusi` 对象支持：
 
 - **`emoji`**：CLI 显示用 emoji（例如 `"💾"`）
 - **`events`**：要监听的事件数组（例如 `["command:new", "command:reset"]`）
@@ -228,7 +228,7 @@ export default myHandler;
     senderId?: string,
     workspaceDir?: string,
     bootstrapFiles?: WorkspaceBootstrapFile[],
-    cfg?: OpenClawConfig,
+    cfg?: MullusiConfig,
     // 消息事件（完整详情见“消息事件”部分）：
     from?: string,             // message:received
     to?: string,               // message:sent
@@ -362,7 +362,7 @@ export default handler;
 
 ### 工具结果 Hooks（插件 API）
 
-这些 hooks 不是事件流监听器；它们允许插件在 OpenClaw 持久化工具结果之前同步调整工具结果。
+这些 hooks 不是事件流监听器；它们允许插件在 Mullusi 持久化工具结果之前同步调整工具结果。
 
 - **`tool_result_persist`**：在工具结果写入会话转录之前对其进行转换。必须是同步的；返回更新后的工具结果负载，或返回 `undefined` 以保持原样。请参阅 [Agent Loop](/concepts/agent-loop)。
 
@@ -386,13 +386,13 @@ export default handler;
 ### 1. 选择位置
 
 - **工作区 hooks**（`<workspace>/hooks/`）：每个智能体单独配置，优先级最高
-- **托管 hooks**（`~/.openclaw/hooks/`）：跨工作区共享
+- **托管 hooks**（`~/.mullusi/hooks/`）：跨工作区共享
 
 ### 2. 创建目录结构
 
 ```bash
-mkdir -p ~/.openclaw/hooks/my-hook
-cd ~/.openclaw/hooks/my-hook
+mkdir -p ~/.mullusi/hooks/my-hook
+cd ~/.mullusi/hooks/my-hook
 ```
 
 ### 3. 创建 HOOK.md
@@ -401,7 +401,7 @@ cd ~/.openclaw/hooks/my-hook
 ---
 name: my-hook
 description: "执行某些有用的事情"
-metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
+metadata: { "mullusi": { "emoji": "🎯", "events": ["command:new"] } }
 ---
 
 # My Custom Hook
@@ -428,10 +428,10 @@ export default handler;
 
 ```bash
 # 验证 hook 已被发现
-openclaw hooks list
+mullusi hooks list
 
 # 启用它
-openclaw hooks enable my-hook
+mullusi hooks enable my-hook
 
 # 重启你的 Gateway 网关进程（macOS 上重启菜单栏应用，或重启你的开发进程）
 
@@ -527,46 +527,46 @@ Hooks 可以具有自定义配置：
 
 ```bash
 # 列出所有 hooks
-openclaw hooks list
+mullusi hooks list
 
 # 仅显示符合条件的 hooks
-openclaw hooks list --eligible
+mullusi hooks list --eligible
 
 # 详细输出（显示缺失的要求）
-openclaw hooks list --verbose
+mullusi hooks list --verbose
 
 # JSON 输出
-openclaw hooks list --json
+mullusi hooks list --json
 ```
 
 ### Hook 信息
 
 ```bash
 # 显示某个 hook 的详细信息
-openclaw hooks info session-memory
+mullusi hooks info session-memory
 
 # JSON 输出
-openclaw hooks info session-memory --json
+mullusi hooks info session-memory --json
 ```
 
 ### 检查资格
 
 ```bash
 # 显示资格摘要
-openclaw hooks check
+mullusi hooks check
 
 # JSON 输出
-openclaw hooks check --json
+mullusi hooks check --json
 ```
 
 ### 启用/禁用
 
 ```bash
 # 启用一个 hook
-openclaw hooks enable session-memory
+mullusi hooks enable session-memory
 
 # 禁用一个 hook
-openclaw hooks disable command-logger
+mullusi hooks disable command-logger
 ```
 
 ## 内置 hook 参考
@@ -579,7 +579,7 @@ openclaw hooks disable command-logger
 
 **要求**：必须配置 `workspace.dir`
 
-**输出**：`<workspace>/memory/YYYY-MM-DD-slug.md`（默认是 `~/.openclaw/workspace`）
+**输出**：`<workspace>/memory/YYYY-MM-DD-slug.md`（默认是 `~/.mullusi/workspace`）
 
 **它的作用**：
 
@@ -607,7 +607,7 @@ openclaw hooks disable command-logger
 **启用**：
 
 ```bash
-openclaw hooks enable session-memory
+mullusi hooks enable session-memory
 ```
 
 ### bootstrap-extra-files
@@ -648,7 +648,7 @@ openclaw hooks enable session-memory
 **启用**：
 
 ```bash
-openclaw hooks enable bootstrap-extra-files
+mullusi hooks enable bootstrap-extra-files
 ```
 
 ### command-logger
@@ -659,7 +659,7 @@ openclaw hooks enable bootstrap-extra-files
 
 **要求**：无
 
-**输出**：`~/.openclaw/logs/commands.log`
+**输出**：`~/.mullusi/logs/commands.log`
 
 **它的作用**：
 
@@ -678,19 +678,19 @@ openclaw hooks enable bootstrap-extra-files
 
 ```bash
 # 查看最近的命令
-tail -n 20 ~/.openclaw/logs/commands.log
+tail -n 20 ~/.mullusi/logs/commands.log
 
 # 使用 jq 美化输出
-cat ~/.openclaw/logs/commands.log | jq .
+cat ~/.mullusi/logs/commands.log | jq .
 
 # 按操作筛选
-grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
+grep '"action":"new"' ~/.mullusi/logs/commands.log | jq .
 ```
 
 **启用**：
 
 ```bash
-openclaw hooks enable command-logger
+mullusi hooks enable command-logger
 ```
 
 ### boot-md
@@ -711,7 +711,7 @@ openclaw hooks enable command-logger
 **启用**：
 
 ```bash
-openclaw hooks enable boot-md
+mullusi hooks enable boot-md
 ```
 
 ## 最佳实践
@@ -768,13 +768,13 @@ const handler: HookHandler = async (event) => {
 如果可能，请在元数据中指定精确事件：
 
 ```yaml
-metadata: { "openclaw": { "events": ["command:new"] } } # 精确
+metadata: { "mullusi": { "events": ["command:new"] } } # 精确
 ```
 
 而不是：
 
 ```yaml
-metadata: { "openclaw": { "events": ["command"] } } # 通用 - 开销更大
+metadata: { "mullusi": { "events": ["command"] } } # 通用 - 开销更大
 ```
 
 ## 调试
@@ -795,7 +795,7 @@ Registered hook: boot-md -> gateway:startup
 列出所有已发现的 hooks：
 
 ```bash
-openclaw hooks list --verbose
+mullusi hooks list --verbose
 ```
 
 ### 检查注册情况
@@ -814,7 +814,7 @@ const handler: HookHandler = async (event) => {
 检查某个 hook 为什么不符合条件：
 
 ```bash
-openclaw hooks info my-hook
+mullusi hooks info my-hook
 ```
 
 查看输出中缺失的要求。
@@ -830,7 +830,7 @@ openclaw hooks info my-hook
 ./scripts/clawlog.sh -f
 
 # 其他平台
-tail -f ~/.openclaw/gateway.log
+tail -f ~/.mullusi/gateway.log
 ```
 
 ### 直接测试 Hooks
@@ -910,21 +910,21 @@ Gateway 网关启动
 1. 检查目录结构：
 
    ```bash
-   ls -la ~/.openclaw/hooks/my-hook/
+   ls -la ~/.mullusi/hooks/my-hook/
    # 应显示：HOOK.md, handler.ts
    ```
 
 2. 验证 HOOK.md 格式：
 
    ```bash
-   cat ~/.openclaw/hooks/my-hook/HOOK.md
+   cat ~/.mullusi/hooks/my-hook/HOOK.md
    # 应包含带有 name 和 metadata 的 YAML frontmatter
    ```
 
 3. 列出所有已发现的 hooks：
 
    ```bash
-   openclaw hooks list
+   mullusi hooks list
    ```
 
 ### Hook 不符合条件
@@ -932,7 +932,7 @@ Gateway 网关启动
 检查要求：
 
 ```bash
-openclaw hooks info my-hook
+mullusi hooks info my-hook
 ```
 
 查看是否缺少：
@@ -947,7 +947,7 @@ openclaw hooks info my-hook
 1. 验证 hook 已启用：
 
    ```bash
-   openclaw hooks list
+   mullusi hooks list
    # 应在已启用的 hooks 旁显示 ✓
    ```
 
@@ -995,8 +995,8 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 1. 创建 hook 目录：
 
    ```bash
-   mkdir -p ~/.openclaw/hooks/my-hook
-   mv ./hooks/handlers/my-handler.ts ~/.openclaw/hooks/my-hook/handler.ts
+   mkdir -p ~/.mullusi/hooks/my-hook
+   mv ./hooks/handlers/my-handler.ts ~/.mullusi/hooks/my-hook/handler.ts
    ```
 
 2. 创建 HOOK.md：
@@ -1005,7 +1005,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
    ---
    name: my-hook
    description: "我的自定义 hook"
-   metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
+   metadata: { "mullusi": { "emoji": "🎯", "events": ["command:new"] } }
    ---
 
    # My Hook
@@ -1031,7 +1031,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 4. 验证并重启你的 Gateway 网关进程：
 
    ```bash
-   openclaw hooks list
+   mullusi hooks list
    # 应显示：🎯 my-hook ✓
    ```
 
@@ -1046,6 +1046,6 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 ## 另请参阅
 
 - [CLI Reference: hooks](/cli/hooks)
-- [Bundled Hooks README](https://github.com/openclaw/openclaw/tree/main/src/hooks/bundled)
+- [Bundled Hooks README](https://github.com/mullusi/mullusi/tree/main/src/hooks/bundled)
 - [Webhook Hooks](/automation/webhook)
 - [Configuration](/gateway/configuration#hooks)

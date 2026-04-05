@@ -11,13 +11,13 @@ export {
   readStringParam,
   type PollInput,
   type ReplyPayload,
-} from "openclaw/plugin-sdk/core";
+} from "mullusi/plugin-sdk/core";
 export type {
   ChannelPlugin,
   NormalizedLocation,
   PluginRuntime,
   RuntimeLogger,
-} from "openclaw/plugin-sdk/core";
+} from "mullusi/plugin-sdk/core";
 export type {
   BaseProbeResult,
   ChannelDirectoryEntry,
@@ -30,25 +30,25 @@ export type {
   ChannelResolveKind,
   ChannelResolveResult,
   ChannelToolSend,
-} from "openclaw/plugin-sdk/channel-contract";
-export { formatZonedTimestamp } from "openclaw/plugin-sdk/core";
-export { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
-export type { ChannelSetupInput } from "openclaw/plugin-sdk/core";
+} from "mullusi/plugin-sdk/channel-contract";
+export { formatZonedTimestamp } from "mullusi/plugin-sdk/core";
+export { normalizeOptionalAccountId } from "mullusi/plugin-sdk/account-id";
+export type { ChannelSetupInput } from "mullusi/plugin-sdk/core";
 export type {
-  OpenClawConfig,
+  MullusiConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
-} from "openclaw/plugin-sdk/config-runtime";
-export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-runtime";
-export type { WizardPrompter } from "openclaw/plugin-sdk/core";
-export type { SecretInput } from "openclaw/plugin-sdk/secret-input";
+} from "mullusi/plugin-sdk/config-runtime";
+export type { GroupToolPolicyConfig } from "mullusi/plugin-sdk/config-runtime";
+export type { WizardPrompter } from "mullusi/plugin-sdk/core";
+export type { SecretInput } from "mullusi/plugin-sdk/secret-input";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/config-runtime";
 export {
   addWildcardAllowFrom,
   formatDocsLink,
@@ -57,8 +57,8 @@ export {
   moveSingleAccountChannelSectionToDefaultAccount,
   promptAccountId,
   promptChannelAccessConfig,
-} from "openclaw/plugin-sdk/setup";
-export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+} from "mullusi/plugin-sdk/setup";
+export type { RuntimeEnv } from "mullusi/plugin-sdk/runtime";
 export {
   assertHttpUrlTargetsPrivateNetwork,
   closeDispatcher,
@@ -68,29 +68,29 @@ export {
   ssrfPolicyFromAllowPrivateNetwork,
   type LookupFn,
   type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-export { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+} from "mullusi/plugin-sdk/ssrf-runtime";
+export { dispatchReplyFromConfigWithSettledDispatcher } from "mullusi/plugin-sdk/inbound-reply-dispatch";
 export {
   ensureConfiguredAcpBindingReady,
   resolveConfiguredAcpBindingRecord,
-} from "openclaw/plugin-sdk/core";
+} from "mullusi/plugin-sdk/core";
 export {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
   PAIRING_APPROVED_MESSAGE,
-} from "openclaw/plugin-sdk/channel-status";
+} from "mullusi/plugin-sdk/channel-status";
 export {
   getSessionBindingService,
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
-} from "openclaw/plugin-sdk/conversation-runtime";
-export { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
-export { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
-export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-export { normalizePollInput } from "openclaw/plugin-sdk/media-runtime";
-export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+} from "mullusi/plugin-sdk/conversation-runtime";
+export { resolveOutboundSendDep } from "mullusi/plugin-sdk/outbound-runtime";
+export { resolveAgentIdFromSessionKey } from "mullusi/plugin-sdk/routing";
+export { chunkTextForOutbound } from "mullusi/plugin-sdk/text-chunking";
+export { createChannelReplyPipeline } from "mullusi/plugin-sdk/channel-reply-pipeline";
+export { loadOutboundMediaFromUrl } from "mullusi/plugin-sdk/outbound-media";
+export { normalizePollInput } from "mullusi/plugin-sdk/media-runtime";
+export { writeJsonFileAtomically } from "mullusi/plugin-sdk/json-store";
 // resolveMatrixAccountStringValues already comes from plugin-sdk/matrix.
 // Re-exporting auth-precedence here makes Jiti try to define the same export twice.
 

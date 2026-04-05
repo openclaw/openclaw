@@ -1,1 +1,1 @@
-export { resolveGatewayAuth } from "openclaw/plugin-sdk/browser-support";
+export { resolveGatewayAuth } from "mullusi/plugin-sdk/browser-support";

@@ -1,24 +1,24 @@
 {
-  "name": "@openclaw/whatsapp",
+  "name": "@mullusi/whatsapp",
   "version": "2026.4.4",
-  "description": "OpenClaw WhatsApp channel plugin",
+  "description": "Mullusi WhatsApp channel plugin",
   "type": "module",
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc.9",
     "jimp": "^1.6.0"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "mullusi": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.4"
+    "mullusi": ">=2026.4.4"
   },
   "peerDependenciesMeta": {
-    "openclaw": {
+    "mullusi": {
       "optional": true
     }
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],
@@ -34,7 +34,7 @@
       "systemImage": "message"
     },
     "install": {
-      "npmSpec": "@openclaw/whatsapp",
+      "npmSpec": "@mullusi/whatsapp",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.4"
     },
@@ -42,7 +42,7 @@
       "pluginApi": ">=2026.4.4"
     },
     "build": {
-      "openclawVersion": "2026.4.4"
+      "mullusiVersion": "2026.4.4"
     },
     "release": {
       "publishToClawHub": true,

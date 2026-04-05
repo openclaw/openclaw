@@ -23,7 +23,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
   it("waits for the caller pid before kickstarting launchd", () => {
     const env = {
       HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
+      MULLUSI_PROFILE: "default",
     };
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
 
@@ -37,7 +37,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const [, args] = spawnMock.mock.calls[0] as [string, string[]];
     expect(args[0]).toBe("-c");
-    expect(args[2]).toBe("openclaw-launchd-restart-handoff");
+    expect(args[2]).toBe("mullusi-launchd-restart-handoff");
     expect(args[6]).toBe("9876");
     expect(args[1]).toContain('while kill -0 "$wait_pid" >/dev/null 2>&1; do');
     expect(args[1]).toContain('launchctl kickstart -k "$service_target" >/dev/null 2>&1');

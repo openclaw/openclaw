@@ -7,7 +7,7 @@ import {
   resolveModelRefFromString,
   type ModelRef,
 } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { resolvePluginWebSearchConfig } from "../config/legacy-web-search.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
@@ -251,7 +251,7 @@ function addProviderModelPair(params: {
   params.refs.set(modelKey(normalized.provider, normalized.model), normalized);
 }
 
-export function collectConfiguredModelPricingRefs(config: OpenClawConfig): ModelRef[] {
+export function collectConfiguredModelPricingRefs(config: MullusiConfig): ModelRef[] {
   const refs = new Map<string, ModelRef>();
   const aliasIndex = buildModelAliasIndex({
     cfg: config,
@@ -376,7 +376,7 @@ function resolveCatalogPricingForRef(params: {
   return undefined;
 }
 
-function scheduleRefresh(params: { config: OpenClawConfig; fetchImpl: typeof fetch }): void {
+function scheduleRefresh(params: { config: MullusiConfig; fetchImpl: typeof fetch }): void {
   clearRefreshTimer();
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
@@ -387,7 +387,7 @@ function scheduleRefresh(params: { config: OpenClawConfig; fetchImpl: typeof fet
 }
 
 export async function refreshGatewayModelPricingCache(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   fetchImpl?: typeof fetch;
 }): Promise<void> {
   if (inFlightRefresh) {
@@ -437,7 +437,7 @@ export async function refreshGatewayModelPricingCache(params: {
 }
 
 export function startGatewayModelPricingRefresh(params: {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   fetchImpl?: typeof fetch;
 }): () => void {
   void refreshGatewayModelPricingCache(params).catch((error: unknown) => {

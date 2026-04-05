@@ -1,5 +1,5 @@
-import { getRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
+import { getRuntimeConfigSnapshot, type MullusiConfig } from "../../config/config.js";
 
-export function resolveSkillRuntimeConfig(config?: OpenClawConfig): OpenClawConfig | undefined {
+export function resolveSkillRuntimeConfig(config?: MullusiConfig): MullusiConfig | undefined {
   return getRuntimeConfigSnapshot() ?? config;
 }

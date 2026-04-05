@@ -41,8 +41,8 @@ function parsePayload(element: HTMLScriptElement): DiffViewerPayload {
 function getCards(): Array<{ host: HTMLElement; payload: DiffViewerPayload }> {
   const cards: Array<{ host: HTMLElement; payload: DiffViewerPayload }> = [];
   for (const card of document.querySelectorAll<HTMLElement>(".oc-diff-card")) {
-    const host = card.querySelector<HTMLElement>("[data-openclaw-diff-host]");
-    const payloadNode = card.querySelector<HTMLScriptElement>("[data-openclaw-diff-payload]");
+    const host = card.querySelector<HTMLElement>("[data-mullusi-diff-host]");
+    const payloadNode = card.querySelector<HTMLScriptElement>("[data-mullusi-diff-payload]");
     if (!host || !payloadNode) {
       continue;
     }
@@ -335,9 +335,9 @@ async function hydrateViewer(): Promise<void> {
 async function main(): Promise<void> {
   try {
     await hydrateViewer();
-    document.documentElement.dataset.openclawDiffsReady = "true";
+    document.documentElement.dataset.mullusiDiffsReady = "true";
   } catch (error) {
-    document.documentElement.dataset.openclawDiffsError = "true";
+    document.documentElement.dataset.mullusiDiffsError = "true";
     console.error("Failed to hydrate diff viewer", error);
   }
 }

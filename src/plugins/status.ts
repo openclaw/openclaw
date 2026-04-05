@@ -2,7 +2,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { normalizeOpenClawVersionBase } from "../config/version.js";
+import { normalizeMullusiVersionBase } from "../config/version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -13,7 +13,7 @@ import {
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadMullusiPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
@@ -145,8 +145,8 @@ function resolveReportedPluginVersion(
     return plugin.version;
   }
   return (
-    normalizeOpenClawVersionBase(resolveCompatibilityHostVersion(env)) ??
-    normalizeOpenClawVersionBase(plugin.version) ??
+    normalizeMullusiVersionBase(resolveCompatibilityHostVersion(env)) ??
+    normalizeMullusiVersionBase(plugin.version) ??
     plugin.version
   );
 }
@@ -190,7 +190,7 @@ function buildPluginReport(
     pluginIds: bundledProviderIds,
   });
 
-  const registry = loadOpenClawPlugins({
+  const registry = loadMullusiPlugins({
     config: runtimeCompatConfig,
     activationSourceConfig: rawConfig,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,

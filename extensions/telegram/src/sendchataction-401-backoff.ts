@@ -3,7 +3,7 @@ import {
   computeBackoff,
   sleepWithAbort,
   type BackoffPolicy,
-} from "openclaw/plugin-sdk/runtime-env";
+} from "mullusi/plugin-sdk/runtime-env";
 
 export type TelegramSendChatActionLogger = (message: string) => void;
 
@@ -119,7 +119,7 @@ export function createTelegramSendChatActionHandler({
           logger(
             `CRITICAL: sendChatAction suspended after ${consecutive401Failures} consecutive 401 errors. ` +
               `Bot token is likely invalid. Telegram may DELETE the bot if requests continue. ` +
-              `Replace the token and restart: openclaw channels restart telegram`,
+              `Replace the token and restart: mullusi channels restart telegram`,
           );
         } else {
           logger(

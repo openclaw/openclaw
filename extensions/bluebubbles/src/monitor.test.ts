@@ -23,7 +23,7 @@ import {
   resetBlueBubblesParticipantContactNameCacheForTest,
   setBlueBubblesParticipantContactDepsForTest,
 } from "./participant-contact-names.js";
-import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import type { MullusiConfig, PluginRuntime } from "./runtime-api.js";
 import {
   createBlueBubblesMonitorTestRuntime,
   EMPTY_DISPATCH_RESULT,
@@ -231,7 +231,7 @@ describe("BlueBubbles webhook monitor", () => {
 
   function setupWebhookTarget(params?: {
     account?: ReturnType<typeof createMockAccount>;
-    config?: OpenClawConfig;
+    config?: MullusiConfig;
     core?: PluginRuntime;
   }) {
     const registration = trackWebhookRegistrationForTest(
@@ -1013,7 +1013,7 @@ describe("BlueBubbles webhook monitor", () => {
               contextVisibility: "allowlist",
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
       });
 
       const payload = createTimestampedNewMessagePayloadForTest({
@@ -1050,7 +1050,7 @@ describe("BlueBubbles webhook monitor", () => {
               contextVisibility: "allowlist_quote",
             },
           },
-        } as OpenClawConfig,
+        } as MullusiConfig,
       });
 
       const payload = createTimestampedNewMessagePayloadForTest({

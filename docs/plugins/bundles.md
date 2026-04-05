@@ -1,20 +1,20 @@
 ---
-summary: "Install and use Codex, Claude, and Cursor bundles as OpenClaw plugins"
+summary: "Install and use Codex, Claude, and Cursor bundles as Mullusi plugins"
 read_when:
   - You want to install a Codex, Claude, or Cursor-compatible bundle
-  - You need to understand how OpenClaw maps bundle content into native features
+  - You need to understand how Mullusi maps bundle content into native features
   - You are debugging bundle detection or missing capabilities
 title: "Plugin Bundles"
 ---
 
 # Plugin Bundles
 
-OpenClaw can install plugins from three external ecosystems: **Codex**, **Claude**,
+Mullusi can install plugins from three external ecosystems: **Codex**, **Claude**,
 and **Cursor**. These are called **bundles** — content and metadata packs that
-OpenClaw maps into native features like skills, hooks, and MCP tools.
+Mullusi maps into native features like skills, hooks, and MCP tools.
 
 <Info>
-  Bundles are **not** the same as native OpenClaw plugins. Native plugins run
+  Bundles are **not** the same as native Mullusi plugins. Native plugins run
   in-process and can register any capability. Bundles are content packs with
   selective feature mapping and a narrower trust boundary.
 </Info>
@@ -22,7 +22,7 @@ OpenClaw maps into native features like skills, hooks, and MCP tools.
 ## Why bundles exist
 
 Many useful plugins are published in Codex, Claude, or Cursor format. Instead
-of requiring authors to rewrite them as native OpenClaw plugins, OpenClaw
+of requiring authors to rewrite them as native Mullusi plugins, Mullusi
 detects these formats and maps their supported content into the native feature
 set. This means you can install a Claude command pack or a Codex skill bundle
 and use it immediately.
@@ -33,22 +33,22 @@ and use it immediately.
   <Step title="Install from a directory, archive, or marketplace">
     ```bash
     # Local directory
-    openclaw plugins install ./my-bundle
+    mullusi plugins install ./my-bundle
 
     # Archive
-    openclaw plugins install ./my-bundle.tgz
+    mullusi plugins install ./my-bundle.tgz
 
     # Claude marketplace
-    openclaw plugins marketplace list <marketplace-name>
-    openclaw plugins install <plugin-name>@<marketplace-name>
+    mullusi plugins marketplace list <marketplace-name>
+    mullusi plugins install <plugin-name>@<marketplace-name>
     ```
 
   </Step>
 
   <Step title="Verify detection">
     ```bash
-    openclaw plugins list
-    openclaw plugins inspect <id>
+    mullusi plugins list
+    mullusi plugins inspect <id>
     ```
 
     Bundles show as `Format: bundle` with a subtype of `codex`, `claude`, or `cursor`.
@@ -57,7 +57,7 @@ and use it immediately.
 
   <Step title="Restart and use">
     ```bash
-    openclaw gateway restart
+    mullusi gateway restart
     ```
 
     Mapped features (skills, hooks, MCP tools, LSP defaults) are available in the next session.
@@ -65,34 +65,34 @@ and use it immediately.
   </Step>
 </Steps>
 
-## What OpenClaw maps from bundles
+## What Mullusi maps from bundles
 
-Not every bundle feature runs in OpenClaw today. Here is what works and what
+Not every bundle feature runs in Mullusi today. Here is what works and what
 is detected but not yet wired.
 
 ### Supported now
 
 | Feature       | How it maps                                                                                 | Applies to     |
 | ------------- | ------------------------------------------------------------------------------------------- | -------------- |
-| Skill content | Bundle skill roots load as normal OpenClaw skills                                           | All formats    |
+| Skill content | Bundle skill roots load as normal Mullusi skills                                           | All formats    |
 | Commands      | `commands/` and `.cursor/commands/` treated as skill roots                                  | Claude, Cursor |
-| Hook packs    | OpenClaw-style `HOOK.md` + `handler.ts` layouts                                             | Codex          |
+| Hook packs    | Mullusi-style `HOOK.md` + `handler.ts` layouts                                             | Codex          |
 | MCP tools     | Bundle MCP config merged into embedded Pi settings; supported stdio and HTTP servers loaded | All formats    |
 | LSP servers   | Claude `.lsp.json` and manifest-declared `lspServers` merged into embedded Pi LSP defaults  | Claude         |
 | Settings      | Claude `settings.json` imported as embedded Pi defaults                                     | Claude         |
 
 #### Skill content
 
-- bundle skill roots load as normal OpenClaw skill roots
+- bundle skill roots load as normal Mullusi skill roots
 - Claude `commands` roots are treated as additional skill roots
 - Cursor `.cursor/commands` roots are treated as additional skill roots
 
-This means Claude markdown command files work through the normal OpenClaw skill
+This means Claude markdown command files work through the normal Mullusi skill
 loader. Cursor command markdown works through the same path.
 
 #### Hook packs
 
-- bundle hook roots work **only** when they use the normal OpenClaw hook-pack
+- bundle hook roots work **only** when they use the normal Mullusi hook-pack
   layout. Today this is primarily the Codex-compatible case:
   - `HOOK.md`
   - `handler.ts` or `handler.js`
@@ -100,9 +100,9 @@ loader. Cursor command markdown works through the same path.
 #### MCP for Pi
 
 - enabled bundles can contribute MCP server config
-- OpenClaw merges bundle MCP config into the effective embedded Pi settings as
+- Mullusi merges bundle MCP config into the effective embedded Pi settings as
   `mcpServers`
-- OpenClaw exposes supported bundle MCP tools during embedded Pi agent turns by
+- Mullusi exposes supported bundle MCP tools during embedded Pi agent turns by
   launching stdio servers or connecting to HTTP servers
 - project-local Pi settings still apply after bundle defaults, so workspace
   settings can override bundle MCP entries when needed
@@ -148,7 +148,7 @@ MCP servers can use stdio or HTTP transport:
 }
 ```
 
-- `transport` may be set to `"streamable-http"` or `"sse"`; when omitted, OpenClaw uses `sse`
+- `transport` may be set to `"streamable-http"` or `"sse"`; when omitted, Mullusi uses `sse`
 - only `http:` and `https:` URL schemes are allowed
 - `headers` values support `${ENV_VAR}` interpolation
 - a server entry with both `command` and `url` is rejected
@@ -159,7 +159,7 @@ MCP servers can use stdio or HTTP transport:
 
 ##### Tool naming
 
-OpenClaw registers bundle MCP tools with provider-safe names in the form
+Mullusi registers bundle MCP tools with provider-safe names in the form
 `serverName__toolName`. For example, a server keyed `"vigil-harbor"` exposing a
 `memory_search` tool registers as `vigil-harbor__memory_search`.
 
@@ -175,7 +175,7 @@ OpenClaw registers bundle MCP tools with provider-safe names in the form
 
 - Claude `settings.json` is imported as default embedded Pi settings when the
   bundle is enabled
-- OpenClaw sanitizes shell override keys before applying them
+- Mullusi sanitizes shell override keys before applying them
 
 Sanitized keys:
 
@@ -185,14 +185,14 @@ Sanitized keys:
 #### Embedded Pi LSP
 
 - enabled Claude bundles can contribute LSP server config
-- OpenClaw loads `.lsp.json` plus any manifest-declared `lspServers` paths
+- Mullusi loads `.lsp.json` plus any manifest-declared `lspServers` paths
 - bundle LSP config is merged into the effective embedded Pi LSP defaults
 - only supported stdio-backed LSP servers are runnable today; unsupported
-  transports still show up in `openclaw plugins inspect <id>`
+  transports still show up in `mullusi plugins inspect <id>`
 
 ### Detected but not executed
 
-These are recognized and shown in diagnostics, but OpenClaw does not run them:
+These are recognized and shown in diagnostics, but Mullusi does not run them:
 
 - Claude `agents`, `hooks.json` automation, `outputStyles`
 - Cursor `.cursor/agents`, `.cursor/hooks.json`, `.cursor/rules`
@@ -206,7 +206,7 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
 
     Optional content: `skills/`, `hooks/`, `.mcp.json`, `.app.json`
 
-    Codex bundles fit OpenClaw best when they use skill roots and OpenClaw-style
+    Codex bundles fit Mullusi best when they use skill roots and Mullusi-style
     hook-pack directories (`HOOK.md` + `handler.ts`).
 
   </Accordion>
@@ -241,19 +241,19 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
 
 ## Detection precedence
 
-OpenClaw checks for native plugin format first:
+Mullusi checks for native plugin format first:
 
-1. `openclaw.plugin.json` or valid `package.json` with `openclaw.extensions` — treated as **native plugin**
+1. `mullusi.plugin.json` or valid `package.json` with `mullusi.extensions` — treated as **native plugin**
 2. Bundle markers (`.codex-plugin/`, `.claude-plugin/`, or default Claude/Cursor layout) — treated as **bundle**
 
-If a directory contains both, OpenClaw uses the native path. This prevents
+If a directory contains both, Mullusi uses the native path. This prevents
 dual-format packages from being partially installed as bundles.
 
 ## Security
 
 Bundles have a narrower trust boundary than native plugins:
 
-- OpenClaw does **not** load arbitrary bundle runtime modules in-process
+- Mullusi does **not** load arbitrary bundle runtime modules in-process
 - Skills and hook-pack paths must stay inside the plugin root (boundary-checked)
 - Settings files are read with the same boundary checks
 - Supported stdio MCP servers may be launched as subprocesses
@@ -265,7 +265,7 @@ bundles as trusted content for the features they do expose.
 
 <AccordionGroup>
   <Accordion title="Bundle is detected but capabilities do not run">
-    Run `openclaw plugins inspect <id>`. If a capability is listed but marked as
+    Run `mullusi plugins inspect <id>`. If a capability is listed but marked as
     not wired, that is a product limit — not a broken install.
   </Accordion>
 
@@ -275,13 +275,13 @@ bundles as trusted content for the features they do expose.
   </Accordion>
 
   <Accordion title="Claude settings do not apply">
-    Only embedded Pi settings from `settings.json` are supported. OpenClaw does
+    Only embedded Pi settings from `settings.json` are supported. Mullusi does
     not treat bundle settings as raw config patches.
   </Accordion>
 
   <Accordion title="Claude hooks do not execute">
     `hooks/hooks.json` is detect-only. If you need runnable hooks, use the
-    OpenClaw hook-pack layout or ship a native plugin.
+    Mullusi hook-pack layout or ship a native plugin.
   </Accordion>
 </AccordionGroup>
 

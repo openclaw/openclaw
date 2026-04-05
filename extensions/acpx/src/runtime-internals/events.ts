@@ -1,4 +1,4 @@
-import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { safeParseJsonWithSchema } from "mullusi/plugin-sdk/extension-shared";
 import { z } from "zod";
 import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "../../runtime-api.js";
 import {

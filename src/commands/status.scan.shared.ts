@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import type { OpenClawConfig } from "../config/types.js";
+import type { MullusiConfig } from "../config/types.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
@@ -35,7 +35,7 @@ export type GatewayProbeSnapshot = {
   gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
 };
 
-export function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
+export function hasExplicitMemorySearchConfig(cfg: MullusiConfig, agentId: string): boolean {
   if (
     cfg.agents?.defaults &&
     Object.prototype.hasOwnProperty.call(cfg.agents.defaults, "memorySearch")
@@ -48,7 +48,7 @@ export function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: stri
   );
 }
 
-export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStatus {
+export function resolveMemoryPluginStatus(cfg: MullusiConfig): MemoryPluginStatus {
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   if (!pluginsEnabled) {
     return { enabled: false, slot: null, reason: "plugins disabled" };
@@ -61,7 +61,7 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
 }
 
 export async function resolveGatewayProbeSnapshot(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   opts: { timeoutMs?: number; all?: boolean; skipProbe?: boolean };
 }): Promise<GatewayProbeSnapshot> {
   const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: params.cfg });
@@ -116,12 +116,12 @@ export function buildTailscaleHttpsUrl(params: {
 }
 
 export async function resolveSharedMemoryStatusSnapshot(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentStatus: { defaultId?: string | null };
   memoryPlugin: MemoryPluginStatus;
-  resolveMemoryConfig: (cfg: OpenClawConfig, agentId: string) => { store: { path: string } } | null;
+  resolveMemoryConfig: (cfg: MullusiConfig, agentId: string) => { store: { path: string } } | null;
   getMemorySearchManager: (params: {
-    cfg: OpenClawConfig;
+    cfg: MullusiConfig;
     agentId: string;
     purpose: "status";
   }) => Promise<{

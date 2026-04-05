@@ -21,9 +21,9 @@ provider id `opencode-go` so upstream per-model routing stays correct.
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice opencode-go
+mullusi onboard --auth-choice opencode-go
 # or non-interactive
-openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
+mullusi onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 ```
 
 ## Config snippet
@@ -37,7 +37,7 @@ openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 
 ## Routing behavior
 
-OpenClaw handles per-model routing automatically when the model ref uses `opencode-go/...`.
+Mullusi handles per-model routing automatically when the model ref uses `opencode-go/...`.
 
 ## Notes
 

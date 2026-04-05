@@ -86,7 +86,7 @@ Agent: Reads standing orders → executes steps → reports results
 The cron job prompt should reference the standing order rather than duplicating it:
 
 ```bash
-openclaw cron add \
+mullusi cron add \
   --name daily-inbox-triage \
   --cron "0 8 * * 1-5" \
   --tz America/New_York \

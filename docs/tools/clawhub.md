@@ -1,5 +1,5 @@
 ---
-summary: "ClawHub guide: public registry, native OpenClaw install flows, and ClawHub CLI workflows"
+summary: "ClawHub guide: public registry, native Mullusi install flows, and ClawHub CLI workflows"
 read_when:
   - Introducing ClawHub to new users
   - Installing, searching, or publishing skills or plugins
@@ -9,52 +9,52 @@ title: "ClawHub"
 
 # ClawHub
 
-ClawHub is the public registry for **OpenClaw skills and plugins**.
+ClawHub is the public registry for **Mullusi skills and plugins**.
 
-- Use native `openclaw` commands to search/install/update skills and install
+- Use native `mullusi` commands to search/install/update skills and install
   plugins from ClawHub.
 - Use the separate `clawhub` CLI when you need registry auth, publish, delete,
   undelete, or sync workflows.
 
 Site: [clawhub.ai](https://clawhub.ai)
 
-## Native OpenClaw flows
+## Native Mullusi flows
 
 Skills:
 
 ```bash
-openclaw skills search "calendar"
-openclaw skills install <skill-slug>
-openclaw skills update --all
+mullusi skills search "calendar"
+mullusi skills install <skill-slug>
+mullusi skills update --all
 ```
 
 Plugins:
 
 ```bash
-openclaw plugins install clawhub:<package>
-openclaw plugins update --all
+mullusi plugins install clawhub:<package>
+mullusi plugins update --all
 ```
 
 Bare npm-safe plugin specs are also tried against ClawHub before npm:
 
 ```bash
-openclaw plugins install openclaw-codex-app-server
+mullusi plugins install mullusi-codex-app-server
 ```
 
-Native `openclaw` commands install into your active workspace and persist source
+Native `mullusi` commands install into your active workspace and persist source
 metadata so later `update` calls can stay on ClawHub.
 
 Plugin installs validate advertised `pluginApi` and `minGatewayVersion`
 compatibility before archive install runs, so incompatible hosts fail closed
 early instead of partially installing the package.
 
-`openclaw plugins install clawhub:...` only accepts installable plugin families.
-If a ClawHub package is actually a skill, OpenClaw stops and points you at
-`openclaw skills install <slug>` instead.
+`mullusi plugins install clawhub:...` only accepts installable plugin families.
+If a ClawHub package is actually a skill, Mullusi stops and points you at
+`mullusi skills install <slug>` instead.
 
 ## What ClawHub is
 
-- A public registry for OpenClaw skills and plugins.
+- A public registry for Mullusi skills and plugins.
 - A versioned store of skill bundles and metadata.
 - A discovery surface for search, tags, and usage signals.
 
@@ -63,7 +63,7 @@ If a ClawHub package is actually a skill, OpenClaw stops and points you at
 1. A user publishes a skill bundle (files + metadata).
 2. ClawHub stores the bundle, parses metadata, and assigns a version.
 3. The registry indexes the skill for search and discovery.
-4. Users browse, download, and install skills in OpenClaw.
+4. Users browse, download, and install skills in Mullusi.
 
 ## What you can do
 
@@ -75,7 +75,7 @@ If a ClawHub package is actually a skill, OpenClaw stops and points you at
 
 ## Who this is for (beginner-friendly)
 
-If you want to add new capabilities to your OpenClaw agent, ClawHub is the easiest way to find and install skills. You do not need to know how the backend works. You can:
+If you want to add new capabilities to your Mullusi agent, ClawHub is the easiest way to find and install skills. You do not need to know how the backend works. You can:
 
 - Search for skills by plain language.
 - Install a skill into your workspace.
@@ -85,10 +85,10 @@ If you want to add new capabilities to your OpenClaw agent, ClawHub is the easie
 ## Quick start (non-technical)
 
 1. Search for something you need:
-   - `openclaw skills search "calendar"`
+   - `mullusi skills search "calendar"`
 2. Install a skill:
-   - `openclaw skills install <skill-slug>`
-3. Start a new OpenClaw session so it picks up the new skill.
+   - `mullusi skills install <skill-slug>`
+3. Start a new Mullusi session so it picks up the new skill.
 4. If you want to publish or manage registry auth, install the separate
    `clawhub` CLI too.
 
@@ -104,29 +104,29 @@ npm i -g clawhub
 pnpm add -g clawhub
 ```
 
-## How it fits into OpenClaw
+## How it fits into Mullusi
 
-Native `openclaw skills install` installs into the active workspace `skills/`
-directory. `openclaw plugins install clawhub:...` records a normal managed
+Native `mullusi skills install` installs into the active workspace `skills/`
+directory. `mullusi plugins install clawhub:...` records a normal managed
 plugin install plus ClawHub source metadata for updates.
 
 Anonymous ClawHub plugin installs also fail closed for private packages.
-Community or other non-official channels can still install, but OpenClaw warns
+Community or other non-official channels can still install, but Mullusi warns
 so operators can review source and verification before enabling them.
 
 The separate `clawhub` CLI also installs skills into `./skills` under your
-current working directory. If an OpenClaw workspace is configured, `clawhub`
+current working directory. If an Mullusi workspace is configured, `clawhub`
 falls back to that workspace unless you override `--workdir` (or
-`CLAWHUB_WORKDIR`). OpenClaw loads workspace skills from `<workspace>/skills`
+`CLAWHUB_WORKDIR`). Mullusi loads workspace skills from `<workspace>/skills`
 and will pick them up in the **next** session. If you already use
-`~/.openclaw/skills` or bundled skills, workspace skills take precedence.
+`~/.mullusi/skills` or bundled skills, workspace skills take precedence.
 
 For more detail on how skills are loaded, shared, and gated, see
 [Skills](/tools/skills).
 
 ## Skill system overview
 
-A skill is a versioned bundle of files that teaches OpenClaw how to perform a
+A skill is a versioned bundle of files that teaches Mullusi how to perform a
 specific task. Each publish creates a new version, and the registry keeps a
 history of versions so users can audit changes.
 
@@ -165,14 +165,14 @@ Reporting and moderation:
 - Moderators can view hidden skills, unhide them, delete them, or ban users.
 - Abusing the report feature can result in account bans.
 
-Interested in becoming a moderator? Ask in the OpenClaw Discord and contact a
+Interested in becoming a moderator? Ask in the Mullusi Discord and contact a
 moderator or maintainer.
 
 ## CLI commands and parameters
 
 Global options (apply to all commands):
 
-- `--workdir <dir>`: Working directory (default: current dir; falls back to OpenClaw workspace).
+- `--workdir <dir>`: Working directory (default: current dir; falls back to Mullusi workspace).
 - `--dir <dir>`: Skills directory, relative to workdir (default: `skills`).
 - `--site <url>`: Site base URL (browser login).
 - `--registry <url>`: Registry API base URL.
@@ -289,21 +289,21 @@ clawhub package publish your-org/your-plugin@v1.0.0
 clawhub package publish https://github.com/your-org/your-plugin
 ```
 
-Code plugins must include the required OpenClaw metadata in `package.json`:
+Code plugins must include the required Mullusi metadata in `package.json`:
 
 ```json
 {
-  "name": "@myorg/openclaw-my-plugin",
+  "name": "@myorg/mullusi-my-plugin",
   "version": "1.0.0",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": ["./index.ts"],
     "compat": {
       "pluginApi": ">=2026.3.24-beta.2",
       "minGatewayVersion": "2026.3.24-beta.2"
     },
     "build": {
-      "openclawVersion": "2026.3.24-beta.2",
+      "mullusiVersion": "2026.3.24-beta.2",
       "pluginSdkVersion": "2026.3.24-beta.2"
     }
   }
@@ -324,7 +324,7 @@ Updates compare the local skill contents to registry versions using a content ha
 
 ### Sync scanning and fallback roots
 
-`clawhub sync` scans your current workdir first. If no skills are found, it falls back to known legacy locations (for example `~/openclaw/skills` and `~/.openclaw/skills`). This is designed to find older skill installs without extra flags.
+`clawhub sync` scans your current workdir first. If no skills are found, it falls back to known legacy locations (for example `~/mullusi/skills` and `~/.mullusi/skills`). This is designed to find older skill installs without extra flags.
 
 ### Storage and lockfile
 

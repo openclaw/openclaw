@@ -2,8 +2,8 @@
 title: "Trusted Proxy Auth"
 summary: "Delegate gateway authentication to a trusted reverse proxy (Pomerium, Caddy, nginx + OAuth)"
 read_when:
-  - Running OpenClaw behind an identity-aware proxy
-  - Setting up Pomerium, Caddy, or nginx with OAuth in front of OpenClaw
+  - Running Mullusi behind an identity-aware proxy
+  - Setting up Pomerium, Caddy, or nginx with OAuth in front of Mullusi
   - Fixing WebSocket 1008 unauthorized errors with reverse proxy setups
   - Deciding where to set HSTS and other HTTP hardening headers
 ---
@@ -16,7 +16,7 @@ read_when:
 
 Use `trusted-proxy` auth mode when:
 
-- You run OpenClaw behind an **identity-aware proxy** (Pomerium, Caddy + OAuth, nginx + oauth2-proxy, Traefik + forward auth)
+- You run Mullusi behind an **identity-aware proxy** (Pomerium, Caddy + OAuth, nginx + oauth2-proxy, Traefik + forward auth)
 - Your proxy handles all authentication and passes user identity via headers
 - You're in a Kubernetes or container environment where the proxy is the only path to the Gateway
 - You're hitting WebSocket `1008 unauthorized` errors because browsers can't pass tokens in WS payloads
@@ -32,8 +32,8 @@ Use `trusted-proxy` auth mode when:
 
 1. Your reverse proxy authenticates users (OAuth, OIDC, SAML, etc.)
 2. Proxy adds a header with the authenticated user identity (e.g., `x-forwarded-user: nick@example.com`)
-3. OpenClaw checks that the request came from a **trusted proxy IP** (configured in `gateway.trustedProxies`)
-4. OpenClaw extracts the user identity from the configured header
+3. Mullusi checks that the request came from a **trusted proxy IP** (configured in `gateway.trustedProxies`)
+4. Mullusi extracts the user identity from the configured header
 5. If everything checks out, the request is authorized
 
 ## Control UI Pairing Behavior
@@ -80,7 +80,7 @@ Important runtime rule:
 
 - Trusted-proxy auth rejects loopback-source requests (`127.0.0.1`, `::1`, loopback CIDRs).
 - Same-host loopback reverse proxies do **not** satisfy trusted-proxy auth.
-- For same-host loopback proxy setups, use token/password auth instead, or route through a non-loopback trusted proxy address that OpenClaw can verify.
+- For same-host loopback proxy setups, use token/password auth instead, or route through a non-loopback trusted proxy address that Mullusi can verify.
 - Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
 
 ### Configuration Reference
@@ -104,7 +104,7 @@ When your reverse proxy handles HTTPS for `https://control.example.com`, set
 
 - Good fit for internet-facing deployments.
 - Keeps certificate + HTTP hardening policy in one place.
-- OpenClaw can stay on loopback HTTP behind the proxy.
+- Mullusi can stay on loopback HTTP behind the proxy.
 
 Example header value:
 
@@ -114,7 +114,7 @@ Strict-Transport-Security: max-age=31536000; includeSubDomains
 
 ### Gateway TLS termination
 
-If OpenClaw itself serves HTTPS directly (no TLS-terminating proxy), set:
+If Mullusi itself serves HTTPS directly (no TLS-terminating proxy), set:
 
 ```json5
 {
@@ -165,8 +165,8 @@ Pomerium config snippet:
 
 ```yaml
 routes:
-  - from: https://openclaw.example.com
-    to: http://openclaw-gateway:18789
+  - from: https://mullusi.example.com
+    to: http://mullusi-gateway:18790
     policy:
       - allow:
           or:
@@ -197,11 +197,11 @@ Caddy with the `caddy-security` plugin can authenticate users and pass identity 
 Caddyfile snippet:
 
 ```
-openclaw.example.com {
+mullusi.example.com {
     authenticate with oauth2_provider
     authorize with policy1
 
-    reverse_proxy openclaw:18789 {
+    reverse_proxy mullusi:18790 {
         header_up X-Forwarded-User {http.auth.user.email}
     }
 }
@@ -233,7 +233,7 @@ location / {
     auth_request /oauth2/auth;
     auth_request_set $user $upstream_http_x_auth_request_email;
 
-    proxy_pass http://openclaw:18789;
+    proxy_pass http://mullusi:18790;
     proxy_set_header X-Auth-Request-Email $user;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
@@ -260,7 +260,7 @@ location / {
 
 ## Mixed token configuration
 
-OpenClaw rejects ambiguous configurations where both a `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) and `trusted-proxy` mode are active at the same time. Mixed token configs can cause loopback requests to silently authenticate on the wrong auth path.
+Mullusi rejects ambiguous configurations where both a `gateway.auth.token` (or `MULLUSI_GATEWAY_TOKEN`) and `trusted-proxy` mode are active at the same time. Mixed token configs can cause loopback requests to silently authenticate on the wrong auth path.
 
 If you see a `mixed_trusted_proxy_token` error on startup:
 
@@ -272,25 +272,25 @@ Loopback trusted-proxy auth also fails closed: same-host callers must supply the
 ## Operator scopes header
 
 Trusted-proxy auth is an **identity-bearing** HTTP mode, so callers may
-optionally declare operator scopes with `x-openclaw-scopes`.
+optionally declare operator scopes with `x-mullusi-scopes`.
 
 Examples:
 
-- `x-openclaw-scopes: operator.read`
-- `x-openclaw-scopes: operator.read,operator.write`
-- `x-openclaw-scopes: operator.admin,operator.write`
+- `x-mullusi-scopes: operator.read`
+- `x-mullusi-scopes: operator.read,operator.write`
+- `x-mullusi-scopes: operator.admin,operator.write`
 
 Behavior:
 
-- When the header is present, OpenClaw honors the declared scope set.
+- When the header is present, Mullusi honors the declared scope set.
 - When the header is present but empty, the request declares **no** operator scopes.
 - When the header is absent, normal identity-bearing HTTP APIs fall back to the standard operator default scope set.
-- Gateway-auth **plugin HTTP routes** are narrower by default: when `x-openclaw-scopes` is absent, their runtime scope falls back to `operator.write`.
+- Gateway-auth **plugin HTTP routes** are narrower by default: when `x-mullusi-scopes` is absent, their runtime scope falls back to `operator.write`.
 - Browser-origin HTTP requests still have to pass `gateway.controlUi.allowedOrigins` (or deliberate Host-header fallback mode) even after trusted-proxy auth succeeds.
 
 Practical rule:
 
-- Send `x-openclaw-scopes` explicitly when you want a trusted-proxy request to
+- Send `x-mullusi-scopes` explicitly when you want a trusted-proxy request to
   be narrower than the defaults, or when a gateway-auth plugin route needs
   something stronger than write scope.
 
@@ -309,7 +309,7 @@ Before enabling trusted-proxy auth, verify:
 
 ## Security Audit
 
-`openclaw security audit` will flag trusted-proxy auth with a **critical** severity finding. This is intentional — it's a reminder that you're delegating security to your proxy setup.
+`mullusi security audit` will flag trusted-proxy auth with a **critical** severity finding. This is intentional — it's a reminder that you're delegating security to your proxy setup.
 
 The audit checks for:
 
@@ -331,7 +331,7 @@ The request didn't come from an IP in `gateway.trustedProxies`. Check:
 
 ### "trusted_proxy_loopback_source"
 
-OpenClaw rejected a loopback-source trusted-proxy request.
+Mullusi rejected a loopback-source trusted-proxy request.
 
 Check:
 
@@ -386,10 +386,10 @@ If you're moving from token auth to trusted-proxy:
 
 1. Configure your proxy to authenticate users and pass headers
 2. Test the proxy setup independently (curl with headers)
-3. Update OpenClaw config with trusted-proxy auth
+3. Update Mullusi config with trusted-proxy auth
 4. Restart the Gateway
 5. Test WebSocket connections from the Control UI
-6. Run `openclaw security audit` and review findings
+6. Run `mullusi security audit` and review findings
 
 ## Related
 

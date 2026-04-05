@@ -1,7 +1,7 @@
 {
-  "name": "@openclaw/discord",
+  "name": "@mullusi/discord",
   "version": "2026.4.4",
-  "description": "OpenClaw Discord channel plugin",
+  "description": "Mullusi Discord channel plugin",
   "type": "module",
   "dependencies": {
     "@buape/carbon": "0.0.0-beta-20260327000044",
@@ -11,17 +11,17 @@
     "opusscript": "^0.1.1"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "mullusi": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.4"
+    "mullusi": ">=2026.4.4"
   },
   "peerDependenciesMeta": {
-    "openclaw": {
+    "mullusi": {
       "optional": true
     }
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],
@@ -38,7 +38,7 @@
       "markdownCapable": true
     },
     "install": {
-      "npmSpec": "@openclaw/discord",
+      "npmSpec": "@mullusi/discord",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.4"
     },
@@ -46,7 +46,7 @@
       "pluginApi": ">=2026.4.4"
     },
     "build": {
-      "openclawVersion": "2026.4.4"
+      "mullusiVersion": "2026.4.4"
     },
     "bundle": {
       "stageRuntimeDependencies": true

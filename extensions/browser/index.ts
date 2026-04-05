@@ -1,8 +1,8 @@
 import {
   definePluginEntry,
-  type OpenClawPluginToolContext,
-  type OpenClawPluginToolFactory,
-} from "openclaw/plugin-sdk/plugin-entry";
+  type MullusiPluginToolContext,
+  type MullusiPluginToolFactory,
+} from "mullusi/plugin-sdk/plugin-entry";
 import {
   createBrowserPluginService,
   createBrowserTool,
@@ -15,12 +15,12 @@ export default definePluginEntry({
   name: "Browser",
   description: "Default browser tool plugin",
   register(api) {
-    api.registerTool(((ctx: OpenClawPluginToolContext) =>
+    api.registerTool(((ctx: MullusiPluginToolContext) =>
       createBrowserTool({
         sandboxBridgeUrl: ctx.browser?.sandboxBridgeUrl,
         allowHostControl: ctx.browser?.allowHostControl,
         agentSessionKey: ctx.sessionKey,
-      })) as OpenClawPluginToolFactory);
+      })) as MullusiPluginToolFactory);
     api.registerCli(({ program }) => registerBrowserCli(program), { commands: ["browser"] });
     api.registerGatewayMethod("browser.request", handleBrowserGatewayRequest, {
       scope: "operator.write",

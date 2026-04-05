@@ -1,8 +1,8 @@
-import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { getReplyFromConfig } from "mullusi/plugin-sdk/reply-runtime";
+import type { MsgContext } from "mullusi/plugin-sdk/reply-runtime";
+import { resolveAgentRoute } from "mullusi/plugin-sdk/routing";
+import { buildGroupHistoryKey } from "mullusi/plugin-sdk/routing";
+import { logVerbose } from "mullusi/plugin-sdk/runtime-env";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
 import { normalizeE164 } from "../../text-runtime.js";
 import { loadConfig } from "../config.runtime.js";
@@ -27,7 +27,7 @@ export function createWebOnMessageHandler(params: {
   echoTracker: EchoTracker;
   backgroundTasks: Set<Promise<unknown>>;
   replyResolver: typeof getReplyFromConfig;
-  replyLogger: ReturnType<(typeof import("openclaw/plugin-sdk/runtime-env"))["getChildLogger"]>;
+  replyLogger: ReturnType<(typeof import("mullusi/plugin-sdk/runtime-env"))["getChildLogger"]>;
   baseMentionConfig: MentionConfig;
   account: { authDir?: string; accountId?: string; selfChatMode?: boolean };
 }) {

@@ -56,7 +56,7 @@ describe("gateway --force helpers", () => {
       err.status = 1; // lsof uses exit 1 for no matches
       throw err;
     });
-    expect(listPortListeners(18789)).toEqual([]);
+    expect(listPortListeners(18790)).toEqual([]);
   });
 
   it("throws when lsof missing", () => {
@@ -65,7 +65,7 @@ describe("gateway --force helpers", () => {
       err.code = "ENOENT";
       throw err;
     });
-    expect(() => listPortListeners(18789)).toThrow(/lsof not found/);
+    expect(() => listPortListeners(18790)).toThrow(/lsof not found/);
   });
 
   it("kills each listener and returns metadata", () => {
@@ -75,7 +75,7 @@ describe("gateway --force helpers", () => {
     const killMock = vi.fn();
     process.kill = killMock;
 
-    const killed = forceFreePort(18789);
+    const killed = forceFreePort(18790);
 
     expect(execFileSync).toHaveBeenCalled();
     expect(killMock).toHaveBeenCalledTimes(2);
@@ -107,7 +107,7 @@ describe("gateway --force helpers", () => {
     const killMock = vi.fn();
     process.kill = killMock;
 
-    const promise = forceFreePortAndWait(18789, {
+    const promise = forceFreePortAndWait(18790, {
       timeoutMs: 500,
       intervalMs: 100,
       sigtermTimeoutMs: 400,
@@ -139,7 +139,7 @@ describe("gateway --force helpers", () => {
     const killMock = vi.fn();
     process.kill = killMock;
 
-    const promise = forceFreePortAndWait(18789, {
+    const promise = forceFreePortAndWait(18790, {
       timeoutMs: 800,
       intervalMs: 100,
       sigtermTimeoutMs: 300,
@@ -162,17 +162,17 @@ describe("gateway --force helpers", () => {
         err.code = "EACCES";
         throw err;
       }
-      return "18789/tcp: 4242\n";
+      return "18790/tcp: 4242\n";
     });
     tryListenOnPortMock.mockResolvedValue(undefined);
 
-    const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
+    const result = await forceFreePortAndWait(18790, { timeoutMs: 500, intervalMs: 100 });
 
     expect(result.escalatedToSigkill).toBe(false);
     expect(result.killed).toEqual<PortProcess[]>([{ pid: 4242 }]);
     expect(execFileSync).toHaveBeenCalledWith(
       "fuser",
-      ["-k", "-TERM", "18789/tcp"],
+      ["-k", "-TERM", "18790/tcp"],
       expect.objectContaining({ encoding: "utf-8" }),
     );
   });
@@ -186,10 +186,10 @@ describe("gateway --force helpers", () => {
         throw err;
       }
       if (args.includes("-TERM")) {
-        return "18789/tcp: 1337\n";
+        return "18790/tcp: 1337\n";
       }
       if (args.includes("-KILL")) {
-        return "18789/tcp: 1337\n";
+        return "18790/tcp: 1337\n";
       }
       return "";
     });
@@ -201,7 +201,7 @@ describe("gateway --force helpers", () => {
       .mockRejectedValueOnce(busyErr)
       .mockResolvedValueOnce(undefined);
 
-    const promise = forceFreePortAndWait(18789, {
+    const promise = forceFreePortAndWait(18790, {
       timeoutMs: 300,
       intervalMs: 100,
       sigtermTimeoutMs: 100,
@@ -213,7 +213,7 @@ describe("gateway --force helpers", () => {
     expect(result.waitedMs).toBe(100);
     expect(execFileSync).toHaveBeenCalledWith(
       "fuser",
-      ["-k", "-KILL", "18789/tcp"],
+      ["-k", "-KILL", "18790/tcp"],
       expect.objectContaining({ encoding: "utf-8" }),
     );
     vi.useRealTimers();
@@ -226,7 +226,7 @@ describe("gateway --force helpers", () => {
       throw err;
     });
 
-    await expect(forceFreePortAndWait(18789, { timeoutMs: 200, intervalMs: 100 })).rejects.toThrow(
+    await expect(forceFreePortAndWait(18790, { timeoutMs: 200, intervalMs: 100 })).rejects.toThrow(
       /fuser not found/i,
     );
   });
@@ -258,12 +258,12 @@ describe("gateway --force helpers (Windows netstat path)", () => {
 
   it("returns empty list when netstat finds no listeners on the port", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(9999, 42));
-    expect(listPortListeners(18789)).toEqual([]);
+    expect(listPortListeners(18790)).toEqual([]);
   });
 
   it("parses PIDs from netstat output correctly", () => {
-    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 99));
-    expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
+    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18790, 42, 99));
+    expect(listPortListeners(18790)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
   });
 
   it("does not incorrectly match a port that is a substring (e.g. 80 vs 8080)", () => {
@@ -272,23 +272,23 @@ describe("gateway --force helpers (Windows netstat path)", () => {
   });
 
   it("deduplicates PIDs that appear multiple times", () => {
-    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 42));
-    expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }]);
+    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18790, 42, 42));
+    expect(listPortListeners(18790)).toEqual<PortProcess[]>([{ pid: 42 }]);
   });
 
   it("throws a descriptive error when netstat fails", () => {
     (execFileSync as unknown as Mock).mockImplementation(() => {
       throw new Error("access denied");
     });
-    expect(() => listPortListeners(18789)).toThrow(/netstat failed/);
+    expect(() => listPortListeners(18790)).toThrow(/netstat failed/);
   });
 
   it("kills Windows listeners and returns metadata", () => {
-    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 99));
+    (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18790, 42, 99));
     const killMock = vi.fn();
     process.kill = killMock;
 
-    const killed = forceFreePort(18789);
+    const killed = forceFreePort(18790);
 
     expect(killMock).toHaveBeenCalledTimes(2);
     expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");

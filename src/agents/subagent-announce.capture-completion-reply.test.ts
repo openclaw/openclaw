@@ -24,16 +24,16 @@ describe("captureSubagentCompletionReply", () => {
   }
 
   beforeAll(async () => {
-    previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
-    process.env.OPENCLAW_TEST_FAST = "1";
+    previousFastTestEnv = process.env.MULLUSI_TEST_FAST;
+    process.env.MULLUSI_TEST_FAST = "1";
   });
 
   afterAll(() => {
     if (previousFastTestEnv === undefined) {
-      delete process.env.OPENCLAW_TEST_FAST;
+      delete process.env.MULLUSI_TEST_FAST;
       return;
     }
-    process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+    process.env.MULLUSI_TEST_FAST = previousFastTestEnv;
   });
 
   beforeEach(async () => {

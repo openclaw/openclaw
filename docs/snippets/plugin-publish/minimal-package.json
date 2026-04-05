@@ -1,15 +1,15 @@
 {
-  "name": "@myorg/openclaw-my-plugin",
+  "name": "@myorg/mullusi-my-plugin",
   "version": "1.0.0",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": ["./index.ts"],
     "compat": {
       "pluginApi": ">=2026.3.24-beta.2",
       "minGatewayVersion": "2026.3.24-beta.2"
     },
     "build": {
-      "openclawVersion": "2026.3.24-beta.2",
+      "mullusiVersion": "2026.3.24-beta.2",
       "pluginSdkVersion": "2026.3.24-beta.2"
     }
   }

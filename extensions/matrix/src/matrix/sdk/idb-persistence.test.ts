@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   drainFileLockStateForTest,
   resetFileLockStateForTest,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "mullusi/plugin-sdk/infra-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
 import {
@@ -35,7 +35,7 @@ describe("Matrix IndexedDB persistence", () => {
   it("persists and restores database contents for the selected prefix", async () => {
     const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
     await seedDatabase({
-      name: "openclaw-matrix-test::matrix-sdk-crypto",
+      name: "mullusi-matrix-test::matrix-sdk-crypto",
       storeName: "sessions",
       records: [{ key: "room-1", value: { session: "abc123" } }],
     });
@@ -47,7 +47,7 @@ describe("Matrix IndexedDB persistence", () => {
 
     await persistIdbToDisk({
       snapshotPath,
-      databasePrefix: "openclaw-matrix-test",
+      databasePrefix: "mullusi-matrix-test",
     });
     expect(fs.existsSync(snapshotPath)).toBe(true);
 
@@ -60,7 +60,7 @@ describe("Matrix IndexedDB persistence", () => {
     expect(restored).toBe(true);
 
     const restoredRecords = await readDatabaseRecords({
-      name: "openclaw-matrix-test::matrix-sdk-crypto",
+      name: "mullusi-matrix-test::matrix-sdk-crypto",
       storeName: "sessions",
     });
     expect(restoredRecords).toEqual([{ key: "room-1", value: { session: "abc123" } }]);
@@ -96,14 +96,14 @@ describe("Matrix IndexedDB persistence", () => {
   it("serializes concurrent persist operations via file lock", async () => {
     const snapshotPath = path.join(tmpDir, "concurrent-persist.json");
     await seedDatabase({
-      name: "openclaw-matrix-test::matrix-sdk-crypto",
+      name: "mullusi-matrix-test::matrix-sdk-crypto",
       storeName: "sessions",
       records: [{ key: "room-1", value: { session: "abc123" } }],
     });
 
     await Promise.all([
-      persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" }),
-      persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" }),
+      persistIdbToDisk({ snapshotPath, databasePrefix: "mullusi-matrix-test" }),
+      persistIdbToDisk({ snapshotPath, databasePrefix: "mullusi-matrix-test" }),
     ]);
 
     expect(fs.existsSync(snapshotPath)).toBe(true);
@@ -116,12 +116,12 @@ describe("Matrix IndexedDB persistence", () => {
   it("releases lock after persist completes", async () => {
     const snapshotPath = path.join(tmpDir, "lock-release.json");
     await seedDatabase({
-      name: "openclaw-matrix-test::matrix-sdk-crypto",
+      name: "mullusi-matrix-test::matrix-sdk-crypto",
       storeName: "sessions",
       records: [{ key: "room-1", value: { session: "abc123" } }],
     });
 
-    await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
+    await persistIdbToDisk({ snapshotPath, databasePrefix: "mullusi-matrix-test" });
 
     const lockPath = `${snapshotPath}.lock`;
     expect(fs.existsSync(lockPath)).toBe(false);
@@ -131,12 +131,12 @@ describe("Matrix IndexedDB persistence", () => {
   it("releases lock after restore completes", async () => {
     const snapshotPath = path.join(tmpDir, "lock-release-restore.json");
     await seedDatabase({
-      name: "openclaw-matrix-test::matrix-sdk-crypto",
+      name: "mullusi-matrix-test::matrix-sdk-crypto",
       storeName: "sessions",
       records: [{ key: "room-1", value: { session: "abc123" } }],
     });
 
-    await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
+    await persistIdbToDisk({ snapshotPath, databasePrefix: "mullusi-matrix-test" });
     await clearAllIndexedDbState();
     await drainFileLockStateForTest();
 

@@ -1,18 +1,18 @@
 ---
 name: acp-router
-description: Route plain-language requests for Pi, Claude Code, Codex, Cursor, Copilot, OpenClaw ACP, OpenCode, Gemini CLI, Qwen, Kiro, Kimi, iFlow, Factory Droid, Kilocode, or ACP harness work into either OpenClaw ACP runtime sessions or direct acpx-driven sessions ("telephone game" flow). For coding-agent thread requests, read this skill first, then use only `sessions_spawn` for thread creation.
+description: Route plain-language requests for Pi, Claude Code, Codex, Cursor, Copilot, Mullusi ACP, OpenCode, Gemini CLI, Qwen, Kiro, Kimi, iFlow, Factory Droid, Kilocode, or ACP harness work into either Mullusi ACP runtime sessions or direct acpx-driven sessions ("telephone game" flow). For coding-agent thread requests, read this skill first, then use only `sessions_spawn` for thread creation.
 user-invocable: false
 ---
 
 # ACP Harness Router
 
-When user intent is "run this in Pi/Claude Code/Codex/Cursor/Copilot/OpenClaw/OpenCode/Gemini/Qwen/Kiro/Kimi/iFlow/Droid/Kilocode (ACP harness)", do not use subagent runtime or PTY scraping. Route through ACP-aware flows.
+When user intent is "run this in Pi/Claude Code/Codex/Cursor/Copilot/Mullusi/OpenCode/Gemini/Qwen/Kiro/Kimi/iFlow/Droid/Kilocode (ACP harness)", do not use subagent runtime or PTY scraping. Route through ACP-aware flows.
 
 ## Intent detection
 
-Trigger this skill when the user asks OpenClaw to:
+Trigger this skill when the user asks Mullusi to:
 
-- run something in Pi / Claude Code / Codex / Cursor / Copilot / OpenClaw / OpenCode / Gemini / Qwen / Kiro / Kimi / iFlow / Droid / Kilocode
+- run something in Pi / Claude Code / Codex / Cursor / Copilot / Mullusi / OpenCode / Gemini / Qwen / Kiro / Kimi / iFlow / Droid / Kilocode
 - continue existing harness work
 - relay instructions to an external coding harness
 - keep an external harness conversation in a thread-like conversation
@@ -20,20 +20,20 @@ Trigger this skill when the user asks OpenClaw to:
 Mandatory preflight for coding-agent thread requests:
 
 - Before creating any thread for ACP harness work, read this skill first in the same turn.
-- After reading, follow `OpenClaw ACP runtime path` below; do not use `message(action="thread-create")` for ACP harness thread spawn.
+- After reading, follow `Mullusi ACP runtime path` below; do not use `message(action="thread-create")` for ACP harness thread spawn.
 
 ## Mode selection
 
 Choose one of these paths:
 
-1. OpenClaw ACP runtime path (default): use `sessions_spawn` / ACP runtime tools.
+1. Mullusi ACP runtime path (default): use `sessions_spawn` / ACP runtime tools.
 2. Direct `acpx` path (telephone game): use `acpx` CLI through `exec` to drive the harness session directly.
 
 Use direct `acpx` when one of these is true:
 
 - user explicitly asks for direct `acpx` driving
 - ACP runtime/plugin path is unavailable or unhealthy
-- the task is "just relay prompts to harness" and no OpenClaw ACP lifecycle features are needed
+- the task is "just relay prompts to harness" and no Mullusi ACP lifecycle features are needed
 
 Do not use:
 
@@ -46,7 +46,7 @@ Do not use:
 Use these defaults when user names a harness directly:
 
 - "pi" -> `agentId: "pi"`
-- "openclaw" -> `agentId: "openclaw"`
+- "mullusi" -> `agentId: "mullusi"`
 - "claude" or "claude code" -> `agentId: "claude"`
 - "codex" -> `agentId: "codex"`
 - "copilot" or "github copilot" -> `agentId: "copilot"`
@@ -64,7 +64,7 @@ These defaults match current acpx built-in aliases.
 
 If policy rejects the chosen id, report the policy error clearly and ask for the allowed ACP agent id.
 
-## OpenClaw ACP runtime path
+## Mullusi ACP runtime path
 
 Required behavior:
 
@@ -117,7 +117,7 @@ Do not default to subagent runtime for these requests.
 
 ## ACPX install and version policy (direct acpx path)
 
-For this repo, direct `acpx` calls must follow the same pinned policy as the `@openclaw/acpx` extension package.
+For this repo, direct `acpx` calls must follow the same pinned policy as the `@mullusi/acpx` extension package.
 
 1. Prefer plugin-local binary, not global PATH:
    - `${ACPX_PLUGIN_ROOT}/node_modules/.bin/acpx`
@@ -198,7 +198,7 @@ ${ACPX_CMD} codex sessions close oc-codex-<conversationId>
 - `kilocode`
 - `kimi`
 - `kiro`
-- `openclaw`
+- `mullusi`
 - `opencode`
 - `pi`
 - `qwen`
@@ -207,7 +207,7 @@ ${ACPX_CMD} codex sessions close oc-codex-<conversationId>
 
 Defaults are:
 
-- `openclaw -> openclaw acp`
+- `mullusi -> mullusi acp`
 - `claude -> npx -y @zed-industries/claude-agent-acp@0.21.0`
 - `codex -> npx @zed-industries/codex-acp@^0.9.5`
 - `copilot -> copilot --acp --stdio`

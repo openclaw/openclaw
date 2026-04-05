@@ -3,8 +3,8 @@ import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
-} from "openclaw/plugin-sdk/realtime-transcription";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+} from "mullusi/plugin-sdk/realtime-transcription";
+import { normalizeResolvedSecretInputString } from "mullusi/plugin-sdk/secret-input";
 import WebSocket from "ws";
 
 type OpenAIRealtimeTranscriptionProviderConfig = {

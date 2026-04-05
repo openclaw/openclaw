@@ -2,7 +2,7 @@
 read_when:
   - 运行无头节点主机
   - 为 system.run 配对非 macOS 节点
-summary: "`openclaw node` 的 CLI 参考（无头节点主机）"
+summary: "`mullusi node` 的 CLI 参考（无头节点主机）"
 title: node
 x-i18n:
   generated_at: "2026-02-03T07:45:07Z"
@@ -13,7 +13,7 @@ x-i18n:
   workflow: 15
 ---
 
-# `openclaw node`
+# `mullusi node`
 
 运行一个**无头节点主机**，连接到 Gateway 网关 WebSocket 并在此机器上暴露
 `system.run` / `system.which`。
@@ -49,13 +49,13 @@ x-i18n:
 ## 运行（前台）
 
 ```bash
-openclaw node run --host <gateway-host> --port 18789
+mullusi node run --host <gateway-host> --port 18790
 ```
 
 选项：
 
 - `--host <host>`：Gateway 网关 WebSocket 主机（默认：`127.0.0.1`）
-- `--port <port>`：Gateway 网关 WebSocket 端口（默认：`18789`）
+- `--port <port>`：Gateway 网关 WebSocket 端口（默认：`18790`）
 - `--tls`：为 Gateway 网关连接使用 TLS
 - `--tls-fingerprint <sha256>`：预期的 TLS 证书指纹（sha256）
 - `--node-id <id>`：覆盖节点 id（清除配对 token）
@@ -66,13 +66,13 @@ openclaw node run --host <gateway-host> --port 18789
 将无头节点主机安装为用户服务。
 
 ```bash
-openclaw node install --host <gateway-host> --port 18789
+mullusi node install --host <gateway-host> --port 18790
 ```
 
 选项：
 
 - `--host <host>`：Gateway 网关 WebSocket 主机（默认：`127.0.0.1`）
-- `--port <port>`：Gateway 网关 WebSocket 端口（默认：`18789`）
+- `--port <port>`：Gateway 网关 WebSocket 端口（默认：`18790`）
 - `--tls`：为 Gateway 网关连接使用 TLS
 - `--tls-fingerprint <sha256>`：预期的 TLS 证书指纹（sha256）
 - `--node-id <id>`：覆盖节点 id（清除配对 token）
@@ -83,13 +83,13 @@ openclaw node install --host <gateway-host> --port 18789
 管理服务：
 
 ```bash
-openclaw node status
-openclaw node stop
-openclaw node restart
-openclaw node uninstall
+mullusi node status
+mullusi node stop
+mullusi node restart
+mullusi node uninstall
 ```
 
-使用 `openclaw node run` 运行前台节点主机（无服务）。
+使用 `mullusi node run` 运行前台节点主机（无服务）。
 
 服务命令接受 `--json` 以获取机器可读输出。
 
@@ -99,17 +99,17 @@ openclaw node uninstall
 通过以下方式批准：
 
 ```bash
-openclaw nodes pending
-openclaw nodes approve <requestId>
+mullusi nodes pending
+mullusi nodes approve <requestId>
 ```
 
 节点主机将其节点 id、token、显示名称和 Gateway 网关连接信息存储在
-`~/.openclaw/node.json` 中。
+`~/.mullusi/node.json` 中。
 
 ## 执行批准
 
 `system.run` 受本地执行批准限制：
 
-- `~/.openclaw/exec-approvals.json`
+- `~/.mullusi/exec-approvals.json`
 - [执行批准](/tools/exec-approvals)
-- `openclaw approvals --node <id|name|ip>`（从 Gateway 网关编辑）
+- `mullusi approvals --node <id|name|ip>`（从 Gateway 网关编辑）

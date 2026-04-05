@@ -1,5 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { MullusiConfig } from "../../../config/config.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
@@ -19,7 +19,7 @@ type StalePluginRegistryState = {
 };
 
 function collectPluginRegistryState(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   env?: NodeJS.ProcessEnv,
 ): StalePluginRegistryState {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
@@ -35,14 +35,14 @@ function collectPluginRegistryState(
 }
 
 export function isStalePluginAutoRepairBlocked(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   env?: NodeJS.ProcessEnv,
 ): boolean {
   return collectPluginRegistryState(cfg, env).hasDiscoveryErrors;
 }
 
 export function scanStalePluginConfig(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   env?: NodeJS.ProcessEnv,
 ): StalePluginConfigHit[] {
   const plugins = asObjectRecord(cfg.plugins);
@@ -111,10 +111,10 @@ export function collectStalePluginConfigWarnings(params: {
 }
 
 export function maybeRepairStalePluginConfig(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   env?: NodeJS.ProcessEnv,
 ): {
-  config: OpenClawConfig;
+  config: MullusiConfig;
   changes: string[];
 } {
   if (isStalePluginAutoRepairBlocked(cfg, env)) {

@@ -8,7 +8,7 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   getPackageManifestMetadata,
   loadPluginManifest,
-  type OpenClawPackageManifest,
+  type MullusiPackageManifest,
   type PackageManifest,
   type PluginManifest,
   type PluginManifestChannelConfig,
@@ -21,7 +21,7 @@ import {
 } from "./sdk-alias.js";
 import type { PluginConfigUiHint } from "./types.js";
 
-const OPENCLAW_PACKAGE_ROOT =
+const MULLUSI_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
     modulePath: fileURLToPath(import.meta.url),
     moduleUrl: import.meta.url,
@@ -62,7 +62,7 @@ export type BundledPluginMetadata = {
   packageName?: string;
   packageVersion?: string;
   packageDescription?: string;
-  packageManifest?: OpenClawPackageManifest;
+  packageManifest?: MullusiPackageManifest;
   manifest: PluginManifest;
 };
 
@@ -298,9 +298,9 @@ function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSu
 }
 
 function resolvePackageChannelMeta(
-  packageManifest: OpenClawPackageManifest | undefined,
+  packageManifest: MullusiPackageManifest | undefined,
   channelId: string,
-): OpenClawPackageManifest["channel"] | undefined {
+): MullusiPackageManifest["channel"] | undefined {
   const channelMeta = packageManifest?.channel;
   return channelMeta?.id?.trim() === channelId ? channelMeta : undefined;
 }
@@ -308,7 +308,7 @@ function resolvePackageChannelMeta(
 function collectBundledChannelConfigs(params: {
   pluginDir: string;
   manifest: PluginManifest;
-  packageManifest?: OpenClawPackageManifest;
+  packageManifest?: MullusiPackageManifest;
 }): Record<string, PluginManifestChannelConfig> | undefined {
   const channelIds = normalizeStringList(params.manifest.channels);
   const existingChannelConfigs: Record<string, PluginManifestChannelConfig> =
@@ -460,7 +460,7 @@ export function listBundledPluginMetadata(params?: {
   includeChannelConfigs?: boolean;
   includeSyntheticChannelConfigs?: boolean;
 }): readonly BundledPluginMetadata[] {
-  const rootDir = path.resolve(params?.rootDir ?? OPENCLAW_PACKAGE_ROOT);
+  const rootDir = path.resolve(params?.rootDir ?? MULLUSI_PACKAGE_ROOT);
   const includeChannelConfigs = params?.includeChannelConfigs ?? !RUNNING_FROM_BUILT_ARTIFACT;
   const includeSyntheticChannelConfigs =
     params?.includeSyntheticChannelConfigs ?? includeChannelConfigs;

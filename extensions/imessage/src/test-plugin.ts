@@ -1,7 +1,7 @@
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
-import { collectStatusIssuesFromLastError } from "openclaw/plugin-sdk/status-helpers";
+import type { ChannelOutboundAdapter } from "mullusi/plugin-sdk/channel-contract";
+import type { ChannelPlugin } from "mullusi/plugin-sdk/core";
+import { resolveOutboundSendDep } from "mullusi/plugin-sdk/outbound-runtime";
+import { collectStatusIssuesFromLastError } from "mullusi/plugin-sdk/status-helpers";
 
 function normalizeIMessageTestHandle(raw: string): string {
   const trimmed = raw.trim();

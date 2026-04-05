@@ -1,17 +1,17 @@
-import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { resolveNormalizedAccountEntry } from "mullusi/plugin-sdk/account-core";
+import { formatAllowFromLowercase } from "mullusi/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
-} from "openclaw/plugin-sdk/channel-config-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+} from "mullusi/plugin-sdk/channel-config-helpers";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { createChannelPluginBase } from "mullusi/plugin-sdk/core";
 import {
   getChatChannelMeta,
   normalizeAccountId,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/core";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+} from "mullusi/plugin-sdk/core";
+import { DEFAULT_ACCOUNT_ID } from "mullusi/plugin-sdk/routing";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
@@ -33,7 +33,7 @@ import { singleAccountKeysToMove } from "./setup-contract.js";
 export const TELEGRAM_CHANNEL = "telegram" as const;
 
 export function findTelegramTokenOwnerAccountId(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
 }): string | null {
   const normalizedAccountId = normalizeAccountId(params.accountId);
@@ -78,9 +78,9 @@ export function formatDuplicateTelegramTokenReason(params: {
  *   2. The config has an explicit `accounts` section with entries, AND
  *   3. The accountId is not found in that `accounts` section.
  *
- * See: https://github.com/openclaw/openclaw/issues/53876
+ * See: https://github.com/mullusi/mullusi/issues/53876
  */
-function isBlockedByMultiBotGuard(cfg: OpenClawConfig, accountId: string): boolean {
+function isBlockedByMultiBotGuard(cfg: MullusiConfig, accountId: string): boolean {
   if (normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID) {
     return false;
   }
@@ -165,7 +165,7 @@ export function createTelegramPluginBase(params: {
         // channel-level fallback paths not available in resolveTelegramAccount.
         // This ensures binding-created accountIds that inherit the channel-level
         // token are correctly detected as configured.
-        // See: https://github.com/openclaw/openclaw/issues/53876
+        // See: https://github.com/mullusi/mullusi/issues/53876
         if (isBlockedByMultiBotGuard(cfg, account.accountId)) {
           return false;
         }

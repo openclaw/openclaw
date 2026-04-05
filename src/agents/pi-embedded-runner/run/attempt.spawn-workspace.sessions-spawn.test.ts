@@ -4,8 +4,8 @@ import { resolveAttemptSpawnWorkspaceDir } from "./attempt.thread-helpers.js";
 
 describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
   it("passes the real workspace to sessions_spawn when workspaceAccess is ro", async () => {
-    const realWorkspace = "/tmp/openclaw-real-workspace";
-    const sandboxWorkspace = "/tmp/openclaw-sandbox-workspace";
+    const realWorkspace = "/tmp/mullusi-real-workspace";
+    const sandboxWorkspace = "/tmp/mullusi-sandbox-workspace";
     const sandbox = createPiToolsSandboxContext({
       workspaceDir: sandboxWorkspace,
       agentWorkspaceDir: realWorkspace,
@@ -23,7 +23,7 @@ describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
   });
 
   it("does not override spawned workspace when sandbox workspace is rw", async () => {
-    const realWorkspace = "/tmp/openclaw-real-workspace";
+    const realWorkspace = "/tmp/mullusi-real-workspace";
     const sandbox = createPiToolsSandboxContext({
       workspaceDir: realWorkspace,
       agentWorkspaceDir: realWorkspace,

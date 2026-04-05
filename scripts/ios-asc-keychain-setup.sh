@@ -12,7 +12,7 @@ Required:
 
 Optional:
   --key-id <id>          API key ID (auto-detected from AuthKey_<id>.p8 if omitted)
-  --service <name>       Keychain service name (default: openclaw-asc-key)
+  --service <name>       Keychain service name (default: mullusi-asc-key)
   --account <name>       Keychain account name (default: $USER or $LOGNAME)
   --write-env            Upsert non-secret env vars into apps/ios/fastlane/.env
   --env-file <path>      Override env file path used with --write-env
@@ -69,7 +69,7 @@ delete_env_line() {
 KEY_PATH=""
 KEY_ID=""
 ISSUER_ID=""
-SERVICE="openclaw-asc-key"
+SERVICE="mullusi-asc-key"
 ACCOUNT="${USER:-${LOGNAME:-}}"
 WRITE_ENV=0
 ENV_FILE=""

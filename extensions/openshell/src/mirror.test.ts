@@ -11,7 +11,7 @@ import {
 const dirs: string[] = [];
 
 async function makeTmpDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mirror-test-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-mirror-test-"));
   dirs.push(dir);
   return dir;
 }

@@ -16,7 +16,7 @@ describe("Matrix inbound event dedupe", () => {
   });
 
   function createStoragePath(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-inbound-dedupe-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-matrix-inbound-dedupe-"));
     tempDirs.push(dir);
     return path.join(dir, "inbound-dedupe.json");
   }

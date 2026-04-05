@@ -1,8 +1,8 @@
 import path from "node:path";
 import {
   definePluginEntry,
-  resolvePreferredOpenClawTmpDir,
-  type OpenClawPluginApi,
+  resolvePreferredMullusiTmpDir,
+  type MullusiPluginApi,
 } from "./api.js";
 import {
   diffsPluginConfigSchema,
@@ -20,12 +20,12 @@ export default definePluginEntry({
   name: "Diffs",
   description: "Read-only diff viewer and PNG/PDF renderer for agents.",
   configSchema: diffsPluginConfigSchema,
-  register(api: OpenClawPluginApi) {
+  register(api: MullusiPluginApi) {
     const defaults = resolveDiffsPluginDefaults(api.pluginConfig);
     const security = resolveDiffsPluginSecurity(api.pluginConfig);
     const viewerBaseUrl = resolveDiffsPluginViewerBaseUrl(api.pluginConfig);
     const store = new DiffArtifactStore({
-      rootDir: path.join(resolvePreferredOpenClawTmpDir(), "openclaw-diffs"),
+      rootDir: path.join(resolvePreferredMullusiTmpDir(), "mullusi-diffs"),
       logger: api.logger,
     });
 

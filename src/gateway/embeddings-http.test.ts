@@ -5,7 +5,7 @@ import { getFreePort, installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-const WRITE_SCOPE_HEADER = { "x-openclaw-scopes": "operator.write" };
+const WRITE_SCOPE_HEADER = { "x-mullusi-scopes": "operator.write" };
 
 let startGatewayServer: typeof import("./server.js").startGatewayServer;
 let createEmbeddingProviderMock: ReturnType<
@@ -92,7 +92,7 @@ async function postEmbeddings(body: unknown, headers?: Record<string, string>) {
 describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   it("embeds string and array inputs", async () => {
     const single = await postEmbeddings({
-      model: "openclaw/default",
+      model: "mullusi/default",
       input: "hello",
     });
     expect(single.status).toBe(200);
@@ -105,7 +105,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(singleJson.data?.[0]?.embedding).toEqual([0.1, 0.2]);
 
     const batch = await postEmbeddings({
-      model: "openclaw/default",
+      model: "mullusi/default",
       input: ["a", "b"],
     });
     expect(batch.status).toBe(200);
@@ -119,14 +119,14 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
 
     const qualified = await postEmbeddings(
       {
-        model: "openclaw/default",
+        model: "mullusi/default",
         input: "hello again",
       },
-      { "x-openclaw-model": "openai/text-embedding-3-small" },
+      { "x-mullusi-model": "openai/text-embedding-3-small" },
     );
     expect(qualified.status).toBe(200);
     const qualifiedJson = (await qualified.json()) as { model?: string };
-    expect(qualifiedJson.model).toBe("openclaw/default");
+    expect(qualifiedJson.model).toBe("mullusi/default");
     const lastCall = createEmbeddingProviderMock.mock.calls.at(-1)?.[0] as
       | { provider?: string; model?: string }
       | undefined;
@@ -139,11 +139,11 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   it("supports base64 encoding and agent-scoped auth/config resolution", async () => {
     const res = await postEmbeddings(
       {
-        model: "openclaw/beta",
+        model: "mullusi/beta",
         input: "hello",
         encoding_format: "base64",
       },
-      { "x-openclaw-agent-id": "beta" },
+      { "x-mullusi-agent-id": "beta" },
     );
     expect(res.status).toBe(200);
     const json = (await res.json()) as { data?: Array<{ embedding?: string }> };
@@ -158,7 +158,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
 
   it("rejects invalid input shapes", async () => {
     const res = await postEmbeddings({
-      model: "openclaw/default",
+      model: "mullusi/default",
       input: [{ nope: true }],
     });
     expect(res.status).toBe(400);
@@ -169,10 +169,10 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   it("ignores narrower declared scopes for shared-secret bearer auth", async () => {
     const res = await postEmbeddings(
       {
-        model: "openclaw/default",
+        model: "mullusi/default",
         input: "hello",
       },
-      { "x-openclaw-scopes": "operator.read" },
+      { "x-mullusi-scopes": "operator.read" },
     );
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
@@ -184,10 +184,10 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   it("allows requests with an empty declared scopes header", async () => {
     const res = await postEmbeddings(
       {
-        model: "openclaw/default",
+        model: "mullusi/default",
         input: "hello",
       },
-      { "x-openclaw-scopes": "" },
+      { "x-mullusi-scopes": "" },
     );
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
@@ -204,7 +204,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: "openclaw/default",
+        model: "mullusi/default",
         input: "hello",
       }),
     });
@@ -224,17 +224,17 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     const json = (await res.json()) as { error?: { type?: string; message?: string } };
     expect(json.error).toEqual({
       type: "invalid_request_error",
-      message: "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
+      message: "Invalid `model`. Use `mullusi` or `mullusi/<agentId>`.",
     });
   });
 
-  it("rejects disallowed x-openclaw-model provider overrides", async () => {
+  it("rejects disallowed x-mullusi-model provider overrides", async () => {
     const res = await postEmbeddings(
       {
-        model: "openclaw/default",
+        model: "mullusi/default",
         input: "hello",
       },
-      { "x-openclaw-model": "ollama/nomic-embed-text" },
+      { "x-mullusi-model": "ollama/nomic-embed-text" },
     );
     expect(res.status).toBe(400);
     const json = (await res.json()) as { error?: { type?: string; message?: string } };
@@ -246,7 +246,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
 
   it("rejects oversized batches", async () => {
     const res = await postEmbeddings({
-      model: "openclaw/default",
+      model: "mullusi/default",
       input: Array.from({ length: 129 }, () => "x"),
     });
     expect(res.status).toBe(400);
@@ -260,7 +260,7 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
   it("sanitizes provider failures", async () => {
     createEmbeddingProviderMock.mockRejectedValueOnce(new Error("secret upstream failure"));
     const res = await postEmbeddings({
-      model: "openclaw/default",
+      model: "mullusi/default",
       input: "hello",
     });
     expect(res.status).toBe(500);

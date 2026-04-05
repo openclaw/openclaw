@@ -1,12 +1,12 @@
 ---
-summary: "Deploy OpenClaw on Render with Infrastructure-as-Code"
+summary: "Deploy Mullusi on Render with Infrastructure-as-Code"
 read_when:
-  - Deploying OpenClaw to Render
+  - Deploying Mullusi to Render
   - You want a declarative cloud deploy with Render Blueprints
 title: "Render"
 ---
 
-Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
+Deploy Mullusi on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
 
 ## Prerequisites
 
@@ -15,7 +15,7 @@ Deploy OpenClaw on Render using Infrastructure as Code. The included `render.yam
 
 ## Deploy with a Render Blueprint
 
-[Deploy to Render](https://render.com/deploy?repo=https://github.com/openclaw/openclaw)
+[Deploy to Render](https://render.com/deploy?repo=https://github.com/mullusi/mullusi)
 
 Clicking this link will:
 
@@ -27,26 +27,26 @@ Once deployed, your service URL follows the pattern `https://<service-name>.onre
 ## Understanding the Blueprint
 
 Render Blueprints are YAML files that define your infrastructure. The `render.yaml` in this
-repository configures everything needed to run OpenClaw:
+repository configures everything needed to run Mullusi:
 
 ```yaml
 services:
   - type: web
-    name: openclaw
+    name: mullusi
     runtime: docker
     plan: starter
     healthCheckPath: /health
     envVars:
-      - key: OPENCLAW_GATEWAY_PORT
+      - key: MULLUSI_GATEWAY_PORT
         value: "8080"
-      - key: OPENCLAW_STATE_DIR
-        value: /data/.openclaw
-      - key: OPENCLAW_WORKSPACE_DIR
+      - key: MULLUSI_STATE_DIR
+        value: /data/.mullusi
+      - key: MULLUSI_WORKSPACE_DIR
         value: /data/workspace
-      - key: OPENCLAW_GATEWAY_TOKEN
+      - key: MULLUSI_GATEWAY_TOKEN
         generateValue: true # auto-generates a secure token
     disk:
-      name: openclaw-data
+      name: mullusi-data
       mountPath: /data
       sizeGB: 1
 ```
@@ -69,7 +69,7 @@ Key Blueprint features used:
 | Standard+ | Never             | 1GB+          | Production, multiple channels |
 
 The Blueprint defaults to `starter`. To use free tier, change `plan: free` in
-your fork's `render.yaml` (but note: no persistent disk means OpenClaw state
+your fork's `render.yaml` (but note: no persistent disk means Mullusi state
 resets on each deploy).
 
 ## After deployment
@@ -79,7 +79,7 @@ resets on each deploy).
 The web dashboard is available at `https://<your-service>.onrender.com/`.
 
 Connect using the configured shared secret. This deploy template auto-generates
-`OPENCLAW_GATEWAY_TOKEN` (find it in **Dashboard → your service →
+`MULLUSI_GATEWAY_TOKEN` (find it in **Dashboard → your service →
 Environment**); if you replace it with password auth, use that password
 instead.
 
@@ -103,7 +103,7 @@ Modify variables in **Dashboard → your service → Environment**. Changes trig
 
 ### Auto-deploy
 
-If you use the original OpenClaw repository, Render will not auto-deploy your OpenClaw. To update it, run a manual Blueprint sync from the dashboard.
+If you use the original Mullusi repository, Render will not auto-deploy your Mullusi. To update it, run a manual Blueprint sync from the dashboard.
 
 ## Custom domain
 
@@ -119,7 +119,7 @@ Render supports horizontal and vertical scaling:
 - **Vertical**: Change the plan to get more CPU/RAM
 - **Horizontal**: Increase instance count (Standard plan and above)
 
-For OpenClaw, vertical scaling is usually sufficient. Horizontal scaling requires sticky sessions or external state management.
+For Mullusi, vertical scaling is usually sufficient. Horizontal scaling requires sticky sessions or external state management.
 
 ## Backups and migration
 
@@ -127,10 +127,10 @@ Export your state, config, auth profiles, and workspace at any time using the
 shell access in the Render Dashboard:
 
 ```bash
-openclaw backup create
+mullusi backup create
 ```
 
-This creates a portable backup archive with OpenClaw state plus any configured
+This creates a portable backup archive with Mullusi state plus any configured
 workspace. See [Backup](/cli/backup) for details.
 
 ## Troubleshooting
@@ -139,8 +139,8 @@ workspace. See [Backup](/cli/backup) for details.
 
 Check the deploy logs in the Render Dashboard. Common issues:
 
-- Missing `OPENCLAW_GATEWAY_TOKEN` — verify it is set in **Dashboard → Environment**
-- Port mismatch — ensure `OPENCLAW_GATEWAY_PORT=8080` is set so the gateway binds to the port Render expects
+- Missing `MULLUSI_GATEWAY_TOKEN` — verify it is set in **Dashboard → Environment**
+- Port mismatch — ensure `MULLUSI_GATEWAY_PORT=8080` is set so the gateway binds to the port Render expects
 
 ### Slow cold starts (free tier)
 
@@ -149,7 +149,7 @@ Free tier services spin down after 15 minutes of inactivity. The first request a
 ### Data loss after redeploy
 
 This happens on free tier (no persistent disk). Upgrade to a paid plan, or
-regularly export a full backup via `openclaw backup create` in the Render shell.
+regularly export a full backup via `mullusi backup create` in the Render shell.
 
 ### Health check failures
 
@@ -162,4 +162,4 @@ Render expects a 200 response from `/health` within 30 seconds. If builds succee
 
 - Set up messaging channels: [Channels](/channels)
 - Configure the Gateway: [Gateway configuration](/gateway/configuration)
-- Keep OpenClaw up to date: [Updating](/install/updating)
+- Keep Mullusi up to date: [Updating](/install/updating)

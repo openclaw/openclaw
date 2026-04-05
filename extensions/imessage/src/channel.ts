@@ -1,14 +1,14 @@
-import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
-import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
-import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { buildDmGroupAccountAllowlistAdapter } from "mullusi/plugin-sdk/allowlist-config-edit";
+import { createChatChannelPlugin } from "mullusi/plugin-sdk/core";
+import { buildPassiveProbedChannelStatusSummary } from "mullusi/plugin-sdk/extension-shared";
+import { createLazyRuntimeModule } from "mullusi/plugin-sdk/lazy-runtime";
+import { sanitizeForPlainText } from "mullusi/plugin-sdk/outbound-runtime";
+import { resolveOutboundSendDep } from "mullusi/plugin-sdk/outbound-runtime";
+import { buildOutboundBaseSessionKey, type RoutePeer } from "mullusi/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
-} from "openclaw/plugin-sdk/status-helpers";
+} from "mullusi/plugin-sdk/status-helpers";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import {
   chunkTextForOutbound,
@@ -234,7 +234,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
     pairing: {
       text: {
         idLabel: "imessageSenderId",
-        message: "OpenClaw: your access has been approved.",
+        message: "Mullusi: your access has been approved.",
         notify: async ({ id }) =>
           await (await loadIMessageChannelRuntime()).notifyIMessageApproval(id),
       },

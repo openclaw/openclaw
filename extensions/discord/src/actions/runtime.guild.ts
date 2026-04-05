@@ -9,7 +9,7 @@ import {
   readStringArrayParam,
   readStringParam,
   type DiscordActionConfig,
-  type OpenClawConfig,
+  type MullusiConfig,
 } from "../runtime-api.js";
 import {
   addRoleDiscord,
@@ -94,7 +94,7 @@ export async function handleDiscordGuildAction(
   action: string,
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
-  cfg?: OpenClawConfig,
+  cfg?: MullusiConfig,
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
   switch (action) {

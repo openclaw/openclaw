@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
@@ -8,7 +8,7 @@ vi.mock("./send.js", () => ({
   sendMessageSlack: sendMessageSlackMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+vi.mock("mullusi/plugin-sdk/plugin-runtime", () => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
 }));
 
@@ -35,7 +35,7 @@ const BASE_SLACK_SEND_CTX = {
 const sendSlackText = async (ctx: SlackSendTextCtx) => {
   const sendText = slackOutbound.sendText as NonNullable<typeof slackOutbound.sendText>;
   return await sendText({
-    cfg: {} as OpenClawConfig,
+    cfg: {} as MullusiConfig,
     ...ctx,
   });
 };
@@ -115,11 +115,11 @@ describe("slack outbound hook wiring", () => {
 
     await sendSlackTextWithDefaults({
       text: "hello",
-      identity: { emoji: ":lobster:" },
+      identity: { emoji: ":mullusi:" },
     });
 
     expectSlackSendCalledWith("hello", {
-      identity: { iconEmoji: ":lobster:" },
+      identity: { iconEmoji: ":mullusi:" },
     });
   });
 
@@ -160,7 +160,7 @@ describe("slack outbound hook wiring", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       to: "C123",
       text: "hello",
       replyToId: "1111.2222",

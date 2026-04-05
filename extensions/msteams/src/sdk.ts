@@ -61,14 +61,14 @@ export async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
  * Create a no-op HTTP server adapter that satisfies the Teams SDK's
  * IHttpServerAdapter interface without spinning up an Express server.
  *
- * OpenClaw manages its own Express server for the Teams webhook endpoint, so
+ * Mullusi manages its own Express server for the Teams webhook endpoint, so
  * the SDK's built-in HTTP server is unnecessary.  Passing this adapter via the
  * `httpServerAdapter` option prevents the SDK from creating the default
  * HttpPlugin (which uses the deprecated `plugins` array and registers an
  * Express middleware with the pattern `/api*` — invalid in Express 5).
  *
- * See: https://github.com/openclaw/openclaw/issues/55161
- * See: https://github.com/openclaw/openclaw/issues/60732
+ * See: https://github.com/mullusi/mullusi/issues/55161
+ * See: https://github.com/mullusi/mullusi/issues/60732
  */
 function createNoOpHttpServerAdapter(): IHttpServerAdapter {
   return {

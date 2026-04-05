@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { MullusiConfig } from "../../../config/config.js";
 import {
   getSessionBindingService,
   type SessionBindingCapabilities,
@@ -26,7 +26,7 @@ type SessionBindingContractEntry = {
 const contractApiPromises = new Map<string, Promise<Record<string, unknown>>>();
 
 const matrixSessionBindingStateDir = fs.mkdtempSync(
-  path.join(os.tmpdir(), "openclaw-matrix-session-binding-contract-"),
+  path.join(os.tmpdir(), "mullusi-matrix-session-binding-contract-"),
 );
 const matrixSessionBindingAuth = {
   accountId: "ops",
@@ -127,7 +127,7 @@ async function createContractMatrixThreadBindingManager() {
 
 const baseSessionBindingCfg = {
   session: { mainKey: "main", scope: "per-sender" },
-} satisfies OpenClawConfig;
+} satisfies MullusiConfig;
 
 const sessionBindingContractEntries: Record<
   SessionBindingContractChannelId,
@@ -287,7 +287,7 @@ const sessionBindingContractEntries: Record<
     getCapabilities: async () => {
       const { createFeishuThreadBindingManager } = await getContractApi<{
         createFeishuThreadBindingManager: (params: {
-          cfg: OpenClawConfig;
+          cfg: MullusiConfig;
           accountId: string;
         }) => unknown;
       }>("feishu");
@@ -300,7 +300,7 @@ const sessionBindingContractEntries: Record<
     bindAndResolve: async () => {
       const { createFeishuThreadBindingManager } = await getContractApi<{
         createFeishuThreadBindingManager: (params: {
-          cfg: OpenClawConfig;
+          cfg: MullusiConfig;
           accountId: string;
         }) => unknown;
       }>("feishu");
@@ -332,7 +332,7 @@ const sessionBindingContractEntries: Record<
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
       const { createFeishuThreadBindingManager } = await getContractApi<{
-        createFeishuThreadBindingManager: (params: { cfg: OpenClawConfig; accountId: string }) => {
+        createFeishuThreadBindingManager: (params: { cfg: MullusiConfig; accountId: string }) => {
           stop: () => void;
         };
       }>("feishu");

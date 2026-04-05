@@ -6,7 +6,7 @@ import {
   setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,
   type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search";
+} from "mullusi/plugin-sdk/provider-web-search";
 import { runTavilySearch } from "./tavily-client.js";
 
 const GenericTavilySearchSchema = Type.Object(
@@ -33,7 +33,7 @@ export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
     envVars: ["TAVILY_API_KEY"],
     placeholder: "tvly-...",
     signupUrl: "https://tavily.com/",
-    docsUrl: "https://docs.openclaw.ai/tools/tavily",
+    docsUrl: "https://docs.mullusi.com/tools/tavily",
     autoDetectOrder: 70,
     credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.tavily.config.webSearch.apiKey"],

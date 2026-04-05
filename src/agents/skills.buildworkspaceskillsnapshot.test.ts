@@ -6,7 +6,7 @@ import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./skills.js";
 
-const fixtureSuite = createFixtureSuite("openclaw-skills-snapshot-suite-");
+const fixtureSuite = createFixtureSuite("mullusi-skills-snapshot-suite-");
 let truncationWorkspaceTemplateDir = "";
 let nestedRepoTemplateDir = "";
 

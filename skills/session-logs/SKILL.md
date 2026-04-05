@@ -3,7 +3,7 @@ name: session-logs
 description: Search and analyze your own session logs (older/parent conversations) using jq.
 metadata:
   {
-    "openclaw":
+    "mullusi":
       {
         "emoji": "📜",
         "requires": { "bins": ["jq", "rg"] },
@@ -39,7 +39,7 @@ Use this skill when the user asks about prior chats, parent conversations, or hi
 ## Location
 
 Session logs live under the active state directory:
-`$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/` (default: `~/.openclaw/agents/<agentId>/sessions/`).
+`$MULLUSI_STATE_DIR/agents/<agentId>/sessions/` (default: `~/.mullusi/agents/<agentId>/sessions/`).
 Use the `agent=<id>` value from the system prompt Runtime line.
 
 - **`sessions.json`** - Index mapping session keys to session IDs
@@ -61,7 +61,7 @@ Each `.jsonl` file contains messages with:
 
 ```bash
 AGENT_ID="<agentId>"
-SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
+SESSION_DIR="${MULLUSI_STATE_DIR:-$HOME/.mullusi}/agents/$AGENT_ID/sessions"
 for f in "$SESSION_DIR"/*.jsonl; do
   date=$(head -1 "$f" | jq -r '.timestamp' | cut -dT -f1)
   size=$(ls -lh "$f" | awk '{print $5}')
@@ -73,7 +73,7 @@ done | sort -r
 
 ```bash
 AGENT_ID="<agentId>"
-SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
+SESSION_DIR="${MULLUSI_STATE_DIR:-$HOME/.mullusi}/agents/$AGENT_ID/sessions"
 for f in "$SESSION_DIR"/*.jsonl; do
   head -1 "$f" | jq -r '.timestamp' | grep -q "2026-01-06" && echo "$f"
 done
@@ -101,7 +101,7 @@ jq -s '[.[] | .message.usage.cost.total // 0] | add' <session>.jsonl
 
 ```bash
 AGENT_ID="<agentId>"
-SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
+SESSION_DIR="${MULLUSI_STATE_DIR:-$HOME/.mullusi}/agents/$AGENT_ID/sessions"
 for f in "$SESSION_DIR"/*.jsonl; do
   date=$(head -1 "$f" | jq -r '.timestamp' | cut -dT -f1)
   cost=$(jq -s '[.[] | .message.usage.cost.total // 0] | add' "$f")
@@ -131,7 +131,7 @@ jq -r '.message.content[]? | select(.type == "toolCall") | .name' <session>.json
 
 ```bash
 AGENT_ID="<agentId>"
-SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
+SESSION_DIR="${MULLUSI_STATE_DIR:-$HOME/.mullusi}/agents/$AGENT_ID/sessions"
 rg -l "phrase" "$SESSION_DIR"/*.jsonl
 ```
 
@@ -146,6 +146,6 @@ rg -l "phrase" "$SESSION_DIR"/*.jsonl
 
 ```bash
 AGENT_ID="<agentId>"
-SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
+SESSION_DIR="${MULLUSI_STATE_DIR:-$HOME/.mullusi}/agents/$AGENT_ID/sessions"
 jq -r 'select(.type=="message") | .message.content[]? | select(.type=="text") | .text' "$SESSION_DIR"/<id>.jsonl | rg 'keyword'
 ```

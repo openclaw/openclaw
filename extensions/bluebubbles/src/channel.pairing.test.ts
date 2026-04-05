@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "./runtime-api.js";
+import type { MullusiConfig } from "./runtime-api.js";
 
 const sendMessageBlueBubblesMock = vi.hoisted(() => vi.fn());
 
@@ -38,7 +38,7 @@ describe("bluebubblesPlugin.pairing.notifyApproval", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as MullusiConfig;
 
     await bluebubblesPlugin.pairing?.notifyApproval?.({
       cfg,

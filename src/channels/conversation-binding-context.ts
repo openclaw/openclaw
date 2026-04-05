@@ -1,5 +1,5 @@
 import { normalizeConversationText } from "../acp/conversation-id.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { parseExplicitTargetForChannel } from "./plugins/target-parsing.js";
@@ -15,7 +15,7 @@ export type ConversationBindingContext = {
 };
 
 export type ResolveConversationBindingContextInput = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   channel?: string | null;
   accountId?: string | null;
   chatType?: string | null;
@@ -62,7 +62,7 @@ function shouldDefaultParentConversationToSelf(plugin?: ChannelPlugin): boolean 
 function resolveBindingAccountId(params: {
   rawAccountId?: string | null;
   plugin?: ChannelPlugin;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
 }): string {
   return (
     normalizeText(params.rawAccountId) ||

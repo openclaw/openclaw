@@ -19,7 +19,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+    await withTempDir({ prefix: "mullusi-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const targetDir = path.join(root, "target-dir");
       const linkPath = path.join(root, "alias");
@@ -46,7 +46,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+    await withTempDir({ prefix: "mullusi-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const linkPath = path.join(root, "alias-out");
@@ -77,7 +77,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+    await withTempDir({ prefix: "mullusi-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const outsideFile = path.join(outside, "target.txt");
@@ -113,7 +113,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+    await withTempDir({ prefix: "mullusi-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const aliasRoot = path.join(base, "workspace-alias");
       const fileName = "plugin.js";
@@ -144,7 +144,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-fuzz-" }, async (base) => {
+    await withTempDir({ prefix: "mullusi-boundary-path-fuzz-" }, async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const safeTarget = path.join(root, "safe-target");

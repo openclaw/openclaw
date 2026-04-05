@@ -2,13 +2,13 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../agents/tool-fs-policy.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "./load-options.js";
 import { getAgentScopedMediaLocalRootsForSources } from "./local-roots.js";
 
 export function createAgentScopedHostMediaReadFile(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentId?: string;
   workspaceDir?: string;
 }): OutboundMediaReadFile | undefined {
@@ -31,7 +31,7 @@ export function createAgentScopedHostMediaReadFile(params: {
 }
 
 export function resolveAgentScopedOutboundMediaAccess(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   agentId?: string;
   mediaSources?: readonly string[];
   workspaceDir?: string;

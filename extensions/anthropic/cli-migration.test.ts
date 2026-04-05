@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 const readClaudeCliCredentialsCached = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importActual) => {
-  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-auth")>();
+vi.mock("mullusi/plugin-sdk/provider-auth", async (importActual) => {
+  const actual = await importActual<typeof import("mullusi/plugin-sdk/provider-auth")>();
   return {
     ...actual,
     readClaudeCliCredentialsCached,

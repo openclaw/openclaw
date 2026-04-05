@@ -65,7 +65,7 @@ export type SandboxBrowserSettings = {
   enabled?: boolean;
   image?: string;
   containerPrefix?: string;
-  /** Docker network for sandbox browser containers (default: openclaw-sandbox-browser). */
+  /** Docker network for sandbox browser containers (default: mullusi-sandbox-browser). */
   network?: string;
   cdpPort?: number;
   /** Optional CIDR allowlist for CDP ingress at the container edge (for example: 172.21.0.1/32). */

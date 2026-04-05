@@ -25,7 +25,7 @@ env:
   NODE_VERSION: "24.x"
   PNPM_VERSION: "10.32.1"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
-  CLAWHUB_REPOSITORY: "openclaw/clawhub"
+  CLAWHUB_REPOSITORY: "mullusi/clawhub"
   # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.
   CLAWHUB_REF: "4af2bd50a71465683dbf8aa269af764b9d39bdf5"
 

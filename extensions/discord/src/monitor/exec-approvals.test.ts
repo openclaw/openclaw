@@ -6,7 +6,7 @@ import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions.j
 import type { DiscordExecApprovalConfig } from "../../../../src/config/types.discord.js";
 
 const { STORE_PATH, mockSessionStoreEntries } = vi.hoisted(() => ({
-  STORE_PATH: "/tmp/openclaw-exec-approvals-test.json",
+  STORE_PATH: "/tmp/mullusi-exec-approvals-test.json",
   mockSessionStoreEntries: {
     value: {} as Record<string, unknown>,
   },
@@ -35,8 +35,8 @@ beforeEach(() => {
     }) => {
       const configToken = params.config?.gateway?.auth?.token;
       const configPassword = params.config?.gateway?.auth?.password;
-      const envToken = params.env.OPENCLAW_GATEWAY_TOKEN;
-      const envPassword = params.env.OPENCLAW_GATEWAY_PASSWORD;
+      const envToken = params.env.MULLUSI_GATEWAY_TOKEN;
+      const envPassword = params.env.MULLUSI_GATEWAY_PASSWORD;
       return { token: envToken ?? configToken, password: envPassword ?? configPassword };
     },
   );
@@ -72,9 +72,9 @@ vi.mock("../send.shared.js", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
+vi.mock("mullusi/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/config-runtime")>(
+    "mullusi/plugin-sdk/config-runtime",
   );
   return {
     ...actual,
@@ -94,8 +94,8 @@ vi.mock("../../../../src/gateway/operator-approvals-client.js", () => ({
     onClose?: unknown;
   }) => {
     mockCreateOperatorApprovalsGatewayClient(params);
-    const envUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
-    const gatewayUrl = params.gatewayUrl?.trim() || envUrl || "ws://127.0.0.1:18789";
+    const envUrl = process.env.MULLUSI_GATEWAY_URL?.trim();
+    const gatewayUrl = params.gatewayUrl?.trim() || envUrl || "ws://127.0.0.1:18790";
     const urlOverrideSource = params.gatewayUrl?.trim() ? "cli" : envUrl ? "env" : undefined;
     const auth = await mockResolveGatewayConnectionAuth({
       config: params.config,
@@ -150,9 +150,9 @@ vi.mock("../../../../src/gateway/client.js", () => ({
   },
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
-    "openclaw/plugin-sdk/text-runtime",
+vi.mock("mullusi/plugin-sdk/text-runtime", async () => {
+  const actual = await vi.importActual<typeof import("mullusi/plugin-sdk/text-runtime")>(
+    "mullusi/plugin-sdk/text-runtime",
   );
   return {
     ...actual,
@@ -892,15 +892,15 @@ describe("DiscordExecApprovalHandler gateway auth", () => {
 
     expect(gatewayClientStarts).toHaveBeenCalledTimes(1);
     expect(gatewayClientParams[0]).toMatchObject({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       token: "shared-gateway-token",
       password: undefined,
       scopes: ["operator.approvals"],
     });
   });
 
-  it("prefers OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-gateway-token");
+  it("prefers MULLUSI_GATEWAY_TOKEN when config token is missing", async () => {
+    vi.stubEnv("MULLUSI_GATEWAY_TOKEN", "env-gateway-token");
     const handler = new DiscordExecApprovalHandler({
       token: "discord-bot-token",
       accountId: "default",
@@ -1163,9 +1163,9 @@ describe("DiscordExecApprovalHandler gateway auth resolution", () => {
   });
 
   it("passes env URL overrides to shared gateway auth resolver", async () => {
-    const previousGatewayUrl = process.env.OPENCLAW_GATEWAY_URL;
+    const previousGatewayUrl = process.env.MULLUSI_GATEWAY_URL;
     try {
-      process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-from-env.example/ws";
+      process.env.MULLUSI_GATEWAY_URL = "wss://gateway-from-env.example/ws";
       const handler = new DiscordExecApprovalHandler({
         token: "test-token",
         accountId: "default",
@@ -1182,9 +1182,9 @@ describe("DiscordExecApprovalHandler gateway auth resolution", () => {
       await handler.stop();
     } finally {
       if (typeof previousGatewayUrl === "string") {
-        process.env.OPENCLAW_GATEWAY_URL = previousGatewayUrl;
+        process.env.MULLUSI_GATEWAY_URL = previousGatewayUrl;
       } else {
-        delete process.env.OPENCLAW_GATEWAY_URL;
+        delete process.env.MULLUSI_GATEWAY_URL;
       }
     }
   });

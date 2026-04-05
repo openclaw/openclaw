@@ -1,17 +1,17 @@
 ---
-summary: "OpenClaw on Raspberry Pi (budget self-hosted setup)"
+summary: "Mullusi on Raspberry Pi (budget self-hosted setup)"
 read_when:
-  - Setting up OpenClaw on a Raspberry Pi
-  - Running OpenClaw on ARM devices
+  - Setting up Mullusi on a Raspberry Pi
+  - Running Mullusi on ARM devices
   - Building a cheap always-on personal AI
 title: "Raspberry Pi (Platform)"
 ---
 
-# OpenClaw on Raspberry Pi
+# Mullusi on Raspberry Pi
 
 ## Goal
 
-Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi for **~$35-80** one-time cost (no monthly fees).
+Run a persistent, always-on Mullusi Gateway on a Raspberry Pi for **~$35-80** one-time cost (no monthly fees).
 
 Perfect for:
 
@@ -107,19 +107,19 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) Install OpenClaw
+## 6) Install Mullusi
 
 ### Option A: Standard Install (Recommended)
 
 ```bash
-curl -fsSL https://openclaw.ai/install.sh | bash
+curl -fsSL https://mullusi.com/install.sh | bash
 ```
 
 ### Option B: Hackable Install (For tinkering)
 
 ```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
+git clone https://github.com/mullusi/mullusi.git
+cd mullusi
 npm install
 npm run build
 npm link
@@ -130,7 +130,7 @@ The hackable install gives you direct access to logs and code — useful for deb
 ## 7) Run Onboarding
 
 ```bash
-openclaw onboard --install-daemon
+mullusi onboard --install-daemon
 ```
 
 Follow the wizard:
@@ -144,40 +144,40 @@ Follow the wizard:
 
 ```bash
 # Check status
-openclaw status
+mullusi status
 
 # Check service (standard install = systemd user unit)
-systemctl --user status openclaw-gateway.service
+systemctl --user status mullusi-gateway.service
 
 # View logs
-journalctl --user -u openclaw-gateway.service -f
+journalctl --user -u mullusi-gateway.service -f
 ```
 
-## 9) Access the OpenClaw Dashboard
+## 9) Access the Mullusi Dashboard
 
 Replace `user@gateway-host` with your Pi username and hostname or IP address.
 
 On your computer, ask the Pi to print a fresh dashboard URL:
 
 ```bash
-ssh user@gateway-host 'openclaw dashboard --no-open'
+ssh user@gateway-host 'mullusi dashboard --no-open'
 ```
 
 The command prints `Dashboard URL:`. Depending on how `gateway.auth.token`
-is configured, the URL may be a plain `http://127.0.0.1:18789/` link or one
+is configured, the URL may be a plain `http://127.0.0.1:18790/` link or one
 that includes `#token=...`.
 
 In another terminal on your computer, create the SSH tunnel:
 
 ```bash
-ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
+ssh -N -L 18790:127.0.0.1:18790 user@gateway-host
 ```
 
 Then open the printed Dashboard URL in your local browser.
 
 If the UI asks for shared-secret auth, paste the configured token or password
 into Control UI settings. For token auth, use `gateway.auth.token` (or
-`OPENCLAW_GATEWAY_TOKEN`).
+`MULLUSI_GATEWAY_TOKEN`).
 
 For always-on remote access, see [Tailscale](/gateway/tailscale).
 
@@ -201,10 +201,10 @@ See [Pi USB boot guide](https://www.raspberrypi.com/documentation/computers/rasp
 On lower-power Pi hosts, enable Node's module compile cache so repeated CLI runs are faster:
 
 ```bash
-grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF' # pragma: allowlist secret
-export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
-mkdir -p /var/tmp/openclaw-compile-cache
-export OPENCLAW_NO_RESPAWN=1
+grep -q 'NODE_COMPILE_CACHE=/var/tmp/mullusi-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF' # pragma: allowlist secret
+export NODE_COMPILE_CACHE=/var/tmp/mullusi-compile-cache
+mkdir -p /var/tmp/mullusi-compile-cache
+export MULLUSI_NO_RESPAWN=1
 EOF
 source ~/.bashrc
 ```
@@ -213,22 +213,22 @@ Notes:
 
 - `NODE_COMPILE_CACHE` speeds up subsequent runs (`status`, `health`, `--help`).
 - `/var/tmp` survives reboots better than `/tmp`.
-- `OPENCLAW_NO_RESPAWN=1` avoids extra startup cost from CLI self-respawn.
+- `MULLUSI_NO_RESPAWN=1` avoids extra startup cost from CLI self-respawn.
 - First run warms the cache; later runs benefit most.
 
 ### systemd startup tuning (optional)
 
-If this Pi is mostly running OpenClaw, add a service drop-in to reduce restart
+If this Pi is mostly running Mullusi, add a service drop-in to reduce restart
 jitter and keep startup env stable:
 
 ```bash
-systemctl --user edit openclaw-gateway.service
+systemctl --user edit mullusi-gateway.service
 ```
 
 ```ini
 [Service]
-Environment=OPENCLAW_NO_RESPAWN=1
-Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
+Environment=MULLUSI_NO_RESPAWN=1
+Environment=NODE_COMPILE_CACHE=/var/tmp/mullusi-compile-cache
 Restart=always
 RestartSec=2
 TimeoutStartSec=90
@@ -238,10 +238,10 @@ Then apply:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user restart openclaw-gateway.service
+systemctl --user restart mullusi-gateway.service
 ```
 
-If possible, keep OpenClaw state/cache on SSD-backed storage to avoid SD-card
+If possible, keep Mullusi state/cache on SSD-backed storage to avoid SD-card
 random-I/O bottlenecks during cold starts.
 
 If this is a headless Pi, enable lingering once so the user service survives
@@ -283,7 +283,7 @@ htop
 
 ### Binary Compatibility
 
-Most OpenClaw features work on ARM64, but some external binaries may need ARM builds:
+Most Mullusi features work on ARM64, but some external binaries may need ARM builds:
 
 | Tool               | ARM64 Status | Notes                               |
 | ------------------ | ------------ | ----------------------------------- |
@@ -333,13 +333,13 @@ Onboarding sets this up, but to verify:
 
 ```bash
 # Check service is enabled
-systemctl --user is-enabled openclaw-gateway.service
+systemctl --user is-enabled mullusi-gateway.service
 
 # Enable if not
-systemctl --user enable openclaw-gateway.service
+systemctl --user enable mullusi-gateway.service
 
 # Start on boot
-systemctl --user start openclaw-gateway.service
+systemctl --user start mullusi-gateway.service
 ```
 
 ---
@@ -366,12 +366,12 @@ free -h
 
 ```bash
 # Check logs
-journalctl --user -u openclaw-gateway.service --no-pager -n 100
+journalctl --user -u mullusi-gateway.service --no-pager -n 100
 
 # Common fix: rebuild
-cd ~/openclaw  # if using hackable install
+cd ~/mullusi  # if using hackable install
 npm run build
-systemctl --user restart openclaw-gateway.service
+systemctl --user restart mullusi-gateway.service
 ```
 
 ### ARM Binary Issues

@@ -15,7 +15,7 @@ export function expectPairingReplyText(
   },
 ): string {
   const code = params.code ?? extractPairingCode(text);
-  expect(text).toContain("OpenClaw: access not configured.");
+  expect(text).toContain("Mullusi: access not configured.");
   expect(text).toContain(params.idLine);
   expect(text).toContain("Pairing code:");
   expect(text).toContain(`\n\`\`\`\n${code}\n\`\`\`\n`);

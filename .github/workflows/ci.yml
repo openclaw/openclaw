@@ -121,15 +121,15 @@ jobs:
       - name: Build CI manifest
         id: manifest
         env:
-          OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
-          OPENCLAW_CI_DOCS_CHANGED: ${{ steps.docs_scope.outputs.docs_changed }}
-          OPENCLAW_CI_RUN_NODE: ${{ steps.changed_scope.outputs.run_node || 'false' }}
-          OPENCLAW_CI_RUN_MACOS: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
-          OPENCLAW_CI_RUN_ANDROID: ${{ steps.changed_scope.outputs.run_android || 'false' }}
-          OPENCLAW_CI_RUN_WINDOWS: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
-          OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
-          OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
-          OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
+          MULLUSI_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
+          MULLUSI_CI_DOCS_CHANGED: ${{ steps.docs_scope.outputs.docs_changed }}
+          MULLUSI_CI_RUN_NODE: ${{ steps.changed_scope.outputs.run_node || 'false' }}
+          MULLUSI_CI_RUN_MACOS: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
+          MULLUSI_CI_RUN_ANDROID: ${{ steps.changed_scope.outputs.run_android || 'false' }}
+          MULLUSI_CI_RUN_WINDOWS: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
+          MULLUSI_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
+          MULLUSI_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
+          MULLUSI_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
@@ -158,17 +158,17 @@ jobs:
           const outputPath = process.env.GITHUB_OUTPUT;
           const eventName = process.env.GITHUB_EVENT_NAME ?? "pull_request";
           const isPush = eventName === "push";
-          const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
-          const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
-          const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
-          const runMacos = parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly;
-          const runAndroid = parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly;
-          const runWindows = parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) && !docsOnly;
-          const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
+          const docsOnly = parseBoolean(process.env.MULLUSI_CI_DOCS_ONLY);
+          const docsChanged = parseBoolean(process.env.MULLUSI_CI_DOCS_CHANGED);
+          const runNode = parseBoolean(process.env.MULLUSI_CI_RUN_NODE) && !docsOnly;
+          const runMacos = parseBoolean(process.env.MULLUSI_CI_RUN_MACOS) && !docsOnly;
+          const runAndroid = parseBoolean(process.env.MULLUSI_CI_RUN_ANDROID) && !docsOnly;
+          const runWindows = parseBoolean(process.env.MULLUSI_CI_RUN_WINDOWS) && !docsOnly;
+          const runSkillsPython = parseBoolean(process.env.MULLUSI_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const hasChangedExtensions =
-            parseBoolean(process.env.OPENCLAW_CI_HAS_CHANGED_EXTENSIONS) && !docsOnly;
+            parseBoolean(process.env.MULLUSI_CI_HAS_CHANGED_EXTENSIONS) && !docsOnly;
           const changedExtensionsMatrix = hasChangedExtensions
-            ? parseJson(process.env.OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX, { include: [] })
+            ? parseJson(process.env.MULLUSI_CI_CHANGED_EXTENSIONS_MATRIX, { include: [] })
             : { include: [] };
           const extensionShardMatrix = createMatrix(
             runNode
@@ -488,8 +488,8 @@ jobs:
 
       - name: Run extension shard
         env:
-          OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
-        run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
+          MULLUSI_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
+        run: pnpm test:extensions:batch -- "$MULLUSI_EXTENSION_BATCH"
 
   checks-fast-extensions:
     name: checks-fast-extensions
@@ -542,9 +542,9 @@ jobs:
         env:
           TASK: ${{ matrix.task }}
         run: |
-          echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+          echo "MULLUSI_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
           if [ "$TASK" = "channels" ]; then
-            echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
+            echo "MULLUSI_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
           fi
 
       - name: Download dist artifact
@@ -579,8 +579,8 @@ jobs:
             compat-node22)
               pnpm build
               pnpm ui:build
-              node openclaw.mjs --help
-              node openclaw.mjs status --json --timeout 1
+              node mullusi.mjs --help
+              node mullusi.mjs status --json --timeout 1
               pnpm test:build:singleton
               ;;
             *)
@@ -613,8 +613,8 @@ jobs:
 
       - name: Run changed extension tests
         env:
-          OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
-        run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
+          MULLUSI_CHANGED_EXTENSION: ${{ matrix.extension }}
+        run: pnpm test:extension "$MULLUSI_CHANGED_EXTENSION"
 
   # Types, lint, and format check.
   check:
@@ -638,7 +638,7 @@ jobs:
 
       - name: Check types and lint and oxfmt
         env:
-          OPENCLAW_LOCAL_CHECK: "0"
+          MULLUSI_LOCAL_CHECK: "0"
         run: pnpm check
 
       - name: Strict TS build smoke
@@ -837,10 +837,10 @@ jobs:
         run: pnpm build
 
       - name: Smoke test CLI launcher help
-        run: node openclaw.mjs --help
+        run: node mullusi.mjs --help
 
       - name: Smoke test CLI launcher status json
-        run: node openclaw.mjs status --json --timeout 1
+        run: node mullusi.mjs status --json --timeout 1
 
       - name: Smoke test built bundled plugin singleton
         run: pnpm test:build:singleton
@@ -907,7 +907,7 @@ jobs:
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 32 vCPU runner.
-      OPENCLAW_VITEST_MAX_WORKERS: 1
+      MULLUSI_VITEST_MAX_WORKERS: 1
     defaults:
       run:
         shell: bash
@@ -1046,7 +1046,7 @@ jobs:
       - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-          OPENCLAW_VITEST_MAX_WORKERS: 2
+          MULLUSI_VITEST_MAX_WORKERS: 2
           TASK: ${{ matrix.task }}
         shell: bash
         run: |

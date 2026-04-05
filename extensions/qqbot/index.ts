@@ -1,5 +1,5 @@
-import type { ChannelPlugin, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import type { ChannelPlugin, MullusiPluginApi } from "mullusi/plugin-sdk/core";
+import { defineChannelPluginEntry } from "mullusi/plugin-sdk/core";
 import { qqbotPlugin } from "./src/channel.js";
 import { resolveQQBotAccount } from "./src/config.js";
 import { sendDocument, type MediaTargetContext } from "./src/outbound.js";
@@ -17,7 +17,7 @@ export default defineChannelPluginEntry({
   description: "QQ Bot channel plugin",
   plugin: qqbotPlugin as ChannelPlugin,
   setRuntime: setQQBotRuntime,
-  registerFull(api: OpenClawPluginApi) {
+  registerFull(api: MullusiPluginApi) {
     registerChannelTool(api);
     registerRemindTool(api);
 

@@ -1,7 +1,7 @@
 ---
 name: qqbot-media
 description: QQBot 富媒体收发能力。使用 <qqmedia> 标签，系统根据文件扩展名自动识别类型（图片/语音/视频/文件）。
-metadata: { "openclaw": { "emoji": "📸", "requires": { "config": ["channels.qqbot"] } } }
+metadata: { "mullusi": { "emoji": "📸", "requires": { "config": ["channels.qqbot"] } } }
 ---
 
 # QQBot 富媒体收发

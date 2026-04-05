@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import {
   mergeSessionEntry,
   setSessionRuntimeModel,
@@ -19,7 +19,7 @@ function resolveNonNegativeNumber(value: number | undefined): number | undefined
 }
 
 export async function updateSessionStoreAfterAgentRun(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   contextTokensOverride?: number;
   sessionId: string;
   sessionKey: string;

@@ -5,7 +5,7 @@ import { sendGatewayAuthFailure } from "./http-common.js";
 import { getBearerToken, getHeader, resolveHttpBrowserOriginPolicy } from "./http-utils.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 
-const OPERATOR_SCOPES_HEADER = "x-openclaw-scopes";
+const OPERATOR_SCOPES_HEADER = "x-mullusi-scopes";
 
 export async function authorizeGatewayBearerRequestOrReply(params: {
   req: IncomingMessage;
@@ -36,7 +36,7 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
 export function resolveGatewayRequestedOperatorScopes(req: IncomingMessage): string[] {
   const raw = getHeader(req, OPERATOR_SCOPES_HEADER)?.trim();
   if (raw === undefined) {
-    // No x-openclaw-scopes header present at all: the caller is a plain
+    // No x-mullusi-scopes header present at all: the caller is a plain
     // Bearer-token HTTP client (curl, OpenAI SDK, etc.) that has already
     // passed gateway token authentication.  Grant the same default operator
     // scopes that the CLI and other first-party callers receive so that

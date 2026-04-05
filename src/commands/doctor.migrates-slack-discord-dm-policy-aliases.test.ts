@@ -10,7 +10,7 @@ describe("doctor command", () => {
     { timeout: DOCTOR_MIGRATION_TIMEOUT_MS },
     async () => {
       readConfigFileSnapshot.mockResolvedValue({
-        path: "/tmp/openclaw.json",
+        path: "/tmp/mullusi.json",
         exists: true,
         raw: "{}",
         parsed: {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import type { WizardPrompter } from "./prompts.js";
 import {
@@ -97,7 +97,7 @@ describe("discoverUnconfiguredPlugins", () => {
         gateway: { label: "Gateway" },
       }),
     ];
-    const config: OpenClawConfig = {
+    const config: MullusiConfig = {
       plugins: {
         entries: {
           openshell: {
@@ -123,7 +123,7 @@ describe("discoverUnconfiguredPlugins", () => {
         gateway: { label: "Gateway" },
       }),
     ];
-    const config: OpenClawConfig = {
+    const config: MullusiConfig = {
       plugins: {
         entries: {
           openshell: {
@@ -145,7 +145,7 @@ describe("discoverUnconfiguredPlugins", () => {
         endpoint: { label: "Endpoint" },
       }),
     ];
-    const config: OpenClawConfig = {
+    const config: MullusiConfig = {
       plugins: {
         entries: {
           "test-plugin": {
@@ -193,7 +193,7 @@ describe("discoverUnconfiguredPlugins", () => {
         },
       ),
     ];
-    const config: OpenClawConfig = {
+    const config: MullusiConfig = {
       plugins: {
         entries: {
           brave: {

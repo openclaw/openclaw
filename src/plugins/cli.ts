@@ -2,17 +2,17 @@ import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { removeCommandByName } from "../cli/program/command-tree.js";
 import { registerLazyCommand } from "../cli/program/register-lazy-command.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  loadOpenClawPluginCliRegistry,
-  loadOpenClawPlugins,
+  loadMullusiPluginCliRegistry,
+  loadMullusiPlugins,
   type PluginLoadOptions,
 } from "./loader.js";
 import type { PluginRegistry } from "./registry.js";
-import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
+import type { MullusiPluginCliCommandDescriptor } from "./types.js";
 import type { PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -26,7 +26,7 @@ type RegisterPluginCliOptions = {
 
 function canRegisterPluginCliLazily(entry: {
   commands: string[];
-  descriptors: OpenClawPluginCliCommandDescriptor[];
+  descriptors: MullusiPluginCliCommandDescriptor[];
 }): boolean {
   if (entry.descriptors.length === 0) {
     return false;
@@ -57,7 +57,7 @@ function mergeCliRegistrars(params: {
   ];
 }
 
-function resolvePluginCliLoadContext(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) {
+function resolvePluginCliLoadContext(cfg?: MullusiConfig, env?: NodeJS.ProcessEnv) {
   const config = cfg ?? loadConfig();
   const autoEnabled = applyPluginAutoEnable({ config, env: env ?? process.env });
   const resolvedConfig = autoEnabled.config;
@@ -81,14 +81,14 @@ function resolvePluginCliLoadContext(cfg?: OpenClawConfig, env?: NodeJS.ProcessE
 }
 
 async function loadPluginCliMetadataRegistry(
-  cfg?: OpenClawConfig,
+  cfg?: MullusiConfig,
   env?: NodeJS.ProcessEnv,
   loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
 ) {
   const context = resolvePluginCliLoadContext(cfg, env);
   return {
     ...context,
-    registry: await loadOpenClawPluginCliRegistry({
+    registry: await loadMullusiPluginCliRegistry({
       config: context.config,
       activationSourceConfig: context.rawConfig,
       autoEnabledReasons: context.autoEnabledReasons,
@@ -101,12 +101,12 @@ async function loadPluginCliMetadataRegistry(
 }
 
 async function loadPluginCliCommandRegistry(
-  cfg?: OpenClawConfig,
+  cfg?: MullusiConfig,
   env?: NodeJS.ProcessEnv,
   loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
 ) {
   const context = resolvePluginCliLoadContext(cfg, env);
-  const runtimeRegistry = loadOpenClawPlugins({
+  const runtimeRegistry = loadMullusiPlugins({
     config: context.config,
     activationSourceConfig: context.rawConfig,
     autoEnabledReasons: context.autoEnabledReasons,
@@ -124,7 +124,7 @@ async function loadPluginCliCommandRegistry(
   }
 
   try {
-    const metadataRegistry = await loadOpenClawPluginCliRegistry({
+    const metadataRegistry = await loadMullusiPluginCliRegistry({
       config: context.config,
       activationSourceConfig: context.rawConfig,
       autoEnabledReasons: context.autoEnabledReasons,
@@ -153,14 +153,14 @@ async function loadPluginCliCommandRegistry(
 }
 
 export async function getPluginCliCommandDescriptors(
-  cfg?: OpenClawConfig,
+  cfg?: MullusiConfig,
   env?: NodeJS.ProcessEnv,
   loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
-): Promise<OpenClawPluginCliCommandDescriptor[]> {
+): Promise<MullusiPluginCliCommandDescriptor[]> {
   try {
     const { registry } = await loadPluginCliMetadataRegistry(cfg, env, loaderOptions);
     const seen = new Set<string>();
-    const descriptors: OpenClawPluginCliCommandDescriptor[] = [];
+    const descriptors: MullusiPluginCliCommandDescriptor[] = [];
     for (const entry of registry.cliRegistrars) {
       for (const descriptor of entry.descriptors) {
         if (seen.has(descriptor.name)) {
@@ -178,7 +178,7 @@ export async function getPluginCliCommandDescriptors(
 
 export async function registerPluginCliCommands(
   program: Command,
-  cfg?: OpenClawConfig,
+  cfg?: MullusiConfig,
   env?: NodeJS.ProcessEnv,
   loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
   options?: RegisterPluginCliOptions,

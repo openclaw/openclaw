@@ -1,20 +1,20 @@
 {
-  "name": "@openclaw/nextcloud-talk",
+  "name": "@mullusi/nextcloud-talk",
   "version": "2026.4.4",
-  "description": "OpenClaw Nextcloud Talk channel plugin",
+  "description": "Mullusi Nextcloud Talk channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "mullusi": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.4"
+    "mullusi": ">=2026.4.4"
   },
   "peerDependenciesMeta": {
-    "openclaw": {
+    "mullusi": {
       "optional": true
     }
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],
@@ -34,7 +34,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/nextcloud-talk",
+      "npmSpec": "@mullusi/nextcloud-talk",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.4"
     },
@@ -42,7 +42,7 @@
       "pluginApi": ">=2026.4.4"
     },
     "build": {
-      "openclawVersion": "2026.4.4"
+      "mullusiVersion": "2026.4.4"
     },
     "release": {
       "publishToClawHub": true,

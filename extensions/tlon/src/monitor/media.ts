@@ -5,7 +5,7 @@ import {
   fetchRemoteMedia,
   MAX_IMAGE_BYTES,
   saveMediaBuffer,
-} from "openclaw/plugin-sdk/media-runtime";
+} from "mullusi/plugin-sdk/media-runtime";
 import { getDefaultSsrFPolicy } from "../urbit/context.js";
 
 const MAX_IMAGES_PER_MESSAGE = 8;
@@ -145,7 +145,7 @@ function getExtensionFromUrl(url: string): string | null {
 
 /**
  * Download all images from a message and return attachment metadata.
- * Format matches OpenClaw's expected attachment structure.
+ * Format matches Mullusi's expected attachment structure.
  */
 export async function downloadMessageImages(
   content: unknown,

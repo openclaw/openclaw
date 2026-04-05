@@ -66,7 +66,7 @@ it("loads the packaged runtime wrapper without recursing through the stable root
     "package.json",
     JSON.stringify(
       {
-        name: "openclaw",
+        name: "mullusi",
         type: "module",
         exports: {
           "./plugin-sdk": "./dist/plugin-sdk/index.js",

@@ -2,14 +2,14 @@ export {
   isChannelExecApprovalClientEnabledFromConfig,
   matchesApprovalRequestFilters,
   getExecApprovalReplyMetadata,
-} from "openclaw/plugin-sdk/approval-client-runtime";
-export { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
+} from "mullusi/plugin-sdk/approval-client-runtime";
+export { resolveApprovalApprovers } from "mullusi/plugin-sdk/approval-auth-runtime";
 export {
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
-} from "openclaw/plugin-sdk/approval-delivery-runtime";
+} from "mullusi/plugin-sdk/approval-delivery-runtime";
 export {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
   doesApprovalRequestMatchChannelAccount,
-} from "openclaw/plugin-sdk/approval-native-runtime";
+} from "mullusi/plugin-sdk/approval-native-runtime";

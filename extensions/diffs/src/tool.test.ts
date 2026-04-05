@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
-import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
+import type { MullusiPluginApi, MullusiPluginToolContext } from "../api.js";
 import type { DiffScreenshotter } from "./browser.js";
 import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
 import { DiffArtifactStore } from "./store.js";
@@ -15,7 +15,7 @@ describe("diffs tool", () => {
   let cleanupRootDir: () => Promise<void>;
 
   beforeEach(async () => {
-    ({ store, cleanup: cleanupRootDir } = await createDiffStoreHarness("openclaw-diffs-tool-"));
+    ({ store, cleanup: cleanupRootDir } = await createDiffStoreHarness("mullusi-diffs-tool-"));
   });
 
   afterEach(async () => {
@@ -37,18 +37,18 @@ describe("diffs tool", () => {
     });
 
     const text = readTextContent(result, 0);
-    expect(text).toContain("http://127.0.0.1:18789/plugins/diffs/view/");
+    expect(text).toContain("http://127.0.0.1:18790/plugins/diffs/view/");
     expect((result?.details as Record<string, unknown>).viewerUrl).toBeDefined();
   });
 
   it("uses configured viewerBaseUrl when tool input omits baseUrl", async () => {
     const tool = createDiffsTool({
       api: createApi({
-        viewerBaseUrl: "https://example.com/openclaw/",
+        viewerBaseUrl: "https://example.com/mullusi/",
       }),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
-      viewerBaseUrl: "https://example.com/openclaw",
+      viewerBaseUrl: "https://example.com/mullusi",
     });
 
     const result = await tool.execute?.("tool-viewer-config", {
@@ -59,21 +59,21 @@ describe("diffs tool", () => {
     });
 
     expect(readTextContent(result, 0)).toContain(
-      "https://example.com/openclaw/plugins/diffs/view/",
+      "https://example.com/mullusi/plugins/diffs/view/",
     );
     expect((result?.details as Record<string, unknown>).viewerUrl).toEqual(
-      expect.stringContaining("https://example.com/openclaw/plugins/diffs/view/"),
+      expect.stringContaining("https://example.com/mullusi/plugins/diffs/view/"),
     );
   });
 
   it("prefers per-call baseUrl over configured viewerBaseUrl", async () => {
     const tool = createDiffsTool({
       api: createApi({
-        viewerBaseUrl: "https://example.com/openclaw",
+        viewerBaseUrl: "https://example.com/mullusi",
       }),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
-      viewerBaseUrl: "https://example.com/openclaw",
+      viewerBaseUrl: "https://example.com/mullusi",
     });
 
     const result = await tool.execute?.("tool-viewer-override", {
@@ -471,7 +471,7 @@ describe("diffs tool", () => {
   });
 });
 
-function createApi(pluginConfig?: Record<string, unknown>): OpenClawPluginApi {
+function createApi(pluginConfig?: Record<string, unknown>): MullusiPluginApi {
   return createTestPluginApi({
     id: "diffs",
     name: "Diffs",
@@ -479,20 +479,20 @@ function createApi(pluginConfig?: Record<string, unknown>): OpenClawPluginApi {
     source: "test",
     config: {
       gateway: {
-        port: 18789,
+        port: 18790,
         bind: "loopback",
       },
     },
     pluginConfig,
-    runtime: {} as OpenClawPluginApi["runtime"],
-  }) as OpenClawPluginApi;
+    runtime: {} as MullusiPluginApi["runtime"],
+  }) as MullusiPluginApi;
 }
 
 function createToolWithScreenshotter(
   store: DiffArtifactStore,
   screenshotter: DiffScreenshotter,
   defaults = DEFAULT_DIFFS_TOOL_DEFAULTS,
-  context: OpenClawPluginToolContext | undefined = {
+  context: MullusiPluginToolContext | undefined = {
     agentId: "main",
     sessionId: "session-123",
     messageChannel: "discord",

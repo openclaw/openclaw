@@ -21,12 +21,12 @@ describe("avatar policy", () => {
     expect(isAvatarHttpUrl("https://example.com/avatar.png")).toBe(true);
     expect(isAvatarHttpUrl("ftp://example.com/avatar.png")).toBe(false);
     expect(hasAvatarUriScheme("slack://avatar")).toBe(true);
-    expect(isWindowsAbsolutePath("C:\\\\avatars\\\\openclaw.png")).toBe(true);
+    expect(isWindowsAbsolutePath("C:\\\\avatars\\\\mullusi.png")).toBe(true);
   });
 
   it("accepts workspace-relative avatar paths and rejects URI schemes", () => {
-    expect(isWorkspaceRelativeAvatarPath("avatars/openclaw.png")).toBe(true);
-    expect(isWorkspaceRelativeAvatarPath("C:\\\\avatars\\\\openclaw.png")).toBe(true);
+    expect(isWorkspaceRelativeAvatarPath("avatars/mullusi.png")).toBe(true);
+    expect(isWorkspaceRelativeAvatarPath("C:\\\\avatars\\\\mullusi.png")).toBe(true);
     expect(isWorkspaceRelativeAvatarPath("https://example.com/avatar.png")).toBe(false);
     expect(isWorkspaceRelativeAvatarPath("data:image/png;base64,AAAA")).toBe(false);
     expect(isWorkspaceRelativeAvatarPath("~/avatar.png")).toBe(false);
@@ -43,8 +43,8 @@ describe("avatar policy", () => {
   });
 
   it("detects avatar-like path strings", () => {
-    expect(looksLikeAvatarPath("avatars/openclaw.svg")).toBe(true);
-    expect(looksLikeAvatarPath("openclaw.webp")).toBe(true);
+    expect(looksLikeAvatarPath("avatars/mullusi.svg")).toBe(true);
+    expect(looksLikeAvatarPath("mullusi.webp")).toBe(true);
     expect(looksLikeAvatarPath("avatar.ico")).toBe(true);
     expect(looksLikeAvatarPath("A")).toBe(false);
   });

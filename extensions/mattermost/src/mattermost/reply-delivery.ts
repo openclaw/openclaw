@@ -1,10 +1,10 @@
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
+} from "mullusi/plugin-sdk/reply-payload";
 import {
   getAgentScopedMediaLocalRoots,
-  type OpenClawConfig,
+  type MullusiConfig,
   type PluginRuntime,
   type ReplyPayload,
 } from "./runtime-api.js";
@@ -15,7 +15,7 @@ type SendMattermostMessage = (
   to: string,
   text: string,
   opts: {
-    cfg?: OpenClawConfig;
+    cfg?: MullusiConfig;
     accountId?: string;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
@@ -25,7 +25,7 @@ type SendMattermostMessage = (
 
 export async function deliverMattermostReplyPayload(params: {
   core: PluginRuntime;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   payload: ReplyPayload;
   to: string;
   accountId: string;

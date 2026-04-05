@@ -103,11 +103,11 @@ prepare_gates() {
       echo "Docs-only change detected with high confidence; skipping pnpm test."
     else
       gates_mode="full"
-      echo "Running pnpm test with OPENCLAW_VITEST_MAX_WORKERS=${OPENCLAW_VITEST_MAX_WORKERS:-4}."
+      echo "Running pnpm test with MULLUSI_VITEST_MAX_WORKERS=${MULLUSI_VITEST_MAX_WORKERS:-4}."
       run_quiet_logged \
         "pnpm test" \
         ".local/gates-test.log" \
-        env OPENCLAW_VITEST_MAX_WORKERS="${OPENCLAW_VITEST_MAX_WORKERS:-4}" pnpm test
+        env MULLUSI_VITEST_MAX_WORKERS="${MULLUSI_VITEST_MAX_WORKERS:-4}" pnpm test
       previous_full_gates_head="$current_head"
     fi
   fi

@@ -1,9 +1,9 @@
 import {
   createModelCatalogPresetAppliers,
   type ModelProviderConfig,
-  type OpenClawConfig,
+  type MullusiConfig,
   type ProviderOnboardPresetAppliers,
-} from "openclaw/plugin-sdk/provider-onboard";
+} from "mullusi/plugin-sdk/provider-onboard";
 import {
   buildStepFunPlanProvider,
   buildStepFunProvider,
@@ -34,7 +34,7 @@ function createStepFunPresetAppliers(params: {
 }): ProviderOnboardPresetAppliers<[string]> {
   return createModelCatalogPresetAppliers<[string]>({
     primaryModelRef: params.primaryModelRef,
-    resolveParams: (_cfg: OpenClawConfig, baseUrl: string) => {
+    resolveParams: (_cfg: MullusiConfig, baseUrl: string) => {
       const provider = params.buildProvider(baseUrl);
       const models = provider.models ?? [];
       return {
@@ -65,18 +65,18 @@ const stepFunPlanPresetAppliers = createStepFunPresetAppliers({
   buildProvider: buildStepFunPlanProvider,
 });
 
-export function applyStepFunStandardConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+export function applyStepFunStandardConfigCn(cfg: MullusiConfig): MullusiConfig {
   return stepFunPresetAppliers.applyConfig(cfg, STEPFUN_STANDARD_CN_BASE_URL);
 }
 
-export function applyStepFunStandardConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyStepFunStandardConfig(cfg: MullusiConfig): MullusiConfig {
   return stepFunPresetAppliers.applyConfig(cfg, STEPFUN_STANDARD_INTL_BASE_URL);
 }
 
-export function applyStepFunPlanConfigCn(cfg: OpenClawConfig): OpenClawConfig {
+export function applyStepFunPlanConfigCn(cfg: MullusiConfig): MullusiConfig {
   return stepFunPlanPresetAppliers.applyConfig(cfg, STEPFUN_PLAN_CN_BASE_URL);
 }
 
-export function applyStepFunPlanConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyStepFunPlanConfig(cfg: MullusiConfig): MullusiConfig {
   return stepFunPlanPresetAppliers.applyConfig(cfg, STEPFUN_PLAN_INTL_BASE_URL);
 }

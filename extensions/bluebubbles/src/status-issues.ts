@@ -1,4 +1,4 @@
-import { collectIssuesForEnabledAccounts } from "openclaw/plugin-sdk/status-helpers";
+import { collectIssuesForEnabledAccounts } from "mullusi/plugin-sdk/status-helpers";
 import type { ChannelAccountSnapshot } from "./runtime-api.js";
 
 type BlueBubblesAccountStatus = {
@@ -69,7 +69,7 @@ export function collectBlueBubblesStatusIssues(accounts: ChannelAccountSnapshot[
           accountId,
           kind: "config",
           message: "Not configured (missing serverUrl or password).",
-          fix: "Run: openclaw channels add bluebubbles --http-url <server-url> --password <password>",
+          fix: "Run: mullusi channels add bluebubbles --http-url <server-url> --password <password>",
         });
         return;
       }

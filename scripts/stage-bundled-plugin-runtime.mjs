@@ -17,21 +17,35 @@ function ensureSymlink(targetValue, targetPath, type) {
     fs.symlinkSync(targetValue, targetPath, type);
     return;
   } catch (error) {
-    if (error?.code !== "EEXIST") {
+    if (error?.code === "EEXIST") {
+      try {
+        if (fs.lstatSync(targetPath).isSymbolicLink() && fs.readlinkSync(targetPath) === targetValue) {
+          return;
+        }
+      } catch {
+        // Fall through and recreate the target when inspection fails.
+      }
+      removePathIfExists(targetPath);
+      try {
+        fs.symlinkSync(targetValue, targetPath, type);
+        return;
+      } catch (retryError) {
+        if (retryError?.code !== "EPERM") throw retryError;
+      }
+    } else if (error?.code !== "EPERM") {
       throw error;
     }
-  }
-
-  try {
-    if (fs.lstatSync(targetPath).isSymbolicLink() && fs.readlinkSync(targetPath) === targetValue) {
-      return;
+    // EPERM fallback: copy instead of symlink (Windows without Developer Mode)
+    const resolvedSource = path.resolve(path.dirname(targetPath), targetValue);
+    if (fs.existsSync(resolvedSource)) {
+      const stat = fs.statSync(resolvedSource);
+      if (stat.isDirectory()) {
+        fs.cpSync(resolvedSource, targetPath, { recursive: true });
+      } else {
+        fs.copyFileSync(resolvedSource, targetPath);
+      }
     }
-  } catch {
-    // Fall through and recreate the target when inspection fails.
   }
-
-  removePathIfExists(targetPath);
-  fs.symlinkSync(targetValue, targetPath, type);
 }
 
 function symlinkPath(sourcePath, targetPath, type) {
@@ -46,7 +60,7 @@ function shouldCopyRuntimeFile(sourcePath) {
   const relativePath = sourcePath.replace(/\\/g, "/");
   return (
     relativePath.endsWith("/package.json") ||
-    relativePath.endsWith("/openclaw.plugin.json") ||
+    relativePath.endsWith("/mullusi.plugin.json") ||
     relativePath.endsWith("/.codex-plugin/plugin.json") ||
     relativePath.endsWith("/.claude-plugin/plugin.json") ||
     relativePath.endsWith("/.cursor-plugin/plugin.json")

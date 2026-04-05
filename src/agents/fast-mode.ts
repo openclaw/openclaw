@@ -1,5 +1,5 @@
 import { normalizeFastMode } from "../auto-reply/thinking.shared.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
@@ -17,7 +17,7 @@ export function resolveFastModeParam(
 }
 
 function resolveConfiguredFastModeRaw(params: {
-  cfg: OpenClawConfig | undefined;
+  cfg: MullusiConfig | undefined;
   provider: string;
   model: string;
 }): unknown {
@@ -27,7 +27,7 @@ function resolveConfiguredFastModeRaw(params: {
 }
 
 export function resolveConfiguredFastMode(params: {
-  cfg: OpenClawConfig | undefined;
+  cfg: MullusiConfig | undefined;
   provider: string;
   model: string;
 }): boolean {
@@ -39,7 +39,7 @@ export function resolveConfiguredFastMode(params: {
 }
 
 export function resolveFastModeState(params: {
-  cfg: OpenClawConfig | undefined;
+  cfg: MullusiConfig | undefined;
   provider: string;
   model: string;
   agentId?: string;

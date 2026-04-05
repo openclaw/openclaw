@@ -10,7 +10,7 @@ const qianfanApiKeyEnv = ["QIANFAN_API", "KEY"].join("_");
 describe("Qianfan provider", () => {
   it("should include qianfan when QIANFAN_API_KEY is configured", async () => {
     // pragma: allowlist secret
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const qianfanApiKey = "test-key"; // pragma: allowlist secret
     await withEnvAsync({ [qianfanApiKeyEnv]: qianfanApiKey }, async () => {
       const providers = await resolveImplicitProvidersForTest({ agentDir });

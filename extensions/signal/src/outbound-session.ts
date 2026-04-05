@@ -1,4 +1,4 @@
-import { type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { type RoutePeer } from "mullusi/plugin-sdk/routing";
 import { resolveSignalPeerId, resolveSignalRecipient, resolveSignalSender } from "./identity.js";
 import { looksLikeUuid } from "./uuid.js";
 

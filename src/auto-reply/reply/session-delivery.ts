@@ -95,7 +95,7 @@ export function resolveLastChannelRaw(params: {
   // created via an external channel (e.g. Telegram, iMessage), webchat/dashboard
   // access must not overwrite the persisted route — doing so causes subagent
   // completion events to be delivered to the dashboard instead of the original
-  // channel. See: https://github.com/openclaw/openclaw/issues/47745
+  // channel. See: https://github.com/mullusi/mullusi/issues/47745
   const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
   const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
   const hasEstablishedExternalRoute =

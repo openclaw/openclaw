@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { runCommandWithTimeout } from "../process/exec.js";
 import { discoverGatewayBeacons } from "./bonjour-discovery.js";
 
-const WIDE_AREA_DOMAIN = "openclaw.internal.";
+const WIDE_AREA_DOMAIN = "mullusi.internal.";
 
 describe("bonjour-discovery", () => {
   it("discovers beacons on darwin across local + wide-area domains", async () => {
@@ -17,8 +17,8 @@ describe("bonjour-discovery", () => {
         if (domain === "local.") {
           return {
             stdout: [
-              "Add 2 3 local. _openclaw-gw._tcp. Peter\\226\\128\\153s Mac Studio Gateway",
-              "Add 2 3 local. _openclaw-gw._tcp. Laptop Gateway",
+              "Add 2 3 local. _mullusi-gw._tcp. Peter\\226\\128\\153s Mac Studio Gateway",
+              "Add 2 3 local. _mullusi-gw._tcp. Laptop Gateway",
               "",
             ].join("\n"),
             stderr: "",
@@ -29,7 +29,7 @@ describe("bonjour-discovery", () => {
         }
         if (domain === WIDE_AREA_DOMAIN) {
           return {
-            stdout: [`Add 2 3 ${WIDE_AREA_DOMAIN} _openclaw-gw._tcp. Tailnet Gateway`, ""].join(
+            stdout: [`Add 2 3 ${WIDE_AREA_DOMAIN} _mullusi-gw._tcp. Tailnet Gateway`, ""].join(
               "\n",
             ),
             stderr: "",
@@ -57,14 +57,14 @@ describe("bonjour-discovery", () => {
           "txtvers=1",
           `displayName=${displayName}`,
           `lanHost=${host}`,
-          "gatewayPort=18789",
+          "gatewayPort=18790",
           "sshPort=22",
           tailnetDns ? `tailnetDns=${tailnetDns}` : null,
         ].filter((v): v is string => Boolean(v));
 
         return {
           stdout: [
-            `${instance}._openclaw-gw._tcp. can be reached at ${host}:18789`,
+            `${instance}._mullusi-gw._tcp. can be reached at ${host}:18790`,
             txtParts.join(" "),
             "",
           ].join("\n"),
@@ -114,7 +114,7 @@ describe("bonjour-discovery", () => {
       const domain = argv[3] ?? "";
       if (argv[0] === "dns-sd" && argv[1] === "-B" && domain === "local.") {
         return {
-          stdout: ["Add 2 3 local. _openclaw-gw._tcp. Studio Gateway", ""].join("\n"),
+          stdout: ["Add 2 3 local. _mullusi-gw._tcp. Studio Gateway", ""].join("\n"),
           stderr: "",
           code: 0,
           signal: null,
@@ -125,8 +125,8 @@ describe("bonjour-discovery", () => {
       if (argv[0] === "dns-sd" && argv[1] === "-L") {
         return {
           stdout: [
-            "Studio Gateway._openclaw-gw._tcp. can be reached at studio.local:18789",
-            "txtvers=1 displayName=Peter\\226\\128\\153s\\032Mac\\032Studio lanHost=studio.local gatewayPort=18789 sshPort=22",
+            "Studio Gateway._mullusi-gw._tcp. can be reached at studio.local:18790",
+            "txtvers=1 displayName=Peter\\226\\128\\153s\\032Mac\\032Studio lanHost=studio.local gatewayPort=18790 sshPort=22",
             "",
           ].join("\n"),
           stderr: "",
@@ -167,7 +167,7 @@ describe("bonjour-discovery", () => {
   it("falls back to tailnet DNS probing for wide-area when split DNS is not configured", async () => {
     const calls: Array<{ argv: string[]; timeoutMs: number }> = [];
     const zone = WIDE_AREA_DOMAIN.replace(/\.$/, "");
-    const serviceBase = `_openclaw-gw._tcp.${zone}`;
+    const serviceBase = `_mullusi-gw._tcp.${zone}`;
     const studioService = `studio-gateway.${serviceBase}`;
 
     const run = vi.fn(async (argv: string[], options: { timeoutMs: number }) => {
@@ -217,7 +217,7 @@ describe("bonjour-discovery", () => {
 
         if (server === "100.123.224.76" && qtype === "SRV" && qname === studioService) {
           return {
-            stdout: `0 0 18789 studio.${zone}.\n`,
+            stdout: `0 0 18790 studio.${zone}.\n`,
             stderr: "",
             code: 0,
             signal: null,
@@ -229,11 +229,11 @@ describe("bonjour-discovery", () => {
           return {
             stdout: [
               `"displayName=Studio"`,
-              `"gatewayPort=18789"`,
+              `"gatewayPort=18790"`,
               `"transport=gateway"`,
               `"sshPort=22"`,
               `"tailnetDns=peters-mac-studio-1.sheep-coho.ts.net"`,
-              `"cliPath=/opt/homebrew/bin/openclaw"`,
+              `"cliPath=/opt/homebrew/bin/mullusi"`,
               "",
             ].join(" "),
             stderr: "",
@@ -261,11 +261,11 @@ describe("bonjour-discovery", () => {
         instanceName: "studio-gateway",
         displayName: "Studio",
         host: `studio.${zone}`,
-        port: 18789,
+        port: 18790,
         tailnetDns: "peters-mac-studio-1.sheep-coho.ts.net",
-        gatewayPort: 18789,
+        gatewayPort: 18790,
         sshPort: 22,
-        cliPath: "/opt/homebrew/bin/openclaw",
+        cliPath: "/opt/homebrew/bin/mullusi",
       }),
     ]);
 
@@ -289,12 +289,12 @@ describe("bonjour-discovery", () => {
     await discoverGatewayBeacons({
       platform: "darwin",
       timeoutMs: 1,
-      domains: ["local", "openclaw.internal"],
+      domains: ["local", "mullusi.internal"],
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
     expect(calls.filter((c) => c[1] === "-B").map((c) => c[3])).toEqual(
-      expect.arrayContaining(["local.", "openclaw.internal."]),
+      expect.arrayContaining(["local.", "mullusi.internal."]),
     );
 
     calls.length = 0;

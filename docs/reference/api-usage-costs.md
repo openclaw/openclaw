@@ -10,7 +10,7 @@ title: "API Usage and Costs"
 # API usage & costs
 
 This doc lists **features that can invoke API keys** and where their costs show up. It focuses on
-OpenClaw features that can generate provider usage or paid API calls.
+Mullusi features that can generate provider usage or paid API calls.
 
 ## Where costs show up (chat + CLI)
 
@@ -27,39 +27,39 @@ OpenClaw features that can generate provider usage or paid API calls.
 
 - `/usage full` appends a usage footer to every reply, including **estimated cost** (API-key only).
 - `/usage tokens` shows tokens only; subscription-style OAuth/token and CLI flows hide dollar cost.
-- Gemini CLI note: when the CLI returns JSON output, OpenClaw reads usage from
+- Gemini CLI note: when the CLI returns JSON output, Mullusi reads usage from
   `stats`, normalizes `stats.cached` into `cacheRead`, and derives input tokens
   from `stats.input_tokens - stats.cached` when needed.
 
 Anthropic note: Anthropic's public Claude Code docs still include direct Claude
-Code terminal usage in Claude plan limits. Separately, Anthropic told OpenClaw
+Code terminal usage in Claude plan limits. Separately, Anthropic told Mullusi
 users that starting **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**, the
-**OpenClaw** Claude-login path counts as third-party harness usage and
+**Mullusi** Claude-login path counts as third-party harness usage and
 requires **Extra Usage** billed separately from the subscription. Anthropic
-does not expose a per-message dollar estimate that OpenClaw can show in
+does not expose a per-message dollar estimate that Mullusi can show in
 `/usage full`.
 
 **CLI usage windows (provider quotas)**
 
-- `openclaw status --usage` and `openclaw channels list` show provider **usage windows**
+- `mullusi status --usage` and `mullusi channels list` show provider **usage windows**
   (quota snapshots, not per-message costs).
 - Human output is normalized to `X% left` across providers.
 - Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI,
   OpenAI Codex, MiniMax, Xiaomi, and z.ai.
 - MiniMax note: its raw `usage_percent` / `usagePercent` fields mean remaining
-  quota, so OpenClaw inverts them before display. Count-based fields still win
-  when present. If the provider returns `model_remains`, OpenClaw prefers the
+  quota, so Mullusi inverts them before display. Count-based fields still win
+  when present. If the provider returns `model_remains`, Mullusi prefers the
   chat-model entry, derives the window label from timestamps when needed, and
   includes the model name in the plan label.
 - Usage auth for those quota windows comes from provider-specific hooks when
-  available; otherwise OpenClaw falls back to matching OAuth/API-key
+  available; otherwise Mullusi falls back to matching OAuth/API-key
   credentials from auth profiles, env, or config.
 
 See [Token use & costs](/reference/token-use) for details and examples.
 
 ## How keys are discovered
 
-OpenClaw can pick up credentials from:
+Mullusi can pick up credentials from:
 
 - **Auth profiles** (per-agent, stored in `auth-profiles.json`).
 - **Environment variables** (e.g. `OPENAI_API_KEY`, `BRAVE_API_KEY`, `FIRECRAWL_API_KEY`).
@@ -76,9 +76,9 @@ Every reply or tool call uses the **current model provider** (OpenAI, Anthropic,
 primary source of usage and cost.
 
 This also includes subscription-style hosted providers that still bill outside
-OpenClaw's local UI, such as **OpenAI Codex**, **Alibaba Cloud Model Studio
+Mullusi's local UI, such as **OpenAI Codex**, **Alibaba Cloud Model Studio
 Coding Plan**, **MiniMax Coding Plan**, **Z.AI / GLM Coding Plan**, and
-Anthropic's OpenClaw Claude-login path with **Extra Usage** enabled.
+Anthropic's Mullusi Claude-login path with **Extra Usage** enabled.
 
 See [Models](/providers/models) for pricing config and [Token use & costs](/reference/token-use) for display.
 
@@ -163,8 +163,8 @@ See [Web tools](/tools/web).
 Some status commands call **provider usage endpoints** to display quota windows or auth health.
 These are typically low-volume calls but still hit provider APIs:
 
-- `openclaw status --usage`
-- `openclaw models status --json`
+- `mullusi status --usage`
+- `mullusi models status --json`
 
 See [Models CLI](/cli/models).
 
@@ -177,7 +177,7 @@ See [Session management + compaction](/reference/session-management-compaction).
 
 ### 8) Model scan / probe
 
-`openclaw models scan` can probe OpenRouter models and uses `OPENROUTER_API_KEY` when
+`mullusi models scan` can probe OpenRouter models and uses `OPENROUTER_API_KEY` when
 probing is enabled.
 
 See [Models CLI](/cli/models).

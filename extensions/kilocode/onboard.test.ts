@@ -1,13 +1,13 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   resolveApiKeyForProvider,
   resolveEnvApiKey,
-} from "openclaw/plugin-sdk/provider-auth-runtime";
-import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
-import { captureEnv } from "openclaw/plugin-sdk/testing";
+} from "mullusi/plugin-sdk/provider-auth-runtime";
+import { resolveAgentModelPrimaryValue } from "mullusi/plugin-sdk/provider-onboard";
+import { captureEnv } from "mullusi/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
 import {
   buildKilocodeModelDefinition,
@@ -23,7 +23,7 @@ import {
   KILOCODE_DEFAULT_MODEL_REF,
 } from "./onboard.js";
 
-const emptyCfg: OpenClawConfig = {};
+const emptyCfg: MullusiConfig = {};
 const KILOCODE_MODEL_IDS = ["kilo/auto"];
 
 describe("Kilo Gateway provider config", () => {
@@ -107,7 +107,7 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("preserves existing alias if already set", () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         agents: {
           defaults: {
             models: {
@@ -122,7 +122,7 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("does not change the default model selection", () => {
-      const cfg: OpenClawConfig = {
+      const cfg: MullusiConfig = {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5" },
@@ -174,7 +174,7 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("resolves the kilocode api key via resolveApiKeyForProvider", async () => {
-      const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+      const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
       const envSnapshot = captureEnv(["KILOCODE_API_KEY"]);
       process.env.KILOCODE_API_KEY = "kilo-provider-test-key";
 

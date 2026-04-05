@@ -33,8 +33,8 @@ describe("plugin activation boundary", () => {
     | Promise<{
         DEFAULT_AI_SNAPSHOT_MAX_CHARS: typeof import("./plugin-sdk/browser-config.js").DEFAULT_AI_SNAPSHOT_MAX_CHARS;
         DEFAULT_BROWSER_EVALUATE_ENABLED: typeof import("./plugin-sdk/browser-config.js").DEFAULT_BROWSER_EVALUATE_ENABLED;
-        DEFAULT_OPENCLAW_BROWSER_COLOR: typeof import("./plugin-sdk/browser-config.js").DEFAULT_OPENCLAW_BROWSER_COLOR;
-        DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: typeof import("./plugin-sdk/browser-config.js").DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
+        DEFAULT_MULLUSI_BROWSER_COLOR: typeof import("./plugin-sdk/browser-config.js").DEFAULT_MULLUSI_BROWSER_COLOR;
+        DEFAULT_MULLUSI_BROWSER_PROFILE_NAME: typeof import("./plugin-sdk/browser-config.js").DEFAULT_MULLUSI_BROWSER_PROFILE_NAME;
         DEFAULT_UPLOAD_DIR: typeof import("./plugin-sdk/browser-config.js").DEFAULT_UPLOAD_DIR;
         closeTrackedBrowserTabsForSessions: typeof import("./plugin-sdk/browser-maintenance.js").closeTrackedBrowserTabsForSessions;
         parseBrowserMajorVersion: typeof import("./plugin-sdk/browser-host-inspection.js").parseBrowserMajorVersion;
@@ -83,8 +83,8 @@ describe("plugin activation boundary", () => {
     ]).then(([config, inspection, maintenance]) => ({
       DEFAULT_AI_SNAPSHOT_MAX_CHARS: config.DEFAULT_AI_SNAPSHOT_MAX_CHARS,
       DEFAULT_BROWSER_EVALUATE_ENABLED: config.DEFAULT_BROWSER_EVALUATE_ENABLED,
-      DEFAULT_OPENCLAW_BROWSER_COLOR: config.DEFAULT_OPENCLAW_BROWSER_COLOR,
-      DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: config.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+      DEFAULT_MULLUSI_BROWSER_COLOR: config.DEFAULT_MULLUSI_BROWSER_COLOR,
+      DEFAULT_MULLUSI_BROWSER_PROFILE_NAME: config.DEFAULT_MULLUSI_BROWSER_PROFILE_NAME,
       DEFAULT_UPLOAD_DIR: config.DEFAULT_UPLOAD_DIR,
       closeTrackedBrowserTabsForSessions: maintenance.closeTrackedBrowserTabsForSessions,
       parseBrowserMajorVersion: inspection.parseBrowserMajorVersion,
@@ -150,8 +150,8 @@ describe("plugin activation boundary", () => {
 
     expect(browser.DEFAULT_AI_SNAPSHOT_MAX_CHARS).toBe(80_000);
     expect(browser.DEFAULT_BROWSER_EVALUATE_ENABLED).toBe(true);
-    expect(browser.DEFAULT_OPENCLAW_BROWSER_COLOR).toBe("#FF4500");
-    expect(browser.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME).toBe("openclaw");
+    expect(browser.DEFAULT_MULLUSI_BROWSER_COLOR).toBe("#FF4500");
+    expect(browser.DEFAULT_MULLUSI_BROWSER_PROFILE_NAME).toBe("mullusi");
     expect(browser.DEFAULT_UPLOAD_DIR).toContain("uploads");
     expect(browser.parseBrowserMajorVersion("Google Chrome 144.0.7534.0")).toBe(144);
     expect(browser.resolveBrowserControlAuth({}, {} as NodeJS.ProcessEnv)).toEqual({
@@ -159,9 +159,9 @@ describe("plugin activation boundary", () => {
       password: undefined,
     });
     const resolved = browser.resolveBrowserConfig(undefined, {});
-    expect(browser.resolveProfile(resolved, "openclaw")).toEqual(
+    expect(browser.resolveProfile(resolved, "mullusi")).toEqual(
       expect.objectContaining({
-        name: "openclaw",
+        name: "mullusi",
         cdpHost: "127.0.0.1",
       }),
     );

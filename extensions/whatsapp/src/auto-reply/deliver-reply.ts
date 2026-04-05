@@ -1,11 +1,11 @@
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
+import type { MarkdownTableMode } from "mullusi/plugin-sdk/config-runtime";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "mullusi/plugin-sdk/reply-chunking";
+import type { ReplyPayload } from "mullusi/plugin-sdk/reply-chunking";
 import {
   resolveOutboundMediaUrls,
   sendMediaWithLeadingCaption,
-} from "openclaw/plugin-sdk/reply-payload";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+} from "mullusi/plugin-sdk/reply-payload";
+import { logVerbose, shouldLogVerbose } from "mullusi/plugin-sdk/runtime-env";
 import { loadWebMedia } from "../media.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";

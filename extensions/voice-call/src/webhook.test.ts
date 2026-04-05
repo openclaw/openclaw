@@ -1,5 +1,5 @@
 import { request } from "node:http";
-import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
+import type { RealtimeTranscriptionProviderPlugin } from "mullusi/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
@@ -811,7 +811,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
     call.state = "speaking";
     call.metadata = {
       mode: "conversation",
-      initialMessage: "Hi, this is OpenClaw.",
+      initialMessage: "Hi, this is Mullusi.",
     };
 
     const clearTtsQueue = vi.fn();

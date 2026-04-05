@@ -83,7 +83,7 @@ describe("openai codex provider", () => {
         store: { version: 1, profiles: {} },
       }),
     ).toBe(
-      "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.",
+      "Deprecated profile. Run `mullusi models auth login --provider openai-codex` or `mullusi configure`.",
     );
   });
 

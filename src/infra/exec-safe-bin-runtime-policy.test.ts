@@ -136,7 +136,7 @@ describe("exec safe-bin runtime policy", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-safe-bin-runtime-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-safe-bin-runtime-"));
     try {
       await fs.chmod(dir, 0o777);
       const onWarning = vi.fn();

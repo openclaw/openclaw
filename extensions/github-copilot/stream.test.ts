@@ -1,4 +1,4 @@
-import { buildCopilotDynamicHeaders } from "openclaw/plugin-sdk/provider-stream";
+import { buildCopilotDynamicHeaders } from "mullusi/plugin-sdk/provider-stream";
 import { describe, expect, it, vi } from "vitest";
 import { wrapCopilotAnthropicStream, wrapCopilotProviderStream } from "./stream.js";
 

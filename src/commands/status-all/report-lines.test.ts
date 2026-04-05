@@ -49,7 +49,7 @@ describe("buildStatusAllReportLines", () => {
         secretDiagnostics: [],
         sentinel: null,
         lastErr: null,
-        port: 18789,
+        port: 18790,
         portUsage: null,
         tailscaleMode: "off",
         tailscale: {

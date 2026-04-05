@@ -31,7 +31,7 @@ describe("projects vitest config", () => {
     expect(config.test.environment).toBe("jsdom");
     expect(config.test.isolate).toBe(false);
     expect(config.test.runner).toBe("./test/non-isolated-runner.ts");
-    expect(config.test.setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
+    expect(config.test.setupFiles).not.toContain("test/setup-mullusi-runtime.ts");
     expect(config.test.setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
     expect(config.test.deps?.optimizer?.web?.enabled).toBe(true);
   });

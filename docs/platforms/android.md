@@ -9,7 +9,7 @@ title: "Android App"
 
 # Android App (Node)
 
-> **Note:** The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assemblePlayDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
+> **Note:** The Android app has not been publicly released yet. The source code is available in the [Mullusi repository](https://github.com/mullusi/mullusi) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assemblePlayDebug`). See [apps/android/README.md](https://github.com/mullusi/mullusi/blob/main/apps/android/README.md) for build instructions.
 
 ## Support snapshot
 
@@ -43,22 +43,22 @@ For Tailscale or public hosts, Android requires a secure endpoint:
   - Same Tailscale tailnet using Wide-Area Bonjour / unicast DNS-SD (see below), **or**
   - Manual gateway host/port (fallback)
 - Tailnet/public mobile pairing does **not** use raw tailnet IP `ws://` endpoints. Use Tailscale Serve or another `wss://` URL instead.
-- You can run the CLI (`openclaw`) on the gateway machine (or via SSH).
+- You can run the CLI (`mullusi`) on the gateway machine (or via SSH).
 
 ### 1) Start the Gateway
 
 ```bash
-openclaw gateway --port 18789 --verbose
+mullusi gateway --port 18790 --verbose
 ```
 
 Confirm in logs you see something like:
 
-- `listening on ws://0.0.0.0:18789`
+- `listening on ws://0.0.0.0:18790`
 
 For remote Android access over Tailscale, prefer Serve/Funnel instead of a raw tailnet bind:
 
 ```bash
-openclaw gateway --tailscale serve
+mullusi gateway --tailscale serve
 ```
 
 This gives Android a secure `wss://` / `https://` endpoint. A plain `gateway.bind: "tailnet"` setup is not enough for first-time remote Android pairing unless you also terminate TLS separately.
@@ -68,7 +68,7 @@ This gives Android a secure `wss://` / `https://` endpoint. A plain `gateway.bin
 From the gateway machine:
 
 ```bash
-dns-sd -B _openclaw-gw._tcp local.
+dns-sd -B _mullusi-gw._tcp local.
 ```
 
 More debugging notes: [Bonjour](/gateway/bonjour).
@@ -76,7 +76,7 @@ More debugging notes: [Bonjour](/gateway/bonjour).
 If you also configured a wide-area discovery domain, compare against:
 
 ```bash
-openclaw gateway discover --json
+mullusi gateway discover --json
 ```
 
 That shows `local.` plus the configured wide-area domain in one pass and uses the resolved
@@ -88,7 +88,7 @@ Android NSD/mDNS discovery won’t cross networks. If your Android node and the 
 
 Discovery alone is not sufficient for tailnet/public Android pairing. The discovered route still needs a secure endpoint (`wss://` or Tailscale Serve):
 
-1. Set up a DNS-SD zone (example `openclaw.internal.`) on the gateway host and publish `_openclaw-gw._tcp` records.
+1. Set up a DNS-SD zone (example `mullusi.internal.`) on the gateway host and publish `_mullusi-gw._tcp` records.
 2. Configure Tailscale split DNS for your chosen domain pointing at that DNS server.
 
 Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
@@ -112,9 +112,9 @@ After the first successful pairing, Android auto-reconnects on launch:
 On the gateway machine:
 
 ```bash
-openclaw devices list
-openclaw devices approve <requestId>
-openclaw devices reject <requestId>
+mullusi devices list
+mullusi devices approve <requestId>
+mullusi devices reject <requestId>
 ```
 
 Pairing details: [Pairing](/channels/pairing).
@@ -124,13 +124,13 @@ Pairing details: [Pairing](/channels/pairing).
 - Via nodes status:
 
   ```bash
-  openclaw nodes status
+  mullusi nodes status
   ```
 
 - Via Gateway:
 
   ```bash
-  openclaw gateway call node.list --params "{}"
+  mullusi gateway call node.list --params "{}"
   ```
 
 ### 6) Chat + history
@@ -153,20 +153,20 @@ The Android Chat tab supports session selection (default `main`, plus other exis
 
 If you want the node to show real HTML/CSS/JS that the agent can edit on disk, point the node at the Gateway canvas host.
 
-Note: nodes load canvas from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
+Note: nodes load canvas from the Gateway HTTP server (same port as `gateway.port`, default `18790`).
 
-1. Create `~/.openclaw/workspace/canvas/index.html` on the gateway host.
+1. Create `~/.mullusi/workspace/canvas/index.html` on the gateway host.
 
 2. Navigate the node to it (LAN):
 
 ```bash
-openclaw nodes invoke --node "<Android Node>" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18789/__openclaw__/canvas/"}'
+mullusi nodes invoke --node "<Android Node>" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18790/__mullusi__/canvas/"}'
 ```
 
-Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18789/__openclaw__/canvas/`.
+Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18790/__mullusi__/canvas/`.
 
 This server injects a live-reload client into HTML and reloads on file changes.
-The A2UI host lives at `http://<gateway-host>:18789/__openclaw__/a2ui/`.
+The A2UI host lives at `http://<gateway-host>:18790/__mullusi__/a2ui/`.
 
 Canvas commands (foreground only):
 
@@ -196,9 +196,9 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
 
 ## Assistant entrypoints
 
-Android supports launching OpenClaw from the system assistant trigger (Google
+Android supports launching Mullusi from the system assistant trigger (Google
 Assistant). When configured, holding the home button or saying "Hey Google, ask
-OpenClaw..." opens the app and hands the prompt into the chat composer.
+Mullusi..." opens the app and hands the prompt into the chat composer.
 
 This uses Android **App Actions** metadata declared in the app manifest. No
 extra configuration is needed on the gateway side -- the assistant intent is
@@ -206,7 +206,7 @@ handled entirely by the Android app and forwarded as a normal chat message.
 
 <Note>
 App Actions availability depends on the device, Google Play Services version,
-and whether the user has set OpenClaw as the default assistant app.
+and whether the user has set Mullusi as the default assistant app.
 </Note>
 
 ## Notification forwarding

@@ -1,10 +1,10 @@
 import fs from "node:fs";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
+} from "mullusi/plugin-sdk/secret-input";
 import type { ResolvedQQBotAccount, QQBotAccountConfig } from "./types.js";
 
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -38,7 +38,7 @@ function normalizeAppId(raw: unknown): string {
 }
 
 /** List all configured QQBot account IDs. */
-export function listQQBotAccountIds(cfg: OpenClawConfig): string[] {
+export function listQQBotAccountIds(cfg: MullusiConfig): string[] {
   const ids = new Set<string>();
   const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
 
@@ -58,7 +58,7 @@ export function listQQBotAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 /** Resolve the default QQBot account ID. */
-export function resolveDefaultQQBotAccountId(cfg: OpenClawConfig): string {
+export function resolveDefaultQQBotAccountId(cfg: MullusiConfig): string {
   const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
   const configuredDefaultAccountId = normalizeConfiguredDefaultAccountId(qqbot?.defaultAccount);
   if (
@@ -82,7 +82,7 @@ export function resolveDefaultQQBotAccountId(cfg: OpenClawConfig): string {
 
 /** Resolve QQBot account config for runtime or setup flows. */
 export function resolveQQBotAccount(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId?: string | null,
   opts?: { allowUnresolvedSecretRef?: boolean },
 ): ResolvedQQBotAccount {
@@ -149,9 +149,9 @@ export function resolveQQBotAccount(
   };
 }
 
-/** Apply account config updates back into the OpenClaw config object. */
+/** Apply account config updates back into the Mullusi config object. */
 export function applyQQBotAccountConfig(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId: string,
   input: {
     appId?: string;
@@ -159,7 +159,7 @@ export function applyQQBotAccountConfig(
     clientSecretFile?: string;
     name?: string;
   },
-): OpenClawConfig {
+): MullusiConfig {
   const next = { ...cfg };
 
   if (accountId === DEFAULT_ACCOUNT_ID) {

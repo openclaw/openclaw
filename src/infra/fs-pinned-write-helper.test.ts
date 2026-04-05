@@ -12,7 +12,7 @@ afterEach(async () => {
 
 describe("fs pinned write helper", () => {
   it.runIf(process.platform !== "win32")("writes through a pinned parent directory", async () => {
-    const root = await tempDirs.make("openclaw-fs-pinned-root-");
+    const root = await tempDirs.make("mullusi-fs-pinned-root-");
 
     const identity = await runPinnedWriteHelper({
       rootPath: root,
@@ -36,8 +36,8 @@ describe("fs pinned write helper", () => {
   it.runIf(process.platform !== "win32")(
     "rejects symlink-parent writes instead of creating a temp file outside root",
     async () => {
-      const root = await tempDirs.make("openclaw-fs-pinned-root-");
-      const outside = await tempDirs.make("openclaw-fs-pinned-outside-");
+      const root = await tempDirs.make("mullusi-fs-pinned-root-");
+      const outside = await tempDirs.make("mullusi-fs-pinned-outside-");
       await fs.symlink(outside, path.join(root, "alias"));
 
       await expect(
@@ -61,8 +61,8 @@ describe("fs pinned write helper", () => {
   );
 
   it.runIf(process.platform !== "win32")("accepts streamed input", async () => {
-    const root = await tempDirs.make("openclaw-fs-pinned-root-");
-    const sourcePath = path.join(await tempDirs.make("openclaw-fs-pinned-src-"), "source.txt");
+    const root = await tempDirs.make("mullusi-fs-pinned-root-");
+    const sourcePath = path.join(await tempDirs.make("mullusi-fs-pinned-src-"), "source.txt");
     await fs.writeFile(sourcePath, "streamed", "utf8");
     const sourceHandle = await fs.open(sourcePath, "r");
     try {

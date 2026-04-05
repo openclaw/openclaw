@@ -1,16 +1,16 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 
-export function resolveTelegramReplyToMode(params: { cfg: OpenClawConfig; accountId: string }) {
+export function resolveTelegramReplyToMode(params: { cfg: MullusiConfig; accountId: string }) {
   return resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId }).config
     .replyToMode;
 }
 
 export const telegramThreading = {
   scopedAccountReplyToMode: {
-    resolveAccount: (cfg: OpenClawConfig, accountId: string) =>
+    resolveAccount: (cfg: MullusiConfig, accountId: string) =>
       resolveTelegramAccount({ cfg, accountId }),
     resolveReplyToMode: (account: ReturnType<typeof resolveTelegramAccount>) =>
       account.config.replyToMode,

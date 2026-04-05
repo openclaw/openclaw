@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { AcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
+import { AcpRuntimeError } from "mullusi/plugin-sdk/acp-runtime";
 import {
   __testing,
   getAcpRuntimeBackend,
   requireAcpRuntimeBackend,
-} from "openclaw/plugin-sdk/acp-runtime";
+} from "mullusi/plugin-sdk/acp-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AcpRuntime, OpenClawPluginServiceContext } from "../runtime-api.js";
+import type { AcpRuntime, MullusiPluginServiceContext } from "../runtime-api.js";
 import { ACPX_BUNDLED_BIN, ACPX_PINNED_VERSION } from "./config.js";
 import { createAcpxRuntimeService } from "./service.js";
 
@@ -112,8 +112,8 @@ function createRetryingRuntimeStub(
 }
 
 function createServiceContext(
-  overrides: Partial<OpenClawPluginServiceContext> = {},
-): OpenClawPluginServiceContext {
+  overrides: Partial<MullusiPluginServiceContext> = {},
+): MullusiPluginServiceContext {
   return {
     config: {},
     workspaceDir: "/tmp/workspace",

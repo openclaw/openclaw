@@ -11,7 +11,7 @@ import {
   type AuthProfileStore,
   type FallbackAttempt,
   type GeneratedVideoAsset,
-  type OpenClawConfig,
+  type MullusiConfig,
   type VideoGenerationResolution,
   type VideoGenerationResult,
   type VideoGenerationSourceAsset,
@@ -20,7 +20,7 @@ import {
 const log = createSubsystemLogger("video-generation");
 
 export type GenerateVideoParams = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   prompt: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
@@ -44,7 +44,7 @@ export type GenerateVideoRuntimeResult = {
 };
 
 function resolveVideoGenerationCandidates(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   modelOverride?: string;
 }): Array<{ provider: string; model: string }> {
   const candidates: Array<{ provider: string; model: string }> = [];
@@ -90,7 +90,7 @@ function throwVideoGenerationFailure(params: {
   });
 }
 
-function buildNoVideoGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
+function buildNoVideoGenerationModelConfiguredMessage(cfg: MullusiConfig): string {
   const providers = listVideoGenerationProviders(cfg);
   const sampleModel =
     providers.find((provider) => provider.defaultModel) ??
@@ -112,7 +112,7 @@ function buildNoVideoGenerationModelConfiguredMessage(cfg: OpenClawConfig): stri
   ].join(" ");
 }
 
-export function listRuntimeVideoGenerationProviders(params?: { config?: OpenClawConfig }) {
+export function listRuntimeVideoGenerationProviders(params?: { config?: MullusiConfig }) {
   return listVideoGenerationProviders(params?.config);
 }
 

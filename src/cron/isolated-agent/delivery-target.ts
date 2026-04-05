@@ -1,6 +1,6 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
@@ -61,7 +61,7 @@ async function loadChannelSelectionRuntime() {
   return await channelSelectionRuntimePromise;
 }
 export async function resolveDeliveryTarget(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   agentId: string,
   jobPayload: {
     channel?: ChannelId;

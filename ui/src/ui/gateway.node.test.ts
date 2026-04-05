@@ -94,7 +94,7 @@ type ConnectFrame = {
 
 function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {
   vi.stubGlobal("window", {
-    location: { href: "http://127.0.0.1:18789/" },
+    location: { href: "http://127.0.0.1:18790/" },
     localStorage: storage,
     setTimeout: (handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) =>
       globalThis.setTimeout(() => handler(...args), timeout),
@@ -211,7 +211,7 @@ describe("GatewayBrowserClient", () => {
 
   it("requests the full control ui operator scope bundle on connect", async () => {
     const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       token: "shared-auth-token",
     });
 
@@ -223,7 +223,7 @@ describe("GatewayBrowserClient", () => {
 
   it("prefers explicit shared auth over cached device tokens", async () => {
     const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       token: "shared-auth-token",
     });
 
@@ -241,7 +241,7 @@ describe("GatewayBrowserClient", () => {
   it("sends explicit shared token on insecure first connect without cached device fallback", async () => {
     stubInsecureCrypto();
     const client = new GatewayBrowserClient({
-      url: "ws://gateway.example:18789",
+      url: "ws://gateway.example:18790",
       token: "shared-auth-token",
     });
 
@@ -261,7 +261,7 @@ describe("GatewayBrowserClient", () => {
   it("sends explicit shared password on insecure first connect without cached device fallback", async () => {
     stubInsecureCrypto();
     const client = new GatewayBrowserClient({
-      url: "ws://gateway.example:18789",
+      url: "ws://gateway.example:18790",
       password: "shared-password", // pragma: allowlist secret
     });
 
@@ -280,7 +280,7 @@ describe("GatewayBrowserClient", () => {
 
   it("uses cached device tokens only when no explicit shared auth is provided", async () => {
     const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
     });
 
     const { connectFrame } = await startConnect(client);
@@ -303,7 +303,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
     });
 
     const { connectFrame } = await startConnect(client);
@@ -317,7 +317,7 @@ describe("GatewayBrowserClient", () => {
   it("retries once with device token after token mismatch when shared token is explicit", async () => {
     vi.useFakeTimers();
     const { secondWs, secondConnect } = await startRetriedDeviceTokenConnect({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       token: "shared-auth-token",
     });
 
@@ -345,7 +345,7 @@ describe("GatewayBrowserClient", () => {
   it("treats IPv6 loopback as trusted for bounded device-token retry", async () => {
     vi.useFakeTimers();
     const { client } = await startRetriedDeviceTokenConnect({
-      url: "ws://[::1]:18789",
+      url: "ws://[::1]:18790",
       token: "shared-auth-token",
     });
 
@@ -358,7 +358,7 @@ describe("GatewayBrowserClient", () => {
     localStorage.clear();
 
     const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       token: "shared-auth-token",
     });
 
@@ -388,7 +388,7 @@ describe("GatewayBrowserClient", () => {
     vi.useFakeTimers();
 
     const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
       token: "shared-auth-token",
     });
 
@@ -409,7 +409,7 @@ describe("GatewayBrowserClient", () => {
     localStorage.clear();
 
     const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
+      url: "ws://127.0.0.1:18790",
     });
 
     const { ws: ws1, connectFrame: connect } = await startConnect(client);
@@ -456,7 +456,7 @@ describe("shouldRetryWithDeviceToken", () => {
         },
         storedToken: "stored-device-token",
         canRetryWithDeviceTokenHint: true,
-        url: "ws://127.0.0.1:18789",
+        url: "ws://127.0.0.1:18790",
       }),
     ).toBe(true);
   });
@@ -474,7 +474,7 @@ describe("shouldRetryWithDeviceToken", () => {
         },
         storedToken: "stored-device-token",
         canRetryWithDeviceTokenHint: true,
-        url: "ws://127.0.0.1:18789",
+        url: "ws://127.0.0.1:18790",
       }),
     ).toBe(false);
   });

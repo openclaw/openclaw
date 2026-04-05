@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import {
   createBundleMcpTempHarness,
   createBundleProbePlugin,
@@ -16,7 +16,7 @@ afterEach(async () => {
 
 describe("prepareCliBundleMcpConfig", () => {
   it("injects a strict empty --mcp-config overlay for bundle-MCP-enabled backends without servers", async () => {
-    const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-empty-");
+    const workspaceDir = await tempHarness.createTempDir("mullusi-cli-bundle-mcp-empty-");
 
     const prepared = await prepareCliBundleMcpConfig({
       enabled: true,
@@ -44,13 +44,13 @@ describe("prepareCliBundleMcpConfig", () => {
   it("injects a merged --mcp-config overlay for bundle-MCP-enabled backends", async () => {
     const env = captureEnv(["HOME"]);
     try {
-      const homeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
-      const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-workspace-");
+      const homeDir = await tempHarness.createTempDir("mullusi-cli-bundle-mcp-home-");
+      const workspaceDir = await tempHarness.createTempDir("mullusi-cli-bundle-mcp-workspace-");
       process.env.HOME = homeDir;
 
       const { serverPath } = await createBundleProbePlugin(homeDir);
 
-      const config: OpenClawConfig = {
+      const config: MullusiConfig = {
         plugins: {
           entries: {
             "bundle-probe": { enabled: true },
@@ -88,13 +88,13 @@ describe("prepareCliBundleMcpConfig", () => {
   it("merges loopback overlay config with bundle MCP servers", async () => {
     const env = captureEnv(["HOME"]);
     try {
-      const homeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
-      const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-workspace-");
+      const homeDir = await tempHarness.createTempDir("mullusi-cli-bundle-mcp-home-");
+      const workspaceDir = await tempHarness.createTempDir("mullusi-cli-bundle-mcp-workspace-");
       process.env.HOME = homeDir;
 
       await createBundleProbePlugin(homeDir);
 
-      const config: OpenClawConfig = {
+      const config: MullusiConfig = {
         plugins: {
           entries: {
             "bundle-probe": { enabled: true },
@@ -112,11 +112,11 @@ describe("prepareCliBundleMcpConfig", () => {
         config,
         additionalConfig: {
           mcpServers: {
-            openclaw: {
+            mullusi: {
               type: "http",
               url: "http://127.0.0.1:23119/mcp",
               headers: {
-                Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+                Authorization: "Bearer ${MULLUSI_MCP_TOKEN}",
               },
             },
           },
@@ -128,9 +128,9 @@ describe("prepareCliBundleMcpConfig", () => {
       const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
         mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
       };
-      expect(Object.keys(raw.mcpServers ?? {}).toSorted()).toEqual(["bundleProbe", "openclaw"]);
-      expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
-      expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer ${OPENCLAW_MCP_TOKEN}");
+      expect(Object.keys(raw.mcpServers ?? {}).toSorted()).toEqual(["bundleProbe", "mullusi"]);
+      expect(raw.mcpServers?.mullusi?.url).toBe("http://127.0.0.1:23119/mcp");
+      expect(raw.mcpServers?.mullusi?.headers?.Authorization).toBe("Bearer ${MULLUSI_MCP_TOKEN}");
 
       await prepared.cleanup?.();
     } finally {
@@ -139,7 +139,7 @@ describe("prepareCliBundleMcpConfig", () => {
   });
 
   it("preserves extra env values alongside generated MCP config", async () => {
-    const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-env-");
+    const workspaceDir = await tempHarness.createTempDir("mullusi-cli-bundle-mcp-env-");
 
     const prepared = await prepareCliBundleMcpConfig({
       enabled: true,
@@ -150,14 +150,14 @@ describe("prepareCliBundleMcpConfig", () => {
       workspaceDir,
       config: {},
       env: {
-        OPENCLAW_MCP_TOKEN: "loopback-token-123",
-        OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
+        MULLUSI_MCP_TOKEN: "loopback-token-123",
+        MULLUSI_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
       },
     });
 
     expect(prepared.env).toEqual({
-      OPENCLAW_MCP_TOKEN: "loopback-token-123",
-      OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
+      MULLUSI_MCP_TOKEN: "loopback-token-123",
+      MULLUSI_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
     });
 
     await prepared.cleanup?.();
@@ -170,7 +170,7 @@ describe("prepareCliBundleMcpConfig", () => {
         command: "node",
         args: ["./fake-cli.mjs"],
       },
-      workspaceDir: "/tmp/openclaw-bundle-mcp-disabled",
+      workspaceDir: "/tmp/mullusi-bundle-mcp-disabled",
     });
 
     expect(prepared.backend.args).toEqual(["./fake-cli.mjs"]);

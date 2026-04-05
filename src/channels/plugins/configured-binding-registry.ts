@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import type {
   ConfiguredBindingRecordResolution,
@@ -17,7 +17,7 @@ import {
 import { resolveConfiguredBindingRecordBySessionKeyFromRegistry } from "./configured-binding-session-lookup.js";
 
 function resolveMaterializedConfiguredBinding(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   conversation: ConversationRef;
 }) {
   const conversation = toConfiguredBindingConversationRef(params.conversation);
@@ -46,7 +46,7 @@ function resolveMaterializedConfiguredBinding(params: {
   };
 }
 
-export function primeConfiguredBindingRegistry(params: { cfg: OpenClawConfig }): {
+export function primeConfiguredBindingRegistry(params: { cfg: MullusiConfig }): {
   bindingCount: number;
   channelCount: number;
 } {
@@ -54,7 +54,7 @@ export function primeConfiguredBindingRegistry(params: { cfg: OpenClawConfig }):
 }
 
 export function resolveConfiguredBindingRecord(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   channel: string;
   accountId: string;
   conversationId: string;
@@ -76,7 +76,7 @@ export function resolveConfiguredBindingRecord(params: {
 }
 
 export function resolveConfiguredBindingRecordForConversation(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   conversation: ConversationRef;
 }): ConfiguredBindingRecordResolution | null {
   const resolved = resolveMaterializedConfiguredBinding(params);
@@ -87,7 +87,7 @@ export function resolveConfiguredBindingRecordForConversation(params: {
 }
 
 export function resolveConfiguredBinding(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   conversation: ConversationRef;
 }): ConfiguredBindingResolution | null {
   const resolved = resolveMaterializedConfiguredBinding(params);
@@ -103,7 +103,7 @@ export function resolveConfiguredBinding(params: {
 }
 
 export function resolveConfiguredBindingRecordBySessionKey(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   sessionKey: string;
 }): ConfiguredBindingRecordResolution | null {
   return resolveConfiguredBindingRecordBySessionKeyFromRegistry({

@@ -10,18 +10,18 @@ export type {
   ChannelPlugin,
   ChatType,
   HistoryEntry,
-  OpenClawConfig,
-  OpenClawPluginApi,
+  MullusiConfig,
+  MullusiPluginApi,
   PluginRuntime,
-} from "openclaw/plugin-sdk/core";
-export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
+} from "mullusi/plugin-sdk/core";
+export type { RuntimeEnv } from "mullusi/plugin-sdk/runtime";
+export type { ReplyPayload } from "mullusi/plugin-sdk/reply-runtime";
+export type { ModelsProviderData } from "mullusi/plugin-sdk/command-auth";
 export type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "mullusi/plugin-sdk/config-runtime";
 export {
   DEFAULT_ACCOUNT_ID,
   buildChannelConfigSchema,
@@ -29,16 +29,16 @@ export {
   parseStrictPositiveInteger,
   resolveClientIp,
   isTrustedProxyAddress,
-} from "openclaw/plugin-sdk/core";
-export { buildComputedAccountStatusSnapshot } from "openclaw/plugin-sdk/channel-status";
-export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
+} from "mullusi/plugin-sdk/core";
+export { buildComputedAccountStatusSnapshot } from "mullusi/plugin-sdk/channel-status";
+export { createAccountStatusSink } from "mullusi/plugin-sdk/channel-lifecycle";
+export { buildAgentMediaPayload } from "mullusi/plugin-sdk/agent-media-payload";
 export {
   buildModelsProviderData,
   listSkillCommandsForAgents,
   resolveControlCommandGate,
   resolveStoredModelOverride,
-} from "openclaw/plugin-sdk/command-auth";
+} from "mullusi/plugin-sdk/command-auth";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   isDangerousNameMatchingEnabled,
@@ -47,42 +47,42 @@ export {
   resolveDefaultGroupPolicy,
   resolveStorePath,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
-export { formatInboundFromLabel } from "openclaw/plugin-sdk/channel-inbound";
-export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
-export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+} from "mullusi/plugin-sdk/config-runtime";
+export { formatInboundFromLabel } from "mullusi/plugin-sdk/channel-inbound";
+export { logInboundDrop } from "mullusi/plugin-sdk/channel-inbound";
+export { createChannelPairingController } from "mullusi/plugin-sdk/channel-pairing";
 export {
   DM_GROUP_ACCESS_REASON,
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
-} from "openclaw/plugin-sdk/channel-policy";
-export { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
-export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-export { rawDataToString } from "openclaw/plugin-sdk/browser-support";
-export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+} from "mullusi/plugin-sdk/channel-policy";
+export { evaluateSenderGroupAccessForPolicy } from "mullusi/plugin-sdk/group-access";
+export { createChannelReplyPipeline } from "mullusi/plugin-sdk/channel-reply-pipeline";
+export { logTypingFailure } from "mullusi/plugin-sdk/channel-feedback";
+export { loadOutboundMediaFromUrl } from "mullusi/plugin-sdk/outbound-media";
+export { rawDataToString } from "mullusi/plugin-sdk/browser-support";
+export { chunkTextForOutbound } from "mullusi/plugin-sdk/text-chunking";
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
-} from "openclaw/plugin-sdk/reply-history";
-export { normalizeAccountId, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-export { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk/allow-from";
-export { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
+} from "mullusi/plugin-sdk/reply-history";
+export { normalizeAccountId, resolveThreadSessionKeys } from "mullusi/plugin-sdk/routing";
+export { resolveAllowlistMatchSimple } from "mullusi/plugin-sdk/allow-from";
+export { registerPluginHttpRoute } from "mullusi/plugin-sdk/webhook-targets";
 export {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
-} from "openclaw/plugin-sdk/webhook-ingress";
+} from "mullusi/plugin-sdk/webhook-ingress";
 export {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
-} from "openclaw/plugin-sdk/setup";
+} from "mullusi/plugin-sdk/setup";
 export {
   getAgentScopedMediaLocalRoots,
   resolveChannelMediaMaxBytes,
-} from "openclaw/plugin-sdk/media-runtime";
-export { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+} from "mullusi/plugin-sdk/media-runtime";
+export { normalizeProviderId } from "mullusi/plugin-sdk/provider-model-shared";

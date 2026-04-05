@@ -72,7 +72,7 @@ const SLUG_NOUNS = [
   "haven",
   "kelp",
   "lagoon",
-  "lobster",
+  "mullusi",
   "meadow",
   "mist",
   "nudibranch",

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { MullusiConfig } from "../runtime-api.js";
 import { zaloPlugin } from "./channel.js";
 
 const zaloGetStatus = createPluginSetupWizardStatus(zaloPlugin);
@@ -18,7 +18,7 @@ describe("zalo setup wizard status", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as MullusiConfig,
       accountOverrides: {},
     });
 

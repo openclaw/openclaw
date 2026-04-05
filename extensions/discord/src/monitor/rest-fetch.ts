@@ -1,5 +1,5 @@
-import { wrapFetchWithAbortSignal } from "openclaw/plugin-sdk/fetch-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { wrapFetchWithAbortSignal } from "mullusi/plugin-sdk/fetch-runtime";
+import type { RuntimeEnv } from "mullusi/plugin-sdk/runtime-env";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { withValidatedDiscordProxy } from "../proxy-fetch.js";
 

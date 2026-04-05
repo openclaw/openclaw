@@ -14,7 +14,7 @@ read_when:
 The `web_search` tool searches the web using your configured provider and
 returns results. Results are cached by query for 15 minutes (configurable).
 
-OpenClaw also includes `x_search` for X (formerly Twitter) posts and
+Mullusi also includes `x_search` for X (formerly Twitter) posts and
 `web_fetch` for lightweight URL fetching. In this phase, `web_fetch` stays
 local while `web_search` and `x_search` can use xAI Responses under the hood.
 
@@ -34,7 +34,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
   </Step>
   <Step title="Configure">
     ```bash
-    openclaw configure --section web
+    mullusi configure --section web
     ```
     This stores the provider and any needed credential. You can also set an env
     var (for example `BRAVE_API_KEY`) and skip this step for API-backed
@@ -44,7 +44,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
     The agent can now call `web_search`:
 
     ```javascript
-    await web_search({ query: "OpenClaw plugin SDK" });
+    await web_search({ query: "Mullusi plugin SDK" });
     ```
 
     For X posts, use:
@@ -118,7 +118,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 
 ## Native Codex web search
 
-Codex-capable models can optionally use the provider-native Responses `web_search` tool instead of OpenClaw's managed `web_search` function.
+Codex-capable models can optionally use the provider-native Responses `web_search` tool instead of Mullusi's managed `web_search` function.
 
 - Configure it under `tools.web.search.openaiCodex`
 - It only activates for Codex-capable models (`openai-codex/*` or providers using `api: "openai-codex-responses"`)
@@ -149,14 +149,14 @@ Codex-capable models can optionally use the provider-native Responses `web_searc
 }
 ```
 
-If native Codex search is enabled but the current model is not Codex-capable, OpenClaw keeps the normal managed `web_search` behavior.
+If native Codex search is enabled but the current model is not Codex-capable, Mullusi keeps the normal managed `web_search` behavior.
 
 ## Setting up web search
 
 Provider lists in docs and setup flows are alphabetical. Auto-detection keeps a
 separate precedence order.
 
-If no `provider` is set, OpenClaw checks providers in this order and uses the
+If no `provider` is set, Mullusi checks providers in this order and uses the
 first one that is ready:
 
 API-backed providers first:
@@ -182,7 +182,7 @@ error prompting you to configure one).
 
 <Note>
   All provider key fields support SecretRef objects. In auto-detect mode,
-  OpenClaw resolves only the selected provider key -- non-selected SecretRefs
+  Mullusi resolves only the selected provider key -- non-selected SecretRefs
   stay inactive.
 </Note>
 
@@ -211,31 +211,31 @@ examples.
 `web_fetch` fallback provider selection is separate:
 
 - choose it with `tools.web.fetch.provider`
-- or omit that field and let OpenClaw auto-detect the first ready web-fetch
+- or omit that field and let Mullusi auto-detect the first ready web-fetch
   provider from available credentials
 - today the bundled web-fetch provider is Firecrawl, configured under
   `plugins.entries.firecrawl.config.webFetch.*`
 
-When you choose **Kimi** during `openclaw onboard` or
-`openclaw configure --section web`, OpenClaw can also ask for:
+When you choose **Kimi** during `mullusi onboard` or
+`mullusi configure --section web`, Mullusi can also ask for:
 
 - the Moonshot API region (`https://api.moonshot.ai/v1` or `https://api.moonshot.cn/v1`)
 - the default Kimi web-search model (defaults to `kimi-k2.5`)
 
 For `x_search`, configure `plugins.entries.xai.config.xSearch.*`. It uses the
 same `XAI_API_KEY` fallback as Grok web search.
-Legacy `tools.web.x_search.*` config is auto-migrated by `openclaw doctor --fix`.
-When you choose Grok during `openclaw onboard` or `openclaw configure --section web`,
-OpenClaw can also offer optional `x_search` setup with the same key.
+Legacy `tools.web.x_search.*` config is auto-migrated by `mullusi doctor --fix`.
+When you choose Grok during `mullusi onboard` or `mullusi configure --section web`,
+Mullusi can also offer optional `x_search` setup with the same key.
 This is a separate follow-up step inside the Grok path, not a separate top-level
-web-search provider choice. If you pick another provider, OpenClaw does not
+web-search provider choice. If you pick another provider, Mullusi does not
 show the `x_search` prompt.
 
 ### Storing API keys
 
 <Tabs>
   <Tab title="Config file">
-    Run `openclaw configure --section web` or set the key directly:
+    Run `mullusi configure --section web` or set the key directly:
 
     ```json5
     {
@@ -261,7 +261,7 @@ show the `x_search` prompt.
     export BRAVE_API_KEY="YOUR_KEY"
     ```
 
-    For a gateway install, put it in `~/.openclaw/.env`.
+    For a gateway install, put it in `~/.mullusi/.env`.
     See [Env vars](/help/faq#env-vars-and-env-loading).
 
   </Tab>
@@ -303,7 +303,7 @@ show the `x_search` prompt.
 
 `x_search` queries X (formerly Twitter) posts using xAI and returns
 AI-synthesized answers with citations. It accepts natural-language queries and
-optional structured filters. OpenClaw only enables the built-in xAI `x_search`
+optional structured filters. Mullusi only enables the built-in xAI `x_search`
 tool on the request that serves this tool call.
 
 <Note>
@@ -374,7 +374,7 @@ await x_search({
 
 ```javascript
 // Basic search
-await web_search({ query: "OpenClaw plugin SDK" });
+await web_search({ query: "Mullusi plugin SDK" });
 
 // German-specific search
 await web_search({ query: "TV online schauen", country: "DE", language: "de" });

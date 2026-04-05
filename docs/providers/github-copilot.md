@@ -1,8 +1,8 @@
 ---
-summary: "Sign in to GitHub Copilot from OpenClaw using the device flow"
+summary: "Sign in to GitHub Copilot from Mullusi using the device flow"
 read_when:
   - You want to use GitHub Copilot as a model provider
-  - You need the `openclaw models auth login-github-copilot` flow
+  - You need the `mullusi models auth login-github-copilot` flow
 title: "GitHub Copilot"
 ---
 
@@ -11,20 +11,20 @@ title: "GitHub Copilot"
 ## What is GitHub Copilot?
 
 GitHub Copilot is GitHub's AI coding assistant. It provides access to Copilot
-models for your GitHub account and plan. OpenClaw can use Copilot as a model
+models for your GitHub account and plan. Mullusi can use Copilot as a model
 provider in two different ways.
 
-## Two ways to use Copilot in OpenClaw
+## Two ways to use Copilot in Mullusi
 
 ### 1) Built-in GitHub Copilot provider (`github-copilot`)
 
 Use the native device-login flow to obtain a GitHub token, then exchange it for
-Copilot API tokens when OpenClaw runs. This is the **default** and simplest path
+Copilot API tokens when Mullusi runs. This is the **default** and simplest path
 because it does not require VS Code.
 
 ### 2) Copilot Proxy plugin (`copilot-proxy`)
 
-Use the **Copilot Proxy** VS Code extension as a local bridge. OpenClaw talks to
+Use the **Copilot Proxy** VS Code extension as a local bridge. Mullusi talks to
 the proxy’s `/v1` endpoint and uses the model list you configure there. Choose
 this when you already run Copilot Proxy in VS Code or need to route through it.
 You must enable the plugin and keep the VS Code extension running.
@@ -36,7 +36,7 @@ profile.
 ## CLI setup
 
 ```bash
-openclaw models auth login-github-copilot
+mullusi models auth login-github-copilot
 ```
 
 You'll be prompted to visit a URL and enter a one-time code. Keep the terminal
@@ -45,20 +45,20 @@ open until it completes.
 ### Optional flags
 
 ```bash
-openclaw models auth login-github-copilot --yes
+mullusi models auth login-github-copilot --yes
 ```
 
 To also apply the provider's recommended default model in one step, use the
 generic auth command instead:
 
 ```bash
-openclaw models auth login --provider github-copilot --method device --set-default
+mullusi models auth login --provider github-copilot --method device --set-default
 ```
 
 ## Set a default model
 
 ```bash
-openclaw models set github-copilot/gpt-4o
+mullusi models set github-copilot/gpt-4o
 ```
 
 ### Config snippet
@@ -77,4 +77,4 @@ openclaw models set github-copilot/gpt-4o
 - Claude model IDs use the Anthropic Messages transport automatically; GPT, o-series,
   and Gemini models keep the OpenAI Responses transport.
 - The login stores a GitHub token in the auth profile store and exchanges it for a
-  Copilot API token when OpenClaw runs.
+  Copilot API token when Mullusi runs.

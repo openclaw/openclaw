@@ -10,7 +10,7 @@ const INSTALL_BASE_CHANGED_ABORT_WARNING =
 const INSTALL_BASE_CHANGED_BACKUP_WARNING =
   "Install base directory changed before backup cleanup; leaving backup in place.";
 const STAGED_NPM_PROJECT_CONFIG_NAME = ".npmrc";
-const STAGED_NPM_PROJECT_CONFIG_PREFIX = ".openclaw-install-hidden-npmrc-";
+const STAGED_NPM_PROJECT_CONFIG_PREFIX = ".mullusi-install-hidden-npmrc-";
 
 type HiddenProjectConfigFile = {
   hiddenDir: string;
@@ -210,7 +210,7 @@ export async function installPackageDir(params: {
       installBaseDir: installBaseRealPath,
       candidatePaths: [canonicalTargetDir],
     });
-    stageDir = await fs.mkdtemp(path.join(installBaseRealPath, ".openclaw-install-stage-"));
+    stageDir = await fs.mkdtemp(path.join(installBaseRealPath, ".mullusi-install-stage-"));
     await fs.cp(params.sourceDir, stageDir, { recursive: true });
   } catch (err) {
     return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
@@ -251,7 +251,7 @@ export async function installPackageDir(params: {
   }
 
   if (params.mode === "update" && (await fileExists(canonicalTargetDir))) {
-    const backupRoot = path.join(installBaseRealPath, ".openclaw-install-backups");
+    const backupRoot = path.join(installBaseRealPath, ".mullusi-install-backups");
     backupDir = path.join(backupRoot, `${path.basename(canonicalTargetDir)}-${Date.now()}`);
     try {
       await fs.mkdir(backupRoot, { recursive: true });

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
@@ -37,7 +37,7 @@ const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityC
 
 function resolveBundledCapabilityCompatPluginIds(params: {
   key: CapabilityProviderRegistryKey;
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
 }): string[] {
   const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
   return loadPluginManifestRegistry({
@@ -53,7 +53,7 @@ function resolveBundledCapabilityCompatPluginIds(params: {
 
 function resolveCapabilityProviderConfig(params: {
   key: CapabilityProviderRegistryKey;
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
 }) {
   const pluginIds = resolveBundledCapabilityCompatPluginIds(params);
   const enablementCompat = withBundledPluginEnablementCompat({
@@ -69,7 +69,7 @@ function resolveCapabilityProviderConfig(params: {
 
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
   key: K;
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];

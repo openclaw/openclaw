@@ -41,24 +41,24 @@ async function readRequestBodyWithLimitForTest(req: IncomingMessage): Promise<st
   });
 }
 
-vi.mock("openclaw/plugin-sdk/setup", async () => {
-  const actual = await vi.importActual<object>("openclaw/plugin-sdk/setup");
+vi.mock("mullusi/plugin-sdk/setup", async () => {
+  const actual = await vi.importActual<object>("mullusi/plugin-sdk/setup");
   return {
     ...actual,
     DEFAULT_ACCOUNT_ID: "default",
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-config-schema", async () => {
-  const actual = await vi.importActual<object>("openclaw/plugin-sdk/channel-config-schema");
+vi.mock("mullusi/plugin-sdk/channel-config-schema", async () => {
+  const actual = await vi.importActual<object>("mullusi/plugin-sdk/channel-config-schema");
   return {
     ...actual,
     buildChannelConfigSchema: vi.fn((schema: unknown) => ({ schema })),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
-  const actual = await vi.importActual<object>("openclaw/plugin-sdk/webhook-ingress");
+vi.mock("mullusi/plugin-sdk/webhook-ingress", async () => {
+  const actual = await vi.importActual<object>("mullusi/plugin-sdk/webhook-ingress");
   return {
     ...actual,
     registerPluginHttpRoute: registerPluginHttpRouteMock,

@@ -10,7 +10,7 @@ const EXPECTED_PLAN_MODELS = ["step-3.5-flash", "step-3.5-flash-2603"];
 
 describe("StepFun provider catalog", () => {
   it("includes standard and Step Plan providers when STEPFUN_API_KEY is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const providers = await resolveImplicitProvidersForTest({
       agentDir,
       env: { ...process.env, STEPFUN_API_KEY: "test-stepfun-key" },
@@ -33,7 +33,7 @@ describe("StepFun provider catalog", () => {
   });
 
   it("falls back to global endpoints for untagged StepFun auth profiles", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
 
     upsertAuthProfile({
       profileId: "stepfun:default",
@@ -65,7 +65,7 @@ describe("StepFun provider catalog", () => {
   });
 
   it("uses China endpoints when explicit config points the paired surface at the China host", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
     const providers = await resolveImplicitProvidersForTest({
       agentDir,
       env: { ...process.env, STEPFUN_API_KEY: "test-stepfun-key" },
@@ -86,7 +86,7 @@ describe("StepFun provider catalog", () => {
   });
 
   it("discovers both providers from shared regional auth profiles", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "mullusi-test-"));
 
     upsertAuthProfile({
       profileId: "stepfun:cn",

@@ -1,6 +1,6 @@
 import { createAllowlistProviderRestrictSendersWarningCollector } from "../channels/plugins/group-policy-warnings.js";
 import type { ChannelSecurityAdapter } from "../channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import type { GroupPolicy } from "../config/types.base.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
@@ -94,7 +94,7 @@ export function createDangerousNameMatchingMutableAllowlistWarningCollector(para
     dangerousFlagPath: string;
   }) => ChannelMutableAllowlistCandidate[];
 }) {
-  return ({ cfg }: { cfg: OpenClawConfig }): string[] => {
+  return ({ cfg }: { cfg: MullusiConfig }): string[] => {
     const hits: ChannelMutableAllowlistHit[] = [];
     for (const scope of collectProviderDangerousNameMatchingScopes(cfg, params.channel)) {
       if (scope.dangerousNameMatchingEnabled) {
@@ -134,7 +134,7 @@ export function createRestrictSendersChannelSecurity<
   groupPolicyPath: string;
   groupAllowFromPath: string;
   mentionGated?: boolean;
-  providerConfigPresent?: (cfg: OpenClawConfig) => boolean;
+  providerConfigPresent?: (cfg: MullusiConfig) => boolean;
   resolveFallbackAccountId?: (account: ResolvedAccount) => string | null | undefined;
   defaultDmPolicy?: string;
   allowFromPathSuffix?: string;

@@ -16,7 +16,7 @@ const JITI_EXTENSIONS = [
   ".json",
 ] as const;
 
-const PLUGIN_SDK_SPECIFIER_PREFIX = "openclaw/plugin-sdk/";
+const PLUGIN_SDK_SPECIFIER_PREFIX = "mullusi/plugin-sdk/";
 const SOURCE_MODULE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"] as const;
 
 type SourceModuleRef = {
@@ -213,7 +213,7 @@ import { createJiti } from "jiti";
 const modulePath = ${JSON.stringify(params.modulePath)};
 const exportNames = ${JSON.stringify(params.exportNames)};
 const alias = ${JSON.stringify(alias)};
-const jiti = createJiti(path.join(${JSON.stringify(root)}, "openclaw.mjs"), {
+const jiti = createJiti(path.join(${JSON.stringify(root)}, "mullusi.mjs"), {
   interopDefault: true,
   tryNative: false,
   fsCache: false,

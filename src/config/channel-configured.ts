@@ -1,10 +1,10 @@
 import { hasMeaningfulChannelConfig } from "../channels/config-presence.js";
 import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
 import { isRecord } from "../utils.js";
-import type { OpenClawConfig } from "./config.js";
+import type { MullusiConfig } from "./config.js";
 
 function resolveChannelConfig(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   channelId: string,
 ): Record<string, unknown> | null {
   const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -12,13 +12,13 @@ function resolveChannelConfig(
   return isRecord(entry) ? entry : null;
 }
 
-function isGenericChannelConfigured(cfg: OpenClawConfig, channelId: string): boolean {
+function isGenericChannelConfigured(cfg: MullusiConfig, channelId: string): boolean {
   const entry = resolveChannelConfig(cfg, channelId);
   return hasMeaningfulChannelConfig(entry);
 }
 
 export function isChannelConfigured(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   channelId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {

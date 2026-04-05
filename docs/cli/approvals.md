@@ -1,17 +1,17 @@
 ---
-summary: "CLI reference for `openclaw approvals` (exec approvals for gateway or node hosts)"
+summary: "CLI reference for `mullusi approvals` (exec approvals for gateway or node hosts)"
 read_when:
   - You want to edit exec approvals from the CLI
   - You need to manage allowlists on gateway or node hosts
 title: "approvals"
 ---
 
-# `openclaw approvals`
+# `mullusi approvals`
 
 Manage exec approvals for the **local host**, **gateway host**, or a **node host**.
 By default, commands target the local approvals file on disk. Use `--gateway` to target the gateway, or `--node` to target a specific node.
 
-Alias: `openclaw exec-approvals`
+Alias: `mullusi exec-approvals`
 
 Related:
 
@@ -21,12 +21,12 @@ Related:
 ## Common commands
 
 ```bash
-openclaw approvals get
-openclaw approvals get --node <id|name|ip>
-openclaw approvals get --gateway
+mullusi approvals get
+mullusi approvals get --node <id|name|ip>
+mullusi approvals get --gateway
 ```
 
-`openclaw approvals get` now shows the effective exec policy for local, gateway, and node targets:
+`mullusi approvals get` now shows the effective exec policy for local, gateway, and node targets:
 
 - requested `tools.exec` policy
 - host approvals-file policy
@@ -42,12 +42,12 @@ Precedence is intentional:
 ## Replace approvals from a file
 
 ```bash
-openclaw approvals set --file ./exec-approvals.json
-openclaw approvals set --stdin <<'EOF'
+mullusi approvals set --file ./exec-approvals.json
+mullusi approvals set --stdin <<'EOF'
 { version: 1, defaults: { security: "full", ask: "off" } }
 EOF
-openclaw approvals set --node <id|name|ip> --file ./exec-approvals.json
-openclaw approvals set --gateway --file ./exec-approvals.json
+mullusi approvals set --node <id|name|ip> --file ./exec-approvals.json
+mullusi approvals set --gateway --file ./exec-approvals.json
 ```
 
 `set` accepts JSON5, not only strict JSON. Use either `--file` or `--stdin`, not both.
@@ -57,7 +57,7 @@ openclaw approvals set --gateway --file ./exec-approvals.json
 For a host that should never stop on exec approvals, set the host approvals defaults to `full` + `off`:
 
 ```bash
-openclaw approvals set --stdin <<'EOF'
+mullusi approvals set --stdin <<'EOF'
 {
   version: 1,
   defaults: {
@@ -72,7 +72,7 @@ EOF
 Node variant:
 
 ```bash
-openclaw approvals set --node <id|name|ip> --stdin <<'EOF'
+mullusi approvals set --node <id|name|ip> --stdin <<'EOF'
 {
   version: 1,
   defaults: {
@@ -84,12 +84,12 @@ openclaw approvals set --node <id|name|ip> --stdin <<'EOF'
 EOF
 ```
 
-This changes the **host approvals file** only. To keep the requested OpenClaw policy aligned, also set:
+This changes the **host approvals file** only. To keep the requested Mullusi policy aligned, also set:
 
 ```bash
-openclaw config set tools.exec.host gateway
-openclaw config set tools.exec.security full
-openclaw config set tools.exec.ask off
+mullusi config set tools.exec.host gateway
+mullusi config set tools.exec.security full
+mullusi config set tools.exec.ask off
 ```
 
 Why `tools.exec.host=gateway` in this example:
@@ -103,11 +103,11 @@ This matches the current host-default YOLO behavior. Tighten it if you want appr
 ## Allowlist helpers
 
 ```bash
-openclaw approvals allowlist add "~/Projects/**/bin/rg"
-openclaw approvals allowlist add --agent main --node <id|name|ip> "/usr/bin/uptime"
-openclaw approvals allowlist add --agent "*" "/usr/bin/uname"
+mullusi approvals allowlist add "~/Projects/**/bin/rg"
+mullusi approvals allowlist add --agent main --node <id|name|ip> "/usr/bin/uptime"
+mullusi approvals allowlist add --agent "*" "/usr/bin/uname"
 
-openclaw approvals allowlist remove "~/Projects/**/bin/rg"
+mullusi approvals allowlist remove "~/Projects/**/bin/rg"
 ```
 
 ## Common options
@@ -130,7 +130,7 @@ Targeting notes:
 
 ## Notes
 
-- `--node` uses the same resolver as `openclaw nodes` (id, name, ip, or id prefix).
+- `--node` uses the same resolver as `mullusi nodes` (id, name, ip, or id prefix).
 - `--agent` defaults to `"*"`, which applies to all agents.
 - The node host must advertise `system.execApprovals.get/set` (macOS app or headless node host).
-- Approvals files are stored per host at `~/.openclaw/exec-approvals.json`.
+- Approvals files are stored per host at `~/.mullusi/exec-approvals.json`.

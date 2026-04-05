@@ -5,7 +5,7 @@ import { registerDaemonCli } from "./daemon-cli.js";
 
 const probeGatewayStatus = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const resolveGatewayProgramArguments = vi.fn(async (_opts?: unknown) => ({
-  programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
+  programArguments: ["/bin/node", "cli", "gateway", "--port", "18790"],
 }));
 const serviceInstall = vi.fn().mockResolvedValue(undefined);
 const serviceStage = vi.fn().mockResolvedValue(undefined);
@@ -28,8 +28,8 @@ const buildGatewayInstallPlan = vi.fn(
     programArguments: ["/bin/node", "cli", "gateway", "--port", String(params.port)],
     workingDirectory: process.cwd(),
     environment: {
-      OPENCLAW_GATEWAY_PORT: String(params.port),
-      ...(params.token ? { OPENCLAW_GATEWAY_TOKEN: params.token } : {}),
+      MULLUSI_GATEWAY_PORT: String(params.port),
+      ...(params.token ? { MULLUSI_GATEWAY_TOKEN: params.token } : {}),
     },
   }),
 );
@@ -102,7 +102,7 @@ vi.mock("../daemon/inspect.js", () => ({
 
 vi.mock("../infra/ports.js", () => ({
   inspectPortUsage: (port: number) => inspectPortUsage(port),
-  formatPortDiagnostics: () => ["Port 18789 is already in use."],
+  formatPortDiagnostics: () => ["Port 18790 is already in use."],
 }));
 
 vi.mock("../runtime.js", async () => ({
@@ -147,15 +147,15 @@ describe("daemon-cli coverage", () => {
   beforeEach(() => {
     daemonProgram = createDaemonProgram();
     envSnapshot = captureEnv([
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_CONFIG_PATH",
-      "OPENCLAW_GATEWAY_PORT",
-      "OPENCLAW_PROFILE",
+      "MULLUSI_STATE_DIR",
+      "MULLUSI_CONFIG_PATH",
+      "MULLUSI_GATEWAY_PORT",
+      "MULLUSI_PROFILE",
     ]);
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-cli-state";
-    process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-cli-state/openclaw.json";
-    delete process.env.OPENCLAW_GATEWAY_PORT;
-    delete process.env.OPENCLAW_PROFILE;
+    process.env.MULLUSI_STATE_DIR = "/tmp/mullusi-cli-state";
+    process.env.MULLUSI_CONFIG_PATH = "/tmp/mullusi-cli-state/mullusi.json";
+    delete process.env.MULLUSI_GATEWAY_PORT;
+    delete process.env.MULLUSI_PROFILE;
     serviceReadCommand.mockResolvedValue(null);
     resolveGatewayProbeAuthWithSecretInputs.mockClear();
     buildGatewayInstallPlan.mockClear();
@@ -173,7 +173,7 @@ describe("daemon-cli coverage", () => {
 
     expect(probeGatewayStatus).toHaveBeenCalledTimes(1);
     expect(probeGatewayStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+      expect.objectContaining({ url: "ws://127.0.0.1:18790" }),
     );
     expect(findExtraGatewayServices).toHaveBeenCalled();
     expect(inspectPortUsage).toHaveBeenCalled();
@@ -187,12 +187,12 @@ describe("daemon-cli coverage", () => {
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
       environment: {
-        OPENCLAW_PROFILE: "dev",
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon-state",
-        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon-state/openclaw.json",
-        OPENCLAW_GATEWAY_PORT: "19001",
+        MULLUSI_PROFILE: "dev",
+        MULLUSI_STATE_DIR: "/tmp/mullusi-daemon-state",
+        MULLUSI_CONFIG_PATH: "/tmp/mullusi-daemon-state/mullusi.json",
+        MULLUSI_GATEWAY_PORT: "19001",
       },
-      sourcePath: "/tmp/ai.openclaw.gateway.plist",
+      sourcePath: "/tmp/ai.mullusi.gateway.plist",
     });
 
     await runDaemonCommand(["daemon", "status", "--json"]);
@@ -237,7 +237,7 @@ describe("daemon-cli coverage", () => {
       "daemon",
       "install",
       "--port",
-      "18789",
+      "18790",
       "--token",
       "test-token",
       "--json",

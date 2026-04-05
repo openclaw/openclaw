@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { MullusiConfig } from "../runtime-api.js";
 import { fetchGraphJson, resolveGraphToken } from "./graph.js";
 
 type GraphUserProfile = {
@@ -11,7 +11,7 @@ type GraphUserProfile = {
 };
 
 export type GetMemberInfoMSTeamsParams = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   userId: string;
 };
 

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { logVerbose } from "../globals.js";
 import type {
@@ -11,21 +11,21 @@ import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
-type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
+type WebFetchConfig = NonNullable<MullusiConfig["tools"]>["web"] extends infer Web
   ? Web extends { fetch?: infer Fetch }
     ? Fetch
     : undefined
   : undefined;
 
 export type ResolveWebFetchDefinitionParams = {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   sandboxed?: boolean;
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   providerId?: string;
   preferRuntimeProviders?: boolean;
 };
 
-function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
+function resolveFetchConfig(cfg?: MullusiConfig): WebFetchConfig {
   const fetch = cfg?.tools?.web?.fetch;
   if (!fetch || typeof fetch !== "object") {
     return undefined;
@@ -64,7 +64,7 @@ function hasEntryCredential(
     PluginWebFetchProviderEntry,
     "envVars" | "getConfiguredCredentialValue" | "getCredentialValue" | "requiresCredential"
   >,
-  config: OpenClawConfig | undefined,
+  config: MullusiConfig | undefined,
   fetch: WebFetchConfig | undefined,
 ): boolean {
   if (!providerRequiresCredential(provider)) {
@@ -83,7 +83,7 @@ function hasEntryCredential(
 }
 
 export function listWebFetchProviders(params?: {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
 }): PluginWebFetchProviderEntry[] {
   return resolvePluginWebFetchProviders({
     config: params?.config,
@@ -93,7 +93,7 @@ export function listWebFetchProviders(params?: {
 }
 
 export function listConfiguredWebFetchProviders(params?: {
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
 }): PluginWebFetchProviderEntry[] {
   return resolvePluginWebFetchProviders({
     config: params?.config,
@@ -103,7 +103,7 @@ export function listConfiguredWebFetchProviders(params?: {
 
 export function resolveWebFetchProviderId(params: {
   fetch?: WebFetchConfig;
-  config?: OpenClawConfig;
+  config?: MullusiConfig;
   providers?: PluginWebFetchProviderEntry[];
 }): string {
   const providers = sortWebFetchProvidersForAutoDetect(

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -131,9 +131,9 @@ function resetGatewayCallMocks() {
   closeCode = 1006;
   closeReason = "";
   helloMethods = ["health", "secrets.resolve"];
-  const loadConfigForTests = loadConfig as unknown as () => OpenClawConfig;
+  const loadConfigForTests = loadConfig as unknown as () => MullusiConfig;
   const resolveGatewayPortForTests = resolveGatewayPort as unknown as (
-    cfg?: OpenClawConfig,
+    cfg?: MullusiConfig,
     env?: NodeJS.ProcessEnv,
   ) => number;
   __testing.setDepsForTests({
@@ -151,12 +151,12 @@ function resetGatewayCallMocks() {
   deviceIdentityState.throwOnLoad = false;
 }
 
-function setGatewayNetworkDefaults(port = 18789) {
+function setGatewayNetworkDefaults(port = 18790) {
   resolveGatewayPort.mockReturnValue(port);
   pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 }
 
-function setLocalLoopbackGatewayConfig(port = 18789) {
+function setLocalLoopbackGatewayConfig(port = 18790) {
   loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
   setGatewayNetworkDefaults(port);
 }
@@ -165,7 +165,7 @@ function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword =
   return {
     gateway: {
       mode: "remote",
-      remote: { url: "wss://remote.example:18789", password: remotePassword },
+      remote: { url: "wss://remote.example:18790", password: remotePassword },
       auth: { password: localPassword },
     },
   };
@@ -173,16 +173,16 @@ function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword =
 
 describe("callGateway url resolution", () => {
   const envSnapshot = captureEnv([
-    "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
-    "OPENCLAW_GATEWAY_URL",
-    "OPENCLAW_GATEWAY_TOKEN",
+    "MULLUSI_ALLOW_INSECURE_PRIVATE_WS",
+    "MULLUSI_GATEWAY_URL",
+    "MULLUSI_GATEWAY_TOKEN",
   ]);
 
   beforeEach(() => {
     envSnapshot.restore();
-    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
-    delete process.env.OPENCLAW_GATEWAY_URL;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.MULLUSI_ALLOW_INSECURE_PRIVATE_WS;
+    delete process.env.MULLUSI_GATEWAY_URL;
+    delete process.env.MULLUSI_GATEWAY_TOKEN;
     resetGatewayCallMocks();
   });
 
@@ -261,7 +261,7 @@ describe("callGateway url resolution", () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },
     });
-    resolveGatewayPort.mockReturnValue(18789);
+    resolveGatewayPort.mockReturnValue(18790);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
     await callGateway({
@@ -282,7 +282,7 @@ describe("callGateway url resolution", () => {
       token: "explicit-token",
     });
 
-    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18790");
     expect(lastClientOptions?.token).toBe("explicit-token");
     expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
@@ -296,20 +296,20 @@ describe("callGateway url resolution", () => {
       token: "explicit-token",
     });
 
-    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18790");
     expect(lastClientOptions?.token).toBe("explicit-token");
     expect(lastClientOptions?.deviceIdentity).toBeNull();
     expect(lastRequestOptions?.method).toBe("health");
   });
 
-  it("uses OPENCLAW_GATEWAY_URL env override in remote mode when remote URL is missing", async () => {
+  it("uses MULLUSI_GATEWAY_URL env override in remote mode when remote URL is missing", async () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },
     });
-    resolveGatewayPort.mockReturnValue(18789);
+    resolveGatewayPort.mockReturnValue(18790);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
-    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    process.env.MULLUSI_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
+    process.env.MULLUSI_GATEWAY_TOKEN = "env-token";
 
     await callGateway({
       method: "health",
@@ -334,11 +334,11 @@ describe("callGateway url resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
-    resolveGatewayPort.mockReturnValue(18789);
+    } as unknown as MullusiConfig);
+    resolveGatewayPort.mockReturnValue(18790);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
-    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    process.env.MULLUSI_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
+    process.env.MULLUSI_GATEWAY_TOKEN = "env-token";
 
     await callGateway({
       method: "health",
@@ -359,10 +359,10 @@ describe("callGateway url resolution", () => {
         },
       },
     });
-    setGatewayNetworkDefaults(18789);
+    setGatewayNetworkDefaults(18790);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
-    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    process.env.MULLUSI_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
+    process.env.MULLUSI_GATEWAY_TOKEN = "env-token";
 
     await callGateway({
       method: "health",
@@ -381,7 +381,7 @@ describe("callGateway url resolution", () => {
         },
       },
     });
-    setGatewayNetworkDefaults(18789);
+    setGatewayNetworkDefaults(18790);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
     await callGateway({
@@ -458,10 +458,10 @@ describe("callGateway url resolution", () => {
           },
           stop() {},
         }) as never,
-      loadConfig: loadConfig as unknown as () => OpenClawConfig,
+      loadConfig: loadConfig as unknown as () => MullusiConfig,
       loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
       resolveGatewayPort: resolveGatewayPort as unknown as (
-        cfg?: OpenClawConfig,
+        cfg?: MullusiConfig,
         env?: NodeJS.ProcessEnv,
       ) => number,
     });
@@ -501,18 +501,18 @@ describe("buildGatewayConnectionDetails", () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },
     });
-    resolveGatewayPort.mockReturnValue(18789);
+    resolveGatewayPort.mockReturnValue(18790);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
     const details = buildGatewayConnectionDetails();
 
-    expect(details.url).toBe("ws://127.0.0.1:18789");
+    expect(details.url).toBe("ws://127.0.0.1:18790");
     expect(details.urlSource).toBe("missing gateway.remote.url (fallback local)");
     expect(details.bindDetail).toBe("Bind: loopback");
     expect(details.remoteFallbackNote).toContain(
       "gateway.mode=remote but gateway.remote.url is missing",
     );
-    expect(details.message).toContain("Gateway target: ws://127.0.0.1:18789");
+    expect(details.message).toContain("Gateway target: ws://127.0.0.1:18790");
   });
 
   it.each([
@@ -558,24 +558,24 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.remoteFallbackNote).toBeUndefined();
   });
 
-  it("uses env OPENCLAW_GATEWAY_URL when set", () => {
+  it("uses env MULLUSI_GATEWAY_URL when set", () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
-    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    const prevUrl = process.env.MULLUSI_GATEWAY_URL;
     try {
-      process.env.OPENCLAW_GATEWAY_URL = "wss://browser-gateway.local:9443/ws";
+      process.env.MULLUSI_GATEWAY_URL = "wss://browser-gateway.local:9443/ws";
 
       const details = buildGatewayConnectionDetails();
 
       expect(details.url).toBe("wss://browser-gateway.local:9443/ws");
-      expect(details.urlSource).toBe("env OPENCLAW_GATEWAY_URL");
+      expect(details.urlSource).toBe("env MULLUSI_GATEWAY_URL");
       expect(details.bindDetail).toBeUndefined();
     } finally {
       if (prevUrl === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_URL;
+        delete process.env.MULLUSI_GATEWAY_URL;
       } else {
-        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+        process.env.MULLUSI_GATEWAY_URL = prevUrl;
       }
     }
   });
@@ -589,7 +589,7 @@ describe("buildGatewayConnectionDetails", () => {
 
     const details = buildGatewayConnectionDetails();
 
-    expect(details.url).toBe("ws://127.0.0.1:18789");
+    expect(details.url).toBe("ws://127.0.0.1:18790");
     expect(details.urlSource).toBe("local loopback");
   });
 
@@ -598,10 +598,10 @@ describe("buildGatewayConnectionDetails", () => {
       gateway: {
         mode: "remote",
         bind: "loopback",
-        remote: { url: "ws://remote.example.com:18789" },
+        remote: { url: "ws://remote.example.com:18790" },
       },
     });
-    resolveGatewayPort.mockReturnValue(18789);
+    resolveGatewayPort.mockReturnValue(18790);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
     let thrown: unknown;
@@ -615,40 +615,40 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("plaintext ws://");
     expect((thrown as Error).message).toContain("wss://");
     expect((thrown as Error).message).toContain("Tailscale Serve/Funnel");
-    expect((thrown as Error).message).toContain("openclaw doctor --fix");
+    expect((thrown as Error).message).toContain("mullusi doctor --fix");
   });
 
-  it("allows ws:// private remote URLs only when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
-    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+  it("allows ws:// private remote URLs only when MULLUSI_ALLOW_INSECURE_PRIVATE_WS=1", () => {
+    process.env.MULLUSI_ALLOW_INSECURE_PRIVATE_WS = "1";
     loadConfig.mockReturnValue({
       gateway: {
         mode: "remote",
         bind: "loopback",
-        remote: { url: "ws://10.0.0.8:18789" },
+        remote: { url: "ws://10.0.0.8:18790" },
       },
     });
-    resolveGatewayPort.mockReturnValue(18789);
+    resolveGatewayPort.mockReturnValue(18790);
 
     const details = buildGatewayConnectionDetails();
 
-    expect(details.url).toBe("ws://10.0.0.8:18789");
+    expect(details.url).toBe("ws://10.0.0.8:18790");
     expect(details.urlSource).toBe("config gateway.remote.url");
   });
 
-  it("allows ws:// hostname remote URLs when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
-    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+  it("allows ws:// hostname remote URLs when MULLUSI_ALLOW_INSECURE_PRIVATE_WS=1", () => {
+    process.env.MULLUSI_ALLOW_INSECURE_PRIVATE_WS = "1";
     loadConfig.mockReturnValue({
       gateway: {
         mode: "remote",
         bind: "loopback",
-        remote: { url: "ws://openclaw-gateway.ai:18789" },
+        remote: { url: "ws://mullusi-gateway.ai:18790" },
       },
     });
-    resolveGatewayPort.mockReturnValue(18789);
+    resolveGatewayPort.mockReturnValue(18790);
 
     const details = buildGatewayConnectionDetails();
 
-    expect(details.url).toBe("ws://openclaw-gateway.ai:18789");
+    expect(details.url).toBe("ws://mullusi-gateway.ai:18790");
     expect(details.urlSource).toBe("config gateway.remote.url");
   });
 
@@ -657,7 +657,7 @@ describe("buildGatewayConnectionDetails", () => {
 
     const details = buildGatewayConnectionDetails();
 
-    expect(details.url).toBe("ws://127.0.0.1:18789");
+    expect(details.url).toBe("ws://127.0.0.1:18790");
   });
 });
 
@@ -684,7 +684,7 @@ describe("callGateway error details", () => {
     }
 
     expect(err?.message).toContain("gateway closed (1006");
-    expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
+    expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18790");
     expect(err?.message).toContain("Source: local loopback");
     expect(err?.message).toContain("Bind: loopback");
   });
@@ -703,7 +703,7 @@ describe("callGateway error details", () => {
     await promise;
 
     expect(errMessage).toContain("gateway timeout after 5ms");
-    expect(errMessage).toContain("Gateway target: ws://127.0.0.1:18789");
+    expect(errMessage).toContain("Gateway target: ws://127.0.0.1:18790");
     expect(errMessage).toContain("Source: local loopback");
     expect(errMessage).toContain("Bind: loopback");
   });
@@ -775,15 +775,15 @@ describe("callGateway url override auth requirements", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv([
-      "OPENCLAW_GATEWAY_TOKEN",
-      "OPENCLAW_GATEWAY_PASSWORD",
-      "OPENCLAW_GATEWAY_URL",
+      "MULLUSI_GATEWAY_TOKEN",
+      "MULLUSI_GATEWAY_PASSWORD",
+      "MULLUSI_GATEWAY_URL",
     ]);
     resetGatewayCallMocks();
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.OPENCLAW_GATEWAY_URL;
-    setGatewayNetworkDefaults(18789);
+    delete process.env.MULLUSI_GATEWAY_TOKEN;
+    delete process.env.MULLUSI_GATEWAY_PASSWORD;
+    delete process.env.MULLUSI_GATEWAY_URL;
+    setGatewayNetworkDefaults(18790);
   });
 
   afterEach(() => {
@@ -791,8 +791,8 @@ describe("callGateway url override auth requirements", () => {
   });
 
   it("throws when url override is set without explicit credentials", async () => {
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-password";
+    process.env.MULLUSI_GATEWAY_TOKEN = "env-token";
+    process.env.MULLUSI_GATEWAY_PASSWORD = "env-password";
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -806,7 +806,7 @@ describe("callGateway url override auth requirements", () => {
   });
 
   it("throws when env URL override is set without env credentials", async () => {
-    process.env.OPENCLAW_GATEWAY_URL = "wss://override.example/ws";
+    process.env.MULLUSI_GATEWAY_URL = "wss://override.example/ws";
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -824,7 +824,7 @@ describe("callGateway password resolution", () => {
     {
       label: "password",
       authKey: "password", // pragma: allowlist secret
-      envKey: "OPENCLAW_GATEWAY_PASSWORD",
+      envKey: "MULLUSI_GATEWAY_PASSWORD",
       envValue: "from-env",
       configValue: "from-config",
       explicitValue: "explicit-password",
@@ -832,7 +832,7 @@ describe("callGateway password resolution", () => {
     {
       label: "token",
       authKey: "token", // pragma: allowlist secret
-      envKey: "OPENCLAW_GATEWAY_TOKEN",
+      envKey: "MULLUSI_GATEWAY_TOKEN",
       envValue: "env-token",
       configValue: "local-token",
       explicitValue: "explicit-token",
@@ -841,21 +841,21 @@ describe("callGateway password resolution", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv([
-      "OPENCLAW_GATEWAY_PASSWORD",
-      "OPENCLAW_GATEWAY_TOKEN",
+      "MULLUSI_GATEWAY_PASSWORD",
+      "MULLUSI_GATEWAY_TOKEN",
       "LOCAL_REMOTE_FALLBACK_TOKEN",
       "LOCAL_REF_PASSWORD",
       "REMOTE_REF_TOKEN",
       "REMOTE_REF_PASSWORD",
     ]);
     resetGatewayCallMocks();
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.MULLUSI_GATEWAY_PASSWORD;
+    delete process.env.MULLUSI_GATEWAY_TOKEN;
     delete process.env.LOCAL_REMOTE_FALLBACK_TOKEN;
     delete process.env.LOCAL_REF_PASSWORD;
     delete process.env.REMOTE_REF_TOKEN;
     delete process.env.REMOTE_REF_PASSWORD;
-    setGatewayNetworkDefaults(18789);
+    setGatewayNetworkDefaults(18790);
   });
 
   afterEach(() => {
@@ -901,7 +901,7 @@ describe("callGateway password resolution", () => {
     },
   ])("$label", async ({ envPassword, config, expectedPassword }) => {
     if (envPassword !== undefined) {
-      process.env.OPENCLAW_GATEWAY_PASSWORD = envPassword;
+      process.env.MULLUSI_GATEWAY_PASSWORD = envPassword;
     }
     loadConfig.mockReturnValue(config);
 
@@ -926,7 +926,7 @@ describe("callGateway password resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as MullusiConfig);
 
     await callGateway({ method: "health" });
 
@@ -934,7 +934,7 @@ describe("callGateway password resolution", () => {
   });
 
   it("does not resolve local password ref when env password takes precedence", async () => {
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "from-env";
+    process.env.MULLUSI_GATEWAY_PASSWORD = "from-env";
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -949,7 +949,7 @@ describe("callGateway password resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as MullusiConfig);
 
     await callGateway({ method: "health" });
 
@@ -972,7 +972,7 @@ describe("callGateway password resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as MullusiConfig);
 
     await callGateway({ method: "health" });
 
@@ -995,7 +995,7 @@ describe("callGateway password resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as MullusiConfig);
 
     await callGateway({ method: "health" });
 
@@ -1022,7 +1022,7 @@ describe("callGateway password resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as MullusiConfig);
 
     await expect(callGateway({ method: "health" })).rejects.toThrow("gateway.auth.token");
   });
@@ -1044,7 +1044,7 @@ describe("callGateway password resolution", () => {
             default: { source: "env" },
           },
         },
-      } as unknown as OpenClawConfig);
+      } as unknown as MullusiConfig);
 
       await callGateway({ method: "health" });
 
@@ -1063,7 +1063,7 @@ describe("callGateway password resolution", () => {
           password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
         },
         remote: {
-          url: "wss://remote.example:18789",
+          url: "wss://remote.example:18790",
           password: "remote-secret",
         },
       },
@@ -1072,7 +1072,7 @@ describe("callGateway password resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as MullusiConfig);
 
     await callGateway({ method: "health" });
 
@@ -1087,7 +1087,7 @@ describe("callGateway password resolution", () => {
         bind: "loopback",
         auth: {},
         remote: {
-          url: "wss://remote.example:18789",
+          url: "wss://remote.example:18790",
           token: { source: "env", provider: "default", id: "REMOTE_REF_TOKEN" },
         },
       },
@@ -1096,7 +1096,7 @@ describe("callGateway password resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as MullusiConfig);
 
     await callGateway({ method: "health" });
 
@@ -1111,7 +1111,7 @@ describe("callGateway password resolution", () => {
         bind: "loopback",
         auth: {},
         remote: {
-          url: "wss://remote.example:18789",
+          url: "wss://remote.example:18790",
           password: { source: "env", provider: "default", id: "REMOTE_REF_PASSWORD" },
         },
       },
@@ -1120,7 +1120,7 @@ describe("callGateway password resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as MullusiConfig);
 
     await callGateway({ method: "health" });
 
@@ -1134,7 +1134,7 @@ describe("callGateway password resolution", () => {
         bind: "loopback",
         auth: {},
         remote: {
-          url: "wss://remote.example:18789",
+          url: "wss://remote.example:18790",
           token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
           password: "remote-password", // pragma: allowlist secret
         },
@@ -1144,7 +1144,7 @@ describe("callGateway password resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as MullusiConfig);
 
     await callGateway({ method: "health" });
 
@@ -1160,7 +1160,7 @@ describe("callGateway password resolution", () => {
         bind: "loopback",
         auth: {},
         remote: {
-          url: "wss://remote.example:18789",
+          url: "wss://remote.example:18790",
           token: { source: "env", provider: "default", id: "REMOTE_REF_TOKEN" },
           password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
         },
@@ -1170,7 +1170,7 @@ describe("callGateway password resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as MullusiConfig);
 
     await callGateway({ method: "health" });
 
@@ -1185,7 +1185,7 @@ describe("callGateway password resolution", () => {
         bind: "loopback",
         auth: {},
         remote: {
-          url: "wss://remote.example:18789",
+          url: "wss://remote.example:18790",
           token: "remote-token",
           password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
         },
@@ -1195,7 +1195,7 @@ describe("callGateway password resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as MullusiConfig);
 
     await callGateway({ method: "health" });
 
@@ -1220,7 +1220,7 @@ describe("callGateway password resolution", () => {
           default: { source: "env" },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as MullusiConfig);
 
     await callGateway({ method: "health" });
 
@@ -1237,7 +1237,7 @@ describe("callGateway password resolution", () => {
           bind: "loopback",
           auth: { mode },
           remote: {
-            url: "wss://remote.example:18789",
+            url: "wss://remote.example:18790",
             token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
             password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
           },
@@ -1247,7 +1247,7 @@ describe("callGateway password resolution", () => {
             default: { source: "env" },
           },
         },
-      } as unknown as OpenClawConfig);
+      } as unknown as MullusiConfig);
 
       await callGateway({ method: "health" });
 

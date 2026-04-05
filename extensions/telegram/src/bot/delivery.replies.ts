@@ -1,23 +1,23 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { fireAndForgetHook } from "openclaw/plugin-sdk/hook-runtime";
-import { createInternalHookEvent, triggerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import type { ReplyToMode } from "mullusi/plugin-sdk/config-runtime";
+import type { MarkdownTableMode } from "mullusi/plugin-sdk/config-runtime";
+import { fireAndForgetHook } from "mullusi/plugin-sdk/hook-runtime";
+import { createInternalHookEvent, triggerInternalHook } from "mullusi/plugin-sdk/hook-runtime";
 import {
   buildCanonicalSentMessageHookContext,
   toInternalMessageSentContext,
   toPluginMessageContext,
   toPluginMessageSentEvent,
-} from "openclaw/plugin-sdk/hook-runtime";
-import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
-import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+} from "mullusi/plugin-sdk/hook-runtime";
+import { buildOutboundMediaLoadOptions } from "mullusi/plugin-sdk/media-runtime";
+import { isGifMedia, kindFromMime } from "mullusi/plugin-sdk/media-runtime";
+import { getGlobalHookRunner } from "mullusi/plugin-sdk/plugin-runtime";
+import type { ReplyPayload } from "mullusi/plugin-sdk/reply-runtime";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "mullusi/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "mullusi/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "mullusi/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "mullusi/plugin-sdk/ssrf-runtime";
+import { loadWebMedia } from "mullusi/plugin-sdk/web-media";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {

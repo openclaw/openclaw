@@ -1,5 +1,5 @@
-import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import type { DiscordExecApprovalConfig, MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "mullusi/plugin-sdk/infra-runtime";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 import {
   createChannelApproverDmTargetResolver,
@@ -53,7 +53,7 @@ function normalizeDiscordOriginChannelId(value?: string | null): string | null {
 }
 
 export function shouldHandleDiscordApprovalRequest(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId?: string | null;
   request: ApprovalRequest;
   configOverride?: DiscordExecApprovalConfig | null;

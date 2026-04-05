@@ -1,25 +1,25 @@
 ---
-summary: "Deploy OpenClaw on Railway with one-click template"
+summary: "Deploy Mullusi on Railway with one-click template"
 read_when:
-  - Deploying OpenClaw to Railway
+  - Deploying Mullusi to Railway
   - You want a one-click cloud deploy with browser-based Control UI
 title: "Railway"
 ---
 
-Deploy OpenClaw on Railway with a one-click template and access it through the web Control UI.
+Deploy Mullusi on Railway with a one-click template and access it through the web Control UI.
 This is the easiest "no terminal on the server" path: Railway runs the Gateway for you.
 
 ## Quick checklist (new users)
 
 1. Click **Deploy on Railway** (below).
 2. Add a **Volume** mounted at `/data`.
-3. Set the required **Variables** (at least `OPENCLAW_GATEWAY_PORT` and `OPENCLAW_GATEWAY_TOKEN`).
+3. Set the required **Variables** (at least `MULLUSI_GATEWAY_PORT` and `MULLUSI_GATEWAY_TOKEN`).
 4. Enable **HTTP Proxy** on port `8080`.
-5. Open `https://<your-railway-domain>/openclaw` and connect using the configured shared secret. This template uses `OPENCLAW_GATEWAY_TOKEN` by default; if you replace it with password auth, use that password instead.
+5. Open `https://<your-railway-domain>/mullusi` and connect using the configured shared secret. This template uses `MULLUSI_GATEWAY_TOKEN` by default; if you replace it with password auth, use that password instead.
 
 ## One-click deploy
 
-<a href="https://railway.com/deploy/clawdbot-railway-template" target="_blank" rel="noreferrer">
+<a href="https://railway.com/deploy/mullusi-railway-template" target="_blank" rel="noreferrer">
   Deploy on Railway
 </a>
 
@@ -32,12 +32,12 @@ Railway will either:
 
 Then open:
 
-- `https://<your-railway-domain>/openclaw` — Control UI
+- `https://<your-railway-domain>/mullusi` — Control UI
 
 ## What you get
 
-- Hosted OpenClaw Gateway + Control UI
-- Persistent storage via Railway Volume (`/data`) so `openclaw.json`,
+- Hosted Mullusi Gateway + Control UI
+- Persistent storage via Railway Volume (`/data`) so `mullusi.json`,
   per-agent `auth-profiles.json`, channel/provider state, sessions, and
   workspace survive redeploys
 
@@ -59,14 +59,14 @@ Attach a volume mounted at:
 
 Set these variables on the service:
 
-- `OPENCLAW_GATEWAY_PORT=8080` (required — must match the port in Public Networking)
-- `OPENCLAW_GATEWAY_TOKEN` (required; treat as an admin secret)
-- `OPENCLAW_STATE_DIR=/data/.openclaw` (recommended)
-- `OPENCLAW_WORKSPACE_DIR=/data/workspace` (recommended)
+- `MULLUSI_GATEWAY_PORT=8080` (required — must match the port in Public Networking)
+- `MULLUSI_GATEWAY_TOKEN` (required; treat as an admin secret)
+- `MULLUSI_STATE_DIR=/data/.mullusi` (recommended)
+- `MULLUSI_WORKSPACE_DIR=/data/workspace` (recommended)
 
 ## Connect a channel
 
-Use the Control UI at `/openclaw` or run `openclaw onboard` via Railway's shell for channel setup instructions:
+Use the Control UI at `/mullusi` or run `mullusi onboard` via Railway's shell for channel setup instructions:
 
 - [Telegram](/channels/telegram) (fastest — just a bot token)
 - [Discord](/channels/discord)
@@ -77,14 +77,14 @@ Use the Control UI at `/openclaw` or run `openclaw onboard` via Railway's shell 
 Export your state, config, auth profiles, and workspace:
 
 ```bash
-openclaw backup create
+mullusi backup create
 ```
 
-This creates a portable backup archive with OpenClaw state plus any configured
+This creates a portable backup archive with Mullusi state plus any configured
 workspace. See [Backup](/cli/backup) for details.
 
 ## Next steps
 
 - Set up messaging channels: [Channels](/channels)
 - Configure the Gateway: [Gateway configuration](/gateway/configuration)
-- Keep OpenClaw up to date: [Updating](/install/updating)
+- Keep Mullusi up to date: [Updating](/install/updating)

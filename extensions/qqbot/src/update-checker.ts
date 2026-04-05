@@ -11,7 +11,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 
-const PKG_NAME = "@openclaw/qqbot";
+const PKG_NAME = "@mullusi/qqbot";
 const ENCODED_PKG = encodeURIComponent(PKG_NAME);
 
 const REGISTRIES = [

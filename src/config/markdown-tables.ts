@@ -2,7 +2,7 @@ import { listBootstrapChannelPlugins } from "../channels/plugins/bootstrap-regis
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import type { OpenClawConfig } from "./config.js";
+import type { MullusiConfig } from "./config.js";
 import type { MarkdownTableMode } from "./types.base.js";
 
 type MarkdownConfigEntry = {
@@ -59,7 +59,7 @@ function resolveMarkdownModeFromSection(
 }
 
 export function resolveMarkdownTableMode(params: {
-  cfg?: Partial<OpenClawConfig>;
+  cfg?: Partial<MullusiConfig>;
   channel?: string | null;
   accountId?: string | null;
 }): MarkdownTableMode {

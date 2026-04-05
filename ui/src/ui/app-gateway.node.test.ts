@@ -101,7 +101,7 @@ vi.mock("./controllers/chat.ts", async () => {
 function createHost() {
   return {
     settings: {
-      gatewayUrl: "ws://127.0.0.1:18789",
+      gatewayUrl: "ws://127.0.0.1:18790",
       token: "",
       sessionKey: "main",
       lastActiveSessionKey: "main",
@@ -130,7 +130,7 @@ function createHost() {
     agentsList: null,
     agentsError: null,
     debugHealth: null,
-    assistantName: "OpenClaw",
+    assistantName: "Mullusi",
     assistantAvatar: null,
     assistantAgentId: null,
     serverVersion: null,
@@ -438,13 +438,13 @@ describe("connectGateway", () => {
       reason: "connect failed",
       error: {
         code: "INVALID_REQUEST",
-        message: "Failed to fetch gateway metadata from ws://127.0.0.1:18789",
+        message: "Failed to fetch gateway metadata from ws://127.0.0.1:18790",
         details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH },
       },
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH);
-    expect(host.lastError).toBe("Failed to fetch gateway metadata from ws://127.0.0.1:18789");
+    expect(host.lastError).toBe("Failed to fetch gateway metadata from ws://127.0.0.1:18790");
   });
 
   it("prefers structured connect errors over close reason", () => {
@@ -646,7 +646,7 @@ describe("resolveControlUiClientVersion", () => {
       resolveControlUiClientVersion({
         gatewayUrl: "ws://localhost:8787",
         serverVersion: "2026.3.7",
-        pageUrl: "http://localhost:8787/openclaw/",
+        pageUrl: "http://localhost:8787/mullusi/",
       }),
     ).toBe("2026.3.7");
   });
@@ -656,7 +656,7 @@ describe("resolveControlUiClientVersion", () => {
       resolveControlUiClientVersion({
         gatewayUrl: "/ws",
         serverVersion: "2026.3.7",
-        pageUrl: "https://control.example.com/openclaw/",
+        pageUrl: "https://control.example.com/mullusi/",
       }),
     ).toBe("2026.3.7");
   });
@@ -666,7 +666,7 @@ describe("resolveControlUiClientVersion", () => {
       resolveControlUiClientVersion({
         gatewayUrl: "https://control.example.com/ws",
         serverVersion: "2026.3.7",
-        pageUrl: "https://control.example.com/openclaw/",
+        pageUrl: "https://control.example.com/mullusi/",
       }),
     ).toBe("2026.3.7");
   });
@@ -676,7 +676,7 @@ describe("resolveControlUiClientVersion", () => {
       resolveControlUiClientVersion({
         gatewayUrl: "wss://gateway.example.com",
         serverVersion: "2026.3.7",
-        pageUrl: "https://control.example.com/openclaw/",
+        pageUrl: "https://control.example.com/mullusi/",
       }),
     ).toBeUndefined();
   });

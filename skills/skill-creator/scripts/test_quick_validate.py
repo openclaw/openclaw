@@ -51,7 +51,7 @@ allowed-tools:
   - gh
 metadata: |
   {
-    "owners": ["team-openclaw"]
+    "owners": ["team-mullusi"]
   }
 ---
 # Skill

@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import type { MullusiPluginApi } from "mullusi/plugin-sdk/core";
 import { resolveDiscordAccount } from "./accounts.js";
 import {
   autoBindSpawnedDiscordSubagent,
@@ -56,7 +56,7 @@ function normalizeThreadBindingTargetKind(raw?: string): ThreadBindingTargetKind
   return undefined;
 }
 
-function resolveThreadBindingFlags(api: OpenClawPluginApi, accountId?: string) {
+function resolveThreadBindingFlags(api: MullusiPluginApi, accountId?: string) {
   const account = resolveDiscordAccount({
     cfg: api.config,
     accountId,
@@ -78,7 +78,7 @@ function resolveThreadBindingFlags(api: OpenClawPluginApi, accountId?: string) {
 }
 
 export async function handleDiscordSubagentSpawning(
-  api: OpenClawPluginApi,
+  api: MullusiPluginApi,
   event: DiscordSubagentSpawningEvent,
 ) {
   if (!event.threadRequested) {
@@ -191,7 +191,7 @@ export function handleDiscordSubagentDeliveryTarget(event: DiscordSubagentDelive
   };
 }
 
-export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
+export function registerDiscordSubagentHooks(api: MullusiPluginApi) {
   api.on("subagent_spawning", (event) => handleDiscordSubagentSpawning(api, event));
   api.on("subagent_ended", (event) => handleDiscordSubagentEnded(event));
   api.on("subagent_delivery_target", (event) => handleDiscordSubagentDeliveryTarget(event));

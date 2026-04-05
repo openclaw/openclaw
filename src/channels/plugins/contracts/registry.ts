@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { MullusiConfig } from "../../../config/config.js";
 import { listBundledChannelPlugins, setBundledChannelRuntime } from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
 import { channelPluginSurfaceKeys, type ChannelPluginSurface } from "./manifest.js";
@@ -34,7 +34,7 @@ type DirectoryContractEntry = {
   id: string;
   plugin: Pick<ChannelPlugin, "id" | "directory">;
   coverage: "lookups" | "presence";
-  cfg?: OpenClawConfig;
+  cfg?: MullusiConfig;
   accountId?: string;
 };
 
@@ -52,7 +52,7 @@ setBundledChannelRuntime("line", {
     line: {
       listLineAccountIds: lineContractApi.listLineAccountIds,
       resolveDefaultLineAccountId: lineContractApi.resolveDefaultLineAccountId,
-      resolveLineAccount: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
+      resolveLineAccount: ({ cfg, accountId }: { cfg: MullusiConfig; accountId?: string }) =>
         lineContractApi.resolveLineAccount({ cfg, accountId }),
     },
   },

@@ -1,1 +1,1 @@
-export { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+export { resolvePreferredMullusiTmpDir } from "../../infra/tmp-mullusi-dir.js";

@@ -1,4 +1,4 @@
-import type { MockFn } from "openclaw/plugin-sdk/testing";
+import type { MockFn } from "mullusi/plugin-sdk/testing";
 import { vi } from "vitest";
 
 export const sendMock: MockFn = vi.fn();
@@ -18,7 +18,7 @@ vi.spyOn(sendModule, "reactMessageDiscord").mockImplementation(async (...args) =
   return { ok: true };
 });
 
-const replyRuntimeModule = await import("openclaw/plugin-sdk/reply-runtime");
+const replyRuntimeModule = await import("mullusi/plugin-sdk/reply-runtime");
 vi.spyOn(replyRuntimeModule, "dispatchInboundMessage").mockImplementation(
   (...args) => dispatchMock(...args) as never,
 );
@@ -40,7 +40,7 @@ function createPairingStoreMocks() {
   };
 }
 
-const conversationRuntimeModule = await import("openclaw/plugin-sdk/conversation-runtime");
+const conversationRuntimeModule = await import("mullusi/plugin-sdk/conversation-runtime");
 vi.spyOn(conversationRuntimeModule, "readChannelAllowFromStore").mockImplementation(
   createPairingStoreMocks().readChannelAllowFromStore,
 );
@@ -48,13 +48,13 @@ vi.spyOn(conversationRuntimeModule, "upsertChannelPairingRequest").mockImplement
   createPairingStoreMocks().upsertChannelPairingRequest,
 );
 
-const configRuntimeModule = await import("openclaw/plugin-sdk/config-runtime");
+const configRuntimeModule = await import("mullusi/plugin-sdk/config-runtime");
 vi.spyOn(configRuntimeModule, "loadConfig").mockImplementation(
   (...args) => loadConfigMock(...args) as never,
 );
 vi.spyOn(configRuntimeModule, "readSessionUpdatedAt").mockImplementation(() => undefined);
 vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(
-  () => "/tmp/openclaw-sessions.json",
+  () => "/tmp/mullusi-sessions.json",
 );
 vi.spyOn(configRuntimeModule, "updateLastRoute").mockImplementation(
   (...args) => updateLastRouteMock(...args) as never,

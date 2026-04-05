@@ -1,6 +1,6 @@
-import { withEnv } from "openclaw/plugin-sdk/testing";
+import { withEnv } from "mullusi/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../src/config/config.js";
+import type { MullusiConfig } from "../../src/config/config.js";
 import { __testing, createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 describe("google web search provider", () => {
@@ -20,7 +20,7 @@ describe("google web search provider", () => {
 
   it("stores configured credentials at the canonical plugin config path", () => {
     const provider = createGeminiWebSearchProvider();
-    const config = {} as OpenClawConfig;
+    const config = {} as MullusiConfig;
 
     provider.setConfiguredCredentialValue?.(config, "AIza-plugin-test");
 

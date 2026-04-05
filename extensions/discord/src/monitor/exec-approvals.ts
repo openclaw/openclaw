@@ -10,15 +10,15 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, Routes } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { DiscordExecApprovalConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   createChannelNativeApprovalRuntime,
   type ExecApprovalChannelRuntime,
-} from "openclaw/plugin-sdk/infra-runtime";
-import { buildExecApprovalActionDescriptors } from "openclaw/plugin-sdk/infra-runtime";
-import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
-import { getExecApprovalApproverDmNoticeText } from "openclaw/plugin-sdk/infra-runtime";
+} from "mullusi/plugin-sdk/infra-runtime";
+import { buildExecApprovalActionDescriptors } from "mullusi/plugin-sdk/infra-runtime";
+import { resolveExecApprovalCommandDisplay } from "mullusi/plugin-sdk/infra-runtime";
+import { getExecApprovalApproverDmNoticeText } from "mullusi/plugin-sdk/infra-runtime";
 import type {
   ExecApprovalActionDescriptor,
   ExecApprovalDecision,
@@ -26,9 +26,9 @@ import type {
   ExecApprovalResolved,
   PluginApprovalRequest,
   PluginApprovalResolved,
-} from "openclaw/plugin-sdk/infra-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
+} from "mullusi/plugin-sdk/infra-runtime";
+import type { RuntimeEnv } from "mullusi/plugin-sdk/runtime-env";
+import { logDebug, logError } from "mullusi/plugin-sdk/text-runtime";
 import {
   createDiscordNativeApprovalAdapter,
   createDiscordApprovalCapability,
@@ -126,7 +126,7 @@ export function parseExecApprovalData(
 }
 
 type ExecApprovalContainerParams = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
   title: string;
   description?: string;
@@ -294,7 +294,7 @@ function resolveExecApprovalPreviews(
 
 function createExecApprovalRequestContainer(params: {
   request: ExecApprovalRequest;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
   actionRow?: Row<Button>;
 }): ExecApprovalContainer {
@@ -321,7 +321,7 @@ function createExecApprovalRequestContainer(params: {
 
 function createPluginApprovalRequestContainer(params: {
   request: PluginApprovalRequest;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
   actionRow?: Row<Button>;
 }): ExecApprovalContainer {
@@ -347,7 +347,7 @@ function createExecResolvedContainer(params: {
   request: ExecApprovalRequest;
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
 }): ExecApprovalContainer {
   const { commandPreview, commandSecondaryPreview } = resolveExecApprovalPreviews(
@@ -386,7 +386,7 @@ function createPluginResolvedContainer(params: {
   request: PluginApprovalRequest;
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
 }): ExecApprovalContainer {
   const decisionLabel =
@@ -418,7 +418,7 @@ function createPluginResolvedContainer(params: {
 
 function createExecExpiredContainer(params: {
   request: ExecApprovalRequest;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
 }): ExecApprovalContainer {
   const { commandPreview, commandSecondaryPreview } = resolveExecApprovalPreviews(
@@ -441,7 +441,7 @@ function createExecExpiredContainer(params: {
 
 function createPluginExpiredContainer(params: {
   request: PluginApprovalRequest;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
 }): ExecApprovalContainer {
   return new ExecApprovalContainer({
@@ -462,7 +462,7 @@ export type DiscordExecApprovalHandlerOpts = {
   accountId: string;
   config: DiscordExecApprovalConfig;
   gatewayUrl?: string;
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   runtime?: RuntimeEnv;
   onResolve?: (id: string, decision: ExecApprovalDecision) => Promise<void>;
 };

@@ -36,7 +36,7 @@ verify_installed_cli() {
     installed_version="$(node "$entry_path" --version 2>/dev/null | head -n 1 | tr -d '\r')"
   fi
 
-  installed_version="$(extract_openclaw_semver "$installed_version")"
+  installed_version="$(extract_mullusi_semver "$installed_version")"
 
   echo "cli=$cli_name installed=$installed_version expected=$expected_version"
   if [[ "$installed_version" != "$expected_version" ]]; then

@@ -51,17 +51,17 @@ function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
 }
 
 function getTestConfigPath() {
-  return path.join(process.env.HOME ?? "", ".openclaw", "openclaw.json");
+  return path.join(process.env.HOME ?? "", ".mullusi", "mullusi.json");
 }
 
-async function writeOpenClawConfig(config: Record<string, unknown>, pretty = false) {
+async function writeMullusiConfig(config: Record<string, unknown>, pretty = false) {
   const configPath = getTestConfigPath();
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, pretty ? 2 : undefined));
 }
 
 async function writeExecApprovalsConfig(config: Record<string, unknown>) {
-  const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
+  const approvalsPath = path.join(process.env.HOME ?? "", ".mullusi", "exec-approvals.json");
   await fs.mkdir(path.dirname(approvalsPath), { recursive: true });
   await fs.writeFile(approvalsPath, JSON.stringify(config, null, 2));
 }
@@ -250,7 +250,7 @@ describe("exec approvals", () => {
     ({ sendMessage } = await import("../infra/outbound/message.js"));
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-test-"));
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
@@ -328,7 +328,7 @@ describe("exec approvals", () => {
   });
 
   it("skips approval when node allowlist is satisfied", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-bin-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-test-bin-"));
     const binDir = path.join(tempDir, "bin");
     await fs.mkdir(binDir, { recursive: true });
     const exeName = process.platform === "win32" ? "tool.cmd" : "tool";
@@ -566,7 +566,7 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
 
-    const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
+    const approvalsPath = path.join(process.env.HOME ?? "", ".mullusi", "exec-approvals.json");
     await expect
       .poll(async () => {
         const raw = await fs.readFile(approvalsPath, "utf8");
@@ -811,7 +811,7 @@ describe("exec approvals", () => {
 
   it("auto-continues the same Discord session after approval resolves without a second user turn", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-followup-discord-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-exec-followup-discord-"));
     const markerPath = path.join(tempDir, "marker.txt");
     let resolveDecision: ((value: { decision: string }) => void) | undefined;
     const decisionPromise = new Promise<{ decision: string }>((resolve) => {
@@ -903,7 +903,7 @@ describe("exec approvals", () => {
 
   it("executes approved commands and emits a session-only followup in webchat-only mode", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-exec-followup-sidefx-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-exec-followup-sidefx-"));
     const markerPath = path.join(tempDir, "marker.txt");
 
     mockAcceptedApprovalFlow({
@@ -1072,9 +1072,9 @@ describe("exec approvals", () => {
     if (process.platform === "win32") {
       return;
     }
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-wrapper-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-skill-wrapper-"));
     try {
-      const skillDir = path.join(tempDir, ".openclaw", "skills", "gog");
+      const skillDir = path.join(tempDir, ".mullusi", "skills", "gog");
       const skillPath = path.join(skillDir, "SKILL.md");
       const binDir = path.join(tempDir, "bin");
       const wrapperPath = path.join(binDir, "gog-wrapper");
@@ -1339,7 +1339,7 @@ describe("exec approvals", () => {
   });
 
   it("shows a local /approve prompt when discord exec approvals are disabled", async () => {
-    await writeOpenClawConfig({
+    await writeMullusiConfig({
       channels: {
         discord: {
           enabled: true,
@@ -1371,7 +1371,7 @@ describe("exec approvals", () => {
   });
 
   it("keeps Telegram approvals in the initiating chat even when Discord DM approvals are also enabled", async () => {
-    await writeOpenClawConfig(
+    await writeMullusiConfig(
       {
         channels: {
           telegram: {
@@ -1474,7 +1474,7 @@ describe("exec approvals", () => {
       return { ok: true };
     });
 
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-obf-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mullusi-test-obf-"));
     const markerPath = path.join(tempDir, "ran.txt");
     const tool = createExecTool({
       host: "gateway",

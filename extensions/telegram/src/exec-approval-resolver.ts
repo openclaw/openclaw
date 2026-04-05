@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
-import { createOperatorApprovalsGatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/infra-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import { isApprovalNotFoundError } from "mullusi/plugin-sdk/error-runtime";
+import { createOperatorApprovalsGatewayClient } from "mullusi/plugin-sdk/gateway-runtime";
+import type { ExecApprovalReplyDecision } from "mullusi/plugin-sdk/infra-runtime";
 
 export type ResolveTelegramExecApprovalParams = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   approvalId: string;
   decision: ExecApprovalReplyDecision;
   senderId?: string | null;

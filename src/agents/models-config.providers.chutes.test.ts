@@ -13,7 +13,7 @@ const ORIGINAL_VITEST_ENV = process.env.VITEST;
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 
 function createTempAgentDir() {
-  return mkdtempSync(join(tmpdir(), "openclaw-test-"));
+  return mkdtempSync(join(tmpdir(), "mullusi-test-"));
 }
 
 type ChutesAuthProfiles = {

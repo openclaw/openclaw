@@ -30,7 +30,7 @@ vi.mock("./bot-message-context.body.js", () => ({
 const { buildTelegramMessageContextForTest } =
   await import("./bot-message-context.test-harness.js");
 const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
-  await import("openclaw/plugin-sdk/config-runtime");
+  await import("mullusi/plugin-sdk/config-runtime");
 
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
@@ -148,7 +148,7 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
 describe("buildTelegramMessageContext direct peer routing", () => {
   it("isolates dm sessions by sender id when chat id differs", async () => {
     const runtimeCfg = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+      agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/mullusi" } },
       channels: { telegram: {} },
       messages: { groupChat: { mentionPatterns: [] } },
       session: { dmScope: "per-channel-peer" as const },

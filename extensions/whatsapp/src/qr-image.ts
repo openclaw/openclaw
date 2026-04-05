@@ -1,1 +1,1 @@
-export { renderQrPngBase64 } from "openclaw/plugin-sdk/media-runtime";
+export { renderQrPngBase64 } from "mullusi/plugin-sdk/media-runtime";

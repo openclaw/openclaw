@@ -10,15 +10,15 @@ import {
 } from "@buape/carbon";
 import type { APIStringSelectComponent } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
-import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { logError } from "openclaw/plugin-sdk/text-runtime";
+import { createChannelPairingChallengeIssuer } from "mullusi/plugin-sdk/channel-pairing";
+import { resolveCommandAuthorizedFromAuthorizers } from "mullusi/plugin-sdk/command-auth-native";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig } from "mullusi/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "mullusi/plugin-sdk/dangerous-name-runtime";
+import { resolveAgentRoute } from "mullusi/plugin-sdk/routing";
+import { logVerbose } from "mullusi/plugin-sdk/runtime-env";
+import { resolveOpenProviderRuntimeGroupPolicy } from "mullusi/plugin-sdk/runtime-group-policy";
+import { logError } from "mullusi/plugin-sdk/text-runtime";
 import {
   parseDiscordComponentCustomId,
   parseDiscordModalCustomId,
@@ -69,10 +69,10 @@ export type DiscordChannelContext = {
 };
 
 export type AgentComponentContext = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   accountId: string;
   discordConfig?: DiscordAccountConfig;
-  runtime?: import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
+  runtime?: import("mullusi/plugin-sdk/runtime-env").RuntimeEnv;
   token?: string;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   allowFrom?: string[];

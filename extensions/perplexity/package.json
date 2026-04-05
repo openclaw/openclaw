@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/perplexity-plugin",
+  "name": "@mullusi/perplexity-plugin",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Perplexity plugin",
+  "description": "Mullusi Perplexity plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

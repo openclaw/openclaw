@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { MullusiConfig } from "mullusi/plugin-sdk/config-runtime";
 import {
   createStandardChannelSetupStatus,
   hasConfiguredSecretInput,
   setSetupChannelEnabled,
-} from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+} from "mullusi/plugin-sdk/setup";
+import type { ChannelSetupWizard } from "mullusi/plugin-sdk/setup";
+import { formatDocsLink } from "mullusi/plugin-sdk/setup-tools";
 import {
   DEFAULT_ACCOUNT_ID,
   listQQBotAccountIds,
@@ -23,10 +23,10 @@ type QQBotEnvCredentialField = "appId" | "clientSecret";
  * AppID + env AppSecret.
  */
 function clearQQBotCredentialField(
-  cfg: OpenClawConfig,
+  cfg: MullusiConfig,
   accountId: string,
   field: QQBotEnvCredentialField,
-): OpenClawConfig {
+): MullusiConfig {
   const next = { ...cfg };
   const qqbot = { ...((next.channels?.qqbot as Record<string, unknown>) || {}) };
 

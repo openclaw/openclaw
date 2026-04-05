@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -23,7 +23,7 @@ export type ExecApprovalSessionTarget = {
 
 type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalRequestOriginTargetResolver<TTarget> = {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   request: ApprovalRequestLike;
   channel: string;
   accountId?: string | null;
@@ -77,7 +77,7 @@ function normalizeOptionalChannel(value?: string | null): string | undefined {
 }
 
 export function resolveExecApprovalSessionTarget(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   request: ExecApprovalRequest;
   turnSourceChannel?: string | null;
   turnSourceTo?: string | null;
@@ -118,7 +118,7 @@ export function resolveExecApprovalSessionTarget(params: {
 }
 
 export function resolveApprovalRequestSessionTarget(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   request: ApprovalRequestLike;
 }): ExecApprovalSessionTarget | null {
   const execLikeRequest = toExecLikeApprovalRequest(params.request);
@@ -133,7 +133,7 @@ export function resolveApprovalRequestSessionTarget(params: {
 }
 
 function resolveApprovalRequestStoredSessionTarget(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   request: ApprovalRequestLike;
 }): ExecApprovalSessionTarget | null {
   const execLikeRequest = toExecLikeApprovalRequest(params.request);

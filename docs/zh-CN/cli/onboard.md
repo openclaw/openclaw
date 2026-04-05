@@ -1,7 +1,7 @@
 ---
 read_when:
   - 你想通过引导式设置来配置 Gateway 网关、工作区、身份验证、渠道和 Skills
-summary: "`openclaw onboard` 的 CLI 参考（交互式新手引导）"
+summary: "`mullusi onboard` 的 CLI 参考（交互式新手引导）"
 title: onboard
 x-i18n:
   generated_at: "2026-03-16T06:21:32Z"
@@ -12,7 +12,7 @@ x-i18n:
   workflow: 15
 ---
 
-# `openclaw onboard`
+# `mullusi onboard`
 
 交互式新手引导（本地或远程 Gateway 网关设置）。
 
@@ -27,19 +27,19 @@ x-i18n:
 ## 示例
 
 ```bash
-openclaw onboard
-openclaw onboard --flow quickstart
-openclaw onboard --flow manual
-openclaw onboard --mode remote --remote-url wss://gateway-host:18789
+mullusi onboard
+mullusi onboard --flow quickstart
+mullusi onboard --flow manual
+mullusi onboard --mode remote --remote-url wss://gateway-host:18790
 ```
 
 对于明文私有网络 `ws://` 目标（仅限受信任网络），请在新手引导进程环境中设置
-`OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`。
+`MULLUSI_ALLOW_INSECURE_PRIVATE_WS=1`。
 
 非交互式自定义提供商：
 
 ```bash
-openclaw onboard --non-interactive \
+mullusi onboard --non-interactive \
   --auth-choice custom-api-key \
   --custom-base-url "https://llm.example.com/v1" \
   --custom-model-id "foo-large" \
@@ -53,7 +53,7 @@ openclaw onboard --non-interactive \
 非交互式 Ollama：
 
 ```bash
-openclaw onboard --non-interactive \
+mullusi onboard --non-interactive \
   --auth-choice ollama \
   --custom-base-url "http://ollama-host:11434" \
   --custom-model-id "qwen3.5:27b" \
@@ -65,7 +65,7 @@ openclaw onboard --non-interactive \
 将提供商密钥存储为引用而不是明文：
 
 ```bash
-openclaw onboard --non-interactive \
+mullusi onboard --non-interactive \
   --auth-choice openai-api-key \
   --secret-input-mode ref \
   --accept-risk
@@ -93,19 +93,19 @@ openclaw onboard --non-interactive \
 示例：
 
 ```bash
-export OPENCLAW_GATEWAY_TOKEN="your-token"
-openclaw onboard --non-interactive \
+export MULLUSI_GATEWAY_TOKEN="your-token"
+mullusi onboard --non-interactive \
   --mode local \
   --auth-choice skip \
   --gateway-auth token \
-  --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
+  --gateway-token-ref-env MULLUSI_GATEWAY_TOKEN \
   --accept-risk
 ```
 
 非交互式本地 Gateway 网关健康检查：
 
 - 除非你传递 `--skip-health`，否则新手引导会等待本地 Gateway 网关可访问后才成功退出。
-- `--install-daemon` 会先启动受管 Gateway 网关安装路径。不使用它时，你必须已经有一个正在运行的本地 Gateway 网关，例如 `openclaw gateway run`。
+- `--install-daemon` 会先启动受管 Gateway 网关安装路径。不使用它时，你必须已经有一个正在运行的本地 Gateway 网关，例如 `mullusi gateway run`。
 - 如果你只想在自动化中写入配置/工作区/bootstrap，请使用 `--skip-health`。
 - 在原生 Windows 上，`--install-daemon` 会先尝试 Scheduled Tasks；如果任务创建被拒绝，则回退到每用户 Startup 文件夹登录项。
 
@@ -125,7 +125,7 @@ openclaw onboard --non-interactive \
 
 ```bash
 # 无提示端点选择
-openclaw onboard --non-interactive \
+mullusi onboard --non-interactive \
   --auth-choice zai-coding-global \
   --zai-api-key "$ZAI_API_KEY"
 
@@ -138,7 +138,7 @@ openclaw onboard --non-interactive \
 非交互式 Mistral 示例：
 
 ```bash
-openclaw onboard --non-interactive \
+mullusi onboard --non-interactive \
   --auth-choice mistral-api-key \
   --mistral-api-key "$MISTRAL_API_KEY"
 ```
@@ -148,15 +148,15 @@ openclaw onboard --non-interactive \
 - `quickstart`：最少提示，自动生成 Gateway 网关令牌。
 - `manual`：提供端口/绑定/身份验证的完整提示（`advanced` 的别名）。
 - 本地新手引导私信范围行为：[CLI 设置参考](/start/wizard-cli-reference#outputs-and-internals)。
-- 最快开始第一次聊天：`openclaw dashboard`（控制 UI，无需设置渠道）。
+- 最快开始第一次聊天：`mullusi dashboard`（控制 UI，无需设置渠道）。
 - 自定义提供商：连接任何兼容 OpenAI 或 Anthropic 的端点，
   包括未列出的托管提供商。使用 Unknown 进行自动检测。
 
 ## 常见后续命令
 
 ```bash
-openclaw configure
-openclaw agents add <name>
+mullusi configure
+mullusi agents add <name>
 ```
 
 <Note>

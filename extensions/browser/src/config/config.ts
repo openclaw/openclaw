@@ -5,5 +5,5 @@ export {
   writeConfigFile,
   type BrowserConfig,
   type BrowserProfileConfig,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/browser-support";
+  type MullusiConfig,
+} from "mullusi/plugin-sdk/browser-support";

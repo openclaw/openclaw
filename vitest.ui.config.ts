@@ -7,7 +7,7 @@ export function createUiVitestConfig(env?: Record<string, string | undefined>) {
     dir: "ui/src/ui",
     environment: "jsdom",
     env,
-    includeOpenClawRuntimeSetup: false,
+    includeMullusiRuntimeSetup: false,
     name: "ui",
     setupFiles: ["ui/src/test-helpers/lit-warnings.setup.ts"],
   });

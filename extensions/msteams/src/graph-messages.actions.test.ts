@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { MullusiConfig } from "../runtime-api.js";
 import {
   pinMessageMSTeams,
   reactMessageMSTeams,
@@ -47,7 +47,7 @@ describe("pinMessageMSTeams", () => {
     mockState.postGraphJson.mockResolvedValue({ id: "pinned-1" });
 
     const result = await pinMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHAT_ID,
       messageId: "msg-1",
     });
@@ -64,7 +64,7 @@ describe("pinMessageMSTeams", () => {
     mockState.postGraphJson.mockResolvedValue({});
 
     const result = await pinMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHANNEL_TO,
       messageId: "msg-2",
     });
@@ -88,7 +88,7 @@ describe("unpinMessageMSTeams", () => {
     mockState.deleteGraphRequest.mockResolvedValue(undefined);
 
     const result = await unpinMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHAT_ID,
       pinnedMessageId: "pinned-1",
     });
@@ -104,7 +104,7 @@ describe("unpinMessageMSTeams", () => {
     mockState.deleteGraphRequest.mockResolvedValue(undefined);
 
     const result = await unpinMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHANNEL_TO,
       pinnedMessageId: "pinned-2",
     });
@@ -127,7 +127,7 @@ describe("reactMessageMSTeams", () => {
     mockState.postGraphBetaJson.mockResolvedValue(undefined);
 
     const result = await reactMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHAT_ID,
       messageId: "msg-1",
       reactionType: "like",
@@ -145,7 +145,7 @@ describe("reactMessageMSTeams", () => {
     mockState.postGraphBetaJson.mockResolvedValue(undefined);
 
     const result = await reactMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHANNEL_TO,
       messageId: "msg-2",
       reactionType: "heart",
@@ -163,7 +163,7 @@ describe("reactMessageMSTeams", () => {
     mockState.postGraphBetaJson.mockResolvedValue(undefined);
 
     await reactMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHAT_ID,
       messageId: "msg-1",
       reactionType: "LAUGH",
@@ -179,7 +179,7 @@ describe("reactMessageMSTeams", () => {
   it("rejects invalid reaction type", async () => {
     await expect(
       reactMessageMSTeams({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         to: CHAT_ID,
         messageId: "msg-1",
         reactionType: "thumbsup",
@@ -195,7 +195,7 @@ describe("reactMessageMSTeams", () => {
     mockState.postGraphBetaJson.mockResolvedValue(undefined);
 
     await reactMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: "user:aad-user-1",
       messageId: "msg-1",
       reactionType: "like",
@@ -220,7 +220,7 @@ describe("unreactMessageMSTeams", () => {
     mockState.postGraphBetaJson.mockResolvedValue(undefined);
 
     const result = await unreactMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHAT_ID,
       messageId: "msg-1",
       reactionType: "sad",
@@ -238,7 +238,7 @@ describe("unreactMessageMSTeams", () => {
     mockState.postGraphBetaJson.mockResolvedValue(undefined);
 
     const result = await unreactMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHANNEL_TO,
       messageId: "msg-2",
       reactionType: "angry",
@@ -255,7 +255,7 @@ describe("unreactMessageMSTeams", () => {
   it("rejects invalid reaction type", async () => {
     await expect(
       unreactMessageMSTeams({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         to: CHAT_ID,
         messageId: "msg-1",
         reactionType: "clap",

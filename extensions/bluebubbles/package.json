@@ -1,20 +1,20 @@
 {
-  "name": "@openclaw/bluebubbles",
+  "name": "@mullusi/bluebubbles",
   "version": "2026.4.4",
-  "description": "OpenClaw BlueBubbles channel plugin",
+  "description": "Mullusi BlueBubbles channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "mullusi": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.4"
+    "mullusi": ">=2026.4.4"
   },
   "peerDependenciesMeta": {
-    "openclaw": {
+    "mullusi": {
       "optional": true
     }
   },
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ],
@@ -37,7 +37,7 @@
       "order": 75
     },
     "install": {
-      "npmSpec": "@openclaw/bluebubbles",
+      "npmSpec": "@mullusi/bluebubbles",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.4"
     },
@@ -45,7 +45,7 @@
       "pluginApi": ">=2026.4.4"
     },
     "build": {
-      "openclawVersion": "2026.4.4"
+      "mullusiVersion": "2026.4.4"
     },
     "release": {
       "publishToClawHub": true,

@@ -18,6 +18,6 @@ describe("live vitest config", () => {
       "src/**/*.live.test.ts",
       BUNDLED_PLUGIN_LIVE_TEST_GLOB,
     ]);
-    expect(liveConfig.test?.setupFiles).toContain("test/setup-openclaw-runtime.ts");
+    expect(liveConfig.test?.setupFiles).toContain("test/setup-mullusi-runtime.ts");
   });
 });

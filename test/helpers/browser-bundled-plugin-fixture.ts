@@ -51,11 +51,11 @@ const BROWSER_FIXTURE_ENTRY = `module.exports = {
 };`;
 
 export function createBundledBrowserPluginFixture(): { rootDir: string; cleanup: () => void } {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-browser-bundled-"));
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullusi-browser-bundled-"));
   const pluginDir = path.join(rootDir, "browser");
   fs.mkdirSync(pluginDir, { recursive: true });
   fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
+    path.join(pluginDir, "mullusi.plugin.json"),
     JSON.stringify(BROWSER_FIXTURE_MANIFEST, null, 2),
     "utf8",
   );

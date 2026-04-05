@@ -1,4 +1,4 @@
-import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/core";
+import { resolveGlobalDedupeCache } from "mullusi/plugin-sdk/core";
 
 /**
  * In-memory cache of Slack threads the bot has participated in.
@@ -13,7 +13,7 @@ const MAX_ENTRIES = 5000;
  * Keep Slack thread participation shared across bundled chunks so thread
  * auto-reply gating does not diverge between prepare/dispatch call paths.
  */
-const SLACK_THREAD_PARTICIPATION_KEY = Symbol.for("openclaw.slackThreadParticipation");
+const SLACK_THREAD_PARTICIPATION_KEY = Symbol.for("mullusi.slackThreadParticipation");
 const threadParticipation = resolveGlobalDedupeCache(SLACK_THREAD_PARTICIPATION_KEY, {
   ttlMs: TTL_MS,
   maxSize: MAX_ENTRIES,

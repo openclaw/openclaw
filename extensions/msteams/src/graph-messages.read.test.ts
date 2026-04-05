@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { MullusiConfig } from "../runtime-api.js";
 import { getMessageMSTeams, listPinsMSTeams, listReactionsMSTeams } from "./graph-messages.js";
 
 const mockState = vi.hoisted(() => ({
@@ -50,7 +50,7 @@ describe("getMessageMSTeams", () => {
     });
 
     await getMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: "user:aad-object-id-123",
       messageId: "msg-1",
     });
@@ -74,7 +74,7 @@ describe("getMessageMSTeams", () => {
     });
 
     await getMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: "user:aad-id",
       messageId: "msg-1",
     });
@@ -90,7 +90,7 @@ describe("getMessageMSTeams", () => {
 
     await expect(
       getMessageMSTeams({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         to: "user:unknown-user",
         messageId: "msg-1",
       }),
@@ -105,7 +105,7 @@ describe("getMessageMSTeams", () => {
 
     await expect(
       getMessageMSTeams({
-        cfg: {} as OpenClawConfig,
+        cfg: {} as MullusiConfig,
         to: "user:some-user",
         messageId: "msg-1",
       }),
@@ -121,7 +121,7 @@ describe("getMessageMSTeams", () => {
     });
 
     await getMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: `conversation:${CHAT_ID}`,
       messageId: "msg-1",
     });
@@ -141,7 +141,7 @@ describe("getMessageMSTeams", () => {
     });
 
     const result = await getMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHAT_ID,
       messageId: "msg-1",
     });
@@ -167,7 +167,7 @@ describe("getMessageMSTeams", () => {
     });
 
     const result = await getMessageMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHANNEL_TO,
       messageId: "msg-2",
     });
@@ -206,7 +206,7 @@ describe("listPinsMSTeams", () => {
     });
 
     const result = await listPinsMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHAT_ID,
     });
 
@@ -224,7 +224,7 @@ describe("listPinsMSTeams", () => {
     mockState.fetchGraphJson.mockResolvedValue({ value: [] });
 
     const result = await listPinsMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHAT_ID,
     });
 
@@ -250,7 +250,7 @@ describe("listReactionsMSTeams", () => {
     });
 
     const result = await listReactionsMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHAT_ID,
       messageId: "msg-1",
     });
@@ -279,7 +279,7 @@ describe("listReactionsMSTeams", () => {
     });
 
     const result = await listReactionsMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHAT_ID,
       messageId: "msg-1",
     });
@@ -295,7 +295,7 @@ describe("listReactionsMSTeams", () => {
     });
 
     const result = await listReactionsMSTeams({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as MullusiConfig,
       to: CHANNEL_TO,
       messageId: "msg-2",
     });

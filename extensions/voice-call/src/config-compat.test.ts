@@ -90,10 +90,10 @@ describe("voice-call config compatibility", () => {
       formatVoiceCallLegacyConfigWarnings({
         value: raw,
         configPathPrefix: "plugins.entries.voice-call.config",
-        doctorFixCommand: "openclaw doctor --fix",
+        doctorFixCommand: "mullusi doctor --fix",
       }),
     ).toEqual([
-      `[voice-call] legacy config keys detected under plugins.entries.voice-call.config; runtime fallback remains for now but will be removed in ${VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION}. Run "openclaw doctor --fix".`,
+      `[voice-call] legacy config keys detected under plugins.entries.voice-call.config; runtime fallback remains for now but will be removed in ${VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION}. Run "mullusi doctor --fix".`,
       '[voice-call] plugins.entries.voice-call.config.provider: Replace provider "log" with "mock".',
       "[voice-call] plugins.entries.voice-call.config.twilio.from: Move twilio.from to fromNumber.",
       "[voice-call] plugins.entries.voice-call.config.streaming.sttProvider: Move streaming.sttProvider to streaming.provider.",

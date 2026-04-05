@@ -13,7 +13,7 @@ import {
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
 
-let resetInboundDedupe: typeof import("openclaw/plugin-sdk/reply-runtime").resetInboundDedupe;
+let resetInboundDedupe: typeof import("mullusi/plugin-sdk/reply-runtime").resetInboundDedupe;
 let HISTORY_CONTEXT_MARKER: typeof import("../../../src/auto-reply/reply/history.js").HISTORY_CONTEXT_MARKER;
 let CURRENT_MESSAGE_MARKER: typeof import("../../../src/auto-reply/reply/mentions.js").CURRENT_MESSAGE_MARKER;
 let monitorSlackProvider: typeof import("./monitor.js").monitorSlackProvider;
@@ -22,7 +22,7 @@ const slackTestState = getSlackTestState();
 const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
 
 beforeAll(async () => {
-  ({ resetInboundDedupe } = await import("openclaw/plugin-sdk/reply-runtime"));
+  ({ resetInboundDedupe } = await import("mullusi/plugin-sdk/reply-runtime"));
   ({ HISTORY_CONTEXT_MARKER } = await import("../../../src/auto-reply/reply/history.js"));
   ({ CURRENT_MESSAGE_MARKER } = await import("../../../src/auto-reply/reply/mentions.js"));
   ({ monitorSlackProvider } = await import("./monitor.js"));
@@ -292,7 +292,7 @@ describe("monitorSlackProvider tool results", () => {
           {
             id: "main",
             default: true,
-            identity: { name: "Mainbot", theme: "space lobster", emoji: "🦞" },
+            identity: { name: "Mainbot", theme: "space mullusi", emoji: "🦞" },
           },
           {
             id: "rich",
@@ -404,7 +404,7 @@ describe("monitorSlackProvider tool results", () => {
   });
 
   async function expectMentionPatternMessageAccepted(text: string): Promise<void> {
-    setRequireMentionChannelConfig(["\\bopenclaw\\b"]);
+    setRequireMentionChannelConfig(["\\bmullusi\\b"]);
     replyMock.mockResolvedValue({ text: "hi" });
 
     await runSlackMessageOnce(monitorSlackProvider, {
@@ -419,11 +419,11 @@ describe("monitorSlackProvider tool results", () => {
   }
 
   it("accepts channel messages when mentionPatterns match", async () => {
-    await expectMentionPatternMessageAccepted("openclaw: hello");
+    await expectMentionPatternMessageAccepted("mullusi: hello");
   });
 
   it("accepts channel messages when mentionPatterns match even if another user is mentioned", async () => {
-    await expectMentionPatternMessageAccepted("openclaw: hello <@U2>");
+    await expectMentionPatternMessageAccepted("mullusi: hello <@U2>");
   });
 
   it("treats replies to bot threads as implicit mentions", async () => {

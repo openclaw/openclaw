@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/ollama-provider",
+  "name": "@mullusi/ollama-provider",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw Ollama provider plugin",
+  "description": "Mullusi Ollama provider plugin",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

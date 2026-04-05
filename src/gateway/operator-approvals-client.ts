@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { MullusiConfig } from "../config/config.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildGatewayConnectionDetails } from "./call.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
@@ -9,7 +9,7 @@ export async function createOperatorApprovalsGatewayClient(
     GatewayClientOptions,
     "clientDisplayName" | "onClose" | "onConnectError" | "onEvent" | "onHelloOk"
   > & {
-    config: OpenClawConfig;
+    config: MullusiConfig;
     gatewayUrl?: string;
   },
 ): Promise<GatewayClient> {
@@ -20,7 +20,7 @@ export async function createOperatorApprovalsGatewayClient(
   const gatewayUrlOverrideSource =
     urlSource === "cli --url"
       ? "cli"
-      : urlSource === "env OPENCLAW_GATEWAY_URL"
+      : urlSource === "env MULLUSI_GATEWAY_URL"
         ? "env"
         : undefined;
   const auth = await resolveGatewayConnectionAuth({

@@ -1,10 +1,10 @@
 {
-  "name": "@openclaw/openshell-sandbox",
+  "name": "@mullusi/openshell-sandbox",
   "version": "2026.4.4",
   "private": true,
-  "description": "OpenClaw OpenShell sandbox backend",
+  "description": "Mullusi OpenShell sandbox backend",
   "type": "module",
-  "openclaw": {
+  "mullusi": {
     "extensions": [
       "./index.ts"
     ]

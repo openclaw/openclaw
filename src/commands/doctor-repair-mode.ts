@@ -16,7 +16,7 @@ export function resolveDoctorRepairMode(options: DoctorOptions): DoctorRepairMod
   const shouldForce = options.force === true;
   const isTty = Boolean(process.stdin.isTTY);
   const nonInteractive = requestedNonInteractive || (!isTty && !yes);
-  const updateInProgress = isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS);
+  const updateInProgress = isTruthyEnvValue(process.env.MULLUSI_UPDATE_IN_PROGRESS);
   const canPrompt = isTty && !yes && !nonInteractive;
 
   return {

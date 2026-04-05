@@ -1,31 +1,31 @@
 ---
 title: "Contributing to the Threat Model"
-summary: "How to contribute to the OpenClaw threat model"
+summary: "How to contribute to the Mullusi threat model"
 read_when:
   - You want to contribute security findings or threat scenarios
   - Reviewing or updating the threat model
 ---
 
-# Contributing to the OpenClaw Threat Model
+# Contributing to the Mullusi Threat Model
 
-Thanks for helping make OpenClaw more secure. This threat model is a living document and we welcome contributions from anyone - you don't need to be a security expert.
+Thanks for helping make Mullusi more secure. This threat model is a living document and we welcome contributions from anyone - you don't need to be a security expert.
 
 ## Ways to Contribute
 
 ### Add a Threat
 
-Spotted an attack vector or risk we haven't covered? Open an issue on [openclaw/trust](https://github.com/openclaw/trust/issues) and describe it in your own words. You don't need to know any frameworks or fill in every field - just describe the scenario.
+Spotted an attack vector or risk we haven't covered? Open an issue on [mullusi/trust](https://github.com/mullusi/trust/issues) and describe it in your own words. You don't need to know any frameworks or fill in every field - just describe the scenario.
 
 **Helpful to include (but not required):**
 
 - The attack scenario and how it could be exploited
-- Which parts of OpenClaw are affected (CLI, gateway, channels, ClawHub, MCP servers, etc.)
+- Which parts of Mullusi are affected (CLI, gateway, channels, ClawHub, MCP servers, etc.)
 - How severe you think it is (low / medium / high / critical)
 - Any links to related research, CVEs, or real-world examples
 
 We'll handle the ATLAS mapping, threat IDs, and risk assessment during review. If you want to include those details, great - but it's not expected.
 
-> **This is for adding to the threat model, not reporting live vulnerabilities.** If you've found an exploitable vulnerability, see our [Trust page](https://trust.openclaw.ai) for responsible disclosure instructions.
+> **This is for adding to the threat model, not reporting live vulnerabilities.** If you've found an exploitable vulnerability, see our [Trust page](https://trust.mullusi.com) for responsible disclosure instructions.
 
 ### Suggest a Mitigation
 
@@ -85,14 +85,14 @@ If you're unsure about the risk level, just describe the impact and we'll assess
 - [ATLAS Website](https://atlas.mitre.org/)
 - [ATLAS Techniques](https://atlas.mitre.org/techniques/)
 - [ATLAS Case Studies](https://atlas.mitre.org/studies/)
-- [OpenClaw Threat Model](/security/THREAT-MODEL-ATLAS)
+- [Mullusi Threat Model](/security/THREAT-MODEL-ATLAS)
 
 ## Contact
 
-- **Security vulnerabilities:** See our [Trust page](https://trust.openclaw.ai) for reporting instructions
-- **Threat model questions:** Open an issue on [openclaw/trust](https://github.com/openclaw/trust/issues)
+- **Security vulnerabilities:** See our [Trust page](https://trust.mullusi.com) for reporting instructions
+- **Threat model questions:** Open an issue on [mullusi/trust](https://github.com/mullusi/trust/issues)
 - **General chat:** Discord #security channel
 
 ## Recognition
 
-Contributors to the threat model are recognized in the threat model acknowledgments, release notes, and the OpenClaw security hall of fame for significant contributions.
+Contributors to the threat model are recognized in the threat model acknowledgments, release notes, and the Mullusi security hall of fame for significant contributions.

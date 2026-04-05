@@ -5,7 +5,7 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
-import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { safeParseJsonWithSchema, safeParseWithSchema } from "mullusi/plugin-sdk/extension-shared";
 import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;

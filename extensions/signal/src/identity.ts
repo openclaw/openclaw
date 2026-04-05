@@ -1,5 +1,5 @@
-import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { evaluateSenderGroupAccessForPolicy } from "mullusi/plugin-sdk/group-access";
+import { normalizeE164 } from "mullusi/plugin-sdk/text-runtime";
 import { looksLikeUuid } from "./uuid.js";
 
 export type SignalSender =

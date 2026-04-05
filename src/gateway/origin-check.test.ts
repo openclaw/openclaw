@@ -6,8 +6,8 @@ describe("checkBrowserOrigin", () => {
     {
       name: "accepts host-header fallback when explicitly enabled",
       input: {
-        requestHost: "127.0.0.1:18789",
-        origin: "http://127.0.0.1:18789",
+        requestHost: "127.0.0.1:18790",
+        origin: "http://127.0.0.1:18790",
         allowHostHeaderOriginFallback: true,
       },
       expected: { ok: true as const, matchedBy: "host-header-fallback" as const },
@@ -15,15 +15,15 @@ describe("checkBrowserOrigin", () => {
     {
       name: "rejects same-origin host matches when fallback is disabled",
       input: {
-        requestHost: "gateway.example.com:18789",
-        origin: "https://gateway.example.com:18789",
+        requestHost: "gateway.example.com:18790",
+        origin: "https://gateway.example.com:18790",
       },
       expected: { ok: false as const, reason: "origin not allowed" },
     },
     {
       name: "accepts local loopback mismatches for local clients",
       input: {
-        requestHost: "127.0.0.1:18789",
+        requestHost: "127.0.0.1:18790",
         origin: "http://localhost:5173",
         isLocalClient: true,
       },
@@ -32,7 +32,7 @@ describe("checkBrowserOrigin", () => {
     {
       name: "rejects loopback mismatches for non-local clients",
       input: {
-        requestHost: "127.0.0.1:18789",
+        requestHost: "127.0.0.1:18790",
         origin: "http://localhost:5173",
         isLocalClient: false,
       },
@@ -41,7 +41,7 @@ describe("checkBrowserOrigin", () => {
     {
       name: "accepts trimmed lowercase-normalized allowlist matches",
       input: {
-        requestHost: "gateway.example.com:18789",
+        requestHost: "gateway.example.com:18790",
         origin: "https://CONTROL.example.com",
         allowedOrigins: [" https://control.example.com "],
       },
@@ -50,7 +50,7 @@ describe("checkBrowserOrigin", () => {
     {
       name: "accepts wildcard allowlists even alongside specific entries",
       input: {
-        requestHost: "gateway.tailnet.ts.net:18789",
+        requestHost: "gateway.tailnet.ts.net:18790",
         origin: "https://any-origin.example.com",
         allowedOrigins: ["https://control.example.com", " * "],
       },
@@ -59,7 +59,7 @@ describe("checkBrowserOrigin", () => {
     {
       name: "rejects missing origin",
       input: {
-        requestHost: "gateway.example.com:18789",
+        requestHost: "gateway.example.com:18790",
         origin: "",
       },
       expected: { ok: false as const, reason: "origin missing or invalid" },
@@ -67,7 +67,7 @@ describe("checkBrowserOrigin", () => {
     {
       name: 'rejects literal "null" origin',
       input: {
-        requestHost: "gateway.example.com:18789",
+        requestHost: "gateway.example.com:18790",
         origin: "null",
       },
       expected: { ok: false as const, reason: "origin missing or invalid" },
@@ -75,7 +75,7 @@ describe("checkBrowserOrigin", () => {
     {
       name: "rejects malformed origin URLs",
       input: {
-        requestHost: "gateway.example.com:18789",
+        requestHost: "gateway.example.com:18790",
         origin: "not a url",
       },
       expected: { ok: false as const, reason: "origin missing or invalid" },
@@ -83,7 +83,7 @@ describe("checkBrowserOrigin", () => {
     {
       name: "rejects mismatched origins",
       input: {
-        requestHost: "gateway.example.com:18789",
+        requestHost: "gateway.example.com:18790",
         origin: "https://attacker.example.com",
       },
       expected: { ok: false as const, reason: "origin not allowed" },

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { MullusiConfig } from "../../config/config.js";
 import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { createGatewayCredentialPlan, trimToUndefined } from "../../gateway/credential-planner.js";
 import { GatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
@@ -9,7 +9,7 @@ function authModeDisablesToken(mode: string | undefined): boolean {
 }
 
 function isPasswordFallbackActive(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   env: NodeJS.ProcessEnv;
 }): boolean {
   const plan = createGatewayCredentialPlan({
@@ -23,7 +23,7 @@ function isPasswordFallbackActive(params: {
 }
 
 export async function resolveGatewayTokenForDriftCheck(params: {
-  cfg: OpenClawConfig;
+  cfg: MullusiConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
   const env = params.env ?? process.env;

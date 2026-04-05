@@ -1,4 +1,4 @@
-import type { MockFn } from "openclaw/plugin-sdk/testing";
+import type { MockFn } from "mullusi/plugin-sdk/testing";
 import { vi } from "vitest";
 
 export const preflightDiscordMessageMock: MockFn = vi.fn();

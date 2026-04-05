@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "./config.js";
+import type { MullusiConfig } from "./config.js";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
 import {
   listLegacyWebSearchConfigPaths,
@@ -9,7 +9,7 @@ import { findLegacyConfigIssues } from "./legacy.js";
 
 describe("legacy web search config", () => {
   it("migrates legacy provider config through bundled web search ownership metadata", () => {
-    const res = migrateLegacyWebSearchConfig<OpenClawConfig>({
+    const res = migrateLegacyWebSearchConfig<MullusiConfig>({
       tools: {
         web: {
           search: {
@@ -102,7 +102,7 @@ describe("legacy web search config", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies MullusiConfig;
 
     expect(findLegacyConfigIssues(rawConfig)).toEqual([
       {

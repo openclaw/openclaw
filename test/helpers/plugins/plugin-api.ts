@@ -1,12 +1,12 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
+import type { MullusiPluginApi } from "mullusi/plugin-sdk/plugin-runtime";
 
 type TestPluginApiInput = Omit<
-  Partial<OpenClawPluginApi>,
+  Partial<MullusiPluginApi>,
   "id" | "name" | "source" | "config" | "runtime"
 > &
-  Pick<OpenClawPluginApi, "id" | "name" | "source" | "config" | "runtime">;
+  Pick<MullusiPluginApi, "id" | "name" | "source" | "config" | "runtime">;
 
-export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi {
+export function createTestPluginApi(api: TestPluginApiInput): MullusiPluginApi {
   return {
     registrationMode: "full",
     logger: { info() {}, warn() {}, error() {}, debug() {} },

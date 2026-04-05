@@ -22,7 +22,7 @@ If you’re looking for conceptual questions (not “something broke”):
 
 ## Environment and debugging
 
-- **Environment variables:** [Where OpenClaw loads env vars and precedence](/help/environment)
+- **Environment variables:** [Where Mullusi loads env vars and precedence](/help/environment)
 - **Debugging:** [Watch mode, raw streams, and dev profile](/help/debugging)
 - **Testing:** [Test suites, live tests, and Docker runners](/help/testing)
 - **Scripts:** [Repository helper scripts](/help/scripts)

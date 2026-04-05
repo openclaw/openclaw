@@ -2065,7 +2065,7 @@ describe("applyExtraParamsToAgent", () => {
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
 
-    // Simulate pi-agent-core passing apiKey in options (API key, not OAuth token)
+    // Simulate mullusi-kernel passing apiKey in options (API key, not OAuth token)
     void agent.streamFn?.(model, context, {
       apiKey: "sk-ant-api03-test", // pragma: allowlist secret
       headers: { "X-Custom": "1" },
@@ -2123,7 +2123,7 @@ describe("applyExtraParamsToAgent", () => {
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
 
-    // Simulate pi-agent-core passing an OAuth token (sk-ant-oat-*) as apiKey
+    // Simulate mullusi-kernel passing an OAuth token (sk-ant-oat-*) as apiKey
     void agent.streamFn?.(model, context, {
       apiKey: "sk-ant-oat01-test-oauth-token", // pragma: allowlist secret
       headers: { "X-Custom": "1" },
