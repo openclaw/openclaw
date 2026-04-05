@@ -28,7 +28,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
         "threads",
         idleVitestStats,
       ),
-    ).toBe(2);
+    ).toBe(6);
   });
 
   it("lets OPENCLAW_VITEST_MAX_WORKERS override the inferred cap", () => {
@@ -77,7 +77,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
         "threads",
         idleVitestStats,
       ),
-    ).toBe(1);
+    ).toBe(2);
   });
 
   it("lets roomy hosts use more local parallelism", () => {
@@ -92,7 +92,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
         "threads",
         idleVitestStats,
       ),
-    ).toBe(3);
+    ).toBe(8);
   });
 
   it("backs off further when the host is already busy", () => {
@@ -122,7 +122,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
         "threads",
         idleVitestStats,
       ),
-    ).toBe(3);
+    ).toBe(12);
   });
 });
 
@@ -188,7 +188,7 @@ describe("resolveLocalVitestScheduling", () => {
         idleVitestStats,
       ),
     ).toEqual({
-      maxWorkers: 3,
+      maxWorkers: 8,
       fileParallelism: true,
       throttledBySystem: false,
     });

@@ -69,6 +69,7 @@ export function createScopedVitestConfig(
     ]),
   ];
   const useNonIsolatedRunner = options?.useNonIsolatedRunner ?? !isolate;
+  const runner = useNonIsolatedRunner ? "./test/non-isolated-runner.ts" : undefined;
 
   return defineConfig({
     ...base,
@@ -78,7 +79,7 @@ export function createScopedVitestConfig(
       ...(options?.name ? { name: options.name } : {}),
       ...(options?.environment ? { environment: options.environment } : {}),
       isolate,
-      ...(useNonIsolatedRunner ? { runner: "./test/non-isolated-runner.ts" } : {}),
+      ...(runner ? { runner } : { runner: undefined }),
       setupFiles,
       ...(scopedDir ? { dir: scopedDir } : {}),
       include: relativizeScopedPatterns(cliInclude ?? include, scopedDir),
