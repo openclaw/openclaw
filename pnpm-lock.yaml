@@ -261,8 +261,8 @@ importers:
         specifier: 0.18.0
         version: 0.18.0(zod@4.3.6)
       acpx:
-        specifier: github:openclaw/acpx#a5ed49269cd0b97e651a11fa0af0d95a9a4a3193
-        version: https://codeload.github.com/openclaw/acpx/tar.gz/a5ed49269cd0b97e651a11fa0af0d95a9a4a3193
+        specifier: github:openclaw/acpx#1334374d0265c03cd07f62594ef1eac139a99374
+        version: https://codeload.github.com/openclaw/acpx/tar.gz/1334374d0265c03cd07f62594ef1eac139a99374
 
   extensions/amazon-bedrock:
     dependencies:
@@ -3639,8 +3639,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@https://codeload.github.com/openclaw/acpx/tar.gz/a5ed49269cd0b97e651a11fa0af0d95a9a4a3193:
-    resolution: {tarball: https://codeload.github.com/openclaw/acpx/tar.gz/a5ed49269cd0b97e651a11fa0af0d95a9a4a3193}
+  acpx@https://codeload.github.com/openclaw/acpx/tar.gz/1334374d0265c03cd07f62594ef1eac139a99374:
+    resolution: {tarball: https://codeload.github.com/openclaw/acpx/tar.gz/1334374d0265c03cd07f62594ef1eac139a99374}
     version: 0.4.1
     engines: {node: '>=22.12.0'}
     hasBin: true
@@ -10075,7 +10075,7 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@https://codeload.github.com/openclaw/acpx/tar.gz/a5ed49269cd0b97e651a11fa0af0d95a9a4a3193:
+  acpx@https://codeload.github.com/openclaw/acpx/tar.gz/1334374d0265c03cd07f62594ef1eac139a99374:
     dependencies:
       '@agentclientprotocol/sdk': 0.17.1(zod@4.3.6)
       commander: 14.0.3
