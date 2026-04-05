@@ -721,6 +721,88 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(/Telegram bot token missing/);
   });
 
+  it.each([
+    {
+      name: "react",
+      params: { action: "react", chatId: "123", messageId: 456, emoji: "✅" },
+      argIndex: 3,
+    },
+    {
+      name: "sendMessage",
+      params: { action: "sendMessage", to: "@testchannel", content: "Hello!" },
+      argIndex: 2,
+    },
+    {
+      name: "poll",
+      params: { action: "poll", to: "@testchannel", question: "Ready?", answers: ["Yes", "No"] },
+      argIndex: 2,
+    },
+    {
+      name: "deleteMessage",
+      params: { action: "deleteMessage", chatId: "123", messageId: 456 },
+      argIndex: 2,
+    },
+    {
+      name: "editMessage",
+      params: { action: "editMessage", chatId: "123", messageId: 456, content: "Updated" },
+      argIndex: 3,
+    },
+    {
+      name: "sendSticker",
+      params: { action: "sendSticker", to: "123", fileId: "sticker-id" },
+      argIndex: 2,
+    },
+    {
+      name: "createForumTopic",
+      params: { action: "createForumTopic", chatId: "-100123", name: "Topic" },
+      argIndex: 2,
+    },
+    {
+      name: "editForumTopic",
+      params: { action: "editForumTopic", chatId: "-100123", messageThreadId: 42, name: "Renamed" },
+      argIndex: 2,
+    },
+  ])(
+    "uses channels.telegram.defaultAccount token for omitted accountId on $name",
+    async ({ params, argIndex }) => {
+      delete process.env.TELEGRAM_BOT_TOKEN;
+      const cfg = {
+        channels: {
+          telegram: {
+            defaultAccount: "work",
+            reactionLevel: "minimal",
+            accounts: {
+              work: {
+                botToken: "tok-work",
+                actions: {
+                  sticker: true,
+                  createForumTopic: true,
+                  editForumTopic: true,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      await handleTelegramAction(params as Record<string, unknown>, cfg);
+
+      const runtimeCallMap = [
+        reactMessageTelegram.mock.calls,
+        sendMessageTelegram.mock.calls,
+        sendPollTelegram.mock.calls,
+        deleteMessageTelegram.mock.calls,
+        editMessageTelegram.mock.calls,
+        sendStickerTelegram.mock.calls,
+        createForumTopicTelegram.mock.calls,
+        editForumTopicTelegram.mock.calls,
+      ];
+      const call = runtimeCallMap.find((calls) => calls.length > 0)?.[0] as unknown[] | undefined;
+      const opts = call?.[argIndex] as Record<string, unknown> | undefined;
+      expect(opts).toMatchObject({ token: "tok-work" });
+    },
+  );
+
   it("allows inline buttons by default (allowlist)", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok" } },
