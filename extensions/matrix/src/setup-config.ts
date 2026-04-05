@@ -10,6 +10,7 @@ import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { isSupportedMatrixAvatarSource } from "./matrix/profile.js";
 import {
   matrixNamedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget,
   matrixSingleAccountKeysToMove,
 } from "./setup-contract.js";
 import type { CoreConfig } from "./types.js";
@@ -93,23 +94,7 @@ export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): Co
     return cfg;
   }
 
-  const defaultAccount =
-    typeof base.defaultAccount === "string" && base.defaultAccount.trim()
-      ? normalizeAccountId(base.defaultAccount)
-      : undefined;
-  const targetAccountId =
-    defaultAccount && defaultAccount !== DEFAULT_ACCOUNT_ID
-      ? (Object.entries(accounts).find(
-          ([accountId, value]) =>
-            accountId &&
-            value &&
-            typeof value === "object" &&
-            normalizeAccountId(accountId) === defaultAccount,
-        )?.[0] ?? DEFAULT_ACCOUNT_ID)
-      : (defaultAccount ??
-        (Object.keys(accounts).filter(Boolean).length === 1
-          ? Object.keys(accounts).filter(Boolean)[0]
-          : DEFAULT_ACCOUNT_ID));
+  const targetAccountId = resolveSingleAccountPromotionTarget({ channel: base });
 
   const nextAccount: Record<string, unknown> = { ...(accounts[targetAccountId] ?? {}) };
   for (const key of keysToMove) {
