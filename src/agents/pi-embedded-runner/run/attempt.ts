@@ -1743,6 +1743,9 @@ export async function runEmbeddedAttempt(
           // modelCallStartedAt remains 0 when an earlier step (e.g. image loading)
           // throws before the call site — in that case there is no API response to log.
           if (modelCallStartedAt > 0 && isModelApiInfoEnabled()) {
+            // Note: durationMs spans the entire activeSession.prompt() turn, including
+            // any tool calls executed during the turn — this is turn latency, not pure
+            // provider round-trip time. See "Known limitations" in PR #34891.
             const modelCallDurationMs = Date.now() - modelCallStartedAt;
             const responseChars =
               assistantTexts.reduce((sum, t) => sum + t.length, 0) +
