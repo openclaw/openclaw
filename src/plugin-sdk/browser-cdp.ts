@@ -1,1 +1,1 @@
-export { redactCdpUrl } from "../../extensions/browser/browser-cdp.js";
+export { redactCdpUrl } from "./browser-config.js";

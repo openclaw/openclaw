@@ -82,6 +82,7 @@ You can still tune behavior with explicit overrides such as:
 - `dreaming.minScore`
 - `dreaming.minRecallCount`
 - `dreaming.minUniqueQueries`
+- `dreaming.verboseLogging`
 
 ## Configure
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createCapturedPluginRegistration } from "../../src/test-utils/plugin-registration.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 
 const { readClaudeCliCredentialsForSetupMock, readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(
@@ -18,6 +19,23 @@ vi.mock("./cli-auth-seam.js", () => {
 import anthropicPlugin from "./index.js";
 
 describe("anthropic provider replay hooks", () => {
+  it("registers the claude-cli backend", async () => {
+    const captured = createCapturedPluginRegistration();
+    await anthropicPlugin.register(captured.api);
+
+    expect(captured.cliBackends).toContainEqual(
+      expect.objectContaining({
+        id: "claude-cli",
+        bundleMcp: true,
+        config: expect.objectContaining({
+          command: "claude",
+          modelArg: "--model",
+          sessionArg: "--session-id",
+        }),
+      }),
+    );
+  });
+
   it("owns native reasoning output mode for Claude transports", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 

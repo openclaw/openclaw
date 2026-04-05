@@ -1,3 +1,4 @@
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -204,6 +205,11 @@ export function buildQwenVideoGenerationProvider(): VideoGenerationProvider {
     label: "Qwen Cloud",
     defaultModel: DEFAULT_QWEN_VIDEO_MODEL,
     models: ["wan2.6-t2v", "wan2.6-i2v", "wan2.6-r2v", "wan2.6-r2v-flash", "wan2.7-r2v"],
+    isConfigured: ({ agentDir }) =>
+      isProviderApiKeyConfigured({
+        provider: "qwen",
+        agentDir,
+      }),
     capabilities: {
       maxVideos: 1,
       maxInputImages: 1,

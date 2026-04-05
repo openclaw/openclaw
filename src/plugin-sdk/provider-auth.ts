@@ -1,5 +1,9 @@
 // Public auth/onboarding helpers for provider plugins.
 
+import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { resolveEnvApiKey } from "../agents/model-auth-env.js";
+
 export type { OpenClawConfig } from "../config/config.js";
 export type { SecretInput } from "../config/types.secrets.js";
 export type { ProviderAuthResult } from "../plugins/types.js";
@@ -13,6 +17,7 @@ export {
   upsertAuthProfile,
   upsertAuthProfileWithLock,
 } from "../agents/auth-profiles/profiles.js";
+export { resolveEnvApiKey } from "../agents/model-auth-env.js";
 export { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
 export { suggestOAuthProfileIdForLegacyDefault } from "../agents/auth-profiles/repair.js";
 export {
@@ -51,3 +56,20 @@ export {
 } from "../secrets/provider-env-vars.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export { generatePkceVerifierChallenge, toFormUrlEncoded } from "./oauth-utils.js";
+
+export function isProviderApiKeyConfigured(params: {
+  provider: string;
+  agentDir?: string;
+}): boolean {
+  if (resolveEnvApiKey(params.provider)?.apiKey) {
+    return true;
+  }
+  const agentDir = params.agentDir?.trim();
+  if (!agentDir) {
+    return false;
+  }
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+  });
+  return listProfilesForProvider(store, params.provider).length > 0;
+}
