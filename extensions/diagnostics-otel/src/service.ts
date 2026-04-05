@@ -232,6 +232,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Run attempts",
       });
+      const toolLoopCounter = meter.createCounter("openclaw.tool.loop", {
+        unit: "1",
+        description: "Tool loop guard events",
+      });
       const turnCounter = meter.createCounter("openclaw.turn", {
         unit: "1",
         description: "Agent turns by outcome",
@@ -619,6 +623,31 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         runAttemptCounter.add(1, { "openclaw.attempt": evt.attempt });
       };
 
+      const recordToolLoop = (evt: Extract<DiagnosticEventPayload, { type: "tool.loop" }>) => {
+        const attrs: Record<string, string | number> = {
+          "openclaw.tool": evt.toolName,
+          "openclaw.level": evt.level,
+          "openclaw.action": evt.action,
+          "openclaw.detector": evt.detector,
+          "openclaw.count": evt.count,
+        };
+        if (evt.pairedToolName) {
+          attrs["openclaw.pairedTool"] = evt.pairedToolName;
+        }
+        toolLoopCounter.add(1, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = { ...attrs };
+        addSessionIdentityAttrs(spanAttrs, evt);
+        spanAttrs["openclaw.message"] = redactSensitiveText(evt.message);
+        const span = tracer.startSpan("openclaw.tool.loop", { attributes: spanAttrs });
+        if (evt.level === "critical") {
+          span.setStatus({ code: SpanStatusCode.ERROR, message: redactSensitiveText(evt.message) });
+        }
+        span.end();
+      };
+
       const recordHeartbeat = (
         evt: Extract<DiagnosticEventPayload, { type: "diagnostic.heartbeat" }>,
       ) => {
@@ -705,6 +734,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "run.attempt":
               recordRunAttempt(evt);
+              return;
+            case "tool.loop":
+              recordToolLoop(evt);
               return;
             case "diagnostic.heartbeat":
               recordHeartbeat(evt);
