@@ -77,6 +77,16 @@ export OPENCLAW_BUNDLED_PLUGINS_DIR="${OPENCLAW_BUNDLED_PLUGINS_DIR:-/app/dist/e
 export PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_CACHE"
 export OPENCLAW_EXTRA_MOUNTS=""
 
+CONTROL_UI_URL="http://127.0.0.1:18789/"
+if [[ "$OPENCLAW_GATEWAY_BIND" == "lan" ]]; then
+  HOST_LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  if [[ -n "$HOST_LAN_IP" ]]; then
+    CONTROL_UI_URL="http://$HOST_LAN_IP:18789/"
+  else
+    CONTROL_UI_URL="http://<host-lan-ip>:18789/"
+  fi
+fi
+
 echo "OpenClaw Docker profile"
 echo "  Host root: $HOST_ROOT"
 echo "  Config: $CONFIG_DIR"
@@ -113,6 +123,9 @@ fi
 
 echo ""
 echo "Setup complete."
-echo "Open the Control UI at http://127.0.0.1:18789/"
+echo "Open the Control UI at $CONTROL_UI_URL"
+if [[ "$OPENCLAW_GATEWAY_BIND" == "lan" && "$CONTROL_UI_URL" == "http://<host-lan-ip>:18789/" ]]; then
+  echo "OPENCLAW_GATEWAY_BIND=lan, so use your host LAN IP if auto-detection failed."
+fi
 echo "If you skipped WhatsApp linking, run:"
 echo "  docker compose ${COMPOSE_ARGS[*]} run --rm openclaw-cli channels login --channel whatsapp"
