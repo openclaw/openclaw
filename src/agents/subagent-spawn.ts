@@ -631,11 +631,15 @@ export async function spawnSubagentDirect(
   // - denyPaths: UNION
   // - allowedPaths: INTERSECTION
   const globalFs = resolveToolFsConfig({ cfg });
+  // resolveToolFsConfig({ cfg, agentId }) already applies agent-over-global precedence.
+  // Avoid intersecting the global allowlist twice by treating this as the agent layer only.
   const agentFs = resolveToolFsConfig({ cfg, agentId: targetAgentId });
   const subagentFs = cfg.tools?.subagents?.fs;
   const sessionsSpawnFs = cfg.tools?.sessions_spawn?.fsPolicy;
   const effectiveFsPolicy = combineToolFsPolicies({
     globalPolicy: globalFs,
+    // agentFs already includes global fallbacks; treat it as the agent layer only.
+    // Passing it as agentPolicy avoids intersecting global twice.
     agentPolicy: agentFs,
     spawnPolicy: {
       ...(requesterFsCeiling
