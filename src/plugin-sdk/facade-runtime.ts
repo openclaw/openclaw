@@ -347,11 +347,16 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
 
   let loaded: T;
   try {
-    // Track the owning plugin once module evaluation begins. Facade top-level
-    // code may have already executed even if the module later throws.
-    loadedFacadePluginIds.add(resolveTrackedFacadePluginId(params.dirName));
     loaded = getJiti(location.modulePath)(location.modulePath) as T;
+    // Back-fill the sentinel *before* resolving the plugin ID. The resolution
+    // triggers config loading (plugin auto-enable, channel discovery, etc.)
+    // which can re-enter this function for the same modulePath. If the
+    // sentinel is still empty at that point the caller sees undefined exports
+    // (e.g. shouldNormalizeGoogleProviderConfig). Populating first ensures any
+    // re-entrant lookup through the sentinel finds the real exports.
     Object.assign(sentinel, loaded);
+    // Track the owning plugin after the module is fully loaded.
+    loadedFacadePluginIds.add(resolveTrackedFacadePluginId(params.dirName));
   } catch (err) {
     loadedFacadeModules.delete(location.modulePath);
     throw err;
