@@ -1,0 +1,23 @@
+{
+  "id": "claude-headless",
+  "enabledByDefault": true,
+  "providers": ["claude-headless"],
+  "cliBackends": ["claude-headless"],
+  "providerAuthChoices": [
+    {
+      "provider": "claude-headless",
+      "method": "detect",
+      "choiceId": "claude-headless",
+      "choiceLabel": "Claude headless (local CLI)",
+      "choiceHint": "Use local Claude CLI in headless mode — no Anthropic API key required",
+      "groupId": "claude-headless",
+      "groupLabel": "Claude Headless",
+      "groupHint": "Local Claude CLI, no API key required"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
