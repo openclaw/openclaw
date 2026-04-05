@@ -234,6 +234,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     const capability = createApproverRestrictedNativeApprovalCapability({
       channel: "matrix",
       channelLabel: "Matrix",
+      describeExecApprovalSetup: ({ channel, channelLabel }) => `${channelLabel}:${channel}:setup`,
       listAccountIds: () => ["work"],
       hasApprovers: () => true,
       isExecAuthorizedSender: ({ senderId }) => senderId === "@owner:example.com",
@@ -252,6 +253,12 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       }),
     ).toEqual({ authorized: true });
     expect(capability.delivery?.hasConfiguredDmRoute?.({ cfg: {} as never })).toBe(true);
+    expect(
+      capability.describeExecApprovalSetup?.({
+        channel: "matrix",
+        channelLabel: "Matrix",
+      }),
+    ).toBe("Matrix:matrix:setup");
     expect(
       capability.native?.describeDeliveryCapabilities({
         cfg: {} as never,
