@@ -1,11 +1,18 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import fsSync from "node:fs";
+import fsSync, { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { FileIdentityStat } from "./file-identity.js";
+
+const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+const FALLBACK_WRITE_FLAGS =
+  fsConstants.O_WRONLY |
+  fsConstants.O_CREAT |
+  fsConstants.O_EXCL |
+  (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 
 export type PinnedWriteInput =
   | { kind: "buffer"; data: string | Buffer; encoding?: BufferEncoding }
@@ -366,22 +373,21 @@ async function runPinnedWriteFallback(params: {
   }
   const targetPath = path.join(parentPath, params.basename);
   const tempPath = path.join(parentPath, `.${params.basename}.fallback.tmp`);
-  if (params.input.kind === "buffer") {
-    if (typeof params.input.data === "string") {
-      await fs.writeFile(tempPath, params.input.data, {
+  // Remove any pre-existing temp file to allow O_EXCL to succeed on retry.
+  await fs.unlink(tempPath).catch(() => {});
+  // Open with O_CREAT | O_EXCL | O_NOFOLLOW to reject symlinks at the temp path,
+  // preventing a pre-placed symlink from redirecting writes outside the root.
+  const handle = await fs.open(tempPath, FALLBACK_WRITE_FLAGS, params.mode);
+  try {
+    if (params.input.kind === "buffer") {
+      await handle.writeFile(params.input.data, {
         encoding: params.input.encoding ?? "utf8",
-        mode: params.mode,
       });
     } else {
-      await fs.writeFile(tempPath, params.input.data, { mode: params.mode });
-    }
-  } else {
-    const handle = await fs.open(tempPath, "w", params.mode);
-    try {
       await pipeline(params.input.stream, handle.createWriteStream());
-    } finally {
-      await handle.close().catch(() => {});
     }
+  } finally {
+    await handle.close().catch(() => {});
   }
   await fs.rename(tempPath, targetPath);
   const stat = await fs.stat(targetPath);
