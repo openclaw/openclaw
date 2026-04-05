@@ -1,5 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+
+const { readClaudeCliCredentialsCachedMock } = vi.hoisted(() => ({
+  readClaudeCliCredentialsCachedMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
+  return {
+    ...actual,
+    readClaudeCliCredentialsCached: readClaudeCliCredentialsCachedMock,
+  };
+});
+
 import anthropicPlugin from "./index.js";
 
 describe("anthropic provider replay hooks", () => {
@@ -82,5 +95,31 @@ describe("anthropic provider replay hooks", () => {
     expect(
       next?.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params?.cacheRetention,
     ).toBe("short");
+  });
+
+  it("resolves claude-cli synthetic auth without allowing keychain prompts", async () => {
+    readClaudeCliCredentialsCachedMock.mockReset();
+    readClaudeCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: 123,
+    });
+
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.resolveSyntheticAuth?.({
+        provider: "claude-cli",
+      } as never),
+    ).toEqual({
+      apiKey: "access-token",
+      source: "Claude CLI native auth",
+      mode: "oauth",
+    });
+    expect(readClaudeCliCredentialsCachedMock).toHaveBeenCalledWith({
+      allowKeychainPrompt: false,
+    });
   });
 });
