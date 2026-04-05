@@ -7,6 +7,10 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
+import {
+  matrixNamedAccountPromotionKeys,
+  matrixSingleAccountKeysToMove,
+} from "./setup-contract.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
@@ -32,48 +36,8 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "groupAllowFrom",
   "defaultTo",
 ]);
-const MATRIX_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
-  "deviceId",
-  "avatarUrl",
-  "initialSyncLimit",
-  "encryption",
-  "allowlistOnly",
-  "allowBots",
-  "blockStreaming",
-  "replyToMode",
-  "threadReplies",
-  "textChunkLimit",
-  "chunkMode",
-  "responsePrefix",
-  "ackReaction",
-  "ackReactionScope",
-  "reactionNotifications",
-  "threadBindings",
-  "startupVerification",
-  "startupVerificationCooldownHours",
-  "mediaMaxMb",
-  "autoJoin",
-  "autoJoinAllowlist",
-  "dm",
-  "groups",
-  "rooms",
-  "actions",
-]);
-const MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS = new Set([
-  // When named accounts already exist, only move auth/bootstrap fields into the
-  // promoted account. Delivery-policy fields stay at the top level so they
-  // remain shared inherited defaults for every account.
-  "name",
-  "homeserver",
-  "userId",
-  "accessToken",
-  "password",
-  "deviceId",
-  "deviceName",
-  "avatarUrl",
-  "initialSyncLimit",
-  "encryption",
-]);
+const MATRIX_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set(matrixSingleAccountKeysToMove);
+const MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS = new Set(matrixNamedAccountPromotionKeys);
 
 function cloneIfObject<T>(value: T): T {
   if (value && typeof value === "object") {
@@ -214,6 +178,7 @@ export function applyMatrixSetupAccountConfig(params: {
     accountId: normalizedAccountId,
     name: params.input.name,
   }) as CoreConfig;
+  const avatarUrl = resolveSetupAvatarUrl(params.input);
 
   if (params.input.useEnv) {
     return updateMatrixAccountConfig(next, normalizedAccountId, {
@@ -226,7 +191,7 @@ export function applyMatrixSetupAccountConfig(params: {
       password: null,
       deviceId: null,
       deviceName: null,
-      avatarUrl: resolveSetupAvatarUrl(params.input),
+      avatarUrl,
     });
   }
 
@@ -247,7 +212,7 @@ export function applyMatrixSetupAccountConfig(params: {
     accessToken: accessToken || (password ? null : undefined),
     password: password || (accessToken ? null : undefined),
     deviceName: params.input.deviceName?.trim(),
-    avatarUrl: resolveSetupAvatarUrl(params.input),
+    avatarUrl,
     initialSyncLimit: params.input.initialSyncLimit,
   });
 }
