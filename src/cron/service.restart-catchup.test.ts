@@ -372,25 +372,24 @@ describe("CronService restart catch-up", () => {
 
   it("does not spuriously fire a non-UTC job whose tz-correct nextRunAtMs is still in the future (#61028)", async () => {
     // nowMs = 2025-12-13T17:00:00Z (UTC).
-    // Job schedule: "0 21 * * *" America/Sao_Paulo (BRT = UTC-3).
-    //   → 21:00 BRT = 00:00 UTC next day.
-    // Last ran at 00:00 UTC Dec 13 (= 21:00 BRT Dec 12).
-    // Tz-correct nextRunAtMs = 00:00 UTC Dec 14 — still 7 hours away.
-    // A UTC-naive nextRunAtMs would be 21:00 UTC Dec 13, which has also not
-    // yet passed at nowMs=17:00 UTC, so this test specifically confirms the
-    // job stays quiet when the tz-correct value is stored.
-    const nextRunAtMs = Date.parse("2025-12-14T00:00:00.000Z"); // 21:00 BRT Dec 13
-    const lastRunAtMs = Date.parse("2025-12-13T00:00:00.000Z"); // 21:00 BRT Dec 12
+    // Job schedule: "0 16 * * *" America/Sao_Paulo (BRT = UTC-3).
+    //   → 16:00 BRT = 19:00 UTC.
+    // Last ran at 19:00 UTC Dec 12 (= 16:00 BRT Dec 12).
+    // Tz-correct nextRunAtMs = 19:00 UTC Dec 13 — still 2 hours away.
+    // A UTC-naive nextRunAtMs would be 16:00 UTC Dec 13, which is already
+    // 1 hour past at nowMs=17:00 UTC and would spuriously fire with the bug.
+    const nextRunAtMs = Date.parse("2025-12-13T19:00:00.000Z"); // 16:00 BRT Dec 13
+    const lastRunAtMs = Date.parse("2025-12-12T19:00:00.000Z"); // 16:00 BRT Dec 12
 
     await withRestartedCron(
       [
         {
           id: "brt-future-job",
-          name: "BRT daily at 21:00",
+          name: "BRT daily at 16:00",
           enabled: true,
           createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
-          updatedAtMs: Date.parse("2025-12-13T00:01:00.000Z"),
-          schedule: { kind: "cron", expr: "0 21 * * *", tz: "America/Sao_Paulo" },
+          updatedAtMs: Date.parse("2025-12-12T19:01:00.000Z"),
+          schedule: { kind: "cron", expr: "0 16 * * *", tz: "America/Sao_Paulo" },
           sessionTarget: "main",
           wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "BRT tick" },
@@ -402,7 +401,7 @@ describe("CronService restart catch-up", () => {
         },
       ],
       async ({ enqueueSystemEvent, requestHeartbeatNow }) => {
-        // The next BRT slot is 7 hours away — must NOT fire on restart.
+        // The next BRT slot is still 2 hours away — must NOT fire on restart.
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
         expect(requestHeartbeatNow).not.toHaveBeenCalled();
       },
