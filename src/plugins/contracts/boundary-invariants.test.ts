@@ -29,7 +29,21 @@ describe("plugin contract boundary invariants", () => {
         return false;
       }
       const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
-      return source.includes("bundled-capability-metadata");
+      return source.includes("contracts/inventory/bundled-capability-metadata");
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps the bundled contract inventory out of non-test runtime code", async () => {
+    const { globSync } = await import("glob");
+    const files = globSync("src/**/*.ts", {
+      cwd: REPO_ROOT,
+      nodir: true,
+      ignore: ["src/**/*.test.ts"],
+    });
+    const offenders = files.filter((file) => {
+      const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+      return source.includes("contracts/inventory/bundled-capability-metadata");
     });
     expect(offenders).toEqual([]);
   });

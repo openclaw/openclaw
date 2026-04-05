@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   buildAllowedModelSet,

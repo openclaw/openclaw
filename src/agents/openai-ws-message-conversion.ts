@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { Context, Message, StopReason } from "@mariozechner/pi-ai";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import {
+  normalizeOpenAIStrictToolParameters,
+  resolveOpenAIStrictToolFlagForInventory,
+} from "./openai-tool-schema.js";
 import type {
   ContentPart,
   FunctionToolDefinition,
@@ -8,7 +12,6 @@ import type {
   OpenAIResponsesAssistantPhase,
   ResponseObject,
 } from "./openai-ws-connection.js";
-import { normalizeToolParameterSchema } from "./pi-tools.schema.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
 import { normalizeUsage } from "./usage.js";
 
@@ -274,16 +277,24 @@ function extractResponseReasoningText(item: unknown): string {
   return typeof record.content === "string" ? record.content.trim() : "";
 }
 
-export function convertTools(tools: Context["tools"]): FunctionToolDefinition[] {
+export function convertTools(
+  tools: Context["tools"],
+  options?: { strict?: boolean | null },
+): FunctionToolDefinition[] {
   if (!tools || tools.length === 0) {
     return [];
   }
+  const strict = resolveOpenAIStrictToolFlagForInventory(tools, options?.strict);
   return tools.map((tool) => {
     return {
       type: "function" as const,
       name: tool.name,
       description: typeof tool.description === "string" ? tool.description : undefined,
-      parameters: normalizeToolParameterSchema(tool.parameters ?? {}) as Record<string, unknown>,
+      parameters: normalizeOpenAIStrictToolParameters(
+        tool.parameters ?? {},
+        strict === true,
+      ) as Record<string, unknown>,
+      ...(strict === undefined ? {} : { strict }),
     };
   });
 }

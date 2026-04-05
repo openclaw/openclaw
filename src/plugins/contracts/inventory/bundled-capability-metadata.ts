@@ -1,4 +1,4 @@
-import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
+import { listBundledPluginMetadata } from "../../bundled-plugin-metadata.js";
 
 // Build/test inventory only.
 // Runtime code should prefer manifest/runtime registry queries instead of these snapshots.
@@ -66,75 +66,6 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
         entry.toolNames.length > 0,
     )
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
-
-function collectPluginIds(
-  pick: (entry: BundledPluginContractSnapshot) => readonly string[],
-): readonly string[] {
-  return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter((entry) => pick(entry).length > 0)
-    .map((entry) => entry.pluginId)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export const BUNDLED_PROVIDER_PLUGIN_IDS = collectPluginIds((entry) => entry.providerIds);
-
-export const BUNDLED_SPEECH_PLUGIN_IDS = collectPluginIds((entry) => entry.speechProviderIds);
-
-export const BUNDLED_REALTIME_TRANSCRIPTION_PLUGIN_IDS = collectPluginIds(
-  (entry) => entry.realtimeTranscriptionProviderIds,
-);
-
-export const BUNDLED_REALTIME_VOICE_PLUGIN_IDS = collectPluginIds(
-  (entry) => entry.realtimeVoiceProviderIds,
-);
-
-export const BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS = collectPluginIds(
-  (entry) => entry.mediaUnderstandingProviderIds,
-);
-
-export const BUNDLED_IMAGE_GENERATION_PLUGIN_IDS = collectPluginIds(
-  (entry) => entry.imageGenerationProviderIds,
-);
-
-export const BUNDLED_VIDEO_GENERATION_PLUGIN_IDS = collectPluginIds(
-  (entry) => entry.videoGenerationProviderIds,
-);
-
-export const BUNDLED_WEB_FETCH_PLUGIN_IDS = collectPluginIds((entry) => entry.webFetchProviderIds);
-
-export const BUNDLED_RUNTIME_CONTRACT_PLUGIN_IDS = [
-  ...new Set(
-    BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
-      (entry) =>
-        entry.providerIds.length > 0 ||
-        entry.speechProviderIds.length > 0 ||
-        entry.realtimeTranscriptionProviderIds.length > 0 ||
-        entry.realtimeVoiceProviderIds.length > 0 ||
-        entry.mediaUnderstandingProviderIds.length > 0 ||
-        entry.imageGenerationProviderIds.length > 0 ||
-        entry.videoGenerationProviderIds.length > 0 ||
-        entry.webFetchProviderIds.length > 0 ||
-        entry.webSearchProviderIds.length > 0,
-    ).map((entry) => entry.pluginId),
-  ),
-].toSorted((left, right) => left.localeCompare(right));
-
-export const BUNDLED_WEB_SEARCH_PLUGIN_IDS = collectPluginIds(
-  (entry) => entry.webSearchProviderIds,
-);
-
-export const BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS = Object.fromEntries(
-  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap((entry) =>
-    entry.webSearchProviderIds.map((providerId) => [providerId, entry.pluginId] as const),
-  ).toSorted(([left], [right]) => left.localeCompare(right)),
-) as Readonly<Record<string, string>>;
-
-export const BUNDLED_PROVIDER_PLUGIN_ID_ALIASES = Object.fromEntries(
-  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap((entry) =>
-    entry.providerIds
-      .filter((providerId) => providerId !== entry.pluginId)
-      .map((providerId) => [providerId, entry.pluginId] as const),
-  ).toSorted(([left], [right]) => left.localeCompare(right)),
-) as Readonly<Record<string, string>>;
 
 export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
   BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.flatMap(({ manifest }) =>
