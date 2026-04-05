@@ -630,12 +630,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
             (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined));
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
-        const sandboxPath = remapWorkspaceAliasPath({
-          filePath,
-          root,
-          containerWorkdir: options?.containerWorkdir,
-        });
-        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        await assertSandboxPath({ filePath, cwd: root, root });
       }
       return tool.execute(toolCallId, aliased, signal, onUpdate);
     },
