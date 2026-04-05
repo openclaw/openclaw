@@ -102,11 +102,11 @@ deploy_server() {
   fi
   echo "  OK: Image pulled"
 
-  # Step 3: Discover agents
+  # Step 3: Discover agents (only directories that contain a docker.env)
   echo ""
   echo "-> Discovering agents..."
   local agents
-  agents=$(ssh "$server" "ls -1 ${AGENTS_DIR}")
+  agents=$(ssh "$server" "for d in ${AGENTS_DIR}/*/; do [ -f \"\${d}docker.env\" ] && basename \"\$d\"; done")
   local agent_count
   agent_count=$(echo "$agents" | wc -l | tr -d ' ')
   echo "  Found ${agent_count} agents"
