@@ -115,6 +115,8 @@ Docs: https://docs.openclaw.ai
 - Control UI/cron: highlight the Cron refresh button while refresh is in flight so the page's loading state stays visible even when prior data remains on screen. (#60394) Thanks @coder-zhuzm.
 - MS Teams: replace the deprecated Teams SDK HttpPlugin stub with `httpServerAdapter` so recurring gateway deprecation warnings stop firing and the Express 5 compatibility workaround stays on the supported SDK path. (#60939) Thanks @coolramukaka-sys.
 - CLI/Commander: preserve Commander-computed exit codes for argument and help-error paths, and cover the user-argv parse mode in the regression tests so invalid CLI invocations no longer report success when exits are intercepted. (#60923) Thanks @Linux2010.
+- Telegram/native command menu: trim long menu descriptions before dropping commands so sub-100 command sets can still fit Telegram's payload budget and keep more `/` entries visible. (#61129) Thanks @neeravmakwana.
+- Agents/Claude CLI: keep non-interactive `--permission-mode bypassPermissions` when custom `cliBackends.claude-cli.args` override defaults, so cron and heartbeat Claude CLI runs do not regress to interactive approval mode. (#61114) Thanks @cathrynlavery and @thewilloftheshadow.
 
 ## 2026.4.2
 
@@ -212,6 +214,8 @@ Docs: https://docs.openclaw.ai
 - Browser/screenshots: stop sending `fromSurface: false` on CDP screenshots so managed Chrome 146+ browsers can capture images again. (#60682) Thanks @mvanhorn.
 - Mattermost/slash commands: harden native slash-command callback token validation to use constant-time secret comparison, matching the existing interaction-token path.
 - Control UI/mobile chat: reduce narrow-screen overflow by shrinking the chat pane minimum width, removing extra mobile padding, widening message groups, and hiding avatars on very small screens. (#60220) Thanks @macdao.
+- Android/Talk Mode: route spoken replies through `talk.speak`, keep compressed playback cleanup deterministic, and fall back to local TTS for legacy gateways that omit Talk error reasons. (#60954) Thanks @obviyus.
+- Android/Talk Mode: keep reply-speaker routing and teardown behavior aligned with the new remote playback path. (#60954) Thanks @MKV21.
 
 ## 2026.4.1
 

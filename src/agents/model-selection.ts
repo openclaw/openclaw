@@ -6,7 +6,7 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
+import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
@@ -70,6 +70,22 @@ export type ModelAliasIndex = {
 
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function sanitizeModelWarningValue(value: string): string {
+  const stripped = value ? stripAnsi(value) : "";
+  let controlBoundary = -1;
+  for (let index = 0; index < stripped.length; index += 1) {
+    const code = stripped.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) {
+      controlBoundary = index;
+      break;
+    }
+  }
+  if (controlBoundary === -1) {
+    return sanitizeForLog(stripped);
+  }
+  return sanitizeForLog(stripped.slice(0, controlBoundary));
 }
 
 export function modelKey(provider: string, model: string) {
@@ -363,16 +379,8 @@ export function resolveConfiguredModelRef(params: {
         return aliasMatch.ref;
       }
 
-      const inferredProvider = inferUniqueProviderFromConfiguredModels({
-        cfg: params.cfg,
-        model: trimmed,
-      });
-      if (inferredProvider) {
-        return { provider: inferredProvider, model: trimmed };
-      }
-
       // Default to the configured provider if no provider is specified, but warn as this is deprecated.
-      const safeTrimmed = sanitizeForLog(trimmed);
+      const safeTrimmed = sanitizeModelWarningValue(trimmed);
       const safeResolved = sanitizeForLog(`${params.defaultProvider}/${safeTrimmed}`);
       getLog().warn(
         `Model "${safeTrimmed}" specified without provider. Falling back to "${safeResolved}". Please use "${safeResolved}" in your config.`,
@@ -404,7 +412,6 @@ export function resolveConfiguredModelRef(params: {
   const fallbackProvider = resolveConfiguredProviderFallback({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
   });
   if (fallbackProvider) {
     return fallbackProvider;

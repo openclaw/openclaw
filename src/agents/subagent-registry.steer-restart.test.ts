@@ -67,7 +67,12 @@ const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
 vi.mock("./subagent-announce.js", () => ({
+  captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: announceSpy,
+}));
+
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -294,13 +299,15 @@ describe("subagent registry steer restarts", () => {
 
       emitLifecycleEnd("run-completion-delayed");
 
-      await flushAnnounce();
+      await vi.waitFor(() => {
+        expect(announceSpy).toHaveBeenCalledTimes(1);
+      });
       expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
 
       resolveAnnounce(true);
-      await flushAnnounce();
-
-      expect(runSubagentEndedHookMock).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(runSubagentEndedHookMock).toHaveBeenCalledTimes(1);
+      });
       expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
         expect.objectContaining({
           targetSessionKey: "agent:main:subagent:completion-delayed",
@@ -551,7 +558,26 @@ describe("subagent registry steer restarts", () => {
     expect(run?.outcome).toEqual({ status: "error", error: "manual kill" });
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");
-    expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
+        {
+          targetSessionKey: childSessionKey,
+          targetKind: "subagent",
+          reason: "subagent-killed",
+          sendFarewell: true,
+          accountId: undefined,
+          runId: "run-killed",
+          endedAt: expect.any(Number),
+          outcome: "killed",
+          error: "manual kill",
+        },
+        {
+          runId: "run-killed",
+          childSessionKey,
+          requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+        },
+      );
+    });
   });
 
   it("treats a child session as inactive when only a stale older row is still unended", async () => {

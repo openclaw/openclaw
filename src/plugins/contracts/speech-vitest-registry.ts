@@ -330,7 +330,7 @@ export function loadVitestImageGenerationProviderContractRegistry(): ImageGenera
     }
     const builders = resolveNamedBuilders<ImageGenerationProviderPlugin>(
       createVitestCapabilityLoader(testApiPath)(testApiPath),
-      /^build.+ImageGenerationProvider$/u,
+      /ImageGenerationProvider$/u,
     );
     if (builders.length === 0) {
       continue;
