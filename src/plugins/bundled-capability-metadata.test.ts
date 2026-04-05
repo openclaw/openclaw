@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import {
   BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
   BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
-} from "./bundled-capability-metadata.js";
-import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
+} from "./contracts/inventory/bundled-capability-metadata.js";
 
 function uniqueStrings(values: readonly string[] | undefined): string[] {
   const result: string[] = [];
@@ -25,7 +25,6 @@ describe("bundled capability metadata", () => {
     const expected = listBundledPluginMetadata()
       .map(({ manifest }) => ({
         pluginId: manifest.id,
-        cliBackendIds: uniqueStrings(manifest.cliBackends),
         providerIds: uniqueStrings(manifest.providers),
         speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
         realtimeTranscriptionProviderIds: uniqueStrings(
@@ -43,7 +42,6 @@ describe("bundled capability metadata", () => {
       }))
       .filter(
         (entry) =>
-          entry.cliBackendIds.length > 0 ||
           entry.providerIds.length > 0 ||
           entry.speechProviderIds.length > 0 ||
           entry.realtimeTranscriptionProviderIds.length > 0 ||

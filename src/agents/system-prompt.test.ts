@@ -502,7 +502,7 @@ describe("buildAgentSystemPrompt", () => {
         params: {
           workspaceDir: "/tmp/openclaw",
           userTimezone: "America/Chicago",
-          userTime: "Monday, January 5th, 2026 — 3:26 PM",
+          userTime: "Monday, January 5th, 2026 - 3:26 PM",
           userTimeFormat: "12" as const,
         },
       },
@@ -511,7 +511,7 @@ describe("buildAgentSystemPrompt", () => {
         params: {
           workspaceDir: "/tmp/openclaw",
           userTimezone: "America/Chicago",
-          userTime: "Monday, January 5th, 2026 — 15:26",
+          userTime: "Monday, January 5th, 2026 - 15:26",
           userTimeFormat: "24" as const,
         },
       },
@@ -549,7 +549,7 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       userTimezone: "America/Chicago",
-      userTime: "Monday, January 5th, 2026 — 3:26 PM",
+      userTime: "Monday, January 5th, 2026 - 3:26 PM",
       userTimeFormat: "12",
     });
 

@@ -2,7 +2,6 @@ import fs from "node:fs";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
-import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
@@ -558,12 +557,6 @@ export async function runReplyAgent(params: {
         });
       }
     }
-    const cliSessionId = isCliProvider(providerUsed, cfg)
-      ? runResult.meta?.agentMeta?.sessionId?.trim()
-      : undefined;
-    const cliSessionBinding = isCliProvider(providerUsed, cfg)
-      ? runResult.meta?.agentMeta?.cliSessionBinding
-      : undefined;
     const contextTokensUsed =
       agentCfgContextTokens ??
       lookupContextTokens(modelUsed) ??
@@ -581,9 +574,7 @@ export async function runReplyAgent(params: {
       providerUsed,
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
-      cliSessionId,
-      cliSessionBinding,
-      usageIsContextSnapshot: isCliProvider(providerUsed, cfg),
+      usageIsContextSnapshot: false,
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
@@ -604,6 +595,7 @@ export async function runReplyAgent(params: {
       replyToMode,
       replyToChannel,
       currentMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+      replyThreading: sessionCtx.ReplyThreading,
       messageProvider: followupRun.run.messageProvider,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,

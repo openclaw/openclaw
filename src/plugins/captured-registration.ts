@@ -4,7 +4,6 @@ import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-provider
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   AnyAgentTool,
-  CliBackendPlugin,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
@@ -29,7 +28,6 @@ export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
   cliRegistrars: CapturedPluginCliRegistration[];
-  cliBackends: CliBackendPlugin[];
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
@@ -48,7 +46,6 @@ export function createCapturedPluginRegistration(params?: {
 }): CapturedPluginRegistration {
   const providers: ProviderPlugin[] = [];
   const cliRegistrars: CapturedPluginCliRegistration[] = [];
-  const cliBackends: CliBackendPlugin[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
@@ -69,7 +66,6 @@ export function createCapturedPluginRegistration(params?: {
   return {
     providers,
     cliRegistrars,
-    cliBackends,
     speechProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
@@ -115,9 +111,6 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerProvider(provider: ProviderPlugin) {
           providers.push(provider);
-        },
-        registerCliBackend(backend: CliBackendPlugin) {
-          cliBackends.push(backend);
         },
         registerSpeechProvider(provider: SpeechProviderPlugin) {
           speechProviders.push(provider);

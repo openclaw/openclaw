@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
-import { testState } from "./test-helpers.mocks.js";
+import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
   createGatewaySuiteHarness,

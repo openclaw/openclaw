@@ -64,6 +64,7 @@
     "speechProviders": ["minimax"],
     "mediaUnderstandingProviders": ["minimax", "minimax-portal"],
     "imageGenerationProviders": ["minimax", "minimax-portal"],
+    "videoGenerationProviders": ["minimax"],
     "webSearchProviders": ["minimax"]
   },
   "uiHints": {

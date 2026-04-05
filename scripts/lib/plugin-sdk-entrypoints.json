@@ -55,7 +55,6 @@
   "github-copilot-login",
   "github-copilot-token",
   "cli-runtime",
-  "cli-backend",
   "hook-runtime",
   "host-runtime",
   "process-runtime",

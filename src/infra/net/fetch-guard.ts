@@ -16,9 +16,6 @@ import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
-type DispatcherCompatibleFetch = FetchLike & {
-  __openclawAcceptsDispatcher?: boolean;
-};
 
 export const GUARDED_FETCH_MODE = {
   STRICT: "strict",
@@ -165,6 +162,17 @@ function isMockedFetch(fetchImpl: FetchLike | undefined): boolean {
   return typeof (fetchImpl as FetchLike & { mock?: unknown }).mock === "object";
 }
 
+function isAmbientGlobalFetch(params: {
+  fetchImpl: FetchLike | undefined;
+  globalFetch: FetchLike | undefined;
+}): boolean {
+  return (
+    typeof params.fetchImpl === "function" &&
+    typeof params.globalFetch === "function" &&
+    params.fetchImpl === params.globalFetch
+  );
+}
+
 export function retainSafeHeadersForCrossOriginRedirectHeaders(
   headers?: HeadersInit,
 ): Record<string, string> | undefined {
@@ -302,11 +310,13 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       };
 
       const supportsDispatcherInit =
-        params.fetchImpl !== undefined ||
-        isMockedFetch(defaultFetch) ||
-        (defaultFetch as DispatcherCompatibleFetch).__openclawAcceptsDispatcher === true;
-      // Explicit caller stubs, test-installed global fetch mocks, and
-      // dispatcher-aware wrappers should win.
+        (params.fetchImpl !== undefined &&
+          !isAmbientGlobalFetch({
+            fetchImpl: params.fetchImpl,
+            globalFetch: globalThis.fetch,
+          })) ||
+        isMockedFetch(defaultFetch);
+      // Explicit caller stubs and test-installed fetch mocks should win.
       // Otherwise, fall back to undici's fetch whenever we attach a dispatcher,
       // because the default global fetch path will not honor per-request
       // dispatchers.

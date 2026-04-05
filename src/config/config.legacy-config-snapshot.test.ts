@@ -2,41 +2,6 @@ import { describe, expect, it } from "vitest";
 import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
-describe("talk.voiceAliases", () => {
-  it("accepts a string map of voice aliases while still flagging legacy talk config", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        talk: {
-          voiceAliases: {
-            Clawd: "VoiceAlias1234567890",
-            Roger: "CwhRBWXzGAHq8TQ4Fs17",
-          },
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "talk")).toBe(true);
-      expect(snap.sourceConfig.talk?.providers?.elevenlabs?.voiceAliases).toEqual({
-        Clawd: "VoiceAlias1234567890",
-        Roger: "CwhRBWXzGAHq8TQ4Fs17",
-      });
-    });
-  });
-
-  it("rejects non-string voice alias values", () => {
-    const res = validateConfigObject({
-      talk: {
-        voiceAliases: {
-          Clawd: 123,
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-  });
-});
-
 describe("config strict validation", () => {
   it("rejects unknown fields", async () => {
     const res = validateConfigObject({
@@ -73,7 +38,7 @@ describe("config strict validation", () => {
     }
   });
 
-  it("rejects top-level memorySearch until doctor repairs it and reports legacyIssues", async () => {
+  it("detects top-level memorySearch and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         memorySearch: {
@@ -95,7 +60,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("rejects top-level heartbeat agent settings until doctor repairs them and reports legacyIssues", async () => {
+  it("detects top-level heartbeat agent settings and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         heartbeat: {
@@ -115,7 +80,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("rejects top-level heartbeat visibility until doctor repairs them and reports legacyIssues", async () => {
+  it("detects top-level heartbeat visibility and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         heartbeat: {
@@ -137,57 +102,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("rejects legacy messages.tts provider keys until doctor repairs them and reports legacyIssues", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        messages: {
-          tts: {
-            provider: "elevenlabs",
-            elevenlabs: {
-              apiKey: "test-key",
-              voiceId: "voice-1",
-            },
-          },
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues.some((issue) => issue.path === "messages.tts")).toBe(true);
-      expect(snap.sourceConfig.messages?.tts).toEqual({
-        provider: "elevenlabs",
-        elevenlabs: {
-          apiKey: "test-key",
-          voiceId: "voice-1",
-        },
-      });
-    });
-  });
-
-  it("reports legacy talk flat fields without auto-migrating them at config load", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        talk: {
-          voiceId: "voice-1",
-          modelId: "eleven_v3",
-          apiKey: "test-key",
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues.some((issue) => issue.path === "talk")).toBe(true);
-      expect(snap.sourceConfig.talk).toEqual({
-        voiceId: "voice-1",
-        modelId: "eleven_v3",
-        apiKey: "test-key",
-      });
-    });
-  });
-
-  it("rejects legacy sandbox perSession until doctor repairs it and reports legacyIssues", async () => {
+  it("detects legacy sandbox perSession and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         agents: {
@@ -219,7 +134,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("rejects legacy x_search auth until doctor repairs it and reports legacyIssues", async () => {
+  it("detects legacy x_search auth and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         tools: {
@@ -243,7 +158,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("rejects legacy thread binding ttlHours until doctor repairs it and reports legacyIssues", async () => {
+  it("detects legacy thread binding ttlHours and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         session: {
@@ -280,7 +195,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("rejects legacy channel streaming aliases until doctor repairs them and reports legacyIssues", async () => {
+  it("detects legacy channel streaming aliases and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         channels: {
@@ -335,7 +250,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("rejects legacy nested channel allow aliases until doctor repairs them and reports legacyIssues", async () => {
+  it("detects legacy nested channel allow aliases and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         channels: {
@@ -423,7 +338,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("rejects telegram groupMentionsOnly until doctor repairs it and reports legacyIssues", async () => {
+  it("detects telegram groupMentionsOnly and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         channels: {
@@ -440,106 +355,6 @@ describe("config strict validation", () => {
         snap.legacyIssues.some((issue) => issue.path === "channels.telegram.groupMentionsOnly"),
       ).toBe(true);
       expect(snap.sourceConfig.channels?.telegram).toMatchObject({ groupMentionsOnly: true });
-    });
-  });
-
-  it("rejects legacy plugins.entries.*.config.tts provider keys until doctor repairs them", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        plugins: {
-          entries: {
-            "voice-call": {
-              config: {
-                tts: {
-                  provider: "openai",
-                  openai: {
-                    model: "gpt-4o-mini-tts",
-                    voice: "alloy",
-                  },
-                },
-              },
-            },
-          },
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues.some((issue) => issue.path === "plugins.entries")).toBe(true);
-      const voiceCallTts = (
-        snap.sourceConfig.plugins?.entries as
-          | Record<
-              string,
-              {
-                config?: {
-                  tts?: {
-                    providers?: Record<string, unknown>;
-                    openai?: unknown;
-                  };
-                };
-              }
-            >
-          | undefined
-      )?.["voice-call"]?.config?.tts;
-      expect(voiceCallTts).toEqual({
-        provider: "openai",
-        openai: {
-          model: "gpt-4o-mini-tts",
-          voice: "alloy",
-        },
-      });
-    });
-  });
-
-  it("rejects legacy discord voice tts provider keys until doctor repairs them and reports legacyIssues", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        channels: {
-          discord: {
-            voice: {
-              tts: {
-                provider: "elevenlabs",
-                elevenlabs: {
-                  voiceId: "voice-1",
-                },
-              },
-            },
-            accounts: {
-              main: {
-                voice: {
-                  tts: {
-                    edge: {
-                      voice: "en-US-AvaNeural",
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.voice.tts")).toBe(
-        true,
-      );
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
-        true,
-      );
-      expect(snap.sourceConfig.channels?.discord?.voice?.tts).toEqual({
-        provider: "elevenlabs",
-        elevenlabs: {
-          voiceId: "voice-1",
-        },
-      });
-      expect(snap.sourceConfig.channels?.discord?.accounts?.main?.voice?.tts).toEqual({
-        edge: {
-          voice: "en-US-AvaNeural",
-        },
-      });
     });
   });
 

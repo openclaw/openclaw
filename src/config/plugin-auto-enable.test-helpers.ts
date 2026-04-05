@@ -75,7 +75,6 @@ export function makeRegistry(
       contracts: plugin.contracts,
       channelConfigs: plugin.channelConfigs,
       providers: plugin.providers ?? [],
-      cliBackends: [],
       skills: [],
       hooks: [],
       origin: "config" as const,

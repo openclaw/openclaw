@@ -1,6 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isParentOwnedBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -39,6 +39,7 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeTtsAutoMode, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
+import { normalizeVerboseLevel } from "../thinking.js";
 import {
   getReplyPayloadMetadata,
   type BlockReplyContext,
@@ -123,6 +124,7 @@ const resolveSessionStoreLookup = (
   cfg: OpenClawConfig,
 ): {
   sessionKey?: string;
+  storePath?: string;
   entry?: SessionEntry;
 } => {
   const targetSessionKey =
@@ -137,13 +139,37 @@ const resolveSessionStoreLookup = (
     const store = loadSessionStore(storePath);
     return {
       sessionKey,
+      storePath,
       entry: resolveSessionStoreEntry({ store, sessionKey }).existing,
     };
   } catch {
     return {
       sessionKey,
+      storePath,
     };
   }
+};
+
+const createShouldEmitVerboseProgress = (params: {
+  sessionKey?: string;
+  storePath?: string;
+  fallbackLevel: string;
+}) => {
+  return () => {
+    if (params.sessionKey && params.storePath) {
+      try {
+        const store = loadSessionStore(params.storePath);
+        const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+        const currentLevel = normalizeVerboseLevel(String(entry?.verboseLevel ?? ""));
+        if (currentLevel) {
+          return currentLevel !== "off";
+        }
+      } catch {
+        // Ignore transient store read failures and fall back to the current dispatch snapshot.
+      }
+    }
+    return params.fallbackLevel !== "off";
+  };
 };
 
 export type DispatchFromConfigResult = {
@@ -221,6 +247,21 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+  const sessionAgentId = resolveSessionAgentId({ sessionKey: acpDispatchSessionKey, config: cfg });
+  const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
+  const shouldEmitVerboseProgress = createShouldEmitVerboseProgress({
+    sessionKey: acpDispatchSessionKey,
+    storePath: sessionStoreEntry.storePath,
+    fallbackLevel:
+      normalizeVerboseLevel(
+        String(
+          sessionStoreEntry.entry?.verboseLevel ??
+            sessionAgentCfg?.verboseDefault ??
+            cfg.agents?.defaults?.verboseDefault ??
+            "",
+        ),
+      ) ?? "off",
+  });
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
@@ -650,6 +691,7 @@ export async function dispatchReplyFromConfig(params: {
     const maybeSendWorkingStatus = (label: string) => {
       const normalizedLabel = normalizeWorkingLabel(label);
       if (
+        !shouldEmitVerboseProgress() ||
         !shouldSendToolStartStatuses ||
         !normalizedLabel ||
         toolStartStatusCount >= 2 ||
@@ -668,6 +710,9 @@ export async function dispatchReplyFromConfig(params: {
       dispatcher.sendToolResult(payload);
     };
     const sendPlanUpdate = (payload: { explanation?: string; steps?: string[] }) => {
+      if (!shouldEmitVerboseProgress()) {
+        return;
+      }
       const replyPayload: ReplyPayload = {
         text: formatPlanUpdateText(payload),
       };

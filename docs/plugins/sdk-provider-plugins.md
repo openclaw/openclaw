@@ -283,7 +283,7 @@ API key auth, and dynamic model resolution.
 
     Real bundled examples:
 
-    - `google` and `google-gemini-cli`: `google-gemini`
+    - `google`: `google-gemini`
     - `openrouter`, `kilocode`, `opencode`, and `opencode-go`: `passthrough-gemini`
     - `amazon-bedrock` and `anthropic-vertex`: `anthropic-by-model`
     - `minimax`: `hybrid-anthropic-openai`
@@ -303,7 +303,7 @@ API key auth, and dynamic model resolution.
 
     Real bundled examples:
 
-    - `google` and `google-gemini-cli`: `google-thinking`
+    - `google`: `google-thinking`
     - `kilocode`: `kilocode-thinking`
     - `moonshot`: `moonshot-thinking`
     - `minimax` and `minimax-portal`: `minimax-fast-mode`

@@ -202,7 +202,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
   });
 
-  it("re-reads externally managed Codex CLI credentials instead of refreshing them", async () => {
+  it("keeps throwing when expired Codex-managed credentials have no fresh fallback source", async () => {
     const profileId = "openai-codex:default";
     saveAuthProfileStore(
       {
@@ -229,25 +229,19 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       accountId: "acct-cli",
     });
 
-    const result = await resolveApiKeyForProfile({
-      store: ensureAuthProfileStore(agentDir),
-      profileId,
-      agentDir,
-    });
+    await expect(
+      resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(agentDir),
+        profileId,
+        agentDir,
+      }),
+    ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
 
-    expect(result).toEqual({
-      apiKey: "fresh-cli-access-token",
-      provider: "openai-codex",
-      email: undefined,
-    });
-    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
     expect(writeCodexCliCredentialsMock).not.toHaveBeenCalled();
-
-    const persisted = await readPersistedStore(agentDir);
-    expect(persisted.profiles[profileId]).toBeUndefined();
   });
 
-  it("refreshes expired Codex-managed credentials and writes them back to Codex storage", async () => {
+  it("refreshes expired Codex-managed credentials and persists them back to auth-profiles", async () => {
     const profileId = "openai-codex:default";
     saveAuthProfileStore(
       {
@@ -293,17 +287,23 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       provider: "openai-codex",
       email: undefined,
     });
-    expect(writeCodexCliCredentialsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai-codex",
-        access: "rotated-cli-access-token",
-        refresh: "rotated-cli-refresh-token",
-        managedBy: "codex-cli",
-      }),
-    );
+    expect(writeCodexCliCredentialsMock).not.toHaveBeenCalled();
 
     const persisted = await readPersistedStore(agentDir);
-    expect(persisted.profiles[profileId]).toBeUndefined();
+    expect(persisted.profiles[profileId]).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "rotated-cli-access-token",
+      refresh: "rotated-cli-refresh-token",
+      accountId: "acct-rotated",
+      managedBy: "codex-cli",
+    });
+    expect(persisted.profiles[profileId]).not.toEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        access: "expired-access-token",
+      }),
+    );
   });
 
   it("keeps throwing for non-codex providers on the same refresh error", async () => {
