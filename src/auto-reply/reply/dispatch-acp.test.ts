@@ -241,11 +241,29 @@ describe("tryDispatchAcpReply", () => {
       maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
       resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
     }));
+    vi.doMock("../../tts/tts.runtime.js", () => ({
+      maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+    }));
+    vi.doMock("../../tts/status-config.js", () => ({
+      resolveStatusTtsSnapshot: () => ({
+        autoMode: "always",
+        provider: "auto",
+        maxLength: 1500,
+        summarize: true,
+      }),
+    }));
+    vi.doMock("./dispatch-acp-tts.runtime.js", () => ({
+      maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+    }));
     vi.doMock("../../media-understanding/apply.js", () => ({
       applyMediaUnderstanding: (params: unknown) =>
         mediaUnderstandingMocks.applyMediaUnderstanding(params),
     }));
     vi.doMock("../../acp/runtime/session-meta.js", () => ({
+      readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+        sessionMetaMocks.readAcpSessionEntry(params),
+    }));
+    vi.doMock("./dispatch-acp-session.runtime.js", () => ({
       readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
         sessionMetaMocks.readAcpSessionEntry(params),
     }));
@@ -403,6 +421,17 @@ describe("tryDispatchAcpReply", () => {
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("skips media understanding for text-only ACP turns", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("text only");
+
+    await runDispatch({
+      bodyForAgent: "plain text prompt",
+    });
+
+    expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
   });
 
   it("forwards normalized image attachments into ACP turns", async () => {

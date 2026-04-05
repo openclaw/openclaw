@@ -1,4 +1,3 @@
-import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { formatAcpRuntimeErrorText } from "../../acp/runtime/error-text.js";
@@ -8,26 +7,15 @@ import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
-import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
-import { MediaAttachmentCache } from "../../media-understanding/attachments.js";
-import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
-import { isMediaUnderstandingSkipError } from "../../media-understanding/errors.js";
-import { resolveMediaAttachmentLocalRoots } from "../../media-understanding/runner.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { maybeApplyTtsToPayload, resolveTtsConfig } from "../../tts/tts.js";
-import {
-  isCommandEnabled,
-  maybeResolveTextAlias,
-  shouldHandleTextCommands,
-} from "../commands-registry.js";
+import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
+import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
@@ -35,6 +23,38 @@ import {
   type AcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+
+let dispatchAcpMediaRuntimePromise: Promise<
+  typeof import("./dispatch-acp-media.runtime.js")
+> | null = null;
+let dispatchAcpManagerRuntimePromise: Promise<
+  typeof import("./dispatch-acp-manager.runtime.js")
+> | null = null;
+let dispatchAcpSessionRuntimePromise: Promise<
+  typeof import("./dispatch-acp-session.runtime.js")
+> | null = null;
+let dispatchAcpTtsRuntimePromise: Promise<typeof import("./dispatch-acp-tts.runtime.js")> | null =
+  null;
+
+function loadDispatchAcpMediaRuntime() {
+  dispatchAcpMediaRuntimePromise ??= import("./dispatch-acp-media.runtime.js");
+  return dispatchAcpMediaRuntimePromise;
+}
+
+function loadDispatchAcpManagerRuntime() {
+  dispatchAcpManagerRuntimePromise ??= import("./dispatch-acp-manager.runtime.js");
+  return dispatchAcpManagerRuntimePromise;
+}
+
+function loadDispatchAcpSessionRuntime() {
+  dispatchAcpSessionRuntimePromise ??= import("./dispatch-acp-session.runtime.js");
+  return dispatchAcpSessionRuntimePromise;
+}
+
+function loadDispatchAcpTtsRuntime() {
+  dispatchAcpTtsRuntimePromise ??= import("./dispatch-acp-tts.runtime.js");
+  return dispatchAcpTtsRuntimePromise;
+}
 
 type DispatchProcessedRecorder = (
   outcome: "completed" | "skipped" | "error",
@@ -67,6 +87,18 @@ function resolveAcpPromptText(ctx: FinalizedMsgContext): string {
   ]).trim();
 }
 
+function hasInboundMediaForAcp(ctx: FinalizedMsgContext): boolean {
+  return Boolean(
+    ctx.StickerMediaIncluded ||
+    ctx.Sticker ||
+    ctx.MediaPath?.trim() ||
+    ctx.MediaUrl?.trim() ||
+    ctx.MediaPaths?.some((value) => value?.trim()) ||
+    ctx.MediaUrls?.some((value) => value?.trim()) ||
+    ctx.MediaTypes?.length,
+  );
+}
+
 const ACP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const ACP_ATTACHMENT_TIMEOUT_MS = 1_000;
 
@@ -74,6 +106,12 @@ async function resolveAcpAttachments(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
 ): Promise<AcpTurnAttachment[]> {
+  const {
+    MediaAttachmentCache,
+    isMediaUnderstandingSkipError,
+    normalizeAttachments,
+    resolveMediaAttachmentLocalRoots,
+  } = await loadDispatchAcpMediaRuntime();
   const mediaAttachments = normalizeAttachments(ctx).map((attachment) =>
     attachment.path?.trim() ? { ...attachment, url: undefined } : attachment,
   );
@@ -114,43 +152,6 @@ async function resolveAcpAttachments(
   return results;
 }
 
-function resolveCommandCandidateText(ctx: FinalizedMsgContext): string {
-  return resolveFirstContextText(ctx, ["CommandBody", "BodyForCommands", "RawBody", "Body"]).trim();
-}
-
-export function shouldBypassAcpDispatchForCommand(
-  ctx: FinalizedMsgContext,
-  cfg: OpenClawConfig,
-): boolean {
-  const candidate = resolveCommandCandidateText(ctx);
-  if (!candidate) {
-    return false;
-  }
-  const allowTextCommands = shouldHandleTextCommands({
-    cfg,
-    surface: ctx.Surface ?? ctx.Provider ?? "",
-    commandSource: ctx.CommandSource,
-  });
-  if (maybeResolveTextAlias(candidate, cfg) != null) {
-    return allowTextCommands;
-  }
-
-  const normalized = candidate.trim();
-  if (!normalized.startsWith("!")) {
-    return false;
-  }
-
-  if (!ctx.CommandAuthorized) {
-    return false;
-  }
-
-  if (!isCommandEnabled(cfg, "bash")) {
-    return false;
-  }
-
-  return allowTextCommands;
-}
-
 function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
   const id = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   if (typeof id === "string" && id.trim()) {
@@ -162,12 +163,12 @@ function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
   return generateSecureUuid();
 }
 
-function hasBoundConversationForSession(params: {
+async function hasBoundConversationForSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   channelRaw: string | undefined;
   accountIdRaw: string | undefined;
-}): boolean {
+}): Promise<boolean> {
   const channel = String(params.channelRaw ?? "")
     .trim()
     .toLowerCase();
@@ -184,6 +185,7 @@ function hasBoundConversationForSession(params: {
     (typeof configuredDefaultAccountId === "string" && configuredDefaultAccountId.trim()
       ? configuredDefaultAccountId.trim().toLowerCase()
       : "default");
+  const { getSessionBindingService } = await loadDispatchAcpManagerRuntime();
   const bindingService = getSessionBindingService();
   const bindings = bindingService.listBySession(params.sessionKey);
   return bindings.some((binding) => {
@@ -248,6 +250,7 @@ async function maybeUnbindStaleBoundConversations(params: {
     return;
   }
   try {
+    const { getSessionBindingService } = await loadDispatchAcpManagerRuntime();
     const removed = await getSessionBindingService().unbind({
       targetSessionKey: params.targetSessionKey,
       reason: ACP_STALE_BINDING_UNBIND_REASON,
@@ -276,13 +279,20 @@ async function finalizeAcpTurnOutput(params: {
   await params.delivery.settleVisibleText();
   let queuedFinal =
     params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
-  const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
+  const ttsMode = resolveConfiguredTtsMode(params.cfg);
   const accumulatedBlockText = params.delivery.getAccumulatedBlockText();
   const hasAccumulatedBlockText = accumulatedBlockText.trim().length > 0;
+  const ttsStatus = resolveStatusTtsSnapshot({
+    cfg: params.cfg,
+    sessionAuto: params.sessionTtsAuto,
+  });
+  const canAttemptFinalTts =
+    ttsStatus != null && !(ttsStatus.autoMode === "inbound" && !params.inboundAudio);
 
   let finalMediaDelivered = false;
-  if (ttsMode === "final" && hasAccumulatedBlockText) {
+  if (ttsMode === "final" && hasAccumulatedBlockText && canAttemptFinalTts) {
     try {
+      const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
       const ttsSyntheticReply = await maybeApplyTtsToPayload({
         payload: { text: accumulatedBlockText },
         cfg: params.cfg,
@@ -324,6 +334,7 @@ async function finalizeAcpTurnOutput(params: {
   }
 
   if (params.shouldEmitResolvedIdentityNotice) {
+    const { readAcpSessionEntry } = await loadDispatchAcpSessionRuntime();
     const currentMeta = readAcpSessionEntry({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
@@ -371,6 +382,7 @@ export async function tryDispatchAcpReply(params: {
     return null;
   }
 
+  const { getAcpSessionManager } = await loadDispatchAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
   const acpResolution = acpManager.resolveSession({
     cfg: params.cfg,
@@ -403,12 +415,12 @@ export async function tryDispatchAcpReply(params: {
     !params.suppressUserDelivery &&
     identityPendingBeforeTurn &&
     (Boolean(params.ctx.MessageThreadId != null && String(params.ctx.MessageThreadId).trim()) ||
-      hasBoundConversationForSession({
+      (await hasBoundConversationForSession({
         cfg: params.cfg,
         sessionKey: canonicalSessionKey,
         channelRaw: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
         accountIdRaw: params.ctx.AccountId,
-      }));
+      })));
 
   const resolvedAcpAgent =
     acpResolution.kind === "ready"
@@ -462,8 +474,9 @@ export async function tryDispatchAcpReply(params: {
     if (agentPolicyError) {
       throw agentPolicyError;
     }
-    if (!params.ctx.MediaUnderstanding?.length) {
+    if (hasInboundMediaForAcp(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
       try {
+        const { applyMediaUnderstanding } = await loadDispatchAcpMediaRuntime();
         await applyMediaUnderstanding({
           ctx: params.ctx,
           cfg: params.cfg,
