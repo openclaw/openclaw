@@ -3,6 +3,7 @@ import type { Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
+import { MOONSHOT_MODEL_CATALOG } from "./provider-catalog.js";
 
 describe("moonshot provider plugin", () => {
   it("owns replay policy for OpenAI-compatible Moonshot transports", async () => {
@@ -57,5 +58,17 @@ describe("moonshot provider plugin", () => {
       config: { thinkingConfig: { thinkingBudget: -1 } },
       thinking: { type: "disabled" },
     });
+  });
+
+  it("augments catalog with moonshot models", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const entries = await provider.augmentModelCatalog?.({} as never);
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        provider: "moonshot",
+        id: MOONSHOT_MODEL_CATALOG[0].id,
+        name: MOONSHOT_MODEL_CATALOG[0].name,
+      }),
+    );
   });
 });
