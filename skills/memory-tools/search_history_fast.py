@@ -70,12 +70,23 @@ def embed_google(text, key):
 
 
 def embed_ollama(text):
-    url = f"{OLLAMA_HOST}/api/embeddings"
-    payload = json.dumps({"model": "nomic-embed-text", "prompt": text[:4000]}).encode()
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        d = json.loads(r.read())
-    return d["embedding"]
+    """Embed via Ollama. Uses /api/embed (batch API, Ollama 0.5+) with /api/embeddings fallback."""
+    # Try modern batch endpoint first (consistent with build_vector_index.py)
+    try:
+        url = f"{OLLAMA_HOST}/api/embed"
+        payload = json.dumps({"model": "nomic-embed-text", "input": text[:4000]}).encode()
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            d = json.loads(r.read())
+        return d["embeddings"][0]
+    except Exception:
+        # Fallback to legacy single-embedding endpoint
+        url = f"{OLLAMA_HOST}/api/embeddings"
+        payload = json.dumps({"model": "nomic-embed-text", "prompt": text[:4000]}).encode()
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            d = json.loads(r.read())
+        return d["embedding"]
 
 
 def embed_query(query: str) -> np.ndarray | None:
@@ -291,9 +302,10 @@ def lexical_candidates(conn: sqlite3.Connection, query: str, limit: int = LEXICA
             "SELECT rowid, bm25(chunks_fts) AS b FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY b LIMIT ?",
             (match_expr, limit),
         ).fetchall()
-        # bm25() is lower=better; convert to monotonic positive score.
+        # bm25() returns NEGATIVE values (more negative = better match).
+        # Use abs() to get positive magnitude, then convert to 0..1 score.
         for rank, (cid, b) in enumerate(rows, 1):
-            base = 1.0 / (1.0 + max(float(b), 0.0))
+            base = 1.0 / (1.0 + abs(float(b)))
             rr = 1.0 / (rank + 10)
             scores[int(cid)] = base + rr
     except Exception:
@@ -315,6 +327,8 @@ def candidate_row_indices(chunk_ids_sorted: np.ndarray, wanted_chunk_ids: Iterab
     if wanted.size == 0:
         return np.empty((0,), dtype=np.int64)
     pos = np.searchsorted(chunk_ids_sorted, wanted)
+    # Clamp positions to valid range before indexing to avoid out-of-bounds
+    pos = np.minimum(pos, len(chunk_ids_sorted) - 1) if len(chunk_ids_sorted) > 0 else pos
     ok = (pos < len(chunk_ids_sorted)) & (chunk_ids_sorted[pos] == wanted)
     return pos[ok]
 
@@ -435,7 +449,7 @@ def hybrid_search(query: str, top_k: int):
         v = vec_scores.get(cid, 0.0)
         l = lex_scores.get(cid, 0.0)
         # Hybrid blending. Vector dominates, lexical nudges relevance.
-        score = 0.78 * v + 0.22 * l
+        score = 0.65 * v + 0.35 * l
         combined.append((cid, score, v, l))
 
     combined.sort(key=lambda x: x[1], reverse=True)

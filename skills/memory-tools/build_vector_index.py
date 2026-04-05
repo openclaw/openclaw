@@ -53,9 +53,19 @@ def ollama_available() -> bool:
         return False
 
 def get_embedding(texts: list[str]) -> list[list[float]]:
-    """Get embeddings. Primary: Google gemini-embedding-2-preview. Fallback: Ollama."""
+    """Get embeddings. Primary: Google gemini-embedding-2-preview. Fallback: Ollama.
+
+    If Google is available but the request fails (quota, network), falls back to Ollama
+    rather than silently dropping the batch.
+    """
     if _google_available():
-        return _google_embed(texts)
+        try:
+            return _google_embed(texts)
+        except Exception as exc:
+            print(f"WARNING: Google embedding failed ({exc}), trying Ollama fallback", file=sys.stderr)
+            if ollama_available():
+                return _ollama_embed(texts)
+            raise RuntimeError(f"Google failed ({exc}) and Ollama unreachable") from exc
     elif ollama_available():
         return _ollama_embed(texts)
     else:
