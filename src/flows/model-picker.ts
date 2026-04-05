@@ -652,17 +652,7 @@ export function applyModelFallbacksFromSelection(
   selection: string[],
 ): OpenClawConfig {
   const normalized = normalizeModelKeys(selection);
-  if (normalized.length <= 1) {
-    return cfg;
-  }
-
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const resolvedKey = modelKey(resolved.provider, resolved.model);
-  if (!normalized.includes(resolvedKey)) {
+  if (normalized.length === 0) {
     return cfg;
   }
 
@@ -674,6 +664,35 @@ export function applyModelFallbacksFromSelection(
       : existingModel && typeof existingModel === "object"
         ? existingModel.primary
         : undefined;
+
+  // When there's nothing to fall back to, explicitly clear fallbacks
+  // so that stale fallback configurations from prior setup are removed.
+  if (normalized.length === 1) {
+    return {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...defaults,
+          model: {
+            ...(typeof existingModel === "object" ? existingModel : undefined),
+            primary: existingPrimary ?? normalized[0],
+            fallbacks: [],
+          },
+        },
+      },
+    };
+  }
+
+  const resolved = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const resolvedKey = modelKey(resolved.provider, resolved.model);
+  if (!normalized.includes(resolvedKey)) {
+    return cfg;
+  }
 
   const fallbacks = normalized.filter((key) => key !== resolvedKey);
   return {

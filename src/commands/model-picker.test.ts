@@ -418,7 +418,7 @@ describe("applyModelFallbacksFromSelection", () => {
     });
   });
 
-  it("keeps existing fallbacks when the primary is not selected", () => {
+  it("clears fallbacks when only one model is selected", () => {
     const config = {
       agents: {
         defaults: {
@@ -430,7 +430,7 @@ describe("applyModelFallbacksFromSelection", () => {
     const next = applyModelFallbacksFromSelection(config, ["openai/gpt-5.4"]);
     expect(next.agents?.defaults?.model).toEqual({
       primary: "anthropic/claude-opus-4-6",
-      fallbacks: ["openai/gpt-5.4"],
+      fallbacks: [],
     });
   });
 });
