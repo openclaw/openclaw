@@ -1,14 +1,15 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 
-type TestPluginApiInput = Omit<
-  Partial<OpenClawPluginApi>,
-  "id" | "name" | "source" | "config" | "runtime"
-> &
-  Pick<OpenClawPluginApi, "id" | "name" | "source" | "config" | "runtime">;
+type TestPluginApiInput = Partial<OpenClawPluginApi>;
 
-export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi {
+export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPluginApi {
   return {
+    id: "test-plugin",
+    name: "test-plugin",
+    source: "test",
     registrationMode: "full",
+    config: {},
+    runtime: {} as OpenClawPluginApi["runtime"],
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     registerTool() {},
     registerHook() {},
