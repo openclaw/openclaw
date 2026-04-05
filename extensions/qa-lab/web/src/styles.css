@@ -1,0 +1,387 @@
+:root {
+  color-scheme: dark;
+  --bg: #0b0f14;
+  --bg-alt: #11161d;
+  --panel: rgba(17, 22, 29, 0.92);
+  --panel-strong: rgba(22, 29, 38, 0.98);
+  --line: rgba(145, 170, 197, 0.16);
+  --text: #eff4fb;
+  --muted: #8c98a8;
+  --accent: #65d6bf;
+  --accent-2: #ff9b57;
+  --danger: #ff7b88;
+  --shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+  --radius: 20px;
+  font-family:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(101, 214, 191, 0.14), transparent 30%),
+    radial-gradient(circle at top right, rgba(255, 155, 87, 0.12), transparent 28%),
+    linear-gradient(180deg, #0a0f14, #0c1218 58%, #0a0f14);
+  color: var(--text);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+input,
+select,
+textarea {
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text);
+}
+
+button {
+  cursor: pointer;
+  padding: 0.7rem 1rem;
+}
+
+button.accent {
+  background: linear-gradient(135deg, var(--accent), #7bdad0);
+  border-color: transparent;
+  color: #04130f;
+  font-weight: 700;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 0.75rem 0.85rem;
+}
+
+textarea {
+  resize: vertical;
+}
+
+.shell {
+  padding: 1.2rem;
+}
+
+.dashboard {
+  min-height: 100vh;
+}
+
+.split-dashboard {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.05fr) minmax(680px, 1fr);
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.qa-column {
+  min-width: 0;
+}
+
+.topbar,
+.statusbar,
+.workspace {
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: end;
+  margin-bottom: 0.8rem;
+}
+
+.topbar h1,
+.panel h2 {
+  margin: 0;
+}
+
+.eyebrow {
+  margin: 0 0 0.25rem;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+}
+
+.subtle {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+}
+
+.toolbar {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.statusbar {
+  display: flex;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.pill {
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.pill.success {
+  color: var(--accent);
+}
+
+.pill.error {
+  color: var(--danger);
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) 360px;
+  gap: 1rem;
+}
+
+.rail,
+.center,
+.right {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-height: 0;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1rem;
+  min-height: 0;
+}
+
+.control-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 2rem);
+  position: sticky;
+  top: 1rem;
+}
+
+.control-frame {
+  flex: 1;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #0b0f14;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.7rem 1rem;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  color: var(--text);
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+  align-items: center;
+  margin-bottom: 0.7rem;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.list-item {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  gap: 0.15rem;
+  text-align: left;
+}
+
+.list-item.selected {
+  background: rgba(101, 214, 191, 0.12);
+  border-color: rgba(101, 214, 191, 0.4);
+}
+
+.list-item span,
+.message footer,
+.event-row span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.transcript,
+.events {
+  flex: 1;
+}
+
+.messages,
+.report {
+  min-height: 0;
+  max-height: 46vh;
+  overflow: auto;
+}
+
+.scenario-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  max-height: 28vh;
+  overflow: auto;
+}
+
+.scenario-card {
+  padding: 0.8rem;
+  border-radius: 16px;
+  background: var(--panel-strong);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.scenario-card header,
+.scenario-card footer {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.scenario-card p {
+  margin: 0.55rem 0 0;
+  color: var(--muted);
+}
+
+.message {
+  padding: 0.9rem;
+  border-radius: 16px;
+  margin-bottom: 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: var(--panel-strong);
+}
+
+.message.inbound {
+  border-left: 3px solid var(--accent-2);
+}
+
+.message.outbound {
+  border-left: 3px solid var(--accent);
+}
+
+.message header,
+.message footer,
+.event-row {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.message p {
+  margin: 0.65rem 0;
+  white-space: pre-wrap;
+}
+
+.composer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+label span {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.textarea-label {
+  display: block;
+  margin-top: 0.85rem;
+}
+
+@media (max-width: 1280px) {
+  .split-dashboard {
+    grid-template-columns: 1fr;
+  }
+
+  .control-pane {
+    min-height: 70vh;
+    position: static;
+  }
+}
+
+.lower {
+  margin-top: 0.85rem;
+}
+
+.report {
+  margin: 0;
+  padding: 0.8rem;
+  border-radius: 16px;
+  background: rgba(7, 10, 14, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.event-row {
+  padding: 0.75rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.event-row code {
+  display: block;
+  width: 100%;
+  color: #c7d2e3;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.empty {
+  color: var(--muted);
+}
+
+@media (max-width: 1180px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .messages,
+  .report {
+    max-height: none;
+  }
+}

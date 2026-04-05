@@ -13,6 +13,10 @@ channels, tools, providers, or other capabilities. They are built and maintained
 by the community, published on [ClawHub](/tools/clawhub) or npm, and
 installable with a single command.
 
+ClawHub is the canonical discovery surface for community plugins. Do not open
+docs-only PRs just to add your plugin here for discoverability; publish it on
+ClawHub instead.
+
 ```bash
 openclaw plugins install <package-name>
 ```
@@ -116,14 +120,13 @@ We welcome community plugins that are useful, documented, and safe to operate.
 
   </Step>
 
-  <Step title="Open a PR">
-    Add your plugin to this page with:
+  <Step title="Use docs PRs only for source-doc changes">
+    You do not need a docs PR just to make your plugin discoverable. Publish it
+    on ClawHub instead.
 
-    - Plugin name
-    - npm package name
-    - GitHub repository URL
-    - One-line description
-    - Install command
+    Open a docs PR only when OpenClaw's source docs need an actual content
+    change, such as correcting install guidance or adding cross-repo
+    documentation that belongs in the main docs set.
 
   </Step>
 </Steps>

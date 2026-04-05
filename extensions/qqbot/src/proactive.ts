@@ -58,7 +58,7 @@ import {
   sendC2CImageMessage,
   sendGroupImageMessage,
 } from "./api.js";
-import { resolveQQBotAccount } from "./config.js";
+import { resolveDefaultQQBotAccountId, resolveQQBotAccount } from "./config.js";
 
 /** Look up a known user entry (adapter for the old proactive API shape). */
 export function getKnownUser(
@@ -98,7 +98,13 @@ export async function sendProactive(
   options: ProactiveSendOptions,
   cfg: OpenClawConfig,
 ): Promise<ProactiveSendResult> {
-  const { to, text, type = "c2c", imageUrl, accountId = "default" } = options;
+  const {
+    to,
+    text,
+    type = "c2c",
+    imageUrl,
+    accountId = resolveDefaultQQBotAccountId(cfg),
+  } = options;
 
   const account = resolveQQBotAccount(cfg, accountId);
 
@@ -174,7 +180,7 @@ export async function sendBulkProactiveMessage(
   text: string,
   type: "c2c" | "group",
   cfg: OpenClawConfig,
-  accountId = "default",
+  accountId = resolveDefaultQQBotAccountId(cfg),
 ): Promise<Array<{ to: string; result: ProactiveSendResult }>> {
   const results: Array<{ to: string; result: ProactiveSendResult }> = [];
 

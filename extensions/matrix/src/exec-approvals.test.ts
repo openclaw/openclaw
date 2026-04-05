@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   getMatrixExecApprovalApprovers,
   isMatrixExecApprovalApprover,
@@ -11,6 +14,20 @@ import {
   shouldHandleMatrixExecApprovalRequest,
   shouldSuppressLocalMatrixExecApprovalPrompt,
 } from "./exec-approvals.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function createTempDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-exec-approvals-"));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function buildConfig(
   execApprovals?: NonNullable<NonNullable<OpenClawConfig["channels"]>["matrix"]>["execApprovals"],
@@ -30,13 +47,13 @@ function buildConfig(
 }
 
 describe("matrix exec approvals", () => {
-  it("requires enablement and an explicit or inferred approver", () => {
+  it("auto-enables when approvers resolve and disables only when forced off", () => {
     expect(isMatrixExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(
       isMatrixExecApprovalClientEnabled({
         cfg: buildConfig(undefined, { dm: { allowFrom: ["@owner:example.org"] } }),
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(isMatrixExecApprovalClientEnabled({ cfg: buildConfig({ enabled: true }) })).toBe(false);
     expect(
       isMatrixExecApprovalClientEnabled({
@@ -246,6 +263,309 @@ describe("matrix exec approvals", () => {
           createdAtMs: 0,
           expiresAtMs: 1000,
         },
+      }),
+    ).toBe(false);
+  });
+
+  it("scopes non-matrix turn sources to the stored matrix account", () => {
+    const tmpDir = createTempDir();
+    const storePath = path.join(tmpDir, "sessions.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:ops-agent:matrix:channel:!room:example.org": {
+          sessionId: "main",
+          updatedAt: 1,
+          origin: {
+            provider: "matrix",
+            accountId: "ops",
+          },
+          lastChannel: "slack",
+          lastTo: "channel:C999",
+          lastAccountId: "work",
+        },
+      }),
+      "utf-8",
+    );
+    const cfg = {
+      session: { store: storePath },
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-default:example.org",
+              accessToken: "tok-default",
+              execApprovals: {
+                enabled: true,
+                approvers: ["@owner:example.org"],
+              },
+            },
+            ops: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-ops:example.org",
+              accessToken: "tok-ops",
+              execApprovals: {
+                enabled: true,
+                approvers: ["@owner:example.org"],
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-3",
+      request: {
+        command: "echo hi",
+        agentId: "ops-agent",
+        sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects unbound foreign-channel approvals in multi-account matrix configs", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-default:example.org",
+              accessToken: "tok-default",
+              execApprovals: {
+                enabled: true,
+                approvers: ["@owner:example.org"],
+              },
+            },
+            ops: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-ops:example.org",
+              accessToken: "tok-ops",
+              execApprovals: {
+                enabled: true,
+                approvers: ["@owner:example.org"],
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-4",
+      request: {
+        command: "echo hi",
+        agentId: "ops-agent",
+        sessionKey: "agent:ops-agent:missing",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows unbound foreign-channel approvals when only one matrix account can handle them", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-default:example.org",
+              accessToken: "tok-default",
+              execApprovals: {
+                enabled: true,
+                approvers: ["@owner:example.org"],
+              },
+            },
+            ops: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-ops:example.org",
+              accessToken: "tok-ops",
+              execApprovals: {
+                enabled: false,
+                approvers: ["@owner:example.org"],
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-5",
+      request: {
+        command: "echo hi",
+        agentId: "ops-agent",
+        sessionKey: "agent:ops-agent:missing",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
+  });
+
+  it("uses request filters when checking foreign-channel matrix ambiguity", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-default:example.org",
+              accessToken: "tok-default",
+              execApprovals: {
+                enabled: true,
+                approvers: ["@owner:example.org"],
+                agentFilter: ["ops-agent"],
+              },
+            },
+            ops: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-ops:example.org",
+              accessToken: "tok-ops",
+              execApprovals: {
+                enabled: true,
+                approvers: ["@owner:example.org"],
+                agentFilter: ["other-agent"],
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-6",
+      request: {
+        command: "echo hi",
+        agentId: "ops-agent",
+        sessionKey: "agent:ops-agent:missing",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores disabled matrix accounts when checking foreign-channel ambiguity", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-default:example.org",
+              accessToken: "tok-default",
+              execApprovals: {
+                enabled: true,
+                approvers: ["@owner:example.org"],
+              },
+            },
+            ops: {
+              enabled: false,
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-ops:example.org",
+              accessToken: "tok-ops",
+              execApprovals: {
+                enabled: true,
+                approvers: ["@owner:example.org"],
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-7",
+      request: {
+        command: "echo hi",
+        agentId: "ops-agent",
+        sessionKey: "agent:ops-agent:missing",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
       }),
     ).toBe(false);
   });

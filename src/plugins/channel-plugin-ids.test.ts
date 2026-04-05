@@ -23,7 +23,6 @@ function createManifestRegistryFixture() {
         origin: "bundled",
         enabledByDefault: undefined,
         providers: [],
-        cliBackends: [],
       },
       {
         id: "demo-other-channel",
@@ -31,7 +30,6 @@ function createManifestRegistryFixture() {
         origin: "bundled",
         enabledByDefault: undefined,
         providers: [],
-        cliBackends: [],
       },
       {
         id: "browser",
@@ -39,7 +37,6 @@ function createManifestRegistryFixture() {
         origin: "bundled",
         enabledByDefault: true,
         providers: [],
-        cliBackends: [],
       },
       {
         id: "demo-provider-plugin",
@@ -47,7 +44,6 @@ function createManifestRegistryFixture() {
         origin: "bundled",
         enabledByDefault: undefined,
         providers: ["demo-provider"],
-        cliBackends: ["demo-cli"],
       },
       {
         id: "voice-call",
@@ -55,7 +51,6 @@ function createManifestRegistryFixture() {
         origin: "bundled",
         enabledByDefault: undefined,
         providers: [],
-        cliBackends: [],
       },
       {
         id: "demo-global-sidecar",
@@ -63,29 +58,36 @@ function createManifestRegistryFixture() {
         origin: "global",
         enabledByDefault: undefined,
         providers: [],
-        cliBackends: [],
       },
     ],
     diagnostics: [],
   };
 }
 
-function expectStartupPluginIds(config: OpenClawConfig, expected: readonly string[]) {
+function expectStartupPluginIds(params: {
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  expected: readonly string[];
+}) {
   expect(
     resolveGatewayStartupPluginIds({
-      config,
+      config: params.config,
+      ...(params.activationSourceConfig !== undefined
+        ? { activationSourceConfig: params.activationSourceConfig }
+        : {}),
       workspaceDir: "/tmp",
       env: process.env,
     }),
-  ).toEqual(expected);
+  ).toEqual(params.expected);
   expect(loadPluginManifestRegistry).toHaveBeenCalled();
 }
 
 function expectStartupPluginIdsCase(params: {
   config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   expected: readonly string[];
 }) {
-  expectStartupPluginIds(params.config, params.expected);
+  expectStartupPluginIds(params);
 }
 
 function createStartupConfig(params: {
@@ -210,5 +212,28 @@ describe("resolveGatewayStartupPluginIds", () => {
     ],
   ] as const)("%s", (_name, config, expected) => {
     expectStartupPluginIdsCase({ config, expected });
+  });
+
+  it("keeps effective-only bundled sidecars behind restrictive allowlists", () => {
+    const rawConfig = createStartupConfig({
+      allowPluginIds: ["browser"],
+    });
+    const effectiveConfig = {
+      ...rawConfig,
+      plugins: {
+        allow: ["browser"],
+        entries: {
+          "voice-call": {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: effectiveConfig,
+      activationSourceConfig: rawConfig,
+      expected: ["demo-channel", "browser"],
+    });
   });
 });

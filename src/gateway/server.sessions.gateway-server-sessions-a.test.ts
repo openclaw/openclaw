@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { withSessionStoreLockForTest } from "../config/sessions/store.js";
@@ -11,7 +10,6 @@ import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-h
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { performGatewaySessionReset } from "./session-reset-service.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   connectOk,
@@ -46,12 +44,22 @@ const beforeResetHookMocks = vi.hoisted(() => ({
   runBeforeReset: vi.fn(async () => {}),
 }));
 
+const sessionLifecycleHookMocks = vi.hoisted(() => ({
+  runSessionEnd: vi.fn(async () => {}),
+  runSessionStart: vi.fn(async () => {}),
+}));
+
 const subagentLifecycleHookMocks = vi.hoisted(() => ({
   runSubagentEnded: vi.fn(async () => {}),
 }));
 
 const beforeResetHookState = vi.hoisted(() => ({
   hasBeforeResetHook: false,
+}));
+
+const sessionLifecycleHookState = vi.hoisted(() => ({
+  hasSessionEndHook: true,
+  hasSessionStartHook: true,
 }));
 
 const subagentLifecycleHookState = vi.hoisted(() => ({
@@ -95,8 +103,10 @@ vi.mock("../auto-reply/reply/abort.js", async () => {
   };
 });
 
-vi.mock("../agents/bootstrap-cache.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/bootstrap-cache.js")>();
+vi.mock("../agents/bootstrap-cache.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/bootstrap-cache.js")>(
+    "../agents/bootstrap-cache.js",
+  );
   return {
     ...actual,
     clearBootstrapSnapshot: bootstrapCacheMocks.clearBootstrapSnapshot,
@@ -114,40 +124,44 @@ vi.mock("../hooks/internal-hooks.js", async () => {
   };
 });
 
-vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/hook-runner-global.js")>();
+vi.mock("../plugins/hook-runner-global.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
+    "../plugins/hook-runner-global.js",
+  );
   return {
     ...actual,
     getGlobalHookRunner: vi.fn(() => ({
       hasHooks: (hookName: string) =>
         (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
-        (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook),
+        (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook) ||
+        (hookName === "session_end" && sessionLifecycleHookState.hasSessionEndHook) ||
+        (hookName === "session_start" && sessionLifecycleHookState.hasSessionStartHook),
       runBeforeReset: beforeResetHookMocks.runBeforeReset,
+      runSessionEnd: sessionLifecycleHookMocks.runSessionEnd,
+      runSessionStart: sessionLifecycleHookMocks.runSessionStart,
       runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
     })),
   };
 });
 
-vi.mock("../plugins/runtime/runtime-discord.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/runtime/runtime-discord.js")>();
+vi.mock("../infra/outbound/session-binding-service.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../infra/outbound/session-binding-service.js")
+  >("../infra/outbound/session-binding-service.js");
   return {
     ...actual,
-    createRuntimeDiscord: () => {
-      const runtime = actual.createRuntimeDiscord();
-      return {
-        ...runtime,
-        threadBindings: {
-          ...runtime.threadBindings,
-          unbindBySessionKey: (params: unknown) =>
-            threadBindingMocks.unbindThreadBindingsBySessionKey(params),
-        },
-      };
-    },
+    getSessionBindingService: () => ({
+      ...actual.getSessionBindingService(),
+      unbind: async (params: unknown) =>
+        threadBindingMocks.unbindThreadBindingsBySessionKey(params),
+    }),
   };
 });
 
-vi.mock("../acp/runtime/registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../acp/runtime/registry.js")>();
+vi.mock("../acp/runtime/registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../acp/runtime/registry.js")>(
+    "../acp/runtime/registry.js",
+  );
   return {
     ...actual,
     getAcpRuntimeBackend: acpRuntimeMocks.getAcpRuntimeBackend,
@@ -278,6 +292,10 @@ describe("gateway server sessions", () => {
     sessionHookMocks.triggerInternalHook.mockClear();
     beforeResetHookMocks.runBeforeReset.mockClear();
     beforeResetHookState.hasBeforeResetHook = false;
+    sessionLifecycleHookMocks.runSessionEnd.mockClear();
+    sessionLifecycleHookMocks.runSessionStart.mockClear();
+    sessionLifecycleHookState.hasSessionEndHook = true;
+    sessionLifecycleHookState.hasSessionStartHook = true;
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
     threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
@@ -569,7 +587,7 @@ describe("gateway server sessions", () => {
           sessionId: "sess-child",
           updatedAt: Date.now() - 1_000,
           modelProvider: "anthropic",
-          model: "claude-sonnet-4-5",
+          model: "claude-sonnet-4-6",
           parentSessionKey: "agent:main:main",
           totalTokens: 0,
           totalTokensFresh: false,
@@ -952,7 +970,7 @@ describe("gateway server sessions", () => {
     expect(list1.ok).toBe(true);
     expect(list1.payload?.path).toBe(storePath);
     expect(list1.payload?.sessions.some((s) => s.key === "global")).toBe(false);
-    expect(list1.payload?.defaults?.modelProvider).toBe(DEFAULT_PROVIDER);
+    expect(list1.payload?.defaults?.modelProvider).toBe("anthropic");
     const main = list1.payload?.sessions.find((s) => s.key === "agent:main:main");
     expect(main?.totalTokens).toBeUndefined();
     expect(main?.totalTokensFresh).toBe(false);
@@ -1322,17 +1340,6 @@ describe("gateway server sessions", () => {
           execAsk: "on-miss",
           execNode: "mac-mini",
           displayName: "Ops Child",
-          cliSessionIds: {
-            "claude-cli": "cli-session-123",
-          },
-          cliSessionBindings: {
-            "claude-cli": {
-              sessionId: "cli-session-123",
-              authProfileId: "anthropic:work",
-              extraSystemPromptHash: "prompt-hash",
-            },
-          },
-          claudeCliSessionId: "cli-session-123",
           deliveryContext: {
             channel: "discord",
             to: "discord:child",
@@ -1382,17 +1389,6 @@ describe("gateway server sessions", () => {
         execAsk?: string;
         execNode?: string;
         displayName?: string;
-        cliSessionBindings?: Record<
-          string,
-          {
-            sessionId?: string;
-            authProfileId?: string;
-            extraSystemPromptHash?: string;
-            mcpConfigHash?: string;
-          }
-        >;
-        cliSessionIds?: Record<string, string>;
-        claudeCliSessionId?: string;
         deliveryContext?: {
           channel?: string;
           to?: string;
@@ -1437,17 +1433,6 @@ describe("gateway server sessions", () => {
     expect(reset.payload?.entry.execAsk).toBe("on-miss");
     expect(reset.payload?.entry.execNode).toBe("mac-mini");
     expect(reset.payload?.entry.displayName).toBe("Ops Child");
-    expect(reset.payload?.entry.cliSessionBindings).toEqual({
-      "claude-cli": {
-        sessionId: "cli-session-123",
-        authProfileId: "anthropic:work",
-        extraSystemPromptHash: "prompt-hash",
-      },
-    });
-    expect(reset.payload?.entry.cliSessionIds).toEqual({
-      "claude-cli": "cli-session-123",
-    });
-    expect(reset.payload?.entry.claudeCliSessionId).toBe("cli-session-123");
     expect(reset.payload?.entry.deliveryContext).toEqual({
       channel: "discord",
       to: "discord:child",
@@ -1492,17 +1477,6 @@ describe("gateway server sessions", () => {
         execAsk?: string;
         execNode?: string;
         displayName?: string;
-        cliSessionBindings?: Record<
-          string,
-          {
-            sessionId?: string;
-            authProfileId?: string;
-            extraSystemPromptHash?: string;
-            mcpConfigHash?: string;
-          }
-        >;
-        cliSessionIds?: Record<string, string>;
-        claudeCliSessionId?: string;
         deliveryContext?: {
           channel?: string;
           to?: string;
@@ -1545,17 +1519,6 @@ describe("gateway server sessions", () => {
     expect(store["agent:main:subagent:child"]?.execAsk).toBe("on-miss");
     expect(store["agent:main:subagent:child"]?.execNode).toBe("mac-mini");
     expect(store["agent:main:subagent:child"]?.displayName).toBe("Ops Child");
-    expect(store["agent:main:subagent:child"]?.cliSessionBindings).toEqual({
-      "claude-cli": {
-        sessionId: "cli-session-123",
-        authProfileId: "anthropic:work",
-        extraSystemPromptHash: "prompt-hash",
-      },
-    });
-    expect(store["agent:main:subagent:child"]?.cliSessionIds).toEqual({
-      "claude-cli": "cli-session-123",
-    });
-    expect(store["agent:main:subagent:child"]?.claudeCliSessionId).toBe("cli-session-123");
     expect(store["agent:main:subagent:child"]?.deliveryContext).toEqual({
       channel: "discord",
       to: "discord:child",
@@ -1844,9 +1807,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:discord:group:dev",
-      targetKind: "acp",
       reason: "session-delete",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -1893,6 +1854,61 @@ describe("gateway server sessions", () => {
       sessionKey: "agent:main:discord:group:dev",
     });
 
+    ws.close();
+  });
+
+  test("sessions.delete emits session_end with deleted reason and no replacement", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    const transcriptPath = path.join(dir, "sess-delete.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "m-delete",
+        message: { role: "user", content: "delete me" },
+      })}\n`,
+      "utf-8",
+    );
+
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        "discord:group:delete": {
+          sessionId: "sess-delete",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "discord:group:delete",
+    });
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+
+    const [event, context] = (
+      sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    expect(event).toMatchObject({
+      sessionId: "sess-delete",
+      sessionKey: "agent:main:discord:group:delete",
+      reason: "deleted",
+      transcriptArchived: true,
+    });
+    expect((event as { sessionFile?: string } | undefined)?.sessionFile).toContain(
+      ".jsonl.deleted.",
+    );
+    expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
+    expect(context).toMatchObject({
+      sessionId: "sess-delete",
+      sessionKey: "agent:main:discord:group:delete",
+      agentId: "main",
+    });
     ws.close();
   });
 
@@ -1949,9 +1965,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:worker",
-      targetKind: "subagent",
       reason: "session-delete",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -1980,9 +1994,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:worker",
-      targetKind: "subagent",
       reason: "session-delete",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2010,9 +2022,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:worker",
-      targetKind: "subagent",
       reason: "session-delete",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2067,9 +2077,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:main",
-      targetKind: "acp",
       reason: "session-reset",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2235,9 +2243,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:worker",
-      targetKind: "subagent",
       reason: "session-reset",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2265,9 +2271,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:main",
-      targetKind: "acp",
       reason: "session-reset",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2361,6 +2365,74 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.reset emits enriched session_end and session_start hooks", async () => {
+    const { dir } = await createSessionStoreDir();
+    const transcriptPath = path.join(dir, "sess-main.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "m1",
+        message: { role: "user", content: "hello from transcript" },
+      })}\n`,
+      "utf-8",
+    );
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+      key: "main",
+      reason: "new",
+    });
+    expect(reset.ok).toBe(true);
+    expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
+
+    const [endEvent, endContext] = (
+      sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+    const [startEvent, startContext] = (
+      sessionLifecycleHookMocks.runSessionStart.mock.calls as unknown as Array<[unknown, unknown]>
+    )[0] ?? [undefined, undefined];
+
+    expect(endEvent).toMatchObject({
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      reason: "new",
+      transcriptArchived: true,
+    });
+    expect((endEvent as { sessionFile?: string } | undefined)?.sessionFile).toContain(
+      ".jsonl.reset.",
+    );
+    expect((endEvent as { nextSessionId?: string } | undefined)?.nextSessionId).toBe(
+      (startEvent as { sessionId?: string } | undefined)?.sessionId,
+    );
+    expect(endContext).toMatchObject({
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    expect(startEvent).toMatchObject({
+      sessionKey: "agent:main:main",
+      resumedFrom: "sess-main",
+    });
+    expect(startContext).toMatchObject({
+      sessionId: (startEvent as { sessionId?: string } | undefined)?.sessionId,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    ws.close();
+  });
+
   test("sessions.reset returns unavailable when active run does not stop", async () => {
     const { dir, storePath } = await seedActiveMainSession();
     const waitCallCountAtSnapshotClear: number[] = [];
@@ -2439,7 +2511,10 @@ describe("gateway server sessions", () => {
       key: "main",
     }).storePath;
 
-    let pendingReset: ReturnType<typeof performGatewaySessionReset> | undefined;
+    let pendingReset:
+      | ReturnType<(typeof import("./session-reset-service.js"))["performGatewaySessionReset"]>
+      | undefined;
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
     await withSessionStoreLockForTest(gatewayStorePath, async () => {
       pendingReset = performGatewaySessionReset({
         key: "main",

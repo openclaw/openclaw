@@ -64,6 +64,17 @@
       - any-glob-to-any-file:
           - "extensions/qqbot/**"
           - "docs/channels/qqbot.md"
+"channel: qa-channel":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qa-channel/**"
+          - "docs/channels/qa-channel.md"
+"extensions: qa-lab":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qa-lab/**"
+          - "docs/concepts/qa-e2e-automation.md"
+          - "docs/channels/qa-channel.md"
 "channel: signal":
   - changed-files:
       - any-glob-to-any-file:
@@ -246,6 +257,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deepseek/**"
+"extensions: stepfun":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/stepfun/**"
 "extensions: anthropic":
   - changed-files:
       - any-glob-to-any-file:

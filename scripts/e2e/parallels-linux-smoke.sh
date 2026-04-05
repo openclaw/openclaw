@@ -634,6 +634,20 @@ setsid sh -lc 'exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw O
 EOF
 )"
   guest_exec bash -lc "$cmd"
+
+  # On the Ubuntu guest the backgrounded process can bind a few seconds after
+  # the launch command returns. Keep the race inside gateway-start instead of
+  # failing the next phase with a false-negative RPC probe.
+  local deadline
+  deadline=$((SECONDS + TIMEOUT_GATEWAY_S))
+  while (( SECONDS < deadline )); do
+    if show_gateway_status_compat >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  return 1
 }
 
 show_gateway_status_compat() {

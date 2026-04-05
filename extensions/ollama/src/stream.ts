@@ -23,9 +23,13 @@ import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
   streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime";
+} from "openclaw/plugin-sdk/provider-stream-shared";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import {
+  parseJsonObjectPreservingUnsafeIntegers,
+  parseJsonPreservingUnsafeIntegers,
+} from "./ollama-json.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
@@ -138,6 +142,7 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
         payloadRecord.options = {};
       }
       (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
+      normalizeOllamaCompatMessageToolArgs(payloadRecord);
     });
 }
 
@@ -321,130 +326,6 @@ interface OllamaToolCall {
   };
 }
 
-const MAX_SAFE_INTEGER_ABS_STR = String(Number.MAX_SAFE_INTEGER);
-
-function isAsciiDigit(ch: string | undefined): boolean {
-  return ch !== undefined && ch >= "0" && ch <= "9";
-}
-
-function parseJsonNumberToken(
-  input: string,
-  start: number,
-): { token: string; end: number; isInteger: boolean } | null {
-  let idx = start;
-  if (input[idx] === "-") {
-    idx += 1;
-  }
-  if (idx >= input.length) {
-    return null;
-  }
-
-  if (input[idx] === "0") {
-    idx += 1;
-  } else if (isAsciiDigit(input[idx]) && input[idx] !== "0") {
-    while (isAsciiDigit(input[idx])) {
-      idx += 1;
-    }
-  } else {
-    return null;
-  }
-
-  let isInteger = true;
-  if (input[idx] === ".") {
-    isInteger = false;
-    idx += 1;
-    if (!isAsciiDigit(input[idx])) {
-      return null;
-    }
-    while (isAsciiDigit(input[idx])) {
-      idx += 1;
-    }
-  }
-
-  if (input[idx] === "e" || input[idx] === "E") {
-    isInteger = false;
-    idx += 1;
-    if (input[idx] === "+" || input[idx] === "-") {
-      idx += 1;
-    }
-    if (!isAsciiDigit(input[idx])) {
-      return null;
-    }
-    while (isAsciiDigit(input[idx])) {
-      idx += 1;
-    }
-  }
-
-  return {
-    token: input.slice(start, idx),
-    end: idx,
-    isInteger,
-  };
-}
-
-function isUnsafeIntegerLiteral(token: string): boolean {
-  const digits = token[0] === "-" ? token.slice(1) : token;
-  if (digits.length < MAX_SAFE_INTEGER_ABS_STR.length) {
-    return false;
-  }
-  if (digits.length > MAX_SAFE_INTEGER_ABS_STR.length) {
-    return true;
-  }
-  return digits > MAX_SAFE_INTEGER_ABS_STR;
-}
-
-function quoteUnsafeIntegerLiterals(input: string): string {
-  let out = "";
-  let inString = false;
-  let escaped = false;
-  let idx = 0;
-
-  while (idx < input.length) {
-    const ch = input[idx] ?? "";
-    if (inString) {
-      out += ch;
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      idx += 1;
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
-      out += ch;
-      idx += 1;
-      continue;
-    }
-
-    if (ch === "-" || isAsciiDigit(ch)) {
-      const parsed = parseJsonNumberToken(input, idx);
-      if (parsed) {
-        if (parsed.isInteger && isUnsafeIntegerLiteral(parsed.token)) {
-          out += `"${parsed.token}"`;
-        } else {
-          out += parsed.token;
-        }
-        idx = parsed.end;
-        continue;
-      }
-    }
-
-    out += ch;
-    idx += 1;
-  }
-
-  return out;
-}
-
-function parseJsonPreservingUnsafeIntegers(input: string): unknown {
-  return JSON.parse(quoteUnsafeIntegerLiterals(input)) as unknown;
-}
-
 interface OllamaChatResponse {
   model: string;
   created_at: string;
@@ -468,8 +349,8 @@ interface OllamaChatResponse {
 type InputContentPart =
   | { type: "text"; text: string }
   | { type: "image"; data: string }
-  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> };
+  | { type: "toolCall"; id: string; name: string; arguments: unknown }
+  | { type: "tool_use"; id: string; name: string; input: unknown };
 
 function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
@@ -493,6 +374,50 @@ function extractOllamaImages(content: unknown): string[] {
     .map((part) => part.data);
 }
 
+function ensureArgsObject(value: unknown): Record<string, unknown> {
+  return parseJsonObjectPreservingUnsafeIntegers(value) ?? {};
+}
+
+function normalizeOllamaCompatMessageToolArgs(payloadRecord: Record<string, unknown>): void {
+  const messages = payloadRecord.messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+
+  for (const message of messages) {
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      continue;
+    }
+    const messageRecord = message as Record<string, unknown>;
+
+    const functionCall = messageRecord.function_call;
+    if (functionCall && typeof functionCall === "object" && !Array.isArray(functionCall)) {
+      const functionCallRecord = functionCall as Record<string, unknown>;
+      if (Object.hasOwn(functionCallRecord, "arguments")) {
+        functionCallRecord.arguments = ensureArgsObject(functionCallRecord.arguments);
+      }
+    }
+
+    const toolCalls = messageRecord.tool_calls;
+    if (!Array.isArray(toolCalls)) {
+      continue;
+    }
+    for (const toolCall of toolCalls) {
+      if (!toolCall || typeof toolCall !== "object" || Array.isArray(toolCall)) {
+        continue;
+      }
+      const functionSpec = (toolCall as Record<string, unknown>).function;
+      if (!functionSpec || typeof functionSpec !== "object" || Array.isArray(functionSpec)) {
+        continue;
+      }
+      const functionRecord = functionSpec as Record<string, unknown>;
+      if (Object.hasOwn(functionRecord, "arguments")) {
+        functionRecord.arguments = ensureArgsObject(functionRecord.arguments);
+      }
+    }
+  }
+}
+
 function extractToolCalls(content: unknown): OllamaToolCall[] {
   if (!Array.isArray(content)) {
     return [];
@@ -501,9 +426,9 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
-      result.push({ function: { name: part.name, arguments: part.arguments } });
+      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.arguments) } });
     } else if (part.type === "tool_use") {
-      result.push({ function: { name: part.name, arguments: part.input } });
+      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.input) } });
     }
   }
   return result;

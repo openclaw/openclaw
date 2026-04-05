@@ -1,4 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -61,7 +62,7 @@ export type RunEmbeddedPiAgentParams = {
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
   /** Reply-to mode for Slack auto-threading. */
-  replyToMode?: "off" | "first" | "all";
+  replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
   /** Require explicit message tool targets (no implicit last-route sends). */
@@ -108,6 +109,7 @@ export type RunEmbeddedPiAgentParams = {
   timeoutMs: number;
   runId: string;
   abortSignal?: AbortSignal;
+  replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;

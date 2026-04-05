@@ -83,6 +83,23 @@ important facts in the conversation that are not yet written to a file, they
 will be saved automatically before the summary happens.
 </Tip>
 
+## Dreaming (experimental)
+
+Dreaming is an optional background consolidation pass for memory. It revisits
+short-term recalls from daily files (`memory/YYYY-MM-DD.md`), scores them, and
+promotes only qualified items into long-term memory (`MEMORY.md`).
+
+It is designed to keep long-term memory high signal:
+
+- **Opt-in**: disabled by default.
+- **Scheduled**: when enabled, `memory-core` manages the recurring task
+  automatically.
+- **Thresholded**: promotions must pass score, recall frequency, and query
+  diversity gates.
+
+For mode behavior (`off`, `core`, `rem`, `deep`), scoring signals, and tuning
+knobs, see [Dreaming (experimental)](/concepts/dreaming).
+
 ## CLI
 
 ```bash
@@ -98,5 +115,7 @@ openclaw memory index --force   # Rebuild the index
 - [Honcho Memory](/concepts/memory-honcho) -- AI-native cross-session memory
 - [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
   tuning
+- [Dreaming (experimental)](/concepts/dreaming) -- background promotion
+  from short-term recall to long-term memory
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
 - [Compaction](/concepts/compaction) -- how compaction interacts with memory

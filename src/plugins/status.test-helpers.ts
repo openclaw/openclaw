@@ -48,13 +48,16 @@ export function createPluginRecord(
     toolNames: [],
     hookNames: [],
     channelIds: [],
-    cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    memoryEmbeddingProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
@@ -107,7 +110,7 @@ export function createCustomHook(params: {
 export function createPluginLoadResult(
   overrides: Partial<PluginLoadResult> & Pick<PluginLoadResult, "plugins"> = { plugins: [] },
 ): PluginLoadResult {
-  const { plugins, ...rest } = overrides;
+  const { plugins, realtimeTranscriptionProviders, realtimeVoiceProviders, ...rest } = overrides;
   return {
     plugins,
     diagnostics: [],
@@ -117,8 +120,10 @@ export function createPluginLoadResult(
     speechProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
+    videoGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    memoryEmbeddingProviders: [],
     tools: [],
     hooks: [],
     typedHooks: [],
@@ -129,6 +134,8 @@ export function createPluginLoadResult(
     commands: [],
     conversationBindingResolvedHandlers: [],
     ...rest,
+    realtimeTranscriptionProviders: realtimeTranscriptionProviders ?? [],
+    realtimeVoiceProviders: realtimeVoiceProviders ?? [],
   };
 }
 

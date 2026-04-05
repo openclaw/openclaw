@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import "./test-helpers/fast-core-tools.js";
@@ -14,7 +14,10 @@ import {
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { resolveRequesterStoreKey } from "./subagent-announce-delivery.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
+import {
+  getLatestSubagentRunByChildSessionKey,
+  resetSubagentRegistryForTests,
+} from "./subagent-registry.js";
 
 const fastModeEnv = vi.hoisted(() => {
   const previous = process.env.OPENCLAW_TEST_FAST;
@@ -39,8 +42,8 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runSubagentEnded: vi.fn(async () => {}),
 }));
 
-vi.mock("./pi-embedded.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./pi-embedded.js")>();
+vi.mock("./pi-embedded.js", async () => {
+  const actual = await vi.importActual<typeof import("./pi-embedded.js")>("./pi-embedded.js");
   return {
     ...actual,
     isEmbeddedPiRunActive: () => false,
@@ -132,12 +135,14 @@ async function executeSpawnAndExpectAccepted(params: {
   callId: string;
   cleanup?: "delete" | "keep";
   label?: string;
+  expectsCompletionMessage?: boolean;
 }) {
   const result = await params.tool.execute(params.callId, {
     task: "do thing",
     runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
     ...(params.label ? { label: params.label } : {}),
+    ...(params.expectsCompletionMessage === false ? { expectsCompletionMessage: false } : {}),
   });
   expect(result.details).toMatchObject({
     status: "accepted",
@@ -200,6 +205,13 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     });
     callGatewayMock.mockClear();
     installDeterministicAnnounceFlow();
+  });
+
+  afterEach(() => {
+    resetSessionsSpawnAnnounceFlowOverride();
+    resetSessionsSpawnHookRunnerOverride();
+    resetSessionsSpawnConfigOverride();
+    resetSubagentRegistryForTests();
   });
 
   afterAll(() => {
@@ -389,7 +401,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
 
-  it("sessions_spawn reports timed out when agent.wait returns timeout", async () => {
+  it("sessions_spawn records timeout when agent.wait returns timeout", async () => {
     const ctx = setupSessionsSpawnGatewayMock({
       includeChatHistory: true,
       chatHistoryText: "still working",
@@ -401,20 +413,28 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       tool,
       callId: "call-timeout",
       cleanup: "keep",
+      expectsCompletionMessage: false,
     });
 
-    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
+    const child = ctx.getChild();
+    if (!child.runId) {
+      throw new Error("missing child runId");
+    }
+    if (!child.sessionKey) {
+      throw new Error("missing child sessionKey");
+    }
+    const childSessionKey = child.sessionKey;
 
-    const mainAgentCall = ctx.calls
-      .filter((call) => call.method === "agent")
-      .find((call) => {
-        const params = call.params as { lane?: string } | undefined;
-        return params?.lane !== "subagent";
-      });
-    const mainMessage = (mainAgentCall?.params as { message?: string } | undefined)?.message ?? "";
+    await waitFor(() => {
+      return (
+        ctx.waitCalls.some((call) => call.runId === child.runId) &&
+        getLatestSubagentRunByChildSessionKey(childSessionKey)?.outcome?.status === "timeout"
+      );
+    }, 20_000);
 
-    expect(mainMessage).toContain("timed out");
-    expect(mainMessage).not.toContain("completed successfully");
+    const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
+    expect(childWait?.timeoutMs).toBe(1000);
+    expect(getLatestSubagentRunByChildSessionKey(childSessionKey)?.outcome?.status).toBe("timeout");
   });
 
   it("sessions_spawn announces with requester accountId", async () => {

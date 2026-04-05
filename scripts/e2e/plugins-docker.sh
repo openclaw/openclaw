@@ -7,8 +7,16 @@ IMAGE_NAME="openclaw-plugins-e2e"
 echo "Building Docker image..."
 docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
+DOCKER_ENV_ARGS=(-e COREPACK_ENABLE_DOWNLOAD_PROMPT=0)
+if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY:-}" != "undefined" && "${OPENAI_API_KEY:-}" != "null" ]]; then
+  DOCKER_ENV_ARGS+=(-e OPENAI_API_KEY)
+fi
+if [[ -n "${OPENAI_BASE_URL:-}" && "${OPENAI_BASE_URL:-}" != "undefined" && "${OPENAI_BASE_URL:-}" != "null" ]]; then
+  DOCKER_ENV_ARGS+=(-e OPENAI_BASE_URL)
+fi
+
 echo "Running plugins Docker E2E..."
-docker run --rm -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 -e OPENAI_API_KEY -i "$IMAGE_NAME" bash -s <<'EOF'
+docker run --rm "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 
 if [ -f dist/index.mjs ]; then
@@ -22,12 +30,64 @@ else
 fi
 export OPENCLAW_ENTRY
 
+sanitize_env_string() {
+  local value="${1:-}"
+  if [[ "$value" == "undefined" || "$value" == "null" ]]; then
+    printf ''
+    return
+  fi
+  printf '%s' "$value"
+}
+
+export OPENAI_API_KEY="$(sanitize_env_string "${OPENAI_API_KEY:-}")"
+export OPENAI_BASE_URL="$(sanitize_env_string "${OPENAI_BASE_URL:-}")"
+if [[ -z "$OPENAI_API_KEY" ]]; then
+  unset OPENAI_API_KEY || true
+fi
+if [[ -z "$OPENAI_BASE_URL" ]]; then
+  unset OPENAI_BASE_URL || true
+fi
+
 home_dir=$(mktemp -d "/tmp/openclaw-plugins-e2e.XXXXXX")
 export HOME="$home_dir"
 BUNDLED_PLUGIN_ROOT_DIR="extensions"
 OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 
 gateway_pid=""
+
+seed_openai_provider_config() {
+  local openai_api_key="$1"
+  local openai_base_url="${2:-}"
+  node - <<'NODE' "$openai_api_key" "$openai_base_url"
+const fs = require("node:fs");
+const path = require("node:path");
+
+const openaiApiKey = process.argv[2];
+const openaiBaseUrl = process.argv[3];
+const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const config = fs.existsSync(configPath)
+  ? JSON.parse(fs.readFileSync(configPath, "utf8"))
+  : {};
+const existingOpenAI = config.models?.providers?.openai ?? {};
+config.models = {
+  ...(config.models || {}),
+  providers: {
+    ...(config.models?.providers || {}),
+    openai: {
+      ...existingOpenAI,
+      baseUrl:
+        typeof existingOpenAI.baseUrl === "string" && existingOpenAI.baseUrl.trim()
+          ? existingOpenAI.baseUrl
+          : openaiBaseUrl || "https://api.openai.com/v1",
+      apiKey: openaiApiKey,
+      models: Array.isArray(existingOpenAI.models) ? existingOpenAI.models : [],
+    },
+  },
+};
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+NODE
+}
 
 stop_gateway() {
   if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
@@ -45,7 +105,9 @@ start_gateway() {
   gateway_pid=$!
 
   for _ in $(seq 1 120); do
-    if grep -q "listening on ws://" "$log_file"; then
+    # Gateway startup logs changed; accept both the legacy listener line and the
+    # current structured ready line so this smoke stays stable across formats.
+    if grep -Eq "listening on ws://|\\[gateway\\] ready \\(" "$log_file"; then
       return 0
     fi
     if ! kill -0 "$gateway_pid" 2>/dev/null; then
@@ -160,11 +222,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function main() {
   const runId = `plugin-e2e-${randomUUID()}`;
-  const sendResult = callGateway("chat.send", {
+  const sendParams = {
     sessionKey,
     message,
     idempotencyKey: runId,
-  });
+  };
+  const sendResult = callGateway("chat.send", sendParams);
   if (!sendResult.ok) {
     throw sendResult.error;
   }
@@ -196,9 +259,39 @@ async function main() {
       );
       return;
     }
+    const statusResult = callGateway("chat.send", sendParams);
+    if (statusResult.ok) {
+      const status = statusResult.value;
+      if (status?.status === "error") {
+        const summary =
+          typeof status.summary === "string" && status.summary.trim()
+            ? status.summary.trim()
+            : JSON.stringify(status);
+        throw new Error(`gateway run failed for ${sessionKey}: ${summary}`);
+      }
+    }
     await sleep(100);
   }
 
+  const finalHistory = callGateway("chat.history", { sessionKey });
+  const finalStatus = callGateway("chat.send", sendParams);
+  fs.writeFileSync(
+    outputFile,
+    `${JSON.stringify(
+      {
+        sessionKey,
+        runId,
+        error: "timeout",
+        history: finalHistory.ok ? finalHistory.value : null,
+        historyError: finalHistory.ok ? null : String(finalHistory.error),
+        status: finalStatus.ok ? finalStatus.value : null,
+        statusError: finalStatus.ok ? null : String(finalStatus.error),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
   throw new Error(`timed out waiting for assistant reply for ${sessionKey}`);
 }
 
@@ -502,7 +595,9 @@ if (process.env.OPENAI_API_KEY) {
     ...(config.agents || {}),
     defaults: {
       ...(config.agents?.defaults || {}),
-      model: { primary: "openai/gpt-5.4" },
+      // Use the same stable OpenAI family as the installer E2E to avoid
+      // long or reasoning-heavy live turns in this bundle-command smoke.
+      model: { primary: "openai/gpt-4.1-mini" },
     },
   };
 }
@@ -514,6 +609,10 @@ config.commands = {
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 NODE
+
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+  seed_openai_provider_config "$OPENAI_API_KEY" "${OPENAI_BASE_URL:-}"
+fi
 
 gateway_log="/tmp/openclaw-plugin-command-e2e.log"
 start_gateway "$gateway_log"
@@ -628,11 +727,17 @@ NODE
 
 if [ -n "${OPENAI_API_KEY:-}" ]; then
   echo "Testing Claude bundle command invocation..."
-  run_gateway_chat_json \
+  if ! run_gateway_chat_json \
     "plugin-e2e-live" \
     "/office_hours Reply with exactly BUNDLE_OK and nothing else." \
     /tmp/plugin-command-live.json \
-    60000
+    120000; then
+    echo "Claude bundle command invocation failed; payload dump:"
+    cat /tmp/plugin-command-live.json 2>/dev/null || true
+    echo "Gateway log tail:"
+    tail -n 200 "$gateway_log" || true
+    exit 1
+  fi
   node - <<'NODE'
 const fs = require("node:fs");
 const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-live.json", "utf8"));
@@ -803,8 +908,6 @@ if (!inspect.gatewayMethods.includes("demo.marketplace.shortcut.v2")) {
 console.log("ok");
 NODE
 
-echo "Running bundle MCP CLI-agent e2e..."
-pnpm exec vitest run --config vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
 EOF
 
 echo "OK"

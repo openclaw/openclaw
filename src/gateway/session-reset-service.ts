@@ -8,6 +8,10 @@ import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue.js";
+import {
+  buildSessionEndHookPayload,
+  buildSessionStartHookPayload,
+} from "../auto-reply/reply/session-hooks.js";
 import { loadConfig } from "../config/config.js";
 import {
   snapshotSessionOrigin,
@@ -17,9 +21,9 @@ import {
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
+import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-maintenance.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -27,7 +31,11 @@ import {
 } from "../routing/session-key.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
-  archiveSessionTranscripts,
+  archiveSessionTranscriptsDetailed,
+  resolveStableSessionEndTranscript,
+  type ArchivedSessionTranscript,
+} from "./session-transcript-files.fs.js";
+import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   readSessionMessages,
@@ -36,12 +44,6 @@ import {
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
-let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | undefined;
-
-function getChannelRuntime() {
-  cachedChannelRuntime ??= createPluginRuntime().channel;
-  return cachedChannelRuntime;
-}
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
@@ -63,15 +65,90 @@ export function archiveSessionTranscriptsForSession(params: {
   agentId?: string;
   reason: "reset" | "deleted";
 }): string[] {
+  return archiveSessionTranscriptsForSessionDetailed(params).map((entry) => entry.archivedPath);
+}
+
+export function archiveSessionTranscriptsForSessionDetailed(params: {
+  sessionId: string | undefined;
+  storePath: string;
+  sessionFile?: string;
+  agentId?: string;
+  reason: "reset" | "deleted";
+}): ArchivedSessionTranscript[] {
   if (!params.sessionId) {
     return [];
   }
-  return archiveSessionTranscripts({
+  return archiveSessionTranscriptsDetailed({
     sessionId: params.sessionId,
     storePath: params.storePath,
     sessionFile: params.sessionFile,
     agentId: params.agentId,
     reason: params.reason,
+  });
+}
+
+export function emitGatewaySessionEndPluginHook(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  sessionKey: string;
+  sessionId?: string;
+  storePath: string;
+  sessionFile?: string;
+  agentId?: string;
+  reason: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "unknown";
+  archivedTranscripts?: ArchivedSessionTranscript[];
+  nextSessionId?: string;
+  nextSessionKey?: string;
+}): void {
+  if (!params.sessionId) {
+    return;
+  }
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("session_end")) {
+    return;
+  }
+  const transcript = resolveStableSessionEndTranscript({
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.sessionFile,
+    agentId: params.agentId,
+    archivedTranscripts: params.archivedTranscripts,
+  });
+  const payload = buildSessionEndHookPayload({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    cfg: params.cfg,
+    reason: params.reason,
+    sessionFile: transcript.sessionFile,
+    transcriptArchived: transcript.transcriptArchived,
+    nextSessionId: params.nextSessionId,
+    nextSessionKey: params.nextSessionKey,
+  });
+  void hookRunner.runSessionEnd(payload.event, payload.context).catch((err) => {
+    logVerbose(`session_end hook failed: ${String(err)}`);
+  });
+}
+
+export function emitGatewaySessionStartPluginHook(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  sessionKey: string;
+  sessionId?: string;
+  resumedFrom?: string;
+}): void {
+  if (!params.sessionId) {
+    return;
+  }
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("session_start")) {
+    return;
+  }
+  const payload = buildSessionStartHookPayload({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    cfg: params.cfg,
+    resumedFrom: params.resumedFrom,
+  });
+  void hookRunner.runSessionStart(payload.event, payload.context).catch((err) => {
+    logVerbose(`session_start hook failed: ${String(err)}`);
   });
 }
 
@@ -81,12 +158,9 @@ export async function emitSessionUnboundLifecycleEvent(params: {
   emitHooks?: boolean;
 }) {
   const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
-  const channelRuntime = getChannelRuntime();
-  channelRuntime.discord.threadBindings.unbindBySessionKey({
+  await getSessionBindingService().unbind({
     targetSessionKey: params.targetSessionKey,
-    targetKind,
     reason: params.reason,
-    sendFarewell: true,
   });
 
   if (params.emitHooks === false) {
@@ -419,9 +493,6 @@ export async function performGatewaySessionReset(params: {
       space: currentEntry?.space,
       origin: snapshotSessionOrigin(currentEntry),
       deliveryContext: currentEntry?.deliveryContext,
-      cliSessionBindings: currentEntry?.cliSessionBindings,
-      cliSessionIds: currentEntry?.cliSessionIds,
-      claudeCliSessionId: currentEntry?.claudeCliSessionId,
       lastChannel: currentEntry?.lastChannel,
       lastTo: currentEntry?.lastTo,
       lastAccountId: currentEntry?.lastAccountId,
@@ -445,7 +516,7 @@ export async function performGatewaySessionReset(params: {
     reason: params.reason,
   });
 
-  archiveSessionTranscriptsForSession({
+  const archivedTranscripts = archiveSessionTranscriptsForSessionDetailed({
     sessionId: oldSessionId,
     storePath,
     sessionFile: oldSessionFile,
@@ -466,6 +537,23 @@ export async function performGatewaySessionReset(params: {
       mode: 0o600,
     });
   }
+  emitGatewaySessionEndPluginHook({
+    cfg,
+    sessionKey: target.canonicalKey ?? params.key,
+    sessionId: oldSessionId,
+    storePath,
+    sessionFile: oldSessionFile,
+    agentId: target.agentId,
+    reason: params.reason,
+    archivedTranscripts,
+    nextSessionId: next.sessionId,
+  });
+  emitGatewaySessionStartPluginHook({
+    cfg,
+    sessionKey: target.canonicalKey ?? params.key,
+    sessionId: next.sessionId,
+    resumedFrom: oldSessionId,
+  });
   if (hadExistingEntry) {
     await emitSessionUnboundLifecycleEvent({
       targetSessionKey: target.canonicalKey ?? params.key,
