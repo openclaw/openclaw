@@ -746,7 +746,7 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         modelProvider: "anthropic",
         model: "claude-haiku-4-5",
-        fallbackNoticeSelectedModel: "fireworks/minimax-m2p5",
+        fallbackNoticeSelectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
         fallbackNoticeReason: "rate limit",
       },

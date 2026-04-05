@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
-import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-web-search-ids.js";
 import { hasBundledWebSearchCredential } from "./bundled-web-search-registry.js";
 import {
   listBundledWebSearchPluginIds,
@@ -58,8 +57,9 @@ describe("bundled web search helpers", () => {
     vi.clearAllMocks();
     vi.mocked(loadPluginManifestRegistry).mockReturnValue({
       plugins: [
-        { id: "xai", origin: "bundled" },
-        { id: "google", origin: "bundled" },
+        { id: "xai", origin: "bundled", contracts: { webSearchProviders: ["grok"] } },
+        { id: "google", origin: "bundled", contracts: { webSearchProviders: ["gemini"] } },
+        { id: "minimax", origin: "bundled", contracts: { webSearchProviders: ["minimax"] } },
         { id: "noise", origin: "bundled" },
         { id: "external-google", origin: "workspace" },
       ] as never[],
@@ -92,7 +92,7 @@ describe("bundled web search helpers", () => {
     } as never);
   });
 
-  it("filters bundled manifest entries down to known bundled web search plugins", () => {
+  it("returns bundled manifest-derived web search plugins from the registry", () => {
     expect(
       resolveBundledWebSearchPluginIds({
         config: {
@@ -103,7 +103,7 @@ describe("bundled web search helpers", () => {
         workspaceDir: "/tmp/workspace",
         env: { OPENCLAW_HOME: "/tmp/openclaw-home" },
       }),
-    ).toEqual(["google", "xai"]);
+    ).toEqual(["google", "minimax", "xai"]);
     expect(loadPluginManifestRegistry).toHaveBeenCalledWith({
       config: {
         plugins: {
@@ -117,8 +117,8 @@ describe("bundled web search helpers", () => {
 
   it("returns a copy of the bundled plugin id fast-path list", () => {
     const listed = listBundledWebSearchPluginIds();
-    expect(listed).toEqual([...BUNDLED_WEB_SEARCH_PLUGIN_IDS]);
-    expect(listed).not.toBe(BUNDLED_WEB_SEARCH_PLUGIN_IDS);
+    expect(listed).toEqual(["google", "minimax", "xai"]);
+    expect(listed).not.toBe(listBundledWebSearchPluginIds());
   });
 
   it("maps bundled provider ids back to their owning plugins", () => {
@@ -140,7 +140,7 @@ describe("bundled web search helpers", () => {
     ]);
     expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
     expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledWith({
-      pluginIds: BUNDLED_WEB_SEARCH_PLUGIN_IDS,
+      pluginIds: ["google", "minimax", "xai"],
       pluginSdkResolution: "dist",
     });
   });

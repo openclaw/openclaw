@@ -27,8 +27,7 @@ export function resolveProviderAuthLoginCommand(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
   }).find((candidate) => matchesProviderId(candidate, params.provider));
   if (!provider || provider.auth.length === 0) {
     return undefined;

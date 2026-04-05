@@ -32,6 +32,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [DeepSeek](/providers/deepseek)
+- [Fireworks](/providers/fireworks)
 - [GitHub Copilot](/providers/github-copilot)
 - [GLM models](/providers/glm)
 - [Google (Gemini)](/providers/google)

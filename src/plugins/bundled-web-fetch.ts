@@ -1,25 +1,50 @@
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
-import { BUNDLED_WEB_FETCH_PLUGIN_IDS } from "./bundled-web-fetch-ids.js";
-import { resolveBundledWebFetchPluginId as resolveBundledWebFetchPluginIdFromMap } from "./bundled-web-fetch-provider-ids.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginWebFetchProviderEntry } from "./types.js";
 
 type BundledWebFetchProviderEntry = PluginWebFetchProviderEntry & { pluginId: string };
 
-let bundledWebFetchProvidersCache: BundledWebFetchProviderEntry[] | null = null;
+const bundledWebFetchProvidersCache = new Map<string, BundledWebFetchProviderEntry[]>();
 
-function loadBundledWebFetchProviders(): BundledWebFetchProviderEntry[] {
-  if (!bundledWebFetchProvidersCache) {
-    bundledWebFetchProvidersCache = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: BUNDLED_WEB_FETCH_PLUGIN_IDS,
-      pluginSdkResolution: "dist",
-    }).webFetchProviders.map((entry) => ({
-      pluginId: entry.pluginId,
-      ...entry.provider,
-    }));
+function resolveBundledWebFetchManifestPlugins(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}) {
+  return loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  }).plugins.filter(
+    (plugin) =>
+      plugin.origin === "bundled" && (plugin.contracts?.webFetchProviders?.length ?? 0) > 0,
+  );
+}
+
+function loadBundledWebFetchProviders(params?: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): BundledWebFetchProviderEntry[] {
+  const pluginIds = resolveBundledWebFetchPluginIds(params ?? {});
+  const cacheKey = pluginIds.join("\u0000");
+  const cached = bundledWebFetchProvidersCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
-  return bundledWebFetchProvidersCache;
+  const providers =
+    pluginIds.length === 0
+      ? []
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds,
+          pluginSdkResolution: "dist",
+        }).webFetchProviders.map((entry) => ({
+          pluginId: entry.pluginId,
+          ...entry.provider,
+        }));
+  bundledWebFetchProvidersCache.set(cacheKey, providers);
+  return providers;
 }
 
 export function resolveBundledWebFetchPluginIds(params: {
@@ -27,23 +52,41 @@ export function resolveBundledWebFetchPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
 }): string[] {
-  const bundledWebFetchPluginIdSet = new Set<string>(BUNDLED_WEB_FETCH_PLUGIN_IDS);
-  return loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })
-    .plugins.filter(
-      (plugin) => plugin.origin === "bundled" && bundledWebFetchPluginIdSet.has(plugin.id),
-    )
+  return resolveBundledWebFetchManifestPlugins(params)
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function listBundledWebFetchProviders(): PluginWebFetchProviderEntry[] {
-  return loadBundledWebFetchProviders();
+export function listBundledWebFetchProviders(params?: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): PluginWebFetchProviderEntry[] {
+  return loadBundledWebFetchProviders(params);
 }
 
-export function resolveBundledWebFetchPluginId(providerId: string | undefined): string | undefined {
-  return resolveBundledWebFetchPluginIdFromMap(providerId);
+export function resolveBundledWebFetchPluginId(
+  providerId: string | undefined,
+  params?: {
+    config?: PluginLoadOptions["config"];
+    workspaceDir?: string;
+    env?: PluginLoadOptions["env"];
+  },
+): string | undefined {
+  if (!providerId) {
+    return undefined;
+  }
+  const normalizedProviderId = providerId.trim().toLowerCase();
+  if (!normalizedProviderId) {
+    return undefined;
+  }
+  return resolveBundledWebFetchManifestPlugins({
+    config: params?.config,
+    workspaceDir: params?.workspaceDir,
+    env: params?.env,
+  }).find((plugin) =>
+    plugin.contracts?.webFetchProviders?.some(
+      (candidate) => candidate.trim().toLowerCase() === normalizedProviderId,
+    ),
+  )?.id;
 }

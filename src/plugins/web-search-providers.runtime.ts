@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isRecord } from "../utils.js";
+import { withActivatedPluginIds } from "./activation-context.js";
 import {
   buildPluginSnapshotCacheEnvKey,
   resolvePluginSnapshotCacheTtlMs,
@@ -155,8 +156,36 @@ export function resolvePluginWebSearchProviders(params: {
   onlyPluginIds?: readonly string[];
   activate?: boolean;
   cache?: boolean;
+  mode?: "runtime" | "setup";
 }): PluginWebSearchProviderEntry[] {
   const env = params.env ?? process.env;
+  if (params.mode === "setup") {
+    const pluginIds =
+      resolveWebSearchCandidatePluginIds({
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env,
+        onlyPluginIds: params.onlyPluginIds,
+      }) ?? [];
+    if (pluginIds.length === 0) {
+      return [];
+    }
+    const registry = loadOpenClawPlugins({
+      config: withActivatedPluginIds({
+        config: params.config,
+        pluginIds,
+      }),
+      activationSourceConfig: params.config,
+      autoEnabledReasons: {},
+      workspaceDir: params.workspaceDir,
+      env,
+      onlyPluginIds: pluginIds,
+      cache: params.cache ?? false,
+      activate: params.activate ?? false,
+      logger: createPluginLoaderLogger(log),
+    });
+    return mapRegistryWebSearchProviders({ registry, onlyPluginIds: pluginIds });
+  }
   const cacheOwnerConfig = params.config;
   const shouldMemoizeSnapshot =
     params.activate !== true && params.cache !== true && shouldUsePluginSnapshotCache(env);

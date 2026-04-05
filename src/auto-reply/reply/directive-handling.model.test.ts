@@ -207,16 +207,18 @@ describe("/model chat UX", () => {
   it("shows active runtime model when different from selected model", async () => {
     const reply = await resolveModelInfoReply({
       provider: "fireworks",
-      model: "fireworks/minimax-m2p5",
+      model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
       defaultProvider: "fireworks",
-      defaultModel: "fireworks/minimax-m2p5",
+      defaultModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
       sessionEntry: {
         modelProvider: "deepinfra",
         model: "moonshotai/Kimi-K2.5",
       },
     });
 
-    expect(reply?.text).toContain("Current: fireworks/minimax-m2p5 (selected)");
+    expect(reply?.text).toContain(
+      "Current: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo (selected)",
+    );
     expect(reply?.text).toContain("Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)");
   });
 

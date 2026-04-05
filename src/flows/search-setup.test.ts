@@ -92,12 +92,6 @@ const mockGrokProvider = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../plugins/bundled-web-search.js", () => ({
-  listBundledWebSearchProviders: () => [mockGrokProvider],
-  resolveBundledWebSearchPluginId: (providerId: string | undefined) =>
-    providerId === "grok" ? "xai" : undefined,
-}));
-
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: () => [mockGrokProvider],
 }));

@@ -51,14 +51,16 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       data: {
         phase: "fallback",
         selectedProvider: "fireworks",
-        selectedModel: "fireworks/minimax-m2p5",
+        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         activeProvider: "deepinfra",
         activeModel: "moonshotai/Kimi-K2.5",
         reasonSummary: "rate limit",
       },
     });
 
-    expect(host.fallbackStatus?.selected).toBe("fireworks/minimax-m2p5");
+    expect(host.fallbackStatus?.selected).toBe(
+      "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+    );
     expect(host.fallbackStatus?.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
     expect(host.fallbackStatus?.reason).toBe("rate limit");
     vi.useRealTimers();
@@ -77,7 +79,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       data: {
         phase: "fallback",
         selectedProvider: "fireworks",
-        selectedModel: "fireworks/minimax-m2p5",
+        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         activeProvider: "deepinfra",
         activeModel: "moonshotai/Kimi-K2.5",
       },
@@ -100,7 +102,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       data: {
         phase: "fallback",
         selectedProvider: "fireworks",
-        selectedModel: "fireworks/minimax-m2p5",
+        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         activeProvider: "deepinfra",
         activeModel: "moonshotai/Kimi-K2.5",
       },
@@ -127,9 +129,9 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       data: {
         phase: "fallback_cleared",
         selectedProvider: "fireworks",
-        selectedModel: "fireworks/minimax-m2p5",
+        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         activeProvider: "fireworks",
-        activeModel: "fireworks/minimax-m2p5",
+        activeModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         previousActiveProvider: "deepinfra",
         previousActiveModel: "moonshotai/Kimi-K2.5",
       },

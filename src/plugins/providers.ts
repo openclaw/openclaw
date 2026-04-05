@@ -69,8 +69,29 @@ export function resolveEnabledProviderPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+export function resolveDiscoveredProviderPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: readonly string[];
+}): string[] {
+  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
+  return loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })
+    .plugins.filter(
+      (plugin) =>
+        plugin.providers.length > 0 && (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)),
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export const __testing = {
   resolveEnabledProviderPluginIds,
+  resolveDiscoveredProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
   withBundledProviderVitestCompat,
 } as const;

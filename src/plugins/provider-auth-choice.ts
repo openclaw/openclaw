@@ -174,8 +174,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
     config: params.config,
     workspaceDir,
     env: params.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
   });
   const resolved = resolveProviderPluginChoice({
     providers,
@@ -256,8 +255,7 @@ export async function applyAuthChoicePluginProvider(
     config: nextConfig,
     workspaceDir,
     env: params.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
   });
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {

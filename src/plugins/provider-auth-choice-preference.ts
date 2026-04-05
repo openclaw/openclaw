@@ -25,8 +25,7 @@ export async function resolvePreferredProviderForAuthChoice(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
   });
   const pluginResolved = resolveProviderPluginChoice({
     providers,

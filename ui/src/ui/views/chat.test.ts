@@ -622,9 +622,9 @@ describe("chat view", () => {
       renderChat(
         createProps({
           fallbackStatus: {
-            selected: "fireworks/minimax-m2p5",
+            selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
             active: "deepinfra/moonshotai/Kimi-K2.5",
-            attempts: ["fireworks/minimax-m2p5: rate limit"],
+            attempts: ["fireworks/accounts/fireworks/routers/kimi-k2p5-turbo: rate limit"],
             occurredAt: 900,
           },
         }),
@@ -645,7 +645,7 @@ describe("chat view", () => {
       renderChat(
         createProps({
           fallbackStatus: {
-            selected: "fireworks/minimax-m2p5",
+            selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
             active: "deepinfra/moonshotai/Kimi-K2.5",
             attempts: [],
             occurredAt: 0,
@@ -667,8 +667,8 @@ describe("chat view", () => {
         createProps({
           fallbackStatus: {
             phase: "cleared",
-            selected: "fireworks/minimax-m2p5",
-            active: "fireworks/minimax-m2p5",
+            selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+            active: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
             previous: "deepinfra/moonshotai/Kimi-K2.5",
             attempts: [],
             occurredAt: 900,
@@ -680,7 +680,9 @@ describe("chat view", () => {
 
     const indicator = container.querySelector(".compaction-indicator--fallback-cleared");
     expect(indicator).not.toBeNull();
-    expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
+    expect(indicator?.textContent).toContain(
+      "Fallback cleared: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+    );
     nowSpy.mockRestore();
   });
 

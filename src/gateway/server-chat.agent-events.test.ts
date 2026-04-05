@@ -119,7 +119,7 @@ describe("agent event handler", () => {
   const FALLBACK_LIFECYCLE_DATA = {
     phase: "fallback",
     selectedProvider: "fireworks",
-    selectedModel: "fireworks/minimax-m2p5",
+    selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
     activeProvider: "deepinfra",
     activeModel: "moonshotai/Kimi-K2.5",
   } as const;

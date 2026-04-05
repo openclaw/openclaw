@@ -189,8 +189,7 @@ describe("promptDefaultModel", () => {
       config,
       workspaceDir: undefined,
       env: undefined,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
+      mode: "setup",
     });
     expect(result.model).toBe("vllm/meta-llama/Meta-Llama-3-8B-Instruct");
     expect(result.config?.models?.providers?.vllm).toMatchObject({
