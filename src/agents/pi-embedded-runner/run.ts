@@ -482,93 +482,134 @@ export async function runEmbeddedPiAgent(
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
           }
 
-          const attempt = await runEmbeddedAttempt({
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            trigger: params.trigger,
-            memoryFlushWritePath: params.memoryFlushWritePath,
-            messageChannel: params.messageChannel,
-            messageProvider: params.messageProvider,
-            agentAccountId: params.agentAccountId,
-            messageTo: params.messageTo,
-            messageThreadId: params.messageThreadId,
-            groupId: params.groupId,
-            groupChannel: params.groupChannel,
-            groupSpace: params.groupSpace,
-            spawnedBy: params.spawnedBy,
-            senderId: params.senderId,
-            senderName: params.senderName,
-            senderUsername: params.senderUsername,
-            senderE164: params.senderE164,
-            senderIsOwner: params.senderIsOwner,
-            currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            replyToMode: params.replyToMode,
-            hasRepliedRef: params.hasRepliedRef,
-            sessionFile: params.sessionFile,
-            workspaceDir: resolvedWorkspace,
-            agentDir,
-            config: params.config,
-            allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-            contextEngine,
-            contextTokenBudget: ctxInfo.tokens,
-            skillsSnapshot: params.skillsSnapshot,
-            prompt,
-            images: params.images,
-            imageOrder: params.imageOrder,
-            clientTools: params.clientTools,
-            disableTools: params.disableTools,
-            provider,
-            modelId,
-            model: applyAuthHeaderOverride(
-              applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
-              // When runtime auth exchange produced a different credential
-              // (runtimeAuthState is set), the exchanged token lives in
-              // authStorage and the SDK will pick it up automatically.
-              // Skip header injection to avoid leaking the pre-exchange key.
-              runtimeAuthState ? null : apiKeyInfo,
-              params.config,
-            ),
-            resolvedApiKey: resolvedStreamApiKey,
-            authProfileId: lastProfileId,
-            authProfileIdSource: lockedProfileId ? "user" : "auto",
-            authStorage,
-            modelRegistry,
-            agentId: workspaceResolution.agentId,
-            legacyBeforeAgentStartResult,
-            thinkLevel,
-            fastMode: params.fastMode,
-            verboseLevel: params.verboseLevel,
-            reasoningLevel: params.reasoningLevel,
-            toolResultFormat: resolvedToolResultFormat,
-            execOverrides: params.execOverrides,
-            bashElevated: params.bashElevated,
-            timeoutMs: params.timeoutMs,
-            runId: params.runId,
-            abortSignal: params.abortSignal,
-            shouldEmitToolResult: params.shouldEmitToolResult,
-            shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onPartialReply: params.onPartialReply,
-            onAssistantMessageStart: params.onAssistantMessageStart,
-            onBlockReply: params.onBlockReply,
-            onBlockReplyFlush: params.onBlockReplyFlush,
-            blockReplyBreak: params.blockReplyBreak,
-            blockReplyChunking: params.blockReplyChunking,
-            onReasoningStream: params.onReasoningStream,
-            onReasoningEnd: params.onReasoningEnd,
-            onToolResult: params.onToolResult,
-            onAgentEvent: params.onAgentEvent,
-            extraSystemPrompt: params.extraSystemPrompt,
-            inputProvenance: params.inputProvenance,
-            streamParams: params.streamParams,
-            ownerNumbers: params.ownerNumbers,
-            enforceFinalTag: params.enforceFinalTag,
-            silentExpected: params.silentExpected,
-            bootstrapPromptWarningSignaturesSeen,
-            bootstrapPromptWarningSignature:
-              bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
-          });
+          // SessionParseError can be thrown synchronously by SessionManager.open()
+          // inside runEmbeddedAttempt before any attempt result is produced. Catch it
+          // here so the friendly /new guidance reaches the user instead of a raw throw.
+          let attempt: Awaited<ReturnType<typeof runEmbeddedAttempt>>;
+          try {
+            attempt = await runEmbeddedAttempt({
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              trigger: params.trigger,
+              memoryFlushWritePath: params.memoryFlushWritePath,
+              messageChannel: params.messageChannel,
+              messageProvider: params.messageProvider,
+              agentAccountId: params.agentAccountId,
+              messageTo: params.messageTo,
+              messageThreadId: params.messageThreadId,
+              groupId: params.groupId,
+              groupChannel: params.groupChannel,
+              groupSpace: params.groupSpace,
+              spawnedBy: params.spawnedBy,
+              senderId: params.senderId,
+              senderName: params.senderName,
+              senderUsername: params.senderUsername,
+              senderE164: params.senderE164,
+              senderIsOwner: params.senderIsOwner,
+              currentChannelId: params.currentChannelId,
+              currentThreadTs: params.currentThreadTs,
+              currentMessageId: params.currentMessageId,
+              replyToMode: params.replyToMode,
+              hasRepliedRef: params.hasRepliedRef,
+              sessionFile: params.sessionFile,
+              workspaceDir: resolvedWorkspace,
+              agentDir,
+              config: params.config,
+              allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+              contextEngine,
+              contextTokenBudget: ctxInfo.tokens,
+              skillsSnapshot: params.skillsSnapshot,
+              prompt,
+              images: params.images,
+              imageOrder: params.imageOrder,
+              clientTools: params.clientTools,
+              disableTools: params.disableTools,
+              provider,
+              modelId,
+              model: applyAuthHeaderOverride(
+                applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
+                // When runtime auth exchange produced a different credential
+                // (runtimeAuthState is set), the exchanged token lives in
+                // authStorage and the SDK will pick it up automatically.
+                // Skip header injection to avoid leaking the pre-exchange key.
+                runtimeAuthState ? null : apiKeyInfo,
+                params.config,
+              ),
+              resolvedApiKey: resolvedStreamApiKey,
+              authProfileId: lastProfileId,
+              authProfileIdSource: lockedProfileId ? "user" : "auto",
+              authStorage,
+              modelRegistry,
+              agentId: workspaceResolution.agentId,
+              legacyBeforeAgentStartResult,
+              thinkLevel,
+              fastMode: params.fastMode,
+              verboseLevel: params.verboseLevel,
+              reasoningLevel: params.reasoningLevel,
+              toolResultFormat: resolvedToolResultFormat,
+              execOverrides: params.execOverrides,
+              bashElevated: params.bashElevated,
+              timeoutMs: params.timeoutMs,
+              runId: params.runId,
+              abortSignal: params.abortSignal,
+              shouldEmitToolResult: params.shouldEmitToolResult,
+              shouldEmitToolOutput: params.shouldEmitToolOutput,
+              onPartialReply: params.onPartialReply,
+              onAssistantMessageStart: params.onAssistantMessageStart,
+              onBlockReply: params.onBlockReply,
+              onBlockReplyFlush: params.onBlockReplyFlush,
+              blockReplyBreak: params.blockReplyBreak,
+              blockReplyChunking: params.blockReplyChunking,
+              onReasoningStream: params.onReasoningStream,
+              onReasoningEnd: params.onReasoningEnd,
+              onToolResult: params.onToolResult,
+              onAgentEvent: params.onAgentEvent,
+              extraSystemPrompt: params.extraSystemPrompt,
+              inputProvenance: params.inputProvenance,
+              streamParams: params.streamParams,
+              ownerNumbers: params.ownerNumbers,
+              enforceFinalTag: params.enforceFinalTag,
+              silentExpected: params.silentExpected,
+              bootstrapPromptWarningSignaturesSeen,
+              bootstrapPromptWarningSignature:
+                bootstrapPromptWarningSignaturesSeen[
+                  bootstrapPromptWarningSignaturesSeen.length - 1
+                ],
+            });
+          } catch (attemptErr) {
+            if (isSessionParseError(attemptErr)) {
+              log.warn(
+                `[session-parse-error] JSON parse error in session transcript (thrown): runId=${params.runId} error=${describeUnknownError(attemptErr).slice(0, 200)}`,
+              );
+              return {
+                payloads: [
+                  {
+                    text:
+                      "Session transcript could not be read (malformed content). " +
+                      "Use /new to start a fresh session.",
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: buildErrorAgentMeta({
+                    sessionId: params.sessionId,
+                    provider,
+                    model: model.id,
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastTurnTotal: undefined,
+                  }),
+                  systemPromptReport: undefined,
+                  error: {
+                    kind: "session_parse_error",
+                    message: describeUnknownError(attemptErr),
+                  },
+                },
+              };
+            }
+            throw attemptErr;
+          }
 
           const {
             aborted,
@@ -974,6 +1015,40 @@ export async function runEmbeddedPiAgent(
           }
 
           if (promptError && !aborted) {
+            // Handle JSON parse errors early — before coerceToFailoverError which may
+            // re-wrap and obscure the SessionParseError identity.
+            if (isSessionParseError(promptError)) {
+              log.warn(
+                `[session-parse-error] JSON parse error in session transcript: runId=${params.runId} error=${describeUnknownError(promptError).slice(0, 200)}`,
+              );
+              return {
+                payloads: [
+                  {
+                    text:
+                      "Session transcript could not be read (malformed content). " +
+                      "Use /new to start a fresh session.",
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: buildErrorAgentMeta({
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastAssistant,
+                    lastTurnTotal,
+                  }),
+                  systemPromptReport: attempt?.systemPromptReport,
+                  error: {
+                    kind: "session_parse_error",
+                    message: describeUnknownError(promptError),
+                  },
+                },
+              };
+            }
             // Normalize wrapped errors (e.g. abort-wrapped RESOURCE_EXHAUSTED) into
             // FailoverError so rate-limit classification works even for nested shapes.
             const normalizedPromptFailover = coerceToFailoverError(promptError, {
@@ -1142,42 +1217,6 @@ export async function runEmbeddedPiAgent(
             }
             if (promptFailoverDecision.action === "surface_error") {
               logPromptFailoverDecision("surface_error");
-            }
-            // Handle JSON parse errors (e.g. bad control characters in session
-            // transcript) with a user-friendly message instead of surfacing the
-            // raw SyntaxError text ("Bad control character in string literal at
-            // position N") to the chat surface.
-            if (isSessionParseError(promptError)) {
-              log.warn(
-                `[session-parse-error] JSON parse error in session transcript: runId=${params.runId} error=${describeUnknownError(promptError).slice(0, 200)}`,
-              );
-              return {
-                payloads: [
-                  {
-                    text:
-                      "Session transcript could not be read (malformed content). " +
-                      "Use /new to start a fresh session.",
-                    isError: true,
-                  },
-                ],
-                meta: {
-                  durationMs: Date.now() - started,
-                  agentMeta: buildErrorAgentMeta({
-                    sessionId: sessionIdUsed,
-                    provider,
-                    model: model.id,
-                    usageAccumulator,
-                    lastRunPromptUsage,
-                    lastAssistant,
-                    lastTurnTotal,
-                  }),
-                  systemPromptReport: attempt.systemPromptReport,
-                  error: {
-                    kind: "session_parse_error",
-                    message: describeUnknownError(promptError),
-                  },
-                },
-              };
             }
             throw promptError;
           }

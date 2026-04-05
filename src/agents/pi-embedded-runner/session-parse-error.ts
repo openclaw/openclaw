@@ -16,5 +16,7 @@ export class SessionParseError extends Error {
 }
 
 export function isSessionParseError(err: unknown): err is SessionParseError {
-  return err instanceof SessionParseError;
+  return (
+    err instanceof SessionParseError || (err instanceof Error && err.name === "SessionParseError")
+  );
 }

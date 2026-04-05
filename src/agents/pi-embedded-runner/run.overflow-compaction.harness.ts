@@ -420,6 +420,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     ensureAuthProfileStore: vi.fn(() => ({})),
     getApiKeyForModel: mockedGetApiKeyForModel,
     resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
+    shouldPreferExplicitConfigApiKeyAuth: vi.fn(() => false),
   }));
 
   vi.doMock("../models-config.js", () => ({
@@ -435,6 +436,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: vi.fn((_lane: string, task: () => unknown) => task()),
+    clearCommandLane: vi.fn(),
   }));
 
   vi.doMock("../../utils/message-channel.js", () => ({
@@ -460,6 +462,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("./lanes.js", () => ({
     resolveSessionLane: vi.fn(() => "session-lane"),
+    resolveEmbeddedSessionLane: vi.fn(() => "session-lane"),
     resolveGlobalLane: vi.fn(() => "global-lane"),
   }));
 
