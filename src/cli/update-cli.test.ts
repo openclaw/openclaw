@@ -127,13 +127,17 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
-vi.mock("../utils.js", () => ({
-  displayString: (input: string) => input,
-  isRecord: (value: unknown) =>
-    typeof value === "object" && value !== null && !Array.isArray(value),
-  pathExists: (...args: unknown[]) => pathExists(...args),
-  resolveConfigDir: () => "/tmp/openclaw-config",
-}));
+vi.mock("../utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../utils.js")>();
+  return {
+    ...actual,
+    displayString: (input: string) => input,
+    isRecord: (value: unknown) =>
+      typeof value === "object" && value !== null && !Array.isArray(value),
+    pathExists: (...args: unknown[]) => pathExists(...args),
+    resolveConfigDir: () => "/tmp/openclaw-config",
+  };
+});
 
 vi.mock("../plugins/update.js", () => ({
   syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
@@ -1034,7 +1038,31 @@ describe("update-cli", () => {
       "Skipped plugin update sync in the pre-update CLI process after switching to a git install.",
     );
   });
+  it("explains why git updates cannot run with edited files", async () => {
+    vi.mocked(defaultRuntime.log).mockClear();
+    vi.mocked(defaultRuntime.error).mockClear();
+    vi.mocked(defaultRuntime.exit).mockClear();
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "skipped",
+      mode: "git",
+      reason: "dirty",
+      steps: [],
+      durationMs: 100,
+    } satisfies UpdateRunResult);
 
+    await updateCommand({ channel: "dev" });
+
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain("Update blocked: local files are edited in this checkout.");
+    expect(logs.join("\n")).toContain(
+      "Git-based updates need a clean working tree before they can switch commits, fetch, or rebase.",
+    );
+    expect(logs.join("\n")).toContain(
+      "Commit, stash, or discard the local changes, then rerun `openclaw update`.",
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+  });
   it.each([
     {
       name: "refreshes service env when already installed",

@@ -1012,10 +1012,14 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   if (result.status === "skipped") {
     if (result.reason === "dirty") {
+      defaultRuntime.error(theme.error("Update blocked: local files are edited in this checkout."));
       defaultRuntime.log(
         theme.warn(
-          "Skipped: working directory has uncommitted changes. Commit or stash them first.",
+          "Git-based updates need a clean working tree before they can switch commits, fetch, or rebase.",
         ),
+      );
+      defaultRuntime.log(
+        theme.muted("Commit, stash, or discard the local changes, then rerun `openclaw update`."),
       );
     }
     if (result.reason === "not-git-install") {
