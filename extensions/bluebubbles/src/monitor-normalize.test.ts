@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
+import { normalizeChatGuidService } from "./targets.js";
 
 function createFallbackDmPayload(overrides: Record<string, unknown> = {}) {
   return {
@@ -119,6 +120,50 @@ describe("normalizeWebhookMessage", () => {
 
     expect(result).not.toBeNull();
     expect(result?.participants).toEqual([{ id: "+15551234567" }, { id: "+15557654321" }]);
+  });
+
+  it("normalizes iMessageLite chatGuid to iMessage (satellite messages)", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-sat-1",
+        text: "sent via satellite",
+        isGroup: false,
+        isFromMe: false,
+        handle: { address: "+13178204214" },
+        chatGuid: "iMessageLite;-;+13178204214",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.chatGuid).toBe("iMessage;-;+13178204214");
+    expect(result?.senderId).toBe("+13178204214");
+  });
+});
+
+describe("normalizeChatGuidService", () => {
+  it("remaps iMessageLite to iMessage", () => {
+    expect(normalizeChatGuidService("iMessageLite;-;+13178204214")).toBe(
+      "iMessage;-;+13178204214",
+    );
+  });
+
+  it("remaps iMessageLite case-insensitively", () => {
+    expect(normalizeChatGuidService("imessagelite;-;+13178204214")).toBe(
+      "iMessage;-;+13178204214",
+    );
+  });
+
+  it("leaves iMessage unchanged", () => {
+    expect(normalizeChatGuidService("iMessage;-;+15551234567")).toBe("iMessage;-;+15551234567");
+  });
+
+  it("leaves SMS unchanged", () => {
+    expect(normalizeChatGuidService("SMS;-;+15551234567")).toBe("SMS;-;+15551234567");
+  });
+
+  it("handles group chat guids", () => {
+    expect(normalizeChatGuidService("iMessageLite;+;chat123456")).toBe("iMessage;+;chat123456");
   });
 });
 

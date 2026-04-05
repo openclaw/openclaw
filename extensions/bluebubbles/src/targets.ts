@@ -28,6 +28,16 @@ const SERVICE_PREFIXES: Array<{ prefix: string; service: BlueBubblesService }> =
 const CHAT_IDENTIFIER_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CHAT_IDENTIFIER_HEX_RE = /^[0-9a-f]{24,64}$/i;
 
+/**
+ * Normalize the service component of a chat GUID.
+ * Satellite messages use "iMessageLite" but macOS Messages only recognizes
+ * "iMessage", so we remap it to avoid AppleScript send failures.
+ */
+const IMESSAGE_LITE_RE = /^iMessageLite(?=;)/i;
+export function normalizeChatGuidService(chatGuid: string): string {
+  return chatGuid.replace(IMESSAGE_LITE_RE, "iMessage");
+}
+
 function parseRawChatGuid(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -46,7 +56,9 @@ function parseRawChatGuid(value: string): string | null {
   if (separator !== "+" && separator !== "-") {
     return null;
   }
-  return `${service};${separator};${identifier}`;
+  // Normalize service directly — it's already split out, no need to regex the full string.
+  const normalizedService = service.toLowerCase() === "imessagelite" ? "iMessage" : service;
+  return `${normalizedService};${separator};${identifier}`;
 }
 
 function stripPrefix(value: string, prefix: string): string {
