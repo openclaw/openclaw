@@ -10,8 +10,9 @@ const state: RegistryState = (() => {
   const globalState = globalThis as typeof globalThis & {
     [PLUGIN_REGISTRY_STATE]?: RegistryState;
   };
-  if (!globalState[PLUGIN_REGISTRY_STATE]) {
-    globalState[PLUGIN_REGISTRY_STATE] = {
+  let registryState = globalState[PLUGIN_REGISTRY_STATE];
+  if (!registryState) {
+    registryState = {
       activeRegistry: null,
       activeVersion: 0,
       httpRoute: {
@@ -25,11 +26,13 @@ const state: RegistryState = (() => {
         version: 0,
       },
       key: null,
+      workspaceDir: null,
       runtimeSubagentMode: "default",
       importedPluginIds: new Set<string>(),
     };
+    globalState[PLUGIN_REGISTRY_STATE] = registryState;
   }
-  return globalState[PLUGIN_REGISTRY_STATE];
+  return registryState;
 })();
 
 export function recordImportedPluginId(pluginId: string): void {
@@ -70,17 +73,23 @@ export function setActivePluginRegistry(
   registry: PluginRegistry,
   cacheKey?: string,
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable" = "default",
+  workspaceDir?: string,
 ) {
   state.activeRegistry = registry;
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);
   syncTrackedSurface(state.channel, registry, true);
   state.key = cacheKey ?? null;
+  state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
   return state.activeRegistry;
+}
+
+export function getActivePluginRegistryWorkspaceDir(): string | undefined {
+  return state.workspaceDir ?? undefined;
 }
 
 export function requireActivePluginRegistry(): PluginRegistry {
@@ -222,6 +231,7 @@ export function resetPluginRuntimeStateForTest(): void {
   installSurfaceRegistry(state.httpRoute, null, false);
   installSurfaceRegistry(state.channel, null, false);
   state.key = null;
+  state.workspaceDir = null;
   state.runtimeSubagentMode = "default";
   state.importedPluginIds.clear();
 }

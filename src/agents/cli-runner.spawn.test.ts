@@ -1,21 +1,29 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
+  makeBootstrapWarn as realMakeBootstrapWarn,
+  resolveBootstrapContextForRun as realResolveBootstrapContextForRun,
+} from "./bootstrap-files.js";
+import {
   createManagedRun,
   mockSuccessfulCliRun,
+  restoreCliRunnerPrepareTestDeps,
   runCliAgentWithBackendConfig,
   setupCliRunnerTestModule,
   SMALL_PNG_BASE64,
   stubBootstrapContext,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
+import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 
 beforeEach(() => {
   resetAgentEventsForTest();
+  restoreCliRunnerPrepareTestDeps();
 });
 
 describe("runCliAgent spawn path", () => {
@@ -308,6 +316,28 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.SAFE_CLEAR).toBeUndefined();
   });
 
+  it("keeps explicit backend env overrides even when clearEnv drops inherited values", async () => {
+    const runCliAgent = await setupCliRunnerTestModule();
+    process.env.SAFE_OVERRIDE = "from-base";
+    mockSuccessfulCliRun();
+    await runCliAgentWithBackendConfig({
+      runCliAgent,
+      backend: {
+        command: "codex",
+        env: {
+          SAFE_OVERRIDE: "from-override",
+        },
+        clearEnv: ["SAFE_OVERRIDE"],
+      },
+      runId: "run-clear-env-override",
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      env?: Record<string, string | undefined>;
+    };
+    expect(input.env?.SAFE_OVERRIDE).toBe("from-override");
+  });
+
   it("prepends bootstrap warnings to the CLI prompt body", async () => {
     const runCliAgent = await setupCliRunnerTestModule();
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -363,6 +393,84 @@ describe("runCliAgent spawn path", () => {
     expect(promptCarrier).toContain("[Bootstrap truncation warning]");
     expect(promptCarrier).toContain("- AGENTS.md: 200 raw -> 20 injected");
     expect(promptCarrier).toContain("hi");
+  });
+
+  it("loads workspace bootstrap files into the Claude CLI system prompt", async () => {
+    const runCliAgent = await setupCliRunnerTestModule();
+    const workspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-cli-bootstrap-context-"),
+    );
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.md"),
+      [
+        "# AGENTS.md",
+        "",
+        "Read SOUL.md and IDENTITY.md before replying.",
+        "Use the injected workspace bootstrap files as standing instructions.",
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "SOUL-SECRET\n", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "IDENTITY-SECRET\n", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "USER-SECRET\n", "utf-8");
+
+    setCliRunnerPrepareTestDeps({
+      makeBootstrapWarn: realMakeBootstrapWarn,
+      resolveBootstrapContextForRun: realResolveBootstrapContextForRun,
+    });
+
+    try {
+      await runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir,
+        prompt: "BOOTSTRAP_CAPTURE_CHECK",
+        provider: "claude-cli",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-bootstrap-context",
+      });
+
+      const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+        argv?: string[];
+        input?: string;
+      };
+      const allArgs = (input.argv ?? []).join("\n");
+      const agentsPath = path.join(workspaceDir, "AGENTS.md");
+      const soulPath = path.join(workspaceDir, "SOUL.md");
+      const identityPath = path.join(workspaceDir, "IDENTITY.md");
+      const userPath = path.join(workspaceDir, "USER.md");
+      expect(input.input).toContain("BOOTSTRAP_CAPTURE_CHECK");
+      expect(allArgs).toContain("--append-system-prompt");
+      expect(allArgs).toContain("# Project Context");
+      expect(allArgs).toContain(`## ${agentsPath}`);
+      expect(allArgs).toContain("Read SOUL.md and IDENTITY.md before replying.");
+      expect(allArgs).toContain(`## ${soulPath}`);
+      expect(allArgs).toContain("SOUL-SECRET");
+      expect(allArgs).toContain(
+        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+      );
+      expect(allArgs).toContain(`## ${identityPath}`);
+      expect(allArgs).toContain("IDENTITY-SECRET");
+      expect(allArgs).toContain(`## ${userPath}`);
+      expect(allArgs).toContain("USER-SECRET");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      restoreCliRunnerPrepareTestDeps();
+    }
   });
 
   it("hydrates prompt media refs into CLI image args", async () => {

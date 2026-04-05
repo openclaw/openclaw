@@ -73,7 +73,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   const botShipName = normalizeShip(account.ship);
   runtime.log?.(`[tlon] Starting monitor for ${botShipName}`);
 
-  const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
+  const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.dangerouslyAllowPrivateNetwork);
 
   // Store validated values for use in closures (TypeScript narrowing doesn't propagate)
   const accountUrl = account.url;

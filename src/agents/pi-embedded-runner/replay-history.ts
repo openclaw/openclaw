@@ -470,6 +470,7 @@ export async function sanitizeSessionHistory(params: {
       sanitizeMode: policy.sanitizeMode,
       sanitizeToolCallIds: policy.sanitizeToolCallIds,
       toolCallIdMode: policy.toolCallIdMode,
+      preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
       ...resolveImageSanitizationLimits(params.config),

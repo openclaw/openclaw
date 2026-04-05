@@ -6,14 +6,16 @@ import {
 } from "./pi-embedded-subscribe.e2e-harness.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  it("does not duplicate when text_end repeats full content", () => {
+  it("does not duplicate when text_end repeats full content", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
     emitAssistantTextDelta({ emit, delta: "Good morning!" });
     emitAssistantTextEnd({ emit, content: "Good morning!" });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
     expect(subscription.assistantTexts).toEqual(["Good morning!"]);
   });
   it("does not duplicate block chunks when text_end repeats full content", () => {
