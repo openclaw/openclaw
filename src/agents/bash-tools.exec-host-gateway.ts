@@ -17,6 +17,7 @@ import {
   detectInterpreterInlineEvalArgv,
 } from "../infra/exec-inline-eval.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { logInfo } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -115,6 +116,7 @@ export async function processGatewayAllowlist(
   const allowlistMatches = allowlistEval.allowlistMatches;
   if (allowlistEval.denylistDenied) {
     const matchedPattern = allowlistEval.denylistPattern ?? "<unknown>";
+    logInfo(`exec: denylist blocked command matching pattern '${matchedPattern}'`);
     throw new Error(`exec denied by denylist pattern: ${matchedPattern}`);
   }
   const analysisOk = allowlistEval.analysisOk;

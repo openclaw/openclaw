@@ -8,8 +8,7 @@ export const BUILTIN_EXEC_DENY_PATTERNS = [
   "rm -rf /",
   "rm -rf /*",
   "mkfs.*",
-  "dd if=* of=/dev/*",
-  "dd of=/dev/* if=*",
+  "dd * of=/dev/*",
 ] as const;
 
 const GLOB_REGEX_CACHE_LIMIT = 512;
@@ -90,6 +89,28 @@ export function resolveExecDenylist(entries?: readonly string[] | null): string[
   return builtins;
 }
 
+const SHELL_WRAPPERS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"]);
+
+function extractInlineShellPayload(segment: ExecCommandSegment): string | null {
+  const argv = segment.argv;
+  if (argv.length < 3) {
+    return null;
+  }
+  const exe = (argv[0] ?? "").replace(/^.*\//, "").toLowerCase();
+  if (!SHELL_WRAPPERS.has(exe)) {
+    return null;
+  }
+  const flagIdx = argv.indexOf("-c");
+  if (flagIdx === -1 || flagIdx + 1 >= argv.length) {
+    const lcIdx = argv.indexOf("-lc");
+    if (lcIdx !== -1 && lcIdx + 1 < argv.length) {
+      return argv[lcIdx + 1] ?? null;
+    }
+    return null;
+  }
+  return argv[flagIdx + 1] ?? null;
+}
+
 function resolveSegmentCandidates(segment: ExecCommandSegment): string[] {
   const candidates = new Set<string>();
   const raw = normalizeCommandText(segment.raw);
@@ -106,6 +127,19 @@ function resolveSegmentCandidates(segment: ExecCommandSegment): string[] {
     if (normalized) {
       candidates.add(normalized);
     }
+  }
+  // Add basename-only candidate for absolute executable paths (e.g. /bin/rm -> rm)
+  if (execution?.rawExecutable && execution.rawExecutable.includes("/")) {
+    const basename = execution.rawExecutable.replace(/^.*\//, "");
+    if (basename && argv.length > 1) {
+      const basenameCmd = normalizeCommandText([basename, ...argv.slice(1)].join(" "));
+      candidates.add(basenameCmd);
+    }
+  }
+  // Extract inline shell payloads (e.g. bash -c 'rm -rf /')
+  const payload = extractInlineShellPayload(segment);
+  if (payload) {
+    candidates.add(normalizeCommandText(payload));
   }
   return [...candidates];
 }
@@ -126,18 +160,28 @@ export function matchesExecDenylist(params: {
   denied: boolean;
   pattern: string | null;
 } {
+  const denyPatterns = resolveExecDenylist(params.denylist);
+  const fullCommand = normalizeCommandText(params.commandText ?? "");
+
+  // Always check the raw command text, even when analysis failed.
+  // An attacker could craft input that causes parser failure while still
+  // matching a deny pattern (e.g. backslash-newline continuations).
+  if (fullCommand) {
+    for (const pattern of denyPatterns) {
+      const matcher = compileGlobRegex(pattern);
+      if (matcher.test(fullCommand)) {
+        return { denied: true, pattern };
+      }
+    }
+  }
+
   if (!params.analysis.ok || params.analysis.segments.length === 0) {
     return { denied: false, pattern: null };
   }
-  const denyPatterns = resolveExecDenylist(params.denylist);
-  const fullCommand = normalizeCommandText(params.commandText ?? "");
+
   const allSegmentCandidates = params.analysis.segments.flatMap(resolveSegmentCandidates);
 
   for (const pattern of denyPatterns) {
-    const matcher = compileGlobRegex(pattern);
-    if (fullCommand && matcher.test(fullCommand)) {
-      return { denied: true, pattern };
-    }
     if (matchesDenyPattern(allSegmentCandidates, pattern)) {
       return { denied: true, pattern };
     }

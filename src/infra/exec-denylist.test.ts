@@ -65,4 +65,64 @@ describe("exec denylist", () => {
       pattern: "chmod 777 *",
     });
   });
+
+  it("falls back to raw commandText when analysis fails", () => {
+    // Simulate analysis failure (e.g. backslash-newline continuation)
+    const result = matchesExecDenylist({
+      analysis: { ok: false, segments: [] },
+      commandText: "rm -rf /",
+    });
+    expect(result).toEqual({
+      denied: true,
+      pattern: "rm -rf /",
+    });
+  });
+
+  it("catches inline shell payloads via wrapper commands", () => {
+    const analysis = analyzeShellCommand({ command: "bash -c 'rm -rf /'" });
+    const result = matchesExecDenylist({
+      analysis,
+      commandText: "bash -c 'rm -rf /'",
+    });
+    expect(result).toEqual({
+      denied: true,
+      pattern: "rm -rf /",
+    });
+  });
+
+  it("catches bash -lc wrapper variant", () => {
+    const analysis = analyzeShellCommand({ command: "bash -lc 'mkfs.ext4 /dev/sda'" });
+    const result = matchesExecDenylist({
+      analysis,
+      commandText: "bash -lc 'mkfs.ext4 /dev/sda'",
+    });
+    expect(result).toEqual({
+      denied: true,
+      pattern: "mkfs.*",
+    });
+  });
+
+  it("matches dd with interleaved flags", () => {
+    const analysis = analyzeShellCommand({ command: "dd bs=4M if=/dev/zero of=/dev/sda" });
+    const result = matchesExecDenylist({
+      analysis,
+      commandText: "dd bs=4M if=/dev/zero of=/dev/sda",
+    });
+    expect(result).toEqual({
+      denied: true,
+      pattern: "dd * of=/dev/*",
+    });
+  });
+
+  it("matches absolute executable path via basename", () => {
+    const analysis = analyzeArgvCommand({ argv: ["/bin/rm", "-rf", "/"] });
+    const result = matchesExecDenylist({
+      analysis,
+      commandText: "/bin/rm -rf /",
+    });
+    expect(result).toEqual({
+      denied: true,
+      pattern: "rm -rf /",
+    });
+  });
 });

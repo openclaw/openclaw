@@ -9,6 +9,7 @@ import {
   minSecurity,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
+import { matchesExecDenylist } from "../infra/exec-denylist.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
@@ -1191,6 +1192,7 @@ export function createExecTool(
   } = resolveExecSafeBinRuntimePolicy({
     local: {
       safeBins: defaults?.safeBins,
+      denylist: defaults?.denylist,
       safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
       safeBinProfiles: defaults?.safeBinProfiles,
     },
@@ -1490,6 +1492,21 @@ export function createExecTool(
 
       if (!workdir) {
         throw new Error("exec internal error: local execution requires a resolved workdir");
+      }
+
+      // Denylist check runs unconditionally, even when bypassApprovals is true.
+      // Elevated full mode bypasses allowlist approval prompts, not security denylists.
+      {
+        const analysis = analyzeShellCommand({ command: params.command });
+        const denyResult = matchesExecDenylist({
+          analysis,
+          commandText: params.command,
+          denylist,
+        });
+        if (denyResult.denied) {
+          logInfo(`exec: denylist blocked command matching pattern '${denyResult.pattern}'`);
+          throw new Error(`exec denied by denylist pattern: ${denyResult.pattern}`);
+        }
       }
 
       if (host === "gateway" && !bypassApprovals) {
