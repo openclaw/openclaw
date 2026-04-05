@@ -1148,4 +1148,70 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("store");
     expect(params).not.toHaveProperty("reasoning_effort");
   });
+
+  it("omits tools from params when context.tools is empty", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params).not.toHaveProperty("tools");
+  });
+
+  it("omits tools from params when context.tools is empty even with tool history in messages", () => {
+    // Regression guard: the removed hasToolHistory fallback used to send tools: []
+    // when prior tool calls appeared in message history. Strict OpenAI-compatible
+    // providers reject an empty tools array; OpenAI does not require it to be present.
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call_1", name: "search", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "search",
+            isError: false,
+            timestamp: 0,
+            content: [{ type: "text", text: "ok" }],
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params).not.toHaveProperty("tools");
+  });
 });

@@ -933,14 +933,6 @@ function buildAzureOpenAIResponsesParams(
   return params;
 }
 
-function hasToolHistory(messages: Context["messages"]): boolean {
-  return messages.some(
-    (message) =>
-      message.role === "toolResult" ||
-      (message.role === "assistant" && message.content.some((block) => block.type === "toolCall")),
-  );
-}
-
 function createOpenAICompletionsClient(
   model: Model<Api>,
   context: Context,
@@ -1344,10 +1336,8 @@ export function buildOpenAICompletionsParams(
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
   }
-  if (context.tools) {
+  if (context.tools && context.tools.length > 0) {
     params.tools = convertTools(context.tools, compat, model);
-  } else if (hasToolHistory(context.messages)) {
-    params.tools = [];
   }
   if (options?.toolChoice) {
     params.tool_choice = options.toolChoice;
