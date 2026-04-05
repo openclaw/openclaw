@@ -289,7 +289,6 @@ export function handleMessageUpdate(
     assistantRecord?.partial && typeof assistantRecord.partial === "object"
       ? (assistantRecord.partial as AssistantMessage)
       : msg;
-  const phaseAwareVisibleText = coerceText(extractAssistantVisibleText(partialAssistant)).trim();
   const deliveryPhase = resolveAssistantMessagePhase(partialAssistant);
   if (deliveryPhase === "commentary") {
     return;

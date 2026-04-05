@@ -25,10 +25,10 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
-import { sanitizeChatHistoryMessages } from "./server-methods/chat.js";
+import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS, sanitizeChatHistoryMessages } from "./server-methods/chat.js";
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
-const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
+
 function resolveSessionHistoryPath(req: IncomingMessage): string | null {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/history$/);
@@ -295,7 +295,10 @@ export async function handleSessionHistoryHttpRequest(
       }
     }
     sentHistory = paginateSessionMessages(
-      readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile),
+      sanitizeChatHistoryMessages(
+        readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile),
+        effectiveMaxChars,
+      ),
       limit,
       cursor,
     );
