@@ -1,0 +1,28 @@
+{
+  "id": "arcee",
+  "enabledByDefault": true,
+  "providers": ["arcee"],
+  "providerAuthEnvVars": {
+    "arcee": ["ARCEEAI_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "arcee",
+      "method": "api-key",
+      "choiceId": "arceeai-api-key",
+      "choiceLabel": "Arcee AI API key",
+      "groupId": "arcee",
+      "groupLabel": "Arcee AI",
+      "groupHint": "API key",
+      "optionKey": "arceeaiApiKey",
+      "cliFlag": "--arceeai-api-key",
+      "cliOption": "--arceeai-api-key <key>",
+      "cliDescription": "Arcee AI API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

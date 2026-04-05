@@ -12,6 +12,7 @@ export type BuiltInAuthChoice =
   | "oauth"
   | "setup-token"
   | "token"
+  | "arceeai-api-key"
   | "chutes"
   | "deepseek-api-key"
   | "openai-codex"
@@ -65,6 +66,7 @@ export type AuthChoice = BuiltInAuthChoice | (string & {});
 export type BuiltInAuthChoiceGroupId =
   | "openai"
   | "anthropic"
+  | "arcee"
   | "chutes"
   | "deepseek"
   | "google"
@@ -131,6 +133,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   tokenExpiresIn?: string;
   /** API key persistence mode for setup flows (default: plaintext). */
   secretInputMode?: SecretInputMode;
+  arceeaiApiKey?: string;
   cloudflareAiGatewayAccountId?: string;
   cloudflareAiGatewayGatewayId?: string;
   customBaseUrl?: string;
