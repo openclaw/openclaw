@@ -127,6 +127,19 @@ export const es: TranslationMap = {
     de: "Deutsch (Alemán)",
     es: "Español",
   },
+  nodesPage: {
+    nodesTitle: "Nodos",
+    nodesSubtitle: "Dispositivos emparejados y enlaces en vivo.",
+    devicesTitle: "Dispositivos",
+    devicesSubtitle: "Solicitudes de emparejamiento + tokens de rol.",
+    loading: "Cargando…",
+    noNodesFound: "No se encontraron nodos.",
+    pending: "Pendientes",
+    paired: "Emparejados",
+    noPairedDevices: "No hay dispositivos emparejados.",
+    approve: "Aprobar",
+    reject: "Rechazar",
+  },
   cron: {
     summary: {
       enabled: "Habilitado",

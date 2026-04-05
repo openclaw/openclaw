@@ -155,6 +155,19 @@ export const en: TranslationMap = {
       noResults: "No results",
     },
   },
+  nodesPage: {
+    nodesTitle: "Nodes",
+    nodesSubtitle: "Paired devices and live links.",
+    devicesTitle: "Devices",
+    devicesSubtitle: "Pairing requests + role tokens.",
+    loading: "Loading…",
+    noNodesFound: "No nodes found.",
+    pending: "Pending",
+    paired: "Paired",
+    noPairedDevices: "No paired devices.",
+    approve: "Approve",
+    reject: "Reject",
+  },
   usage: {
     page: {
       subtitle: "See where tokens go, when sessions spike, and what drives cost.",
