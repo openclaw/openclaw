@@ -234,7 +234,7 @@ describe("secrets audit", () => {
       [
         `${OPENAI_API_KEY_MARKER}=\${OPENAI_API_KEY}`,
         `${OPENAI_API_KEY_MARKER}=$OPENAI_API_KEY`,
-        `${OPENAI_API_KEY_MARKER}=sk-openai-plaintext`,
+        `${OPENAI_API_KEY_MARKER}=sk-openai-plaintext`, // pragma: allowlist secret
       ].join("\n"),
       "utf8",
     );
