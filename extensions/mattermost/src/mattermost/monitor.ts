@@ -55,6 +55,7 @@ import {
   type MattermostEventPayload,
   type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
+import { addMattermostReaction, removeMattermostReaction } from "./reactions.js";
 import { runWithReconnect } from "./reconnect.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import type {
@@ -122,6 +123,52 @@ type MattermostReaction = {
 };
 const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
+const TRANSIENT_INBOUND_REACTION_EMOJI = "eyes";
+
+export async function runMattermostTransientInboundReactionLifecycle(params: {
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  accountId: string;
+  postId?: string | null;
+  runDispatch: () => Promise<unknown>;
+}): Promise<void> {
+  const postId = params.postId?.trim();
+  let transientReactionAdded = false;
+
+  if (postId) {
+    const addReactionResult = await addMattermostReaction({
+      cfg: params.cfg,
+      postId,
+      emojiName: TRANSIENT_INBOUND_REACTION_EMOJI,
+      accountId: params.accountId,
+    });
+    if (addReactionResult.ok) {
+      transientReactionAdded = true;
+    } else {
+      params.runtime.error?.(
+        `mattermost: failed to add transient :eyes: reaction: ${addReactionResult.error}`,
+      );
+    }
+  }
+
+  try {
+    await params.runDispatch();
+  } finally {
+    if (transientReactionAdded && postId) {
+      const removeReactionResult = await removeMattermostReaction({
+        cfg: params.cfg,
+        postId,
+        emojiName: TRANSIENT_INBOUND_REACTION_EMOJI,
+        accountId: params.accountId,
+      });
+      if (!removeReactionResult.ok) {
+        params.runtime.error?.(
+          `mattermost: failed to remove transient :eyes: reaction: ${removeReactionResult.error}`,
+        );
+      }
+    }
+  }
+}
 
 function isLoopbackHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
@@ -1493,22 +1540,29 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         },
       });
 
-    await core.channel.reply.withReplyDispatcher({
-      dispatcher,
-      onSettled: () => {
-        markDispatchIdle();
-      },
-      run: () =>
-        core.channel.reply.dispatchReplyFromConfig({
-          ctx: ctxPayload,
-          cfg,
+    await runMattermostTransientInboundReactionLifecycle({
+      cfg,
+      runtime,
+      accountId: account.accountId,
+      postId: post.id,
+      runDispatch: () =>
+        core.channel.reply.withReplyDispatcher({
           dispatcher,
-          replyOptions: {
-            ...replyOptions,
-            disableBlockStreaming:
-              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-            onModelSelected,
+          onSettled: () => {
+            markDispatchIdle();
           },
+          run: () =>
+            core.channel.reply.dispatchReplyFromConfig({
+              ctx: ctxPayload,
+              cfg,
+              dispatcher,
+              replyOptions: {
+                ...replyOptions,
+                disableBlockStreaming:
+                  typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+                onModelSelected,
+              },
+            }),
         }),
     });
     if (historyKey) {
