@@ -1,6 +1,6 @@
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { resolvePluginActivationSnapshot } from "../plugins/activation-context.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
@@ -20,6 +20,7 @@ type GatewayPluginBootstrapLog = {
 
 type GatewayPluginBootstrapParams = {
   cfg: ReturnType<typeof loadConfig>;
+  activationSourceConfig?: ReturnType<typeof loadConfig>;
   workspaceDir: string;
   log: GatewayPluginBootstrapLog;
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
@@ -58,13 +59,17 @@ function logGatewayPluginDiagnostics(params: {
 }
 
 export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
-  const resolvedConfig = applyPluginAutoEnable({
-    config: params.cfg,
+  const activation = resolvePluginActivationSnapshot({
+    rawConfig: params.activationSourceConfig ?? params.cfg,
     env: process.env,
-  }).config;
+    applyAutoEnable: true,
+  });
+  const resolvedConfig = activation.config ?? params.cfg;
   installGatewayPluginRuntimeEnvironment(resolvedConfig);
   const loaded = loadGatewayPlugins({
     cfg: resolvedConfig,
+    activationSourceConfig: params.activationSourceConfig ?? params.cfg,
+    autoEnabledReasons: activation.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     log: params.log,
     coreGatewayHandlers: params.coreGatewayHandlers,

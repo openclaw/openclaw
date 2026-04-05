@@ -32,6 +32,11 @@ describe("feishu quick-action launcher", () => {
       expiresAt: 123,
       sessionKey: "agent:codex:feishu:chat:chat1",
     }) as {
+      config: {
+        width_mode?: string;
+        enable_forward?: boolean;
+        wide_screen_mode?: boolean;
+      };
       body: {
         elements: Array<{
           tag: string;
@@ -40,6 +45,9 @@ describe("feishu quick-action launcher", () => {
       };
     };
 
+    expect(card.config.width_mode).toBe("fill");
+    expect(card.config.enable_forward).toBeUndefined();
+    expect(card.config.wide_screen_mode).toBeUndefined();
     const actionBlock = card.body.elements.find((entry) => entry.tag === "action");
     expect(actionBlock?.actions).toHaveLength(3);
     expect(actionBlock?.actions?.[0]?.value?.oc).toBe("ocf1");
@@ -64,6 +72,9 @@ describe("feishu quick-action launcher", () => {
         to: "user:u123",
         accountId: "main",
         card: expect.objectContaining({
+          config: expect.objectContaining({
+            width_mode: "fill",
+          }),
           body: expect.objectContaining({
             elements: expect.arrayContaining([
               expect.objectContaining({
@@ -83,6 +94,21 @@ describe("feishu quick-action launcher", () => {
         }),
       }),
     );
+    const firstSendArg = (sendCardFeishuMock.mock.calls as unknown[][]).at(0)?.[0] as
+      | {
+          card?: {
+            config?: {
+              width_mode?: string;
+              wide_screen_mode?: boolean;
+              enable_forward?: boolean;
+            };
+          };
+        }
+      | undefined;
+    const sentCard = firstSendArg?.card;
+    expect(sentCard).toBeDefined();
+    expect(sentCard?.config?.wide_screen_mode).toBeUndefined();
+    expect(sentCard?.config?.enable_forward).toBeUndefined();
   });
 
   it("falls back to legacy menu handling when launcher send fails", async () => {

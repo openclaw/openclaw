@@ -238,6 +238,42 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   });
 });
 
+describe("handleToolExecutionEnd timeout metadata", () => {
+  it("records timeout metadata for failed exec results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-timeout",
+        isError: true,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "Command timed out after 1800 seconds.",
+            },
+          ],
+          details: {
+            status: "failed",
+            timedOut: true,
+            exitCode: null,
+            durationMs: 1_800_000,
+            aggregated: "",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      timedOut: true,
+    });
+  });
+});
+
 describe("handleToolExecutionEnd exec approval prompts", () => {
   it("emits a deterministic approval payload and marks assistant output suppressed", async () => {
     const { ctx } = createTestContext();
@@ -270,12 +306,16 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       expect.objectContaining({
         text: expect.stringContaining("```txt\n/approve 12345678 allow-once\n```"),
         channelData: {
-          execApproval: {
+          execApproval: expect.objectContaining({
             approvalId: "12345678-1234-1234-1234-123456789012",
             approvalSlug: "12345678",
+            approvalKind: "exec",
             allowedDecisions: ["allow-once", "allow-always", "deny"],
-          },
+          }),
         },
+        interactive: expect.objectContaining({
+          blocks: expect.any(Array),
+        }),
       }),
     );
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
@@ -311,12 +351,16 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       expect.objectContaining({
         text: expect.not.stringContaining("allow-always"),
         channelData: {
-          execApproval: {
+          execApproval: expect.objectContaining({
             approvalId: "12345678-1234-1234-1234-123456789012",
             approvalSlug: "12345678",
+            approvalKind: "exec",
             allowedDecisions: ["allow-once", "deny"],
-          },
+          }),
         },
+        interactive: expect.objectContaining({
+          blocks: expect.any(Array),
+        }),
       }),
     );
   });

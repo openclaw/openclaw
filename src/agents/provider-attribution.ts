@@ -33,10 +33,22 @@ export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "o
 
 export type ProviderEndpointClass =
   | "default"
+  | "anthropic-public"
+  | "cerebras-native"
+  | "chutes-native"
+  | "deepseek-native"
+  | "github-copilot-native"
+  | "groq-native"
+  | "mistral-public"
+  | "moonshot-native"
+  | "modelstudio-native"
   | "openai-public"
   | "openai-codex"
+  | "opencode-native"
   | "azure-openai"
   | "openrouter"
+  | "xai-native"
+  | "zai-native"
   | "google-generative-ai"
   | "google-vertex"
   | "local"
@@ -72,10 +84,44 @@ export type ProviderRequestPolicyResolution = {
   usesExplicitProxyLikeEndpoint: boolean;
 };
 
+export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
+  modelId?: string | null;
+  compat?: {
+    supportsStore?: boolean;
+  } | null;
+};
+
+export type ProviderRequestCompatibilityFamily = "moonshot";
+
+export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
+  isKnownNativeEndpoint: boolean;
+  allowsOpenAIServiceTier: boolean;
+  supportsOpenAIReasoningCompatPayload: boolean;
+  allowsAnthropicServiceTier: boolean;
+  supportsResponsesStoreField: boolean;
+  allowsResponsesStore: boolean;
+  shouldStripResponsesPromptCache: boolean;
+  supportsNativeStreamingUsageCompat: boolean;
+  compatibilityFamily?: ProviderRequestCompatibilityFamily;
+};
+
 const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
 const OPENCLAW_ATTRIBUTION_ORIGINATOR = "openclaw";
 
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const MOONSHOT_NATIVE_BASE_URLS = new Set([
+  "https://api.moonshot.ai/v1",
+  "https://api.moonshot.cn/v1",
+]);
+const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
+  "https://coding-intl.dashscope.aliyuncs.com/v1",
+  "https://coding.dashscope.aliyuncs.com/v1",
+  "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+]);
+const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "azure-openai-responses"]);
+const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
+const MOONSHOT_COMPAT_PROVIDERS = new Set(["moonshot", "kimi"]);
 
 function formatOpenClawUserAgent(version: string): string {
   return `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${version}`;
@@ -109,6 +155,29 @@ function resolveUrlHostname(value: unknown): string | undefined {
   return tryParseHostname(`https://${trimmed}`);
 }
 
+function normalizeComparableBaseUrl(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const parsedValue =
+    tryParseHostname(trimmed) || !isSchemelessHostnameCandidate(trimmed)
+      ? trimmed
+      : `https://${trimmed}`;
+  try {
+    const url = new URL(parsedValue);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return undefined;
+    }
+    url.hash = "";
+    url.search = "";
+    return url.toString().replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
 function isLocalEndpointHost(host: string): boolean {
   return (
     LOCAL_ENDPOINT_HOSTS.has(host) ||
@@ -129,14 +198,51 @@ export function resolveProviderEndpoint(
   if (!host) {
     return { endpointClass: "invalid" };
   }
+  const normalizedBaseUrl = normalizeComparableBaseUrl(baseUrl);
+  if (normalizedBaseUrl && MOONSHOT_NATIVE_BASE_URLS.has(normalizedBaseUrl)) {
+    return { endpointClass: "moonshot-native", hostname: host };
+  }
+  if (normalizedBaseUrl && MODELSTUDIO_NATIVE_BASE_URLS.has(normalizedBaseUrl)) {
+    return { endpointClass: "modelstudio-native", hostname: host };
+  }
   if (host === "api.openai.com") {
     return { endpointClass: "openai-public", hostname: host };
+  }
+  if (host === "api.anthropic.com") {
+    return { endpointClass: "anthropic-public", hostname: host };
+  }
+  if (host === "api.mistral.ai") {
+    return { endpointClass: "mistral-public", hostname: host };
+  }
+  if (host === "api.cerebras.ai") {
+    return { endpointClass: "cerebras-native", hostname: host };
+  }
+  if (host === "llm.chutes.ai") {
+    return { endpointClass: "chutes-native", hostname: host };
+  }
+  if (host === "api.deepseek.com") {
+    return { endpointClass: "deepseek-native", hostname: host };
+  }
+  if (host.endsWith(".githubcopilot.com")) {
+    return { endpointClass: "github-copilot-native", hostname: host };
+  }
+  if (host === "api.groq.com") {
+    return { endpointClass: "groq-native", hostname: host };
   }
   if (host === "chatgpt.com") {
     return { endpointClass: "openai-codex", hostname: host };
   }
+  if (host === "opencode.ai" || host.endsWith(".opencode.ai")) {
+    return { endpointClass: "opencode-native", hostname: host };
+  }
   if (host === "openrouter.ai" || host.endsWith(".openrouter.ai")) {
     return { endpointClass: "openrouter", hostname: host };
+  }
+  if (host === "api.x.ai") {
+    return { endpointClass: "xai-native", hostname: host };
+  }
+  if (host === "api.z.ai") {
+    return { endpointClass: "zai-native", hostname: host };
   }
   if (host.endsWith(".openai.azure.com")) {
     return { endpointClass: "azure-openai", hostname: host };
@@ -176,8 +282,24 @@ function resolveKnownProviderFamily(provider: string | undefined): string {
       return "openrouter";
     case "anthropic":
       return "anthropic";
+    case "chutes":
+      return "chutes";
+    case "deepseek":
+      return "deepseek";
     case "google":
       return "google";
+    case "xai":
+      return "xai";
+    case "zai":
+      return "zai";
+    case "moonshot":
+    case "kimi":
+      return "moonshot";
+    case "qwen":
+    case "qwencloud":
+    case "modelstudio":
+    case "dashscope":
+      return "modelstudio";
     case "github-copilot":
       return "github-copilot";
     case "groq":
@@ -371,12 +493,11 @@ export function resolveProviderRequestPolicy(
   ) {
     attributionProvider = "openai-codex";
   } else if (provider === "openrouter" && policy?.enabledByDefault) {
-    // OpenRouter attribution is documented and intentionally remains
-    // provider-key-gated for this pass, including custom base URLs configured
-    // under the openrouter provider. The endpoint class is still surfaced so a
-    // later host-gating decision can reuse the same classifier without changing
-    // callers again.
-    attributionProvider = "openrouter";
+    // OpenRouter attribution is documented, but only apply it to known
+    // OpenRouter endpoints or the default (unset) baseUrl path.
+    if (endpointClass === "openrouter" || endpointClass === "default") {
+      attributionProvider = "openrouter";
+    }
   }
 
   const attributionHeaders = attributionProvider
@@ -406,4 +527,89 @@ export function resolveProviderRequestAttributionHeaders(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): Record<string, string> | undefined {
   return resolveProviderRequestPolicy(input, env).attributionHeaders;
+}
+
+export function resolveProviderRequestCapabilities(
+  input: ProviderRequestCapabilitiesInput,
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderRequestCapabilities {
+  const policy = resolveProviderRequestPolicy(input, env);
+  const provider = policy.provider;
+  const api = input.api?.trim().toLowerCase();
+  const normalizedModelId = input.modelId?.trim().toLowerCase();
+  const endpointClass = policy.endpointClass;
+  const isKnownNativeEndpoint =
+    endpointClass === "anthropic-public" ||
+    endpointClass === "cerebras-native" ||
+    endpointClass === "chutes-native" ||
+    endpointClass === "deepseek-native" ||
+    endpointClass === "github-copilot-native" ||
+    endpointClass === "groq-native" ||
+    endpointClass === "mistral-public" ||
+    endpointClass === "moonshot-native" ||
+    endpointClass === "modelstudio-native" ||
+    endpointClass === "openai-public" ||
+    endpointClass === "openai-codex" ||
+    endpointClass === "opencode-native" ||
+    endpointClass === "azure-openai" ||
+    endpointClass === "openrouter" ||
+    endpointClass === "xai-native" ||
+    endpointClass === "zai-native" ||
+    endpointClass === "google-generative-ai" ||
+    endpointClass === "google-vertex";
+
+  let compatibilityFamily: ProviderRequestCompatibilityFamily | undefined;
+  if (provider && MOONSHOT_COMPAT_PROVIDERS.has(provider)) {
+    compatibilityFamily = "moonshot";
+  } else if (
+    provider === "ollama" &&
+    normalizedModelId?.startsWith("kimi-k") &&
+    normalizedModelId.includes(":cloud")
+  ) {
+    compatibilityFamily = "moonshot";
+  }
+
+  return {
+    ...policy,
+    isKnownNativeEndpoint,
+    allowsOpenAIServiceTier:
+      (provider === "openai" && api === "openai-responses" && endpointClass === "openai-public") ||
+      (provider === "openai-codex" &&
+        (api === "openai-codex-responses" || api === "openai-responses") &&
+        endpointClass === "openai-codex"),
+    supportsOpenAIReasoningCompatPayload:
+      provider !== undefined &&
+      api !== undefined &&
+      !policy.usesExplicitProxyLikeEndpoint &&
+      (provider === "openai" ||
+        provider === "openai-codex" ||
+        provider === "azure-openai" ||
+        provider === "azure-openai-responses") &&
+      (api === "openai-completions" ||
+        api === "openai-responses" ||
+        api === "openai-codex-responses" ||
+        api === "azure-openai-responses"),
+    allowsAnthropicServiceTier:
+      provider === "anthropic" &&
+      api === "anthropic-messages" &&
+      (endpointClass === "default" || endpointClass === "anthropic-public"),
+    // This is intentionally the gate for emitting `store: false` on Responses
+    // transports, not just a statement about vendor support in the abstract.
+    supportsResponsesStoreField:
+      input.compat?.supportsStore !== false && api !== undefined && OPENAI_RESPONSES_APIS.has(api),
+    allowsResponsesStore:
+      input.compat?.supportsStore !== false &&
+      provider !== undefined &&
+      api !== undefined &&
+      OPENAI_RESPONSES_APIS.has(api) &&
+      OPENAI_RESPONSES_PROVIDERS.has(provider) &&
+      policy.usesKnownNativeOpenAIEndpoint,
+    shouldStripResponsesPromptCache:
+      api !== undefined && OPENAI_RESPONSES_APIS.has(api) && policy.usesExplicitProxyLikeEndpoint,
+    // Native endpoint class is the real signal here. Users can point a generic
+    // provider key at Moonshot or DashScope and still need streaming usage.
+    supportsNativeStreamingUsageCompat:
+      endpointClass === "moonshot-native" || endpointClass === "modelstudio-native",
+    compatibilityFamily,
+  };
 }

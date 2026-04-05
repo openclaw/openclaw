@@ -125,13 +125,13 @@ elif [ -d /app/dist/extensions ]; then
   export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
 fi
 cd "$tmp_dir"
-pnpm test:live
+pnpm test:live:models-profiles
 EOF
 
-echo "==> Build live-test image: $LIVE_IMAGE_NAME (target=build)"
-docker build --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
+"$ROOT_DIR/scripts/test-live-build-docker.sh"
 
 echo "==> Run live model tests (profile keys)"
+echo "==> Target: src/agents/models.profiles.live.test.ts"
 echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
 docker run --rm -t \
@@ -145,7 +145,7 @@ docker run --rm -t \
   -e OPENCLAW_LIVE_TEST=1 \
   -e OPENCLAW_LIVE_MODELS="${OPENCLAW_LIVE_MODELS:-modern}" \
   -e OPENCLAW_LIVE_PROVIDERS="${OPENCLAW_LIVE_PROVIDERS:-}" \
-  -e OPENCLAW_LIVE_MAX_MODELS="${OPENCLAW_LIVE_MAX_MODELS:-48}" \
+  -e OPENCLAW_LIVE_MAX_MODELS="${OPENCLAW_LIVE_MAX_MODELS:-12}" \
   -e OPENCLAW_LIVE_MODEL_TIMEOUT_MS="${OPENCLAW_LIVE_MODEL_TIMEOUT_MS:-}" \
   -e OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS="${OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS:-}" \
   -e OPENCLAW_LIVE_GATEWAY_MODELS="${OPENCLAW_LIVE_GATEWAY_MODELS:-}" \

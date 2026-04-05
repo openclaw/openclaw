@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createWindowsCmdShimFixture } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createWindowsCmdShimFixture } from "../../../../src/test-helpers/windows-cmd-shim.js";
 import {
   resolveSpawnCommand,
   spawnAndCollect,
@@ -403,9 +403,7 @@ describe("spawnAndCollect", () => {
       { signal: controller.signal },
     );
 
-    setTimeout(() => {
-      controller.abort();
-    }, 10);
+    controller.abort();
 
     const result = await resultPromise;
     expect(result.error?.name).toBe("AbortError");

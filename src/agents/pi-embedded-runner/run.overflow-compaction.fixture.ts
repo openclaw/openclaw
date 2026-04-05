@@ -1,3 +1,4 @@
+import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 export const DEFAULT_OVERFLOW_ERROR_MESSAGE =
@@ -28,6 +29,9 @@ export function makeCompactionSuccess(params: {
 export function makeAttemptResult(
   overrides: Partial<EmbeddedRunAttemptResult> = {},
 ): EmbeddedRunAttemptResult {
+  const toolMetas = overrides.toolMetas ?? [];
+  const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
+  const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
     timedOut: false,
@@ -35,10 +39,17 @@ export function makeAttemptResult(
     promptError: null,
     sessionIdUsed: "test-session",
     assistantTexts: ["Hello!"],
-    toolMetas: [],
+    toolMetas,
     lastAssistant: undefined,
     messagesSnapshot: [],
-    didSendViaMessagingTool: false,
+    replayMetadata:
+      overrides.replayMetadata ??
+      buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool,
+        successfulCronAdds,
+      }),
+    didSendViaMessagingTool,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],

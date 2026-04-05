@@ -1,12 +1,12 @@
 import fs from "fs";
 import path from "path";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
-import { chunkTextForOutbound, type ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { replyComment } from "./drive.js";
 import { sendMediaFeishu } from "./media.js";
+import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
 

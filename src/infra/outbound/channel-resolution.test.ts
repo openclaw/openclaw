@@ -48,17 +48,20 @@ async function importChannelResolution(scope: string) {
 }
 
 function expectBootstrapArgs() {
-  expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith({
-    config: { autoEnabled: true },
-    workspaceDir: "/tmp/workspace",
-    runtimeOptions: {
-      allowGatewaySubagentBinding: true,
-    },
-  });
+  expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: { autoEnabled: true },
+      activationSourceConfig: { channels: {} },
+      workspaceDir: "/tmp/workspace",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    }),
+  );
 }
 
 describe("outbound channel resolution", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     getChannelPluginMock.mockReset();
@@ -77,9 +80,15 @@ describe("outbound channel resolution", () => {
     );
     getActivePluginRegistryMock.mockReturnValue({ channels: [] });
     getActivePluginChannelRegistryVersionMock.mockReturnValue(1);
-    applyPluginAutoEnableMock.mockReturnValue({ config: { autoEnabled: true } });
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: { autoEnabled: true },
+      autoEnabledReasons: {},
+    });
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
+
+    const channelResolution = await importChannelResolution("reset");
+    channelResolution.resetOutboundChannelResolutionStateForTest();
   });
 
   it.each([

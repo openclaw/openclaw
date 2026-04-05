@@ -88,9 +88,15 @@ describe("secrets handlers", () => {
 
   it("resolves requested command secret assignments from the active snapshot", async () => {
     const resolveSecrets = vi.fn().mockResolvedValue({
-      assignments: [{ path: "talk.apiKey", pathSegments: ["talk", "apiKey"], value: "sk" }],
+      assignments: [
+        {
+          path: "talk.providers.elevenlabs.apiKey",
+          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+          value: "sk",
+        },
+      ],
       diagnostics: ["note"],
-      inactiveRefPaths: ["talk.apiKey"],
+      inactiveRefPaths: ["talk.providers.elevenlabs.apiKey"],
     });
     const handlers = createHandlers({ resolveSecrets });
     const respond = vi.fn();
@@ -98,17 +104,23 @@ describe("secrets handlers", () => {
       handlers,
       respond,
       commandName: "memory status",
-      targetIds: ["talk.apiKey"],
+      targetIds: ["talk.providers.*.apiKey"],
     });
     expect(resolveSecrets).toHaveBeenCalledWith({
       commandName: "memory status",
-      targetIds: ["talk.apiKey"],
+      targetIds: ["talk.providers.*.apiKey"],
     });
     expect(respond).toHaveBeenCalledWith(true, {
       ok: true,
-      assignments: [{ path: "talk.apiKey", pathSegments: ["talk", "apiKey"], value: "sk" }],
+      assignments: [
+        {
+          path: "talk.providers.elevenlabs.apiKey",
+          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+          value: "sk",
+        },
+      ],
       diagnostics: ["note"],
-      inactiveRefPaths: ["talk.apiKey"],
+      inactiveRefPaths: ["talk.providers.elevenlabs.apiKey"],
     });
   });
 
@@ -138,7 +150,7 @@ describe("secrets handlers", () => {
       handlers,
       respond,
       commandName: "memory status",
-      targetIds: ["talk.apiKey", 12],
+      targetIds: ["talk.providers.*.apiKey", 12],
     });
     expect(resolveSecrets).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
@@ -174,7 +186,7 @@ describe("secrets handlers", () => {
 
   it("returns unavailable when secrets.resolve handler returns an invalid payload shape", async () => {
     const resolveSecrets = vi.fn().mockResolvedValue({
-      assignments: [{ path: "talk.apiKey", pathSegments: [""], value: "sk" }],
+      assignments: [{ path: "talk.providers.elevenlabs.apiKey", pathSegments: [""], value: "sk" }],
       diagnostics: [],
       inactiveRefPaths: [],
     });
@@ -184,7 +196,7 @@ describe("secrets handlers", () => {
       handlers,
       respond,
       commandName: "memory status",
-      targetIds: ["talk.apiKey"],
+      targetIds: ["talk.providers.*.apiKey"],
     });
     expect(respond).toHaveBeenCalledWith(
       false,

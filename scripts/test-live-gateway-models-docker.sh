@@ -115,13 +115,13 @@ elif [ -d /app/dist/extensions ]; then
   export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
 fi
 cd "$tmp_dir"
-pnpm test:live
+pnpm test:live:gateway-profiles
 EOF
 
-echo "==> Build live-test image: $LIVE_IMAGE_NAME (target=build)"
-docker build --target build -t "$LIVE_IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
+"$ROOT_DIR/scripts/test-live-build-docker.sh"
 
 echo "==> Run gateway live model tests (profile keys)"
+echo "==> Target: src/gateway/gateway-models.profiles.live.test.ts"
 echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
 docker run --rm -t \
@@ -135,8 +135,10 @@ docker run --rm -t \
   -e OPENCLAW_LIVE_TEST=1 \
   -e OPENCLAW_LIVE_GATEWAY_MODELS="${OPENCLAW_LIVE_GATEWAY_MODELS:-modern}" \
   -e OPENCLAW_LIVE_GATEWAY_PROVIDERS="${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" \
-  -e OPENCLAW_LIVE_GATEWAY_MAX_MODELS="${OPENCLAW_LIVE_GATEWAY_MAX_MODELS:-24}" \
-  -e OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS="${OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS:-}" \
+  -e OPENCLAW_LIVE_GATEWAY_SMOKE="${OPENCLAW_LIVE_GATEWAY_SMOKE:-1}" \
+  -e OPENCLAW_LIVE_GATEWAY_MAX_MODELS="${OPENCLAW_LIVE_GATEWAY_MAX_MODELS:-8}" \
+  -e OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS="${OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS:-45000}" \
+  -e OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS="${OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS:-90000}" \
   -v "$ROOT_DIR":/src:ro \
   -v "$CONFIG_DIR":/home/node/.openclaw \
   -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \

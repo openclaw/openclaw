@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import { buildAttemptReplayMetadata } from "./pi-embedded-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
@@ -58,8 +59,10 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
     runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
   }));
-  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  vi.doMock("../plugins/provider-runtime.js", async () => {
+    const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+      "../plugins/provider-runtime.js",
+    );
     return {
       ...actual,
       prepareProviderRuntimeAuth: async (params: {
@@ -91,8 +94,8 @@ const installRunEmbeddedMocks = () => {
       throw new Error("compact should not run in auth profile rotation tests");
     }),
   }));
-  vi.doMock("./models-config.js", async (importOriginal) => {
-    const mod = await importOriginal<typeof import("./models-config.js")>();
+  vi.doMock("./models-config.js", async () => {
+    const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
     return {
       ...mod,
       ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
@@ -174,24 +177,36 @@ const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage 
   ...overrides,
 });
 
-const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => ({
-  aborted: false,
-  timedOut: false,
-  timedOutDuringCompaction: false,
-  promptError: null,
-  sessionIdUsed: "session:test",
-  systemPromptReport: undefined,
-  messagesSnapshot: [],
-  assistantTexts: [],
-  toolMetas: [],
-  lastAssistant: undefined,
-  didSendViaMessagingTool: false,
-  messagingToolSentTexts: [],
-  messagingToolSentMediaUrls: [],
-  messagingToolSentTargets: [],
-  cloudCodeAssistFormatError: false,
-  ...overrides,
-});
+const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => {
+  const toolMetas = overrides.toolMetas ?? [];
+  const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
+  const successfulCronAdds = overrides.successfulCronAdds;
+  return {
+    aborted: false,
+    timedOut: false,
+    timedOutDuringCompaction: false,
+    promptError: null,
+    sessionIdUsed: "session:test",
+    systemPromptReport: undefined,
+    messagesSnapshot: [],
+    assistantTexts: [],
+    toolMetas,
+    lastAssistant: undefined,
+    replayMetadata:
+      overrides.replayMetadata ??
+      buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool,
+        successfulCronAdds,
+      }),
+    didSendViaMessagingTool,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
+    cloudCodeAssistFormatError: false,
+    ...overrides,
+  };
+};
 
 const makeConfig = (opts?: {
   fallbacks?: string[];

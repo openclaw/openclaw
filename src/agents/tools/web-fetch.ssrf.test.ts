@@ -27,22 +27,33 @@ function textResponse(body: string): Response {
 function setMockFetch(
   impl: FetchMock = async (_input: RequestInfo | URL, _init?: RequestInit) => textResponse(""),
 ) {
-  const fetchSpy = vi.fn<FetchMock>(impl);
+  const fetchSpy = vi.fn(impl);
   global.fetch = withFetchPreconnect(fetchSpy);
   return fetchSpy;
 }
 
-async function createWebFetchToolForTest(params?: {
-  firecrawl?: { enabled?: boolean; apiKey?: string };
-}) {
+async function createWebFetchToolForTest(params?: { firecrawlApiKey?: string }) {
   const { createWebFetchTool } = await import("./web-tools.js");
   return createWebFetchTool({
     config: {
+      plugins: params?.firecrawlApiKey
+        ? {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    apiKey: params.firecrawlApiKey,
+                  },
+                },
+              },
+            },
+          }
+        : undefined,
       tools: {
         web: {
           fetch: {
             cacheTtlMinutes: 0,
-            firecrawl: params?.firecrawl ?? { enabled: false },
+            ...(params?.firecrawlApiKey ? { provider: "firecrawl" } : {}),
           },
         },
       },
@@ -62,6 +73,7 @@ describe("web_fetch SSRF protection", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "");
     vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
       resolvePinnedHostname(hostname, lookupMock),
     );
@@ -70,13 +82,14 @@ describe("web_fetch SSRF protection", () => {
   afterEach(() => {
     global.fetch = priorFetch;
     lookupMock.mockClear();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
   it("blocks localhost hostnames before fetch/firecrawl", async () => {
     const fetchSpy = setMockFetch();
     const tool = await createWebFetchToolForTest({
-      firecrawl: { apiKey: "firecrawl-test" }, // pragma: allowlist secret
+      firecrawlApiKey: "firecrawl-test", // pragma: allowlist secret
     });
 
     await expectBlockedUrl(tool, "http://localhost/test", /Blocked hostname/i);
@@ -118,7 +131,7 @@ describe("web_fetch SSRF protection", () => {
       redirectResponse("http://127.0.0.1/secret"),
     );
     const tool = await createWebFetchToolForTest({
-      firecrawl: { apiKey: "firecrawl-test" }, // pragma: allowlist secret
+      firecrawlApiKey: "firecrawl-test", // pragma: allowlist secret
     });
 
     await expectBlockedUrl(tool, "https://example.com", /private|internal|blocked/i);

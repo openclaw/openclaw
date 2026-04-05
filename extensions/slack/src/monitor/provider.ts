@@ -7,17 +7,9 @@ import {
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "openclaw/plugin-sdk/allow-from";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import {
-  resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
 import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -31,6 +23,7 @@ import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
+import { isSlackExecApprovalClientEnabled } from "../exec-approvals.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist, type SlackChannelResolution } from "../resolve-channels.js";
@@ -38,6 +31,13 @@ import { resolveSlackUserAllowlist, type SlackUserResolution } from "../resolve-
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
+import {
+  isDangerousNameMatchingEnabled,
+  loadConfig,
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "./config.runtime.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { SlackExecApprovalHandler } from "./exec-approvals.js";
@@ -49,6 +49,7 @@ import {
   SLACK_SOCKET_RECONNECT_POLICY,
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
+import { resolveTextChunkLimit } from "./reply.runtime.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
@@ -57,6 +58,9 @@ type SlackHttpReceiverConstructor = typeof import("@slack/bolt").HTTPReceiver;
 type SlackBoltResolvedExports = {
   App: SlackAppConstructor;
   HTTPReceiver: SlackHttpReceiverConstructor;
+};
+type SlackSocketShutdownClient = {
+  shuttingDown?: boolean;
 };
 type Constructor = abstract new (...args: never[]) => unknown;
 
@@ -170,6 +174,29 @@ function publishSlackDisconnectedStatus(
   });
 }
 
+function resolveSlackSocketShutdownClient(app: unknown): SlackSocketShutdownClient | undefined {
+  if (!app || typeof app !== "object") {
+    return undefined;
+  }
+  const receiver = Reflect.get(app, "receiver");
+  if (!receiver || typeof receiver !== "object") {
+    return undefined;
+  }
+  const client = Reflect.get(receiver, "client");
+  if (!client || typeof client !== "object") {
+    return undefined;
+  }
+  return client as SlackSocketShutdownClient;
+}
+
+async function gracefulStopSlackApp(app: { stop: () => unknown }) {
+  const socketClient = resolveSlackSocketShutdownClient(app);
+  if (socketClient) {
+    socketClient.shuttingDown = true;
+  }
+  await Promise.resolve(app.stop()).catch(() => undefined);
+}
+
 function formatSlackResolvedLabel(params: {
   input: string;
   id: string;
@@ -201,7 +228,6 @@ function formatSlackUserResolved(entry: SlackUserResolution): string {
     extra: entry.note ? [entry.note] : [],
   });
 }
-
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const cfg = opts.config ?? loadConfig();
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
@@ -318,6 +344,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           clientOptions,
         },
   );
+
+  // Pre-set shuttingDown on the SocketModeClient before app.stop() to prevent
+  // a race where the library's internal ping timeout fires disconnect() before
+  // shuttingDown is set, causing orphaned reconnects with leaked ping intervals.
+  // See: openclaw/openclaw#56508
+  const gracefulStop = async () => {
+    await gracefulStopSlackApp(app);
+  };
+
   const slackHttpHandler =
     slackMode === "http" && receiver
       ? async (req: IncomingMessage, res: ServerResponse) => {
@@ -406,11 +441,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     : undefined;
 
   const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
-  const execApprovalsHandler = slackCfg.execApprovals?.enabled
+  const execApprovalsHandler = isSlackExecApprovalClientEnabled({
+    cfg,
+    accountId: account.accountId,
+  })
     ? new SlackExecApprovalHandler({
         app,
         accountId: account.accountId,
-        config: slackCfg.execApprovals,
+        config: slackCfg.execApprovals ?? {},
         cfg,
       })
     : null;
@@ -525,7 +563,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const stopOnAbort = () => {
     if (opts.abortSignal?.aborted && slackMode === "socket") {
-      void app.stop();
+      void gracefulStop();
     }
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
@@ -603,7 +641,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             disconnect.error ? ` (${formatUnknownError(disconnect.error)})` : ""
           }`,
         );
-        await app.stop().catch(() => undefined);
+        await gracefulStop();
         try {
           await sleepWithAbort(delayMs, opts.abortSignal);
         } catch {
@@ -624,7 +662,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterHttpHandler?.();
     await execApprovalsHandler?.stop().catch(() => undefined);
-    await app.stop().catch(() => undefined);
+    await gracefulStop();
   }
 }
 
@@ -637,6 +675,8 @@ export const __testing = {
   formatSlackUserResolved,
   publishSlackConnectedStatus,
   publishSlackDisconnectedStatus,
+  resolveSlackSocketShutdownClient,
+  gracefulStopSlackApp,
   resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveSlackBoltInterop,

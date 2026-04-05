@@ -31,12 +31,13 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
   </Step>
   <Step title="Model/Auth">
     - **Anthropic API key**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
-    - **Anthropic Claude CLI**: on macOS onboarding checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present and switches model selection to `claude-cli/...`.
-    - **Anthropic token (paste setup-token)**: run `claude setup-token` on any machine, then paste the token (you can name it; blank = default).
-    - **OpenAI Code (Codex) subscription (Codex CLI)**: if `~/.codex/auth.json` exists, onboarding can reuse it.
+    - **Anthropic Claude CLI**: preferred Anthropic assistant choice in onboarding/configure. On macOS onboarding checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present and switches model selection to a canonical `claude-cli/claude-*` ref.
+    - **Anthropic setup-token (legacy/manual)**: available again in onboarding/configure, but Anthropic told OpenClaw users that the OpenClaw Claude-login path counts as third-party harness usage and requires **Extra Usage** on the Claude account.
+    - **OpenAI Code (Codex) subscription (Codex CLI)**: if `~/.codex/auth.json` exists, onboarding can reuse it. Reused Codex CLI credentials stay managed by Codex CLI; on expiry OpenClaw re-reads that source first and, when the provider can refresh it, writes the refreshed credential back to Codex storage instead of taking ownership itself.
     - **OpenAI Code (Codex) subscription (OAuth)**: browser flow; paste the `code#state`.
-      - Sets `agents.defaults.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
+      - Sets `agents.defaults.model` to `openai-codex/gpt-5.4` when model is unset or `openai/*`.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
+      - Sets `agents.defaults.model` to `openai/gpt-5.4` when model is unset, `openai/*`, or `openai-codex/*`.
     - **xAI (Grok) API key**: prompts for `XAI_API_KEY` and configures xAI as a model provider.
     - **OpenCode**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth) and lets you pick the Zen or Go catalog.
     - **Ollama**: prompts for the Ollama base URL, offers **Cloud + Local** or **Local** mode, discovers available models, and auto-pulls the selected local model when needed.
@@ -47,7 +48,12 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - **Cloudflare AI Gateway**: prompts for Account ID, Gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     - More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
     - **MiniMax**: config is auto-written; hosted default is `MiniMax-M2.7`.
+      API-key setup uses `minimax/...`, and OAuth setup uses
+      `minimax-portal/...`.
     - More detail: [MiniMax](/providers/minimax)
+    - **StepFun**: config is auto-written for StepFun standard or Step Plan on China or global endpoints.
+    - Standard currently includes `step-3.5-flash`, and Step Plan also includes `step-3.5-flash-2603`.
+    - More detail: [StepFun](/providers/stepfun)
     - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
     - More detail: [Synthetic](/providers/synthetic)
     - **Moonshot (Kimi K2)**: config is auto-written.
@@ -57,12 +63,14 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - Pick a default model from detected options (or enter provider/model manually). For best quality and lower prompt-injection risk, choose the strongest latest-generation model available in your provider stack.
     - Onboarding runs a model check and warns if the configured model is unknown or missing auth.
     - API key storage mode defaults to plaintext auth-profile values. Use `--secret-input-mode ref` to store env-backed refs instead (for example `keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" }`).
-    - OAuth credentials live in `~/.openclaw/credentials/oauth.json`; auth profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (API keys + OAuth).
+    - Auth profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (API keys + OAuth). `~/.openclaw/credentials/oauth.json` is legacy import-only.
     - More detail: [/concepts/oauth](/concepts/oauth)
     <Note>
     Headless/server tip: complete OAuth on a machine with a browser, then copy
-    `~/.openclaw/credentials/oauth.json` (or `$OPENCLAW_STATE_DIR/credentials/oauth.json`) to the
-    gateway host.
+    that agent's `auth-profiles.json` (for example
+    `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`, or the matching
+    `$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json`
+    is only a legacy import source.
     </Note>
   </Step>
   <Step title="Workspace">
@@ -97,8 +105,8 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
   </Step>
   <Step title="Web search">
-    - Pick a provider: Perplexity, Brave, Gemini, Grok, or Kimi (or skip).
-    - Paste your API key (QuickStart auto-detects keys from env vars or existing config).
+    - Pick a supported provider such as Brave, DuckDuckGo, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Ollama Web Search, Perplexity, SearXNG, or Tavily (or skip).
+    - API-backed providers can use env vars or existing config for quick setup; key-free providers use their provider-specific prerequisites instead.
     - Skip with `--skip-search`.
     - Configure later: `openclaw configure --section web`.
   </Step>
@@ -115,7 +123,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
   </Step>
   <Step title="Health check">
     - Starts the Gateway (if needed) and runs `openclaw health`.
-    - Tip: `openclaw status --deep` adds gateway health probes to status output (requires a reachable gateway).
+    - Tip: `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported (requires a reachable gateway).
   </Step>
   <Step title="Skills (recommended)">
     - Reads the available skills and checks requirements.
@@ -175,7 +183,7 @@ Use this reference page for flag semantics and step ordering.
 ```bash
 openclaw agents add work \
   --workspace ~/.openclaw/workspace-work \
-  --model openai/gpt-5.2 \
+  --model openai/gpt-5.4 \
   --bind whatsapp:biz \
   --non-interactive \
   --json
@@ -212,6 +220,8 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
 - Channel allowlists (Slack/Discord/Matrix/Microsoft Teams) when you opt in during the prompts (names resolve to IDs when possible).
 - `skills.install.nodeManager`
+  - `setup --node-manager` accepts `npm`, `pnpm`, or `bun`.
+  - Manual config can still use `yarn` by setting `skills.install.nodeManager` directly.
 - `wizard.lastRunAt`
 - `wizard.lastRunVersion`
 - `wizard.lastRunCommit`

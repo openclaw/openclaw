@@ -22,8 +22,9 @@ import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registr
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,
+  buildPluginDiagnosticsReport,
   buildPluginInspectReport,
-  buildPluginStatusReport,
+  buildPluginSnapshotReport,
   formatPluginCompatibilityNotice,
   type PluginStatusReport,
 } from "../../plugins/status.js";
@@ -272,7 +273,10 @@ async function installPluginFromPluginsCommand(params: {
   return { ok: true, pluginId: result.pluginId };
 }
 
-async function loadPluginCommandState(workspaceDir: string): Promise<
+async function loadPluginCommandState(
+  workspaceDir: string,
+  options?: { loadModules?: boolean },
+): Promise<
   | {
       ok: true;
       path: string;
@@ -294,7 +298,10 @@ async function loadPluginCommandState(workspaceDir: string): Promise<
     ok: true,
     path: snapshot.path,
     config,
-    report: buildPluginStatusReport({ config, workspaceDir }),
+    report:
+      options?.loadModules === true
+        ? buildPluginDiagnosticsReport({ config, workspaceDir })
+        : buildPluginSnapshotReport({ config, workspaceDir }),
   };
 }
 
@@ -331,7 +338,9 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const loaded = await loadPluginCommandState(params.workspaceDir);
+  const loaded = await loadPluginCommandState(params.workspaceDir, {
+    loadModules: pluginsCommand.action !== "list",
+  });
   if (!loaded.ok) {
     return {
       shouldContinue: false,

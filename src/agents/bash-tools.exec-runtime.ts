@@ -220,11 +220,15 @@ export function renderExecTargetLabel(target: ExecTarget) {
 export function isRequestedExecTargetAllowed(params: {
   configuredTarget: ExecTarget;
   requestedTarget: ExecTarget;
+  sandboxAvailable?: boolean;
 }) {
   if (params.requestedTarget === params.configuredTarget) {
     return true;
   }
   if (params.configuredTarget === "auto") {
+    if (params.sandboxAvailable && params.requestedTarget === "gateway") {
+      return false;
+    }
     return true;
   }
   return false;
@@ -239,11 +243,12 @@ export function resolveExecTarget(params: {
   const configuredTarget = params.configuredTarget ?? "auto";
   const requestedTarget = params.requestedTarget ?? null;
   if (params.elevatedRequested) {
+    const elevatedTarget = configuredTarget === "node" ? ("node" as const) : ("gateway" as const);
     return {
       configuredTarget,
       requestedTarget,
-      selectedTarget: "gateway" as const,
-      effectiveHost: "gateway" as const,
+      selectedTarget: elevatedTarget,
+      effectiveHost: elevatedTarget,
     };
   }
   if (
@@ -251,11 +256,12 @@ export function resolveExecTarget(params: {
     !isRequestedExecTargetAllowed({
       configuredTarget,
       requestedTarget,
+      sandboxAvailable: params.sandboxAvailable,
     })
   ) {
     throw new Error(
       `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-        `configure tools.exec.host=${renderExecTargetLabel(configuredTarget)} to allow).`,
+        `configure tools.exec.host=${renderExecTargetLabel(requestedTarget)} to allow).`,
     );
   }
   const selectedTarget = requestedTarget ?? configuredTarget;
@@ -340,7 +346,7 @@ export function buildApprovalPendingMessage(params: {
   approvalId: string;
   allowedDecisions?: readonly ExecApprovalDecision[];
   command: string;
-  cwd: string;
+  cwd: string | undefined;
   host: "gateway" | "node";
   nodeId?: string;
 }) {
@@ -361,7 +367,7 @@ export function buildApprovalPendingMessage(params: {
   if (params.nodeId) {
     lines.push(`Node: ${params.nodeId}`);
   }
-  lines.push(`CWD: ${params.cwd}`);
+  lines.push(`CWD: ${params.cwd ?? "(node default)"}`);
   lines.push("Command:");
   lines.push(commandBlock);
   lines.push("Mode: foreground (interactive approvals available).");

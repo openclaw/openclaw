@@ -8,6 +8,7 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { createScopedChannelMediaMaxBytesResolver } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveOutboundSendDep,
+  sanitizeForPlainText,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/outbound-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
@@ -34,6 +35,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
   chunker: (text, _limit) => text.split(/\n{2,}/).flatMap((chunk) => (chunk ? [chunk] : [])),
   chunkerMode: "text",
   textChunkLimit: 4000,
+  sanitizeText: ({ text }) => sanitizeForPlainText(text),
   sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) => {
     const send = resolveSignalSender(deps);
     const maxBytes = resolveSignalMaxBytes({

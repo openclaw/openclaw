@@ -65,19 +65,21 @@ export async function describeMoonshotVideo(
   const model = resolveModel(params.model);
   const mime = params.mime ?? "video/mp4";
   const prompt = resolvePrompt(params.prompt);
-  const { baseUrl, allowPrivateNetwork, headers } = resolveProviderHttpRequestConfig({
-    baseUrl: params.baseUrl,
-    defaultBaseUrl: DEFAULT_MOONSHOT_VIDEO_BASE_URL,
-    headers: params.headers,
-    defaultHeaders: {
-      "content-type": "application/json",
-      authorization: `Bearer ${params.apiKey}`,
-    },
-    provider: "moonshot",
-    api: "openai-completions",
-    capability: "video",
-    transport: "media-understanding",
-  });
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+    resolveProviderHttpRequestConfig({
+      baseUrl: params.baseUrl,
+      defaultBaseUrl: DEFAULT_MOONSHOT_VIDEO_BASE_URL,
+      headers: params.headers,
+      request: params.request,
+      defaultHeaders: {
+        "content-type": "application/json",
+        authorization: `Bearer ${params.apiKey}`,
+      },
+      provider: "moonshot",
+      api: "openai-completions",
+      capability: "video",
+      transport: "media-understanding",
+    });
   const url = `${baseUrl}/chat/completions`;
 
   const body = {
@@ -105,6 +107,7 @@ export async function describeMoonshotVideo(
     timeoutMs: params.timeoutMs,
     fetchFn,
     allowPrivateNetwork,
+    dispatcherPolicy,
   });
 
   try {
@@ -123,6 +126,8 @@ export async function describeMoonshotVideo(
 export const moonshotMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "moonshot",
   capabilities: ["image", "video"],
+  defaultModels: { image: "kimi-k2.5", video: DEFAULT_MOONSHOT_VIDEO_MODEL },
+  autoPriority: { video: 20 },
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
   describeVideo: describeMoonshotVideo,

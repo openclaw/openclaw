@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listBundledChannelPlugins } from "../channels/plugins/bundled.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
@@ -16,7 +17,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { resolveMemoryBackendConfig } from "../plugin-sdk/memory-core-host-engine-storage.js";
+import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -462,9 +463,10 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if (!isRecord(channels)) {
     return false;
   }
-  // WhatsApp auth always uses the credentials tree.
-  if (isRecord(channels.whatsapp)) {
-    return true;
+  for (const plugin of listBundledChannelPlugins()) {
+    if (plugin.config.hasPersistedAuthState?.({ cfg, env })) {
+      return true;
+    }
   }
   // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json.
   for (const [channelId, channelCfg] of Object.entries(channels)) {

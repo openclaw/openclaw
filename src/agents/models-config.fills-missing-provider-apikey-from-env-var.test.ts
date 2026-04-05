@@ -542,7 +542,7 @@ describe("models-config", () => {
     });
   });
 
-  it("refreshes moonshot capabilities while preserving explicit token limits", async () => {
+  it("preserves explicit moonshot model capabilities when config already defines the model", async () => {
     await withTempHome(async () => {
       await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
         const cfg = createMoonshotConfig({ contextWindow: 1024, maxTokens: 256 });
@@ -565,7 +565,7 @@ describe("models-config", () => {
           >;
         }>();
         const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
-        expect(kimi?.input).toEqual(["text", "image"]);
+        expect(kimi?.input).toEqual(["text"]);
         expect(kimi?.reasoning).toBe(false);
         expect(kimi?.contextWindow).toBe(1024);
         expect(kimi?.maxTokens).toBe(256);
@@ -593,12 +593,12 @@ describe("models-config", () => {
     });
   });
 
-  it("falls back to implicit token limits when explicit values are invalid", async () => {
+  it("preserves explicit moonshot token limits even when they are invalid", async () => {
     await expectMoonshotTokenLimits({
       contextWindow: 0,
       maxTokens: -1,
-      expectedContextWindow: 262144,
-      expectedMaxTokens: 262144,
+      expectedContextWindow: 0,
+      expectedMaxTokens: -1,
     });
   });
 });

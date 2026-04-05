@@ -23,6 +23,7 @@ export {
   recordTaskProgressByRunId,
   resolveTaskForLookupToken,
   resetTaskRegistryForTests,
+  isParentFlowLinkError,
   setTaskCleanupAfterById,
   setTaskProgressById,
   setTaskRunDeliveryStatusByRunId,

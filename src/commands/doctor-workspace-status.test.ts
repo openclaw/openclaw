@@ -11,9 +11,9 @@ const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   buildWorkspaceSkillStatus: vi.fn(),
-  buildPluginStatusReport: vi.fn(),
+  buildPluginDiagnosticsReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
-  listFlowRecords: vi.fn<() => unknown[]>(() => []),
+  listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
   listTasksForFlowId: vi.fn<(flowId: string) => unknown[]>((_flowId: string) => []),
 }));
 
@@ -27,13 +27,13 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginStatusReport: (...args: unknown[]) => mocks.buildPluginStatusReport(...args),
+  buildPluginDiagnosticsReport: (...args: unknown[]) => mocks.buildPluginDiagnosticsReport(...args),
   buildPluginCompatibilityWarnings: (...args: unknown[]) =>
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
 
-vi.mock("../tasks/flow-runtime-internal.js", () => ({
-  listFlowRecords: () => mocks.listFlowRecords(),
+vi.mock("../tasks/task-flow-runtime-internal.js", () => ({
+  listTaskFlowRecords: () => mocks.listTaskFlowRecords(),
 }));
 
 vi.mock("../tasks/runtime-internal.js", () => ({
@@ -53,12 +53,12 @@ async function runNoteWorkspaceStatusForTest(
   mocks.buildWorkspaceSkillStatus.mockReturnValue({
     skills: [],
   });
-  mocks.buildPluginStatusReport.mockReturnValue({
+  mocks.buildPluginDiagnosticsReport.mockReturnValue({
     workspaceDir: "/workspace",
     ...loadResult,
   });
   mocks.buildPluginCompatibilityWarnings.mockReturnValue(compatibilityWarnings);
-  mocks.listFlowRecords.mockReturnValue(opts?.flows ?? []);
+  mocks.listTaskFlowRecords.mockReturnValue(opts?.flows ?? []);
   mocks.listTasksForFlowId.mockImplementation((flowId: string) =>
     opts?.tasksByFlowId ? opts.tasksByFlowId(flowId) : [],
   );
@@ -85,7 +85,7 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(mocks.buildPluginStatusReport).toHaveBeenCalledWith({
+      expect(mocks.buildPluginDiagnosticsReport).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
       });
@@ -119,6 +119,30 @@ describe("noteWorkspaceStatus", () => {
       const body = String(pluginCalls[0]?.[0]);
       expect(body).toContain("Bundle plugins: 1");
       expect(body).toContain("agents, commands, skills");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("includes imported plugin counts in the plugins note", async () => {
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: "imported-plugin",
+            imported: true,
+          }),
+          createPluginRecord({
+            id: "cold-plugin",
+            imported: false,
+          }),
+        ],
+      }),
+    );
+    try {
+      const pluginCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugins");
+      expect(pluginCalls).toHaveLength(1);
+      expect(String(pluginCalls[0]?.[0])).toContain("Imported: 1");
     } finally {
       noteSpy.mockRestore();
     }
@@ -158,6 +182,10 @@ describe("noteWorkspaceStatus", () => {
       "legacy-plugin still uses legacy before_agent_start",
     ]);
     try {
+      expect(mocks.buildPluginDiagnosticsReport).toHaveBeenCalledWith({
+        config: {},
+        workspaceDir: "/workspace",
+      });
       expect(mocks.buildPluginCompatibilityWarnings).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
@@ -200,7 +228,7 @@ describe("noteWorkspaceStatus", () => {
       const recoveryCalls = noteSpy.mock.calls.filter(([, title]) => title === "TaskFlow recovery");
       expect(recoveryCalls).toHaveLength(1);
       expect(String(recoveryCalls[0]?.[0])).toContain("flow-123");
-      expect(String(recoveryCalls[0]?.[0])).toContain("openclaw flows show <flow-id>");
+      expect(String(recoveryCalls[0]?.[0])).toContain("openclaw tasks flow show <flow-id>");
     } finally {
       noteSpy.mockRestore();
     }
