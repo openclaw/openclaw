@@ -137,6 +137,7 @@ export type ToolHandlerParams = Pick<
   | "sessionKey"
   | "sessionId"
   | "agentId"
+  | "toolResultFormat"
 >;
 
 export type ToolHandlerState = Pick<

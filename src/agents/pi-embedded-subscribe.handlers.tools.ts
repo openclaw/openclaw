@@ -326,7 +326,13 @@ async function emitToolResultOutput(params: {
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
-      emittedToolOutputMediaUrls = collectEmittedToolOutputMediaUrls(toolName, outputText, result);
+      if (ctx.params.toolResultFormat === "plain") {
+        emittedToolOutputMediaUrls = collectEmittedToolOutputMediaUrls(
+          toolName,
+          outputText,
+          result,
+        );
+      }
       ctx.emitToolOutput(toolName, meta, outputText, result);
     }
     if (!hasStructuredMedia) {
