@@ -77,6 +77,7 @@ import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   getInspectableTaskRegistrySummary,
   startTaskRegistryMaintenance,
+  stopTaskRegistryMaintenance,
 } from "../tasks/task-registry.maintenance.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
@@ -1530,6 +1531,7 @@ export async function startGatewayServer(
     cron,
     heartbeatRunner,
     updateCheckStop: stopGatewayUpdateCheck,
+    stopTaskRegistryMaintenance,
     nodePresenceTimers,
     broadcast,
     tickInterval,

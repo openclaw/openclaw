@@ -17,6 +17,7 @@ export function createGatewayCloseHandler(params: {
   cron: { stop: () => void };
   heartbeatRunner: HeartbeatRunner;
   updateCheckStop?: (() => void) | null;
+  stopTaskRegistryMaintenance?: (() => void) | null;
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   tickInterval: ReturnType<typeof setInterval>;
@@ -75,6 +76,11 @@ export function createGatewayCloseHandler(params: {
       await stopGmailWatcher();
       params.cron.stop();
       params.heartbeatRunner.stop();
+      try {
+        params.stopTaskRegistryMaintenance?.();
+      } catch {
+        /* ignore */
+      }
       try {
         params.updateCheckStop?.();
       } catch {
