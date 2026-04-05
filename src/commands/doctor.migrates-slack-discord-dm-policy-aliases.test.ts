@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { readConfigFileSnapshot, writeConfigFile } from "./doctor.e2e-harness.js";
+import { mockDoctorConfigSnapshot, writeConfigFile } from "./doctor.e2e-harness.js";
 
 const DOCTOR_MIGRATION_TIMEOUT_MS = process.platform === "win32" ? 60_000 : 45_000;
 const { doctorCommand } = await import("./doctor.js");
@@ -9,10 +9,7 @@ describe("doctor command", () => {
     "migrates Slack/Discord dm.policy keys to dmPolicy aliases",
     { timeout: DOCTOR_MIGRATION_TIMEOUT_MS },
     async () => {
-      readConfigFileSnapshot.mockResolvedValue({
-        path: "/tmp/openclaw.json",
-        exists: true,
-        raw: "{}",
+      mockDoctorConfigSnapshot({
         parsed: {
           channels: {
             slack: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
@@ -21,15 +18,18 @@ describe("doctor command", () => {
             },
           },
         },
-        valid: true,
         config: {
           channels: {
             slack: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
             discord: { dm: { enabled: true, policy: "allowlist", allowFrom: ["123"] } },
           },
         },
-        issues: [],
-        legacyIssues: [],
+        legacyIssues: [
+          { path: "channels.slack.dm.policy", message: "legacy dm.policy key" },
+          { path: "channels.slack.dm.allowFrom", message: "legacy dm.allowFrom key" },
+          { path: "channels.discord.dm.policy", message: "legacy dm.policy key" },
+          { path: "channels.discord.dm.allowFrom", message: "legacy dm.allowFrom key" },
+        ],
       });
 
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };

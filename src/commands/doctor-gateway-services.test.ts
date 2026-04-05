@@ -24,6 +24,7 @@ vi.mock("node:fs/promises", async () => {
 });
 
 const mocks = vi.hoisted(() => ({
+  loadConfig: vi.fn(() => ({})),
   readCommand: vi.fn(),
   stage: vi.fn(),
   install: vi.fn(),
@@ -39,15 +40,20 @@ const mocks = vi.hoisted(() => ({
   note: vi.fn(),
 }));
 
-vi.mock("../config/paths.js", () => ({
-  resolveGatewayPort: mocks.resolveGatewayPort,
-  resolveIsNixMode: mocks.resolveIsNixMode,
-}));
-
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
   return {
     ...actual,
+    resolveGatewayPort: mocks.resolveGatewayPort,
+    resolveIsNixMode: mocks.resolveIsNixMode,
+  };
+});
+
+vi.mock("../config/config.js", async () => {
+  const paths = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return {
+    ...paths,
+    loadConfig: mocks.loadConfig,
     writeConfigFile: mocks.writeConfigFile,
   };
 });
@@ -225,6 +231,7 @@ function setupGatewayTokenRepairScenario() {
 describe("maybeRepairGatewayServiceConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.loadConfig.mockReturnValue({});
     fsMocks.realpath.mockImplementation(async (value: string) => value);
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =

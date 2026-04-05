@@ -1,15 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createDoctorRuntime,
-  mockDoctorConfigSnapshot,
-  runChannelPluginStartupMaintenance,
-} from "./doctor.e2e-harness.js";
+import { createDoctorRuntime, runChannelPluginStartupMaintenance } from "./doctor.e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
-import { doctorCommand } from "./doctor.js";
+
+const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./doctor-config-flow.js", () => ({
+  loadAndMaybeMigrateDoctorConfig: (...args: unknown[]) =>
+    loadAndMaybeMigrateDoctorConfigMock(...args),
+}));
 
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProviders: vi.fn(() => []),
 }));
+
+import { doctorCommand } from "./doctor.js";
 
 const DOCTOR_MIGRATION_TIMEOUT_MS = process.platform === "win32" ? 60_000 : 45_000;
 
@@ -18,25 +22,21 @@ describe("doctor command", () => {
     "runs Matrix startup migration during repair flows",
     { timeout: DOCTOR_MIGRATION_TIMEOUT_MS },
     async () => {
-      mockDoctorConfigSnapshot({
-        config: {
-          channels: {
-            matrix: {
-              homeserver: "https://matrix.example.org",
-              userId: "@bot:example.org",
-              accessToken: "tok-123",
-            },
+      const matrixConfig = {
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            userId: "@bot:example.org",
+            accessToken: "tok-123",
           },
         },
-        parsed: {
-          channels: {
-            matrix: {
-              homeserver: "https://matrix.example.org",
-              userId: "@bot:example.org",
-              accessToken: "tok-123",
-            },
-          },
-        },
+      };
+
+      loadAndMaybeMigrateDoctorConfigMock.mockResolvedValueOnce({
+        cfg: matrixConfig,
+        path: "/tmp/openclaw.json",
+        shouldWriteConfig: false,
+        sourceConfigValid: true,
       });
 
       await doctorCommand(createDoctorRuntime(), { nonInteractive: true, repair: true });

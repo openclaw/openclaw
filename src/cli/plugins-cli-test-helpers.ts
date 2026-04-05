@@ -58,35 +58,43 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime,
 }));
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => loadConfig(),
-  readConfigFileSnapshot: ((
-    ...args: Parameters<(typeof import("../config/config.js"))["readConfigFileSnapshot"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../config/config.js"))["readConfigFileSnapshot"]>,
-      ReturnType<(typeof import("../config/config.js"))["readConfigFileSnapshot"]>
-    >(
-      readConfigFileSnapshot,
-      ...args,
-    )) as (typeof import("../config/config.js"))["readConfigFileSnapshot"],
-  writeConfigFile: ((config: OpenClawConfig) =>
-    invokeMock<
-      [OpenClawConfig],
-      ReturnType<(typeof import("../config/config.js"))["writeConfigFile"]>
-    >(writeConfigFile, config)) as (typeof import("../config/config.js"))["writeConfigFile"],
-  replaceConfigFile: ((
-    params: Parameters<(typeof import("../config/config.js"))["replaceConfigFile"]>[0],
-  ) =>
-    invokeMock<
-      [Parameters<(typeof import("../config/config.js"))["replaceConfigFile"]>[0]],
-      ReturnType<(typeof import("../config/config.js"))["replaceConfigFile"]>
-    >(replaceConfigFile, params)) as (typeof import("../config/config.js"))["replaceConfigFile"],
-}));
+vi.mock("../config/config.js", async () => {
+  const paths = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return {
+    ...paths,
+    loadConfig: () => loadConfig(),
+    readConfigFileSnapshot: ((
+      ...args: Parameters<(typeof import("../config/config.js"))["readConfigFileSnapshot"]>
+    ) =>
+      invokeMock<
+        Parameters<(typeof import("../config/config.js"))["readConfigFileSnapshot"]>,
+        ReturnType<(typeof import("../config/config.js"))["readConfigFileSnapshot"]>
+      >(
+        readConfigFileSnapshot,
+        ...args,
+      )) as (typeof import("../config/config.js"))["readConfigFileSnapshot"],
+    writeConfigFile: ((config: OpenClawConfig) =>
+      invokeMock<
+        [OpenClawConfig],
+        ReturnType<(typeof import("../config/config.js"))["writeConfigFile"]>
+      >(writeConfigFile, config)) as (typeof import("../config/config.js"))["writeConfigFile"],
+    replaceConfigFile: ((
+      params: Parameters<(typeof import("../config/config.js"))["replaceConfigFile"]>[0],
+    ) =>
+      invokeMock<
+        [Parameters<(typeof import("../config/config.js"))["replaceConfigFile"]>[0]],
+        ReturnType<(typeof import("../config/config.js"))["replaceConfigFile"]>
+      >(replaceConfigFile, params)) as (typeof import("../config/config.js"))["replaceConfigFile"],
+  };
+});
 
-vi.mock("../config/paths.js", () => ({
-  resolveStateDir: () => resolveStateDir(),
-}));
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return {
+    ...actual,
+    resolveStateDir: () => resolveStateDir(),
+  };
+});
 
 vi.mock("../plugins/marketplace.js", () => ({
   installPluginFromMarketplace: ((...args: Parameters<InstallPluginFromMarketplaceFn>) =>

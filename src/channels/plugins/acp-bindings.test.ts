@@ -17,10 +17,16 @@ vi.mock("./index.js", () => ({
   getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
 }));
 
-vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
-    getActivePluginChannelRegistryVersionMock(...args),
-}));
+vi.mock("../../plugins/runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/runtime.js")>(
+    "../../plugins/runtime.js",
+  );
+  return {
+    ...actual,
+    getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
+      getActivePluginChannelRegistryVersionMock(...args),
+  };
+});
 
 async function importConfiguredBindings() {
   const builtins = await import("./configured-binding-builtins.js");

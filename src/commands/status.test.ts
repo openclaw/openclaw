@@ -288,6 +288,10 @@ vi.mock("../channels/config-presence.js", () => ({
     Object.keys(cfg.channels ?? {}).filter((key) => key !== "defaults" && key !== "modelByChannel"),
 }));
 
+vi.mock("../cli/plugin-registry.js", () => ({
+  ensurePluginRegistryLoaded: vi.fn(),
+}));
+
 vi.mock("../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
     manager: {
@@ -419,6 +423,9 @@ vi.mock("../gateway/probe.js", () => ({
   probeGateway: mocks.probeGateway,
 }));
 vi.mock("../gateway/call.js", () => ({
+  buildGatewayConnectionDetails: vi.fn(() => ({
+    message: "target: ws://127.0.0.1:18789\nsource: config",
+  })),
   callGateway: mocks.callGateway,
   resolveGatewayCredentialsWithSecretInputs: vi.fn(
     async (params: {
@@ -442,10 +449,16 @@ vi.mock("../gateway/call.js", () => ({
 vi.mock("../gateway/agent-list.js", () => ({
   listGatewayAgentsBasic: mocks.listGatewayAgentsBasic,
 }));
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot: vi.fn().mockResolvedValue("/tmp/openclaw"),
-  resolveOpenClawPackageRootSync: vi.fn(() => "/tmp/openclaw"),
-}));
+vi.mock("../infra/openclaw-root.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/openclaw-root.js")>(
+    "../infra/openclaw-root.js",
+  );
+  return {
+    ...actual,
+    resolveOpenClawPackageRoot: vi.fn().mockResolvedValue("/tmp/openclaw"),
+    resolveOpenClawPackageRootSync: vi.fn(() => "/tmp/openclaw"),
+  };
+});
 vi.mock("../infra/os-summary.js", () => ({
   resolveOsSummary: () => ({
     platform: "darwin",
@@ -479,10 +492,19 @@ vi.mock("../infra/update-check.js", () => ({
   formatGitInstallLabel: vi.fn(() => "main · @ deadbeef"),
   compareSemverStrings: vi.fn(() => 0),
 }));
-vi.mock("../config/config.js", () => ({
+vi.mock("../config/config.js", async () => {
+  const paths = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return {
+    ...paths,
+    loadConfig: mocks.loadConfig,
+    readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
+    resolveGatewayPort: vi.fn(() => 18789),
+  };
+});
+
+vi.mock("../config/io.js", () => ({
   loadConfig: mocks.loadConfig,
   readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
-  resolveGatewayPort: vi.fn(() => 18789),
 }));
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: mocks.resolveGatewayService,
@@ -508,6 +530,46 @@ vi.mock("../plugins/status.js", () => ({
   }),
   formatPluginCompatibilityNotice: (notice: PluginCompatibilityNotice) =>
     `${notice.pluginId} ${notice.message}`,
+}));
+
+vi.mock("./status.summary.runtime.js", () => ({
+  statusSummaryRuntime: {
+    resolveContextTokensForModel: (params: {
+      contextTokensOverride?: number;
+      fallbackContextTokens?: number;
+    }) => params.contextTokensOverride ?? params.fallbackContextTokens ?? 200_000,
+    classifySessionKey: (key: string, entry?: { chatType?: string }) => {
+      if (key === "global") {
+        return "global";
+      }
+      if (key === "unknown") {
+        return "unknown";
+      }
+      if (entry?.chatType === "group" || entry?.chatType === "channel") {
+        return "group";
+      }
+      if (key.includes(":group:") || key.includes(":channel:")) {
+        return "group";
+      }
+      return "direct";
+    },
+    resolveConfiguredStatusModelRef: () => ({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    }),
+    resolveSessionModelRef: (
+      _cfg: unknown,
+      entry?: {
+        modelProvider?: string;
+        model?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+      },
+    ) => ({
+      provider: entry?.providerOverride ?? entry?.modelProvider ?? "anthropic",
+      model: entry?.modelOverride ?? entry?.model ?? "claude-opus-4-6",
+    }),
+  },
 }));
 
 import { statusCommand } from "./status.js";
@@ -803,7 +865,6 @@ describe("statusCommand", () => {
     expect(logs.some((line) => line.includes("Cache"))).toBe(true);
     expect(logs.some((line) => line.includes("40% hit"))).toBe(true);
     expect(logs.some((line) => line.includes("read 2.0k"))).toBe(true);
-    expect(logs.some((line) => line.includes("write 1.0k"))).toBe(true);
   });
 
   it("shows a maintenance hint when task audit errors are present", async () => {

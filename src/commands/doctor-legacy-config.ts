@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { migrateAmazonBedrockLegacyConfig } from "../../extensions/amazon-bedrock/config-api.js";
 import { migrateVoiceCallLegacyConfigInput } from "../../extensions/voice-call/config-api.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { applyChannelDoctorCompatibilityMigrations } from "../channels/plugins/legacy-config.js";
 import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../config/defaults.js";
@@ -663,6 +664,12 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   normalizeLegacyCrossContextMessageConfig();
   normalizeLegacyMediaProviderOptions();
   normalizeLegacyMistralModelMaxTokens();
+
+  const channelCompat = applyChannelDoctorCompatibilityMigrations(next as Record<string, unknown>);
+  if (channelCompat.changes.length > 0) {
+    next = channelCompat.next as OpenClawConfig;
+    changes.push(...channelCompat.changes);
+  }
 
   return { config: next, changes };
 }

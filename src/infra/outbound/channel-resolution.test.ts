@@ -6,6 +6,7 @@ const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
 const resolveRuntimePluginRegistryMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
+const getActivePluginChannelRegistryMock = vi.hoisted(() => vi.fn());
 const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn());
 const normalizeMessageChannelMock = vi.hoisted(() => vi.fn());
 const isDeliverableMessageChannelMock = vi.hoisted(() => vi.fn());
@@ -27,11 +28,19 @@ vi.mock("../../plugins/loader.js", () => ({
   resolveRuntimePluginRegistry: (...args: unknown[]) => resolveRuntimePluginRegistryMock(...args),
 }));
 
-vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
-  getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
-    getActivePluginChannelRegistryVersionMock(...args),
-}));
+vi.mock("../../plugins/runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/runtime.js")>(
+    "../../plugins/runtime.js",
+  );
+  return {
+    ...actual,
+    getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
+    getActivePluginChannelRegistry: (...args: unknown[]) =>
+      getActivePluginChannelRegistryMock(...args),
+    getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
+      getActivePluginChannelRegistryVersionMock(...args),
+  };
+});
 
 vi.mock("../../utils/message-channel.js", () => ({
   normalizeMessageChannel: (...args: unknown[]) => normalizeMessageChannelMock(...args),
@@ -68,6 +77,7 @@ describe("outbound channel resolution", () => {
     applyPluginAutoEnableMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReset();
     getActivePluginRegistryMock.mockReset();
+    getActivePluginChannelRegistryMock.mockReset();
     getActivePluginChannelRegistryVersionMock.mockReset();
     normalizeMessageChannelMock.mockReset();
     isDeliverableMessageChannelMock.mockReset();
@@ -79,6 +89,7 @@ describe("outbound channel resolution", () => {
       ["telegram", "discord", "slack"].includes(String(value)),
     );
     getActivePluginRegistryMock.mockReturnValue({ channels: [] });
+    getActivePluginChannelRegistryMock.mockReturnValue({ channels: [] });
     getActivePluginChannelRegistryVersionMock.mockReturnValue(1);
     applyPluginAutoEnableMock.mockReturnValue({
       config: { autoEnabled: true },
@@ -155,7 +166,7 @@ describe("outbound channel resolution", () => {
   it("bootstraps when the active registry has other channels but not the requested one", async () => {
     const plugin = { id: "telegram" };
     getChannelPluginMock.mockReturnValueOnce(undefined).mockReturnValueOnce(plugin);
-    getActivePluginRegistryMock.mockReturnValue({
+    getActivePluginChannelRegistryMock.mockReturnValue({
       channels: [{ plugin: { id: "discord" } }],
     });
     const channelResolution = await importChannelResolution("bootstrap-missing-target");

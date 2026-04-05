@@ -21,20 +21,17 @@ function normalizeDiscordDmAliases(params: {
   const rawDm = updated.dm;
   const dm = asObjectRecord(rawDm) ? (structuredClone(rawDm) as Record<string, unknown>) : null;
   let dmChanged = false;
-  const shouldPromoteLegacyAllowFrom = !(
-    params.pathPrefix === "channels.discord" && asObjectRecord(updated.accounts)
-  );
 
   const allowFromEqual = (a: unknown, b: unknown): boolean => {
     if (!Array.isArray(a) || !Array.isArray(b)) {
       return false;
     }
-    const na = a.map((v) => String(v).trim()).filter(Boolean);
-    const nb = b.map((v) => String(v).trim()).filter(Boolean);
+    const na = a.map((value) => String(value).trim()).filter(Boolean);
+    const nb = b.map((value) => String(value).trim()).filter(Boolean);
     if (na.length !== nb.length) {
       return false;
     }
-    return na.every((v, i) => v === nb[i]);
+    return na.every((value, index) => value === nb[index]);
   };
 
   const topDmPolicy = updated.dmPolicy;
@@ -61,27 +58,25 @@ function normalizeDiscordDmAliases(params: {
 
   const topAllowFrom = updated.allowFrom;
   const legacyAllowFrom = dm?.allowFrom;
-  if (shouldPromoteLegacyAllowFrom) {
-    if (topAllowFrom === undefined && legacyAllowFrom !== undefined) {
-      updated = { ...updated, allowFrom: legacyAllowFrom };
-      changed = true;
-      if (dm) {
-        delete dm.allowFrom;
-        dmChanged = true;
-      }
-      params.changes.push(
-        `Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`,
-      );
-    } else if (
-      topAllowFrom !== undefined &&
-      legacyAllowFrom !== undefined &&
-      allowFromEqual(topAllowFrom, legacyAllowFrom)
-    ) {
-      if (dm) {
-        delete dm.allowFrom;
-        dmChanged = true;
-        params.changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
-      }
+  if (topAllowFrom === undefined && legacyAllowFrom !== undefined) {
+    updated = { ...updated, allowFrom: legacyAllowFrom };
+    changed = true;
+    if (dm) {
+      delete dm.allowFrom;
+      dmChanged = true;
+    }
+    params.changes.push(
+      `Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`,
+    );
+  } else if (
+    topAllowFrom !== undefined &&
+    legacyAllowFrom !== undefined &&
+    allowFromEqual(topAllowFrom, legacyAllowFrom)
+  ) {
+    if (dm) {
+      delete dm.allowFrom;
+      dmChanged = true;
+      params.changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
     }
   }
 
@@ -311,13 +306,13 @@ export function normalizeCompatibilityConfig({
   let updated = rawEntry;
   let changed = false;
 
-  const dm = normalizeDiscordDmAliases({
+  const base = normalizeDiscordDmAliases({
     entry: updated,
     pathPrefix: "channels.discord",
     changes,
   });
-  updated = dm.entry;
-  changed = changed || dm.changed;
+  updated = base.entry;
+  changed = changed || base.changed;
 
   const streaming = normalizeDiscordStreamingAliases({
     entry: updated,
@@ -336,22 +331,18 @@ export function normalizeCompatibilityConfig({
       if (!account) {
         continue;
       }
-      let accountEntry = account;
-      let accountChanged = false;
-      const accountDm = normalizeDiscordDmAliases({
-        entry: accountEntry,
+      const dm = normalizeDiscordDmAliases({
+        entry: account,
         pathPrefix: `channels.discord.accounts.${accountId}`,
         changes,
       });
-      accountEntry = accountDm.entry;
-      accountChanged = accountDm.changed;
       const accountStreaming = normalizeDiscordStreamingAliases({
-        entry: accountEntry,
+        entry: dm.entry,
         pathPrefix: `channels.discord.accounts.${accountId}`,
         changes,
       });
-      accountEntry = accountStreaming.entry;
-      accountChanged = accountChanged || accountStreaming.changed;
+      let accountEntry = accountStreaming.entry;
+      let accountChanged = dm.changed || accountStreaming.changed;
       const accountVoice = asObjectRecord(accountEntry.voice);
       if (
         accountVoice &&

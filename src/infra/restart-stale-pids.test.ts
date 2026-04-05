@@ -21,9 +21,13 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-vi.mock("../config/paths.js", () => ({
-  resolveGatewayPort: () => mockResolveGatewayPort(),
-}));
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return {
+    ...actual,
+    resolveGatewayPort: () => mockResolveGatewayPort(),
+  };
+});
 
 vi.mock("./ports-lsof.js", () => ({
   resolveLsofCommandSync: vi.fn(() => "lsof"),

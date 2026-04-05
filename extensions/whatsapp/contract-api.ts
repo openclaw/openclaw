@@ -34,6 +34,7 @@ export const createWhatsAppPollFixture = createWhatsAppPollFixtureImpl;
 export const expectWhatsAppPollSent = expectWhatsAppPollSentImpl;
 export const isLegacyGroupSessionKey = isLegacyGroupSessionKeyImpl;
 export const isWhatsAppGroupJid = isWhatsAppGroupJidImpl;
+export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
 export const normalizeWhatsAppTarget = normalizeWhatsAppTargetImpl;
 export const resolveLegacyGroupSessionKey = resolveLegacyGroupSessionKeyImpl;
 export const resolveWhatsAppRuntimeGroupPolicy = resolveWhatsAppRuntimeGroupPolicyImpl;

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import { applyLegacyMigrations } from "../config/legacy.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import {
@@ -63,6 +64,7 @@ function createLegacyConfigSnapshot() {
 }
 
 export const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
+export const loadConfig = vi.fn(() => ({})) as unknown as MockFn;
 export const confirm = vi.fn().mockResolvedValue(true) as unknown as MockFn;
 export const select = vi.fn().mockResolvedValue("node") as unknown as MockFn;
 export const note = vi.fn() as unknown as MockFn;
@@ -71,10 +73,13 @@ export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unk
 export const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
-export const migrateLegacyConfig = vi.fn((raw: unknown) => ({
-  config: raw as Record<string, unknown>,
-  changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
-})) as unknown as MockFn;
+export const migrateLegacyConfig = vi.fn((raw: unknown) => {
+  const { next, changes } = applyLegacyMigrations(raw);
+  return {
+    config: next,
+    changes,
+  };
+}) as unknown as MockFn;
 
 export const runExec = vi.fn().mockResolvedValue({
   stdout: "",
@@ -188,6 +193,23 @@ const DEFAULT_CONFIG_SNAPSHOT = {
   legacyIssues: [],
 } as const;
 
+let currentConfigSnapshot: {
+  path: string;
+  exists: boolean;
+  raw: string | null;
+  parsed: Record<string, unknown>;
+  valid: boolean;
+  config: Record<string, unknown>;
+  issues: Array<{ path: string; message: string }>;
+  legacyIssues: Array<{ path: string; message: string }>;
+} = {
+  ...DEFAULT_CONFIG_SNAPSHOT,
+  parsed: { ...DEFAULT_CONFIG_SNAPSHOT.parsed },
+  config: { ...DEFAULT_CONFIG_SNAPSHOT.config },
+  issues: [...DEFAULT_CONFIG_SNAPSHOT.issues],
+  legacyIssues: [...DEFAULT_CONFIG_SNAPSHOT.legacyIssues],
+};
+
 vi.mock("@clack/prompts", () => ({
   confirm,
   intro: vi.fn(),
@@ -200,71 +222,85 @@ vi.mock("../agents/skills-status.js", () => ({
   buildWorkspaceSkillStatus: () => ({ skills: [] }),
 }));
 
-vi.mock("../plugins/loader.js", () => ({
-  loadOpenClawPlugins: () => createEmptyPluginRegistry(),
-}));
-
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("../plugins/loader.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
   return {
     ...actual,
+    loadOpenClawPlugins: () => createEmptyPluginRegistry(),
+  };
+});
+
+vi.mock("../config/config.js", async () => {
+  const paths = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return {
+    ...paths,
     CONFIG_PATH: "/tmp/openclaw.json",
-    createConfigIO,
-    readConfigFileSnapshot,
-    writeConfigFile,
-    migrateLegacyConfig,
+    loadConfig: () => loadConfig(),
+    createConfigIO: (...args: unknown[]) => createConfigIO(...args),
+    readConfigFileSnapshot: (...args: unknown[]) => readConfigFileSnapshot(...args),
+    writeConfigFile: (...args: unknown[]) => writeConfigFile(...args),
+    migrateLegacyConfig: (...args: unknown[]) => migrateLegacyConfig(...args),
   };
 });
 
 vi.mock("../daemon/legacy.js", () => ({
-  findLegacyGatewayServices,
-  uninstallLegacyGatewayServices,
+  findLegacyGatewayServices: (...args: unknown[]) => findLegacyGatewayServices(...args),
+  uninstallLegacyGatewayServices: (...args: unknown[]) => uninstallLegacyGatewayServices(...args),
 }));
 
 vi.mock("../daemon/inspect.js", () => ({
-  findExtraGatewayServices,
-  renderGatewayServiceCleanupHints,
+  findExtraGatewayServices: (...args: unknown[]) => findExtraGatewayServices(...args),
+  renderGatewayServiceCleanupHints: (...args: unknown[]) =>
+    renderGatewayServiceCleanupHints(...args),
 }));
 
 vi.mock("../daemon/service-audit.js", () => ({
-  auditGatewayServiceConfig,
+  auditGatewayServiceConfig: (...args: unknown[]) => auditGatewayServiceConfig(...args),
   needsNodeRuntimeMigration: vi.fn(() => false),
   readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
   SERVICE_AUDIT_CODES: testServiceAuditCodes,
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
-  resolveGatewayProgramArguments,
+  resolveGatewayProgramArguments: (...args: unknown[]) => resolveGatewayProgramArguments(...args),
 }));
 
 vi.mock("./daemon-install-helpers.js", () => ({
-  buildGatewayInstallPlan,
+  buildGatewayInstallPlan: (...args: unknown[]) => buildGatewayInstallPlan(...args),
   gatewayInstallErrorHint: vi.fn(() => "hint"),
 }));
 
 vi.mock("./doctor-gateway-auth-token.js", () => ({
-  resolveGatewayAuthTokenForService,
+  resolveGatewayAuthTokenForService: (...args: unknown[]) =>
+    resolveGatewayAuthTokenForService(...args),
 }));
 
 vi.mock("../gateway/call.js", async () => {
   const actual = await vi.importActual<typeof import("../gateway/call.js")>("../gateway/call.js");
   return {
     ...actual,
-    callGateway,
+    callGateway: (...args: unknown[]) => callGateway(...args),
   };
 });
 
 vi.mock("../process/exec.js", () => ({
-  runExec,
-  runCommandWithTimeout,
+  runExec: (...args: unknown[]) => runExec(...args),
+  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeout(...args),
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot,
-}));
+vi.mock("../infra/openclaw-root.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/openclaw-root.js")>(
+    "../infra/openclaw-root.js",
+  );
+  return {
+    ...actual,
+    resolveOpenClawPackageRoot: (...args: unknown[]) => resolveOpenClawPackageRoot(...args),
+  };
+});
 
 vi.mock("../infra/update-runner.js", () => ({
-  runGatewayUpdate,
+  runGatewayUpdate: (...args: unknown[]) => runGatewayUpdate(...args),
 }));
 
 vi.mock("../agents/auth-profiles.js", async () => {
@@ -273,7 +309,7 @@ vi.mock("../agents/auth-profiles.js", async () => {
   );
   return {
     ...actual,
-    ensureAuthProfileStore,
+    ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStore(...args),
   };
 });
 
@@ -351,14 +387,16 @@ export function mockDoctorConfigSnapshot(
     legacyIssues?: Array<{ path: string; message: string }>;
   } = {},
 ) {
-  readConfigFileSnapshot.mockResolvedValue({
+  currentConfigSnapshot = {
     ...DEFAULT_CONFIG_SNAPSHOT,
     config: params.config ?? DEFAULT_CONFIG_SNAPSHOT.config,
     parsed: params.parsed ?? DEFAULT_CONFIG_SNAPSHOT.parsed,
     valid: params.valid ?? DEFAULT_CONFIG_SNAPSHOT.valid,
-    issues: params.issues ?? DEFAULT_CONFIG_SNAPSHOT.issues,
-    legacyIssues: params.legacyIssues ?? DEFAULT_CONFIG_SNAPSHOT.legacyIssues,
-  });
+    issues: [...(params.issues ?? DEFAULT_CONFIG_SNAPSHOT.issues)],
+    legacyIssues: [...(params.legacyIssues ?? DEFAULT_CONFIG_SNAPSHOT.legacyIssues)],
+  };
+  readConfigFileSnapshot.mockResolvedValue(currentConfigSnapshot);
+  loadConfig.mockReturnValue(currentConfigSnapshot.config);
 }
 
 export function createDoctorRuntime() {
@@ -404,12 +442,24 @@ export async function arrangeLegacyStateMigrationTest(): Promise<{
 }
 
 beforeEach(() => {
+  loadConfig.mockReset().mockImplementation(() => currentConfigSnapshot.config);
   confirm.mockReset().mockResolvedValue(true);
   select.mockReset().mockResolvedValue("node");
   note.mockClear();
 
   readConfigFileSnapshot.mockReset();
-  writeConfigFile.mockReset().mockResolvedValue(undefined);
+  mockDoctorConfigSnapshot();
+  writeConfigFile.mockReset().mockImplementation(async (config: unknown) => {
+    if (config && typeof config === "object") {
+      currentConfigSnapshot = {
+        ...currentConfigSnapshot,
+        parsed: config as Record<string, unknown>,
+        config: config as Record<string, unknown>,
+      };
+      loadConfig.mockReturnValue(currentConfigSnapshot.config);
+    }
+    return undefined;
+  });
   resolveOpenClawPackageRoot.mockReset().mockResolvedValue(null);
   runGatewayUpdate.mockReset().mockResolvedValue(createGatewayUpdateResult());
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue(createLegacyConfigSnapshot());
@@ -419,10 +469,13 @@ beforeEach(() => {
   runExec.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
   runCommandWithTimeout.mockReset().mockResolvedValue(createCommandWithTimeoutResult());
   ensureAuthProfileStore.mockReset().mockReturnValue({ version: 1, profiles: {} });
-  migrateLegacyConfig.mockReset().mockImplementation((raw: unknown) => ({
-    config: raw as Record<string, unknown>,
-    changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
-  }));
+  migrateLegacyConfig.mockReset().mockImplementation((raw: unknown) => {
+    const { next, changes } = applyLegacyMigrations(raw);
+    return {
+      config: next,
+      changes,
+    };
+  });
   findLegacyGatewayServices.mockReset().mockResolvedValue([]);
   uninstallLegacyGatewayServices.mockReset().mockResolvedValue([]);
   findExtraGatewayServices.mockReset().mockResolvedValue([]);

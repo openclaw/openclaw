@@ -10,14 +10,19 @@ const mocks = vi.hoisted(() => ({
   getChannelActivity: vi.fn(),
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
-  readConfigFileSnapshot: vi.fn(async () => ({
-    config: {},
-    path: "openclaw.config.json",
-    raw: "{}",
-  })),
-}));
+vi.mock("../../config/config.js", async () => {
+  const paths =
+    await vi.importActual<typeof import("../../config/paths.js")>("../../config/paths.js");
+  return {
+    ...paths,
+    loadConfig: mocks.loadConfig,
+    readConfigFileSnapshot: vi.fn(async () => ({
+      config: {},
+      path: "openclaw.config.json",
+      raw: "{}",
+    })),
+  };
+});
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
