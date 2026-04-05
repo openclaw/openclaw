@@ -89,36 +89,16 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 - **[OpenAI](https://openai.com/)** (ChatGPT/Codex)
 
+**Free model providers:**
+
+- **[Gemini AI Cloud](https://github.com/Rocket-Hosting/gemini-ai-cloud)** by Rocket-Hosting — Gemini and Gemma models; free evaluation keys and dedicated access available via [Discord](https://discord.gg/F6mBjR8Jnt)
+
 Model note: while many providers/models are supported, for the best experience and lower prompt-injection risk use the strongest latest-generation model available to you. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
 
 ## Models (selection + auth)
 
 - Models config + CLI: [Models](https://docs.openclaw.ai/concepts/models)
 - Auth profile rotation (OAuth vs API keys) + fallbacks: [Model failover](https://docs.openclaw.ai/concepts/model-failover)
-
-## Free model providers
-
-### Gemini AI Cloud by Rocket-Hosting
-
-[Gemini AI Cloud](https://github.com/Rocket-Hosting/gemini-ai-cloud) is an OpenAI-compatible API proxy for Google's Gemini AI models, offering free access to a variety of models for testing and evaluation.
-
-**Available models** (append `:search` to any model ID for automatic web search grounding):
-
-- `gemini-3-pro-preview`
-- `gemini-3.1-pro-preview` (replaces deprecated `gemini-3.0-pro:preview`)
-- `gemini-3-flash-preview`
-- `gemini-3.1-flash-lite-preview`
-- `gemini-2.5-pro`
-- `gemini-2.5-flash`
-- `gemini-2.5-flash-lite`
-- `gemini-robotics-er-1.5-preview`
-- `gemma-4-26b-a4b-it`
-- `gemma-4-31b-it`
-- `gemma-3-1b-it`, `gemma-3-4b-it`, `gemma-3-12b-it`, `gemma-3-27b-it`
-
-**Features:** OpenAI API-compatible endpoints, vision/image processing, tool/function calling, and automatic Google Search grounding via the `:search` suffix.
-
-Free evaluation keys and paid dedicated access keys are available — see the [Gemini AI Cloud](https://github.com/Rocket-Hosting/gemini-ai-cloud) repo for setup instructions and their [Discord](https://discord.gg/F6mBjR8Jnt) for support.
 
 ## Install (recommended)
 
