@@ -93,6 +93,19 @@ function toRateLimitBody(parsedBody: unknown, rawBody: string, headers: Headers)
   };
 }
 
+type RateLimitBody = ReturnType<typeof toRateLimitBody>;
+
+function createRateLimitErrorCompat(
+  response: Response,
+  body: RateLimitBody,
+  request: Request,
+): RateLimitError {
+  const RateLimitErrorCtor = RateLimitError as unknown as {
+    new (response: Response, body: RateLimitBody, request?: Request): RateLimitError;
+  };
+  return new RateLimitErrorCtor(response, body, request);
+}
+
 function toDiscordErrorBody(parsedBody: unknown, rawBody: string): DiscordRawError {
   if (isRecord(parsedBody) && typeof parsedBody.message === "string") {
     return parsedBody as DiscordRawError;
@@ -333,7 +346,7 @@ class ProxyRequestClientCompat {
 
     if (response.status === 429) {
       const rateLimitBody = toRateLimitBody(parsedBody, rawBody, response.headers);
-      const rateLimitError = new RateLimitError(response, rateLimitBody, originalRequest);
+      const rateLimitError = createRateLimitErrorCompat(response, rateLimitBody, originalRequest);
       this.scheduleRateLimit(
         routeKey,
         rateLimitError.retryAfter,
