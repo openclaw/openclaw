@@ -121,9 +121,10 @@ export function resolveSessionKeyForRequest(opts: {
   let sessionKey: string | undefined =
     explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
 
-  // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
-  // When duplicates exist across agent stores, pick the same deterministic best match used by the
-  // shared gateway/session resolver helpers instead of whichever store happens to be scanned first.
+  // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was
+  // derived. When duplicates exist across agent stores, pick the same deterministic best match used
+  // by the shared gateway/session resolver helpers instead of whichever store happens to be scanned
+  // first.
   if (
     opts.sessionId &&
     !explicitSessionKey &&

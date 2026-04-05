@@ -368,6 +368,13 @@ describe("session history HTTP endpoints", () => {
           .messages?.[0]?.content?.[0]?.text,
       ).toBe("second message");
 
+      const suppressed = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: "NO_REPLY",
+        storePath,
+      });
+      expect(suppressed.ok).toBe(true);
+
       const appended = await appendAssistantMessageToSessionTranscript({
         sessionKey: "agent:main:main",
         text: "third message",
@@ -377,10 +384,11 @@ describe("session history HTTP endpoints", () => {
 
       const nextEvent = await readSseEvent(reader!, streamState);
       expect(nextEvent.event).toBe("history");
-      expect(
-        (nextEvent.data as { messages?: Array<{ content?: Array<{ text?: string }> }> })
-          .messages?.[0]?.content?.[0]?.text,
-      ).toBe("third message");
+      const nextData = nextEvent.data as {
+        messages?: Array<{ content?: Array<{ text?: string }>; __openclaw?: { seq?: number } }>;
+      };
+      expect(nextData.messages?.[0]?.content?.[0]?.text).toBe("third message");
+      expect(nextData.messages?.[0]?.__openclaw?.seq).toBe(3);
 
       await reader?.cancel();
     });

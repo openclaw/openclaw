@@ -12,6 +12,7 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
+import { resolveSessionKeyForRequest } from "../command/session.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import { resolveSessionKeyForRequest } from "../command/session.js";
 import {
@@ -209,17 +210,31 @@ export async function runEmbeddedPiAgent(
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+      const normalizedSessionKey = params.sessionKey?.trim();
       const fallbackConfigured = hasConfiguredModelFallbacks({
         cfg: params.config,
         agentId: params.agentId,
-        sessionKey: params.sessionKey,
+        sessionKey: normalizedSessionKey,
       });
       await ensureOpenClawModelsJson(params.config, agentDir);
+      let resolvedSessionKey = normalizedSessionKey;
+      if (!resolvedSessionKey && params.config && params.sessionId?.trim()) {
+        try {
+          resolvedSessionKey = resolveSessionKeyForRequest({
+            cfg: params.config,
+            sessionId: params.sessionId,
+          }).sessionKey;
+        } catch (error) {
+          log.warn(
+            `[session-key-backfill] failed run=${params.runId} session=${redactRunIdentifier(params.sessionId)} agent=${workspaceResolution.agentId} error=${describeUnknownError(error)}`,
+          );
+        }
+      }
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
         agentId: workspaceResolution.agentId,
-        sessionKey: params.sessionKey,
+        sessionKey: resolvedSessionKey,
         sessionId: params.sessionId,
         workspaceDir: resolvedWorkspace,
         modelProviderId: provider,
@@ -568,7 +583,7 @@ export async function runEmbeddedPiAgent(
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
+            sessionKey: resolvedSessionKey,
             trigger: params.trigger,
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
@@ -691,7 +706,7 @@ export async function runEmbeddedPiAgent(
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
-                sessionKey: params.sessionKey ?? params.sessionId,
+                sessionKey: resolvedSessionKey ?? params.sessionId,
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
               })
@@ -715,7 +730,7 @@ export async function runEmbeddedPiAgent(
           }
           const requestedSelection = shouldSwitchToLiveModel({
             cfg: params.config,
-            sessionKey: params.sessionKey,
+            sessionKey: resolvedSessionKey,
             agentId: params.agentId,
             defaultProvider: DEFAULT_PROVIDER,
             defaultModel: DEFAULT_MODEL,
@@ -727,7 +742,7 @@ export async function runEmbeddedPiAgent(
           if (requestedSelection && canRestartForLiveSwitch) {
             await clearLiveModelSwitchPending({
               cfg: params.config,
-              sessionKey: params.sessionKey,
+              sessionKey: resolvedSessionKey,
               agentId: params.agentId,
             });
             log.info(
