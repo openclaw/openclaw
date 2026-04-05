@@ -249,43 +249,15 @@ function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): 
   return sanitizeUserFacingText(extracted, { errorContext });
 }
 
-function hasAssistantTextForPhase(msg: AssistantMessage, phase: AssistantPhase): boolean {
-  const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
+type AssistantTextExtractionResult = {
+  text: string;
+  hadRequestedPhase: boolean;
+};
 
-  if (typeof msg.content === "string") {
-    return messagePhase === phase;
-  }
-
-  if (!Array.isArray(msg.content)) {
-    return false;
-  }
-
-  const hasExplicitPhasedTextBlocks = msg.content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const record = block as { type?: unknown; textSignature?: unknown };
-    if (record.type !== "text") {
-      return false;
-    }
-    return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
-  });
-
-  return msg.content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const record = block as { type?: unknown; textSignature?: unknown };
-    if (record.type !== "text") {
-      return false;
-    }
-    const signature = parseAssistantTextSignature(record.textSignature);
-    const resolvedPhase = signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
-    return resolvedPhase === phase;
-  });
-}
-
-function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPhase): string {
+function extractAssistantTextForPhase(
+  msg: AssistantMessage,
+  phase?: AssistantPhase,
+): AssistantTextExtractionResult {
   const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
   const shouldIncludeContent = (resolvedPhase?: AssistantPhase) => {
     if (phase) {
@@ -295,13 +267,17 @@ function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPh
   };
 
   if (typeof msg.content === "string") {
-    return shouldIncludeContent(messagePhase)
-      ? finalizeAssistantExtraction(msg, sanitizeAssistantText(msg.content))
-      : "";
+    const hadRequestedPhase = phase ? messagePhase === phase : messagePhase === undefined;
+    return {
+      text: shouldIncludeContent(messagePhase)
+        ? finalizeAssistantExtraction(msg, sanitizeAssistantText(msg.content))
+        : "",
+      hadRequestedPhase,
+    };
   }
 
   if (!Array.isArray(msg.content)) {
-    return "";
+    return { text: "", hadRequestedPhase: false };
   }
 
   const hasExplicitPhasedTextBlocks = msg.content.some((block) => {
@@ -315,6 +291,7 @@ function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPh
     return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
   });
 
+  let hadRequestedPhase = false;
   const extracted =
     extractTextFromChatContent(
       msg.content.filter((block) => {
@@ -328,6 +305,9 @@ function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPh
         const signature = parseAssistantTextSignature(record.textSignature);
         const resolvedPhase =
           signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
+        if (phase ? resolvedPhase === phase : resolvedPhase === undefined) {
+          hadRequestedPhase = true;
+        }
         return shouldIncludeContent(resolvedPhase);
       }),
       {
@@ -337,16 +317,19 @@ function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPh
       },
     ) ?? "";
 
-  return finalizeAssistantExtraction(msg, extracted);
+  return {
+    text: finalizeAssistantExtraction(msg, extracted),
+    hadRequestedPhase,
+  };
 }
 
 export function extractAssistantVisibleText(msg: AssistantMessage): string {
-  const finalAnswerText = extractAssistantTextForPhase(msg, "final_answer");
-  if (hasAssistantTextForPhase(msg, "final_answer")) {
-    return finalAnswerText.trim() ? finalAnswerText : "";
+  const finalAnswerExtraction = extractAssistantTextForPhase(msg, "final_answer");
+  if (finalAnswerExtraction.hadRequestedPhase) {
+    return finalAnswerExtraction.text.trim() ? finalAnswerExtraction.text : "";
   }
 
-  return extractAssistantTextForPhase(msg);
+  return extractAssistantTextForPhase(msg).text;
 }
 
 export function extractAssistantText(msg: AssistantMessage): string {
