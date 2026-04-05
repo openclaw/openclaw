@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
@@ -39,6 +40,7 @@ const BUNDLED_CHANNEL_ENTRY_BASENAMES = [
 ] as const;
 
 const log = createSubsystemLogger("channels");
+const nodeRequire = createRequire(import.meta.url);
 
 function resolveChannelPluginModuleEntry(
   moduleExport: unknown,
@@ -161,6 +163,17 @@ function loadBundledModule(modulePath: string, rootDir: string): unknown {
   }
   const safePath = opened.path;
   fs.closeSync(opened.fd);
+  if (
+    process.platform === "win32" &&
+    safePath.includes(`${path.sep}dist${path.sep}`) &&
+    [".js", ".mjs", ".cjs"].includes(path.extname(safePath).toLowerCase())
+  ) {
+    try {
+      return nodeRequire(safePath);
+    } catch {
+      // Fall back to the Jiti loader path when require() cannot handle the entry.
+    }
+  }
   return loadModule(safePath)(safePath);
 }
 
@@ -274,12 +287,25 @@ type BundledChannelState = {
   >;
 };
 
+const EMPTY_BUNDLED_CHANNEL_STATE: BundledChannelState = {
+  entries: [],
+  plugins: [],
+  setupPlugins: [],
+  pluginsById: new Map(),
+  runtimeSettersById: new Map(),
+};
+
 let cachedBundledChannelState: BundledChannelState | null = null;
+let bundledChannelStateLoadInProgress = false;
 
 function getBundledChannelState(): BundledChannelState {
   if (cachedBundledChannelState) {
     return cachedBundledChannelState;
   }
+  if (bundledChannelStateLoadInProgress) {
+    return EMPTY_BUNDLED_CHANNEL_STATE;
+  }
+  bundledChannelStateLoadInProgress = true;
   const entries = loadGeneratedBundledChannelEntries();
   const plugins = entries.map(({ entry }) => entry.channelPlugin);
   const setupPlugins = entries.flatMap(({ setupEntry }) => {
@@ -296,14 +322,18 @@ function getBundledChannelState(): BundledChannelState {
     }
   }
 
-  cachedBundledChannelState = {
-    entries,
-    plugins,
-    setupPlugins,
-    pluginsById: buildBundledChannelPluginsById(plugins),
-    runtimeSettersById,
-  };
-  return cachedBundledChannelState;
+  try {
+    cachedBundledChannelState = {
+      entries,
+      plugins,
+      setupPlugins,
+      pluginsById: buildBundledChannelPluginsById(plugins),
+      runtimeSettersById,
+    };
+    return cachedBundledChannelState;
+  } finally {
+    bundledChannelStateLoadInProgress = false;
+  }
 }
 
 export function listBundledChannelPlugins(): readonly ChannelPlugin[] {

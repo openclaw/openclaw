@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
@@ -6,6 +7,8 @@ import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 afterEach(() => {
   vi.doUnmock("../../plugins/discovery.js");
   vi.doUnmock("../../plugins/manifest-registry.js");
+  vi.doUnmock("../../infra/boundary-file-read.js");
+  vi.doUnmock("jiti");
 });
 
 describe("bundled channel entry shape guards", () => {
@@ -31,7 +34,6 @@ describe("bundled channel entry shape guards", () => {
     expect(bundled.listBundledChannelPlugins()).toEqual([]);
     expect(bundled.listBundledChannelSetupPlugins()).toEqual([]);
   });
-
   it("keeps channel entrypoints on the narrow channel-core SDK surface", () => {
     const extensionRoot = path.resolve("extensions");
     const offenders: string[] = [];
@@ -146,5 +148,75 @@ describe("bundled channel entry shape guards", () => {
     );
 
     expect(offenders).toEqual([]);
+  });
+
+  it("breaks reentrant bundled channel discovery cycles with an empty fallback", async () => {
+    const pluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-reentrant-"));
+    const modulePath = path.join(pluginDir, "index.js");
+    fs.writeFileSync(modulePath, "export {};\n", "utf8");
+
+    vi.doMock("../../plugins/discovery.js", () => ({
+      discoverOpenClawPlugins: () => ({
+        candidates: [
+          {
+            rootDir: pluginDir,
+            source: modulePath,
+            packageManifest: { extensions: ["./index.js"] },
+          },
+        ],
+        diagnostics: [],
+      }),
+    }));
+    vi.doMock("../../plugins/manifest-registry.js", () => ({
+      loadPluginManifestRegistry: () => ({
+        plugins: [
+          {
+            id: "alpha",
+            rootDir: pluginDir,
+            origin: "bundled",
+            channels: ["alpha"],
+            source: modulePath,
+          },
+        ],
+        diagnostics: [],
+      }),
+    }));
+    vi.doMock("../../infra/boundary-file-read.js", () => ({
+      openBoundaryFileSync: ({ absolutePath }: { absolutePath: string }) => ({
+        ok: true,
+        path: absolutePath,
+        fd: fs.openSync(absolutePath, "r"),
+      }),
+    }));
+
+    let reentered = false;
+    vi.doMock("jiti", () => ({
+      createJiti: () => {
+        return () => {
+          if (!reentered) {
+            reentered = true;
+            expect(bundled.listBundledChannelPlugins()).toEqual([]);
+          }
+          return {
+            default: {
+              channelPlugin: {
+                id: "alpha",
+                meta: {},
+                capabilities: {},
+                config: {},
+              },
+            },
+          };
+        };
+      },
+    }));
+
+    const bundled = await importFreshModule<typeof import("./bundled.js")>(
+      import.meta.url,
+      "./bundled.js?scope=reentrant-bundled-discovery",
+    );
+
+    expect(bundled.listBundledChannelPlugins()).toHaveLength(1);
+    expect(reentered).toBe(true);
   });
 });
