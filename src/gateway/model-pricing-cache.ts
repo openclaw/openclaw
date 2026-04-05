@@ -441,7 +441,9 @@ export function startGatewayModelPricingRefresh(params: {
   fetchImpl?: typeof fetch;
 }): () => void {
   void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
-    log.warn(`pricing bootstrap failed: ${String(error)}`);
+    // Use debug level since pricing is optional and the gateway remains functional.
+    // Users can disable model-pricing bootstrap entirely via config if needed.
+    log.debug(`pricing bootstrap failed: ${String(error)}`);
   });
   return () => {
     clearRefreshTimer();
