@@ -32,7 +32,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function readSettingsFile(): GeminiCliAuthSettings | null {
