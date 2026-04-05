@@ -53,13 +53,6 @@
         "path"
       ]
     },
-    "update_plan": {
-      "emoji": "🗺️",
-      "title": "Update plan",
-      "detailKeys": [
-        "explanation"
-      ]
-    },
     "edit": {
       "emoji": "📝",
       "title": "Edit",
