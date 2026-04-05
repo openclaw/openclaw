@@ -28,6 +28,8 @@ type DoctorMemoryDreamingPayload = {
   minScore: number;
   minRecallCount: number;
   minUniqueQueries: number;
+  recencyHalfLifeDays: number;
+  maxAgeDays?: number;
   shortTermCount: number;
   promotedTotal: number;
   promotedToday: number;
@@ -89,6 +91,8 @@ function resolveDreamingConfig(
     minScore: resolved.minScore,
     minRecallCount: resolved.minRecallCount,
     minUniqueQueries: resolved.minUniqueQueries,
+    recencyHalfLifeDays: resolved.recencyHalfLifeDays,
+    ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
   };
 }
 

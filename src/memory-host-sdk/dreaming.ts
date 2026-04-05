@@ -8,6 +8,7 @@ export const DEFAULT_MEMORY_DREAMING_LIMIT = 10;
 export const DEFAULT_MEMORY_DREAMING_MIN_SCORE = 0.75;
 export const DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT = 3;
 export const DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES = 2;
+export const DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS = 14;
 export const DEFAULT_MEMORY_DREAMING_MODE = "off";
 export const DEFAULT_MEMORY_DREAMING_PRESET = "core";
 
@@ -23,6 +24,8 @@ export type MemoryDreamingConfig = {
   minScore: number;
   minRecallCount: number;
   minUniqueQueries: number;
+  recencyHalfLifeDays: number;
+  maxAgeDays?: number;
   verboseLogging: boolean;
 };
 
@@ -39,6 +42,7 @@ export const MEMORY_DREAMING_PRESET_DEFAULTS: Record<
     minScore: number;
     minRecallCount: number;
     minUniqueQueries: number;
+    recencyHalfLifeDays: number;
   }
 > = {
   core: {
@@ -47,6 +51,7 @@ export const MEMORY_DREAMING_PRESET_DEFAULTS: Record<
     minScore: DEFAULT_MEMORY_DREAMING_MIN_SCORE,
     minRecallCount: DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
     minUniqueQueries: DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
+    recencyHalfLifeDays: DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
   },
   deep: {
     cron: "0 */12 * * *",
@@ -54,6 +59,7 @@ export const MEMORY_DREAMING_PRESET_DEFAULTS: Record<
     minScore: 0.8,
     minRecallCount: 3,
     minUniqueQueries: 3,
+    recencyHalfLifeDays: DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
   },
   rem: {
     cron: "0 */6 * * *",
@@ -61,6 +67,7 @@ export const MEMORY_DREAMING_PRESET_DEFAULTS: Record<
     minScore: 0.85,
     minRecallCount: 4,
     minUniqueQueries: 3,
+    recencyHalfLifeDays: DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
   },
 };
 
@@ -103,6 +110,24 @@ function normalizeScore(value: unknown, fallback: number): number {
     return fallback;
   }
   return num;
+}
+
+function normalizeOptionalPositiveInt(value: unknown): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string" && value.trim().length === 0) {
+    return undefined;
+  }
+  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  if (!Number.isFinite(num)) {
+    return undefined;
+  }
+  const floored = Math.floor(num);
+  if (floored <= 0) {
+    return undefined;
+  }
+  return floored;
 }
 
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
@@ -172,6 +197,7 @@ export function resolveMemoryDreamingConfig(params: {
   const timezone =
     normalizeTrimmedString(dreaming?.timezone) ??
     normalizeTrimmedString(params.cfg?.agents?.defaults?.userTimezone);
+  const maxAgeDays = normalizeOptionalPositiveInt(dreaming?.maxAgeDays);
   return {
     mode,
     enabled,
@@ -187,6 +213,11 @@ export function resolveMemoryDreamingConfig(params: {
       dreaming?.minUniqueQueries,
       defaults.minUniqueQueries,
     ),
+    recencyHalfLifeDays: normalizeNonNegativeInt(
+      dreaming?.recencyHalfLifeDays,
+      defaults.recencyHalfLifeDays,
+    ),
+    ...(typeof maxAgeDays === "number" ? { maxAgeDays } : {}),
     verboseLogging: normalizeBoolean(dreaming?.verboseLogging, false),
   };
 }

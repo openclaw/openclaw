@@ -146,6 +146,7 @@ export type RankShortTermPromotionOptions = {
   minScore?: number;
   minRecallCount?: number;
   minUniqueQueries?: number;
+  maxAgeDays?: number;
   includePromoted?: boolean;
   recencyHalfLifeDays?: number;
   weights?: Partial<PromotionWeights>;
@@ -159,6 +160,7 @@ export type ApplyShortTermPromotionsOptions = {
   minScore?: number;
   minRecallCount?: number;
   minUniqueQueries?: number;
+  maxAgeDays?: number;
   nowMs?: number;
   timezone?: string;
 };
@@ -651,6 +653,7 @@ export async function rankShortTermPromotionCandidates(
     options.minUniqueQueries,
     DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
   );
+  const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
   const includePromoted = Boolean(options.includePromoted);
   const halfLifeDays = toFinitePositive(
     options.recencyHalfLifeDays,
@@ -686,6 +689,9 @@ export async function rankShortTermPromotionCandidates(
     const ageDays = Number.isFinite(lastRecalledAtMs)
       ? Math.max(0, (nowMs - lastRecalledAtMs) / DAY_MS)
       : 0;
+    if (maxAgeDays >= 0 && ageDays > maxAgeDays) {
+      continue;
+    }
     const recency = clampScore(calculateRecencyComponent(ageDays, halfLifeDays));
     const recallDays = entry.recallDays ?? [];
     const conceptTags = entry.conceptTags ?? [];
@@ -946,6 +952,7 @@ export async function applyShortTermPromotions(
     options.minUniqueQueries,
     DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
   );
+  const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
 
   return await withShortTermLock(workspaceDir, async () => {
@@ -962,6 +969,9 @@ export async function applyShortTermPromotions(
           return false;
         }
         if (candidate.uniqueQueries < minUniqueQueries) {
+          return false;
+        }
+        if (maxAgeDays >= 0 && candidate.ageDays > maxAgeDays) {
           return false;
         }
         const latest = store.entries[candidate.key];

@@ -42,6 +42,16 @@
       "placeholder": "2",
       "help": "Minimum unique query count required for automatic promotion."
     },
+    "dreaming.recencyHalfLifeDays": {
+      "label": "Recency Half-Life Days",
+      "placeholder": "14",
+      "help": "Days for the recency score to decay by half during dreaming ranking."
+    },
+    "dreaming.maxAgeDays": {
+      "label": "Promotion Max Age Days",
+      "placeholder": "30",
+      "help": "Optional maximum daily-note age in days for automatic or manual promotion."
+    },
     "dreaming.verboseLogging": {
       "label": "Dreaming Verbose Logging",
       "placeholder": "false",
@@ -85,6 +95,14 @@
           "minUniqueQueries": {
             "type": "number",
             "minimum": 0
+          },
+          "recencyHalfLifeDays": {
+            "type": "number",
+            "minimum": 0
+          },
+          "maxAgeDays": {
+            "type": "number",
+            "exclusiveMinimum": 0
           },
           "verboseLogging": {
             "type": "boolean"

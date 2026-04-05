@@ -5,6 +5,7 @@ import {
   DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
   DEFAULT_MEMORY_DREAMING_MIN_SCORE,
   DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
+  DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
   DEFAULT_MEMORY_DREAMING_MODE,
   DEFAULT_MEMORY_DREAMING_PRESET,
   MEMORY_DREAMING_PRESET_DEFAULTS,
@@ -80,6 +81,8 @@ export type ShortTermPromotionDreamingConfig = {
   minScore: number;
   minRecallCount: number;
   minUniqueQueries: number;
+  recencyHalfLifeDays: number;
+  maxAgeDays?: number;
   verboseLogging: boolean;
 };
 
@@ -130,7 +133,7 @@ function formatRepairSummary(repair: {
 }
 
 function resolveManagedCronDescription(config: ShortTermPromotionDreamingConfig): string {
-  return `${MANAGED_DREAMING_CRON_TAG} Promote weighted short-term recalls into MEMORY.md (limit=${config.limit}, minScore=${config.minScore.toFixed(3)}, minRecallCount=${config.minRecallCount}, minUniqueQueries=${config.minUniqueQueries}).`;
+  return `${MANAGED_DREAMING_CRON_TAG} Promote weighted short-term recalls into MEMORY.md (limit=${config.limit}, minScore=${config.minScore.toFixed(3)}, minRecallCount=${config.minRecallCount}, minUniqueQueries=${config.minUniqueQueries}, recencyHalfLifeDays=${config.recencyHalfLifeDays}, maxAgeDays=${config.maxAgeDays ?? "none"}).`;
 }
 
 function buildManagedDreamingCronJob(
@@ -269,6 +272,8 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     minScore: resolved.minScore,
     minRecallCount: resolved.minRecallCount,
     minUniqueQueries: resolved.minUniqueQueries,
+    recencyHalfLifeDays: resolved.recencyHalfLifeDays,
+    ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
     verboseLogging: resolved.verboseLogging,
   };
 }
@@ -387,7 +392,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
 
   if (params.config.verboseLogging) {
     params.logger.info(
-      `memory-core: dreaming verbose enabled (cron=${params.config.cron}, limit=${params.config.limit}, minScore=${params.config.minScore.toFixed(3)}, minRecallCount=${params.config.minRecallCount}, minUniqueQueries=${params.config.minUniqueQueries}, workspaces=${workspaces.length}).`,
+      `memory-core: dreaming verbose enabled (cron=${params.config.cron}, limit=${params.config.limit}, minScore=${params.config.minScore.toFixed(3)}, minRecallCount=${params.config.minRecallCount}, minUniqueQueries=${params.config.minUniqueQueries}, recencyHalfLifeDays=${params.config.recencyHalfLifeDays}, maxAgeDays=${params.config.maxAgeDays ?? "none"}, workspaces=${workspaces.length}).`,
     );
   }
 
@@ -408,6 +413,8 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         minScore: params.config.minScore,
         minRecallCount: params.config.minRecallCount,
         minUniqueQueries: params.config.minUniqueQueries,
+        recencyHalfLifeDays: params.config.recencyHalfLifeDays,
+        maxAgeDays: params.config.maxAgeDays,
       });
       totalCandidates += candidates.length;
       if (params.config.verboseLogging) {
@@ -431,6 +438,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         minScore: params.config.minScore,
         minRecallCount: params.config.minRecallCount,
         minUniqueQueries: params.config.minUniqueQueries,
+        maxAgeDays: params.config.maxAgeDays,
         timezone: params.config.timezone,
       });
       totalApplied += applied.applied;
@@ -528,6 +536,7 @@ export const __testing = {
     DEFAULT_DREAMING_MIN_SCORE: DEFAULT_MEMORY_DREAMING_MIN_SCORE,
     DEFAULT_DREAMING_MIN_RECALL_COUNT: DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
     DEFAULT_DREAMING_MIN_UNIQUE_QUERIES: DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
+    DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS: DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
     DREAMING_PRESET_DEFAULTS: MEMORY_DREAMING_PRESET_DEFAULTS,
   },
 };

@@ -120,6 +120,8 @@ describe("memory-core /dreaming command", () => {
               dreaming: {
                 mode: "deep",
                 timezone: "America/Los_Angeles",
+                recencyHalfLifeDays: 21,
+                maxAgeDays: 45,
               },
             },
           },
@@ -132,6 +134,7 @@ describe("memory-core /dreaming command", () => {
     expect(result.text).toContain("Dreaming status:");
     expect(result.text).toContain("- mode: deep");
     expect(result.text).toContain("- cadence: 0 */12 * * * (America/Los_Angeles)");
+    expect(result.text).toContain("- aging: recencyHalfLifeDays=21, maxAgeDays=45");
     expect(result.text).toContain("- verboseLogging: off");
     expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
   });

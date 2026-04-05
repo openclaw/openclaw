@@ -206,6 +206,80 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("lets recency half-life tune the temporal score", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier retention",
+        nowMs: Date.parse("2026-04-01T10:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.92,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const slowerDecay = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-15T10:00:00.000Z"),
+        recencyHalfLifeDays: 14,
+      });
+      const fasterDecay = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-15T10:00:00.000Z"),
+        recencyHalfLifeDays: 7,
+      });
+
+      expect(slowerDecay).toHaveLength(1);
+      expect(fasterDecay).toHaveLength(1);
+      expect(slowerDecay[0]?.components.recency).toBeCloseTo(0.5, 3);
+      expect(fasterDecay[0]?.components.recency).toBeCloseTo(0.25, 3);
+      expect(slowerDecay[0]!.score).toBeGreaterThan(fasterDecay[0]!.score);
+    });
+  });
+
+  it("filters out candidates older than maxAgeDays during ranking", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "old note",
+        nowMs: Date.parse("2026-04-01T10:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.92,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-15T10:00:00.000Z"),
+        maxAgeDays: 7,
+      });
+
+      expect(ranked).toHaveLength(0);
+    });
+  });
+
   it("treats negative threshold overrides as invalid and keeps defaults", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
@@ -268,6 +342,53 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
+    });
+  });
+
+  it("skips direct candidates that exceed maxAgeDays during apply", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        maxAgeDays: 7,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        candidates: [
+          {
+            key: "memory:memory/2026-04-01.md:1:1",
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "Expired short-term note.",
+            recallCount: 3,
+            avgScore: 0.95,
+            maxScore: 0.95,
+            uniqueQueries: 2,
+            firstRecalledAt: "2026-04-01T00:00:00.000Z",
+            lastRecalledAt: "2026-04-02T00:00:00.000Z",
+            ageDays: 10,
+            score: 0.95,
+            recallDays: ["2026-04-01", "2026-04-02"],
+            conceptTags: ["expired"],
+            components: {
+              frequency: 1,
+              relevance: 1,
+              diversity: 1,
+              recency: 1,
+              consolidation: 1,
+              conceptual: 1,
+            },
+          },
+        ],
+      });
+
+      expect(applied.applied).toBe(0);
+      await expect(
+        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     });
   });
 

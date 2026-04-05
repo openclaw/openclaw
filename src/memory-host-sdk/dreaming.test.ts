@@ -39,6 +39,8 @@ describe("memory dreaming host helpers", () => {
           minScore: "0.9",
           minRecallCount: "4",
           minUniqueQueries: "2",
+          recencyHalfLifeDays: "21",
+          maxAgeDays: "30",
           verboseLogging: "true",
         },
       },
@@ -53,6 +55,8 @@ describe("memory dreaming host helpers", () => {
       minScore: 0.9,
       minRecallCount: 4,
       minUniqueQueries: 2,
+      recencyHalfLifeDays: 21,
+      maxAgeDays: 30,
       verboseLogging: true,
     });
   });
@@ -80,6 +84,8 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.timezone).toBe("America/Los_Angeles");
     expect(resolved.limit).toBe(10);
     expect(resolved.minScore).toBe(0.75);
+    expect(resolved.recencyHalfLifeDays).toBe(14);
+    expect(resolved.maxAgeDays).toBeUndefined();
   });
 
   it("dedupes shared workspaces and skips agents without memory search", () => {

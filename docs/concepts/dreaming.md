@@ -41,14 +41,14 @@ Promotion requires all configured threshold gates to pass, not just one signal.
 
 ### Signal weights
 
-| Signal              | Weight | Description                                      |
-| ------------------- | ------ | ------------------------------------------------ |
-| Frequency           | 0.24   | How often the same entry was recalled            |
-| Relevance           | 0.30   | Average recall scores when retrieved             |
-| Query diversity     | 0.15   | Count of distinct query intents that surfaced it |
-| Recency             | 0.15   | Temporal decay (14-day half-life)                |
-| Consolidation       | 0.10   | Reward recalls repeated across multiple days     |
-| Conceptual richness | 0.06   | Reward entries with richer derived concept tags  |
+| Signal              | Weight | Description                                        |
+| ------------------- | ------ | -------------------------------------------------- |
+| Frequency           | 0.24   | How often the same entry was recalled              |
+| Relevance           | 0.30   | Average recall scores when retrieved               |
+| Query diversity     | 0.15   | Count of distinct query intents that surfaced it   |
+| Recency             | 0.15   | Temporal decay (`recencyHalfLifeDays`, default 14) |
+| Consolidation       | 0.10   | Reward recalls repeated across multiple days       |
+| Conceptual richness | 0.06   | Reward entries with richer derived concept tags    |
 
 ## How it works
 
@@ -71,12 +71,12 @@ Promotion requires all configured threshold gates to pass, not just one signal.
 
 `dreaming.mode` controls cadence and default thresholds:
 
-| Mode   | Cadence        | minScore | minRecallCount | minUniqueQueries |
-| ------ | -------------- | -------- | -------------- | ---------------- |
-| `off`  | Disabled       | --       | --             | --               |
-| `core` | Daily 3 AM     | 0.75     | 3              | 2                |
-| `rem`  | Every 6 hours  | 0.85     | 4              | 3                |
-| `deep` | Every 12 hours | 0.80     | 3              | 3                |
+| Mode   | Cadence        | minScore | minRecallCount | minUniqueQueries | recencyHalfLifeDays |
+| ------ | -------------- | -------- | -------------- | ---------------- | ------------------- |
+| `off`  | Disabled       | --       | --             | --               | --                  |
+| `core` | Daily 3 AM     | 0.75     | 3              | 2                | 14                  |
+| `rem`  | Every 6 hours  | 0.85     | 4              | 3                | 14                  |
+| `deep` | Every 12 hours | 0.80     | 3              | 3                | 14                  |
 
 ## Scheduling model
 
@@ -91,6 +91,8 @@ You can still tune behavior with explicit overrides such as:
 - `dreaming.minScore`
 - `dreaming.minRecallCount`
 - `dreaming.minUniqueQueries`
+- `dreaming.recencyHalfLifeDays`
+- `dreaming.maxAgeDays`
 - `dreaming.verboseLogging`
 
 ## Configure
@@ -102,7 +104,9 @@ You can still tune behavior with explicit overrides such as:
       "memory-core": {
         "config": {
           "dreaming": {
-            "mode": "core"
+            "mode": "core",
+            "recencyHalfLifeDays": 21,
+            "maxAgeDays": 30
           }
         }
       }
@@ -141,6 +145,9 @@ openclaw memory promote --limit 5
 # Include already-promoted entries
 openclaw memory promote --include-promoted
 
+# Manual runs inherit dreaming thresholds unless you override them
+openclaw memory promote --apply
+
 # Check dreaming status
 openclaw memory status --deep
 ```
@@ -153,6 +160,10 @@ When dreaming is enabled, the Gateway sidebar shows a **Dreams** tab with
 memory stats (short-term count, long-term count, promoted count) and the next
 scheduled cycle time. Daily counters honor `dreaming.timezone` when set and
 otherwise fall back to the configured user timezone.
+
+Manual `openclaw memory promote` runs use the same dreaming thresholds by
+default, so scheduled and on-demand promotion stay aligned unless you pass CLI
+overrides.
 
 ## Further reading
 

@@ -127,6 +127,7 @@ describe("short-term dreaming config", () => {
       minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
       minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
       minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+      recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
       verboseLogging: false,
     });
   });
@@ -142,6 +143,8 @@ describe("short-term dreaming config", () => {
           minScore: 0.4,
           minRecallCount: 2,
           minUniqueQueries: 3,
+          recencyHalfLifeDays: 21,
+          maxAgeDays: 30,
           verboseLogging: true,
         },
       },
@@ -154,6 +157,8 @@ describe("short-term dreaming config", () => {
       minScore: 0.4,
       minRecallCount: 2,
       minUniqueQueries: 3,
+      recencyHalfLifeDays: 21,
+      maxAgeDays: 30,
       verboseLogging: true,
     });
   });
@@ -168,6 +173,8 @@ describe("short-term dreaming config", () => {
           minScore: "0.6",
           minRecallCount: "2",
           minUniqueQueries: "3",
+          recencyHalfLifeDays: "9",
+          maxAgeDays: "45",
         },
       },
     });
@@ -178,6 +185,8 @@ describe("short-term dreaming config", () => {
       minScore: 0.6,
       minRecallCount: 2,
       minUniqueQueries: 3,
+      recencyHalfLifeDays: 9,
+      maxAgeDays: 45,
       verboseLogging: false,
     });
   });
@@ -191,6 +200,8 @@ describe("short-term dreaming config", () => {
           minScore: "",
           minRecallCount: "  ",
           minUniqueQueries: "",
+          recencyHalfLifeDays: "",
+          maxAgeDays: " ",
         },
       },
     });
@@ -201,6 +212,7 @@ describe("short-term dreaming config", () => {
       minScore: constants.DREAMING_PRESET_DEFAULTS.deep.minScore,
       minRecallCount: constants.DREAMING_PRESET_DEFAULTS.deep.minRecallCount,
       minUniqueQueries: constants.DREAMING_PRESET_DEFAULTS.deep.minUniqueQueries,
+      recencyHalfLifeDays: constants.DREAMING_PRESET_DEFAULTS.deep.recencyHalfLifeDays,
       verboseLogging: false,
     });
   });
@@ -247,6 +259,8 @@ describe("short-term dreaming config", () => {
           minScore: -0.2,
           minRecallCount: -2,
           minUniqueQueries: -4,
+          recencyHalfLifeDays: -10,
+          maxAgeDays: -5,
         },
       },
     });
@@ -255,7 +269,9 @@ describe("short-term dreaming config", () => {
       minScore: constants.DREAMING_PRESET_DEFAULTS.rem.minScore,
       minRecallCount: constants.DREAMING_PRESET_DEFAULTS.rem.minRecallCount,
       minUniqueQueries: constants.DREAMING_PRESET_DEFAULTS.rem.minUniqueQueries,
+      recencyHalfLifeDays: constants.DREAMING_PRESET_DEFAULTS.rem.recencyHalfLifeDays,
     });
+    expect(resolved.maxAgeDays).toBeUndefined();
   });
 
   it("keeps dreaming disabled when mode is off", () => {

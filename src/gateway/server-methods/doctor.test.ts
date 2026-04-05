@@ -238,6 +238,8 @@ describe("doctor.memory.status", () => {
               dreaming: {
                 mode: "rem",
                 cron: "0 */4 * * *",
+                recencyHalfLifeDays: 21,
+                maxAgeDays: 30,
               },
             },
           },
@@ -287,6 +289,8 @@ describe("doctor.memory.status", () => {
             enabled: true,
             frequency: "0 */4 * * *",
             timezone: "America/Los_Angeles",
+            recencyHalfLifeDays: 21,
+            maxAgeDays: 30,
             shortTermCount: 1,
             promotedTotal: 3,
             promotedToday: 2,

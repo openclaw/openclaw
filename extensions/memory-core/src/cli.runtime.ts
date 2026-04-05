@@ -121,7 +121,7 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
     return "off";
   }
   const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
-  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries}`;
+  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"}`;
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {
@@ -927,6 +927,10 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
+      const dreaming = resolveShortTermPromotionDreamingConfig({
+        pluginConfig: resolveMemoryPluginConfig(cfg),
+        cfg,
+      });
       if (!workspaceDir) {
         defaultRuntime.error("Memory promote requires a resolvable workspace directory.");
         process.exitCode = 1;
@@ -938,9 +942,11 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
         candidates = await rankShortTermPromotionCandidates({
           workspaceDir,
           limit: opts.limit,
-          minScore: opts.minScore,
-          minRecallCount: opts.minRecallCount,
-          minUniqueQueries: opts.minUniqueQueries,
+          minScore: opts.minScore ?? dreaming.minScore,
+          minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
+          minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
+          recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
+          maxAgeDays: dreaming.maxAgeDays,
           includePromoted: Boolean(opts.includePromoted),
         });
       } catch (err) {
@@ -952,17 +958,14 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
       let applyResult: Awaited<ReturnType<typeof applyShortTermPromotions>> | undefined;
       if (opts.apply) {
         try {
-          const dreaming = resolveShortTermPromotionDreamingConfig({
-            pluginConfig: resolveMemoryPluginConfig(cfg),
-            cfg,
-          });
           applyResult = await applyShortTermPromotions({
             workspaceDir,
             candidates,
             limit: opts.limit,
-            minScore: opts.minScore,
-            minRecallCount: opts.minRecallCount,
-            minUniqueQueries: opts.minUniqueQueries,
+            minScore: opts.minScore ?? dreaming.minScore,
+            minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
+            minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
+            maxAgeDays: dreaming.maxAgeDays,
             timezone: dreaming.timezone,
           });
         } catch (err) {
