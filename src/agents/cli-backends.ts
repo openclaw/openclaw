@@ -1,5 +1,6 @@
 import {
   CLAUDE_CLI_BACKEND_ID,
+  buildAnthropicCliBackend,
   normalizeClaudeBackendConfig,
 } from "../../extensions/anthropic/cli-backend-api.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -18,6 +19,7 @@ export { normalizeClaudeBackendConfig };
 
 type FallbackCliBackendPolicy = {
   bundleMcp: boolean;
+  baseConfig?: CliBackendConfig;
   normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
 };
 
@@ -27,6 +29,7 @@ const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = 
     // plugin registry is not initialized yet (for example direct runner tests
     // or narrow non-gateway entrypoints).
     bundleMcp: true,
+    baseConfig: buildAnthropicCliBackend().config,
     normalizeConfig: normalizeClaudeBackendConfig,
   },
 };
@@ -134,11 +137,28 @@ export function resolveCliBackendConfig(
   }
 
   if (!override) {
-    return null;
+    if (!fallbackPolicy?.baseConfig) {
+      return null;
+    }
+    const baseConfig = fallbackPolicy.normalizeConfig
+      ? fallbackPolicy.normalizeConfig(fallbackPolicy.baseConfig)
+      : fallbackPolicy.baseConfig;
+    const command = baseConfig.command?.trim();
+    if (!command) {
+      return null;
+    }
+    return {
+      id: normalized,
+      config: { ...baseConfig, command },
+      bundleMcp: fallbackPolicy.bundleMcp,
+    };
   }
-  const config = fallbackPolicy?.normalizeConfig
-    ? fallbackPolicy.normalizeConfig(override)
+  const mergedFallback = fallbackPolicy?.baseConfig
+    ? mergeBackendConfig(fallbackPolicy.baseConfig, override)
     : override;
+  const config = fallbackPolicy?.normalizeConfig
+    ? fallbackPolicy.normalizeConfig(mergedFallback)
+    : mergedFallback;
   const command = config.command?.trim();
   if (!command) {
     return null;

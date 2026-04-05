@@ -352,6 +352,12 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "--permission-mode",
       "bypassPermissions",
     ]);
+    expect(resolved?.config.systemPromptArg).toBe("--append-system-prompt");
+    expect(resolved?.config.systemPromptWhen).toBe("first");
+    expect(resolved?.config.sessionArg).toBe("--session-id");
+    expect(resolved?.config.sessionMode).toBe("always");
+    expect(resolved?.config.input).toBe("stdin");
+    expect(resolved?.config.output).toBe("jsonl");
   });
 });
 
