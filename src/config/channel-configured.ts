@@ -1,5 +1,6 @@
 import { hasMeaningfulChannelConfig } from "../channels/config-presence.js";
 import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
+import { hasBundledChannelPersistedAuthState } from "../channels/plugins/persisted-auth-state.js";
 import { isRecord } from "../utils.js";
 import type { OpenClawConfig } from "./config.js";
 
@@ -27,7 +28,7 @@ export function isChannelConfigured(
   if (pluginConfigured) {
     return true;
   }
-  const pluginPersistedAuthState = plugin?.config?.hasPersistedAuthState?.({ cfg, env });
+  const pluginPersistedAuthState = hasBundledChannelPersistedAuthState({ channelId, cfg, env });
   if (pluginPersistedAuthState) {
     return true;
   }

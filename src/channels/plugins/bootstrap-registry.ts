@@ -61,11 +61,21 @@ function getBootstrapPlugins(): CachedBootstrapPlugins {
   return cachedBootstrapPlugins;
 }
 
-export function listBootstrapChannelPlugins(): readonly ChannelPlugin[] {
-  return getBootstrapPlugins().sortedIds.flatMap((id) => {
+export function listBootstrapChannelPluginIds(): readonly string[] {
+  return getBootstrapPlugins().sortedIds;
+}
+
+export function* iterateBootstrapChannelPlugins(): IterableIterator<ChannelPlugin> {
+  for (const id of listBootstrapChannelPluginIds()) {
     const plugin = getBootstrapChannelPlugin(id);
-    return plugin ? [plugin] : [];
-  });
+    if (plugin) {
+      yield plugin;
+    }
+  }
+}
+
+export function listBootstrapChannelPlugins(): readonly ChannelPlugin[] {
+  return [...iterateBootstrapChannelPlugins()];
 }
 
 export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
