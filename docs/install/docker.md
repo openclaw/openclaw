@@ -82,11 +82,11 @@ After it finishes:
 - Paste the token into the Control UI (Settings → token).
 - Need the URL again? Run `docker compose run --rm openclaw-cli dashboard --no-open`.
 
-  <Step title="Open the Control UI">
-    Open `http://127.0.0.1:18789/` in your browser and paste the configured
-    shared secret into Settings. The setup script writes a token to `.env` by
-    default; if you switch the container config to password auth, use that
-    password instead.
+    <Step title="Open the Control UI">
+      Open `http://127.0.0.1:18789/` in your browser and paste the configured
+      shared secret into Settings. The setup script writes a token to `.env` by
+      default; if you switch the container config to password auth, use that
+      password instead.
 
 ### Enable agent sandbox for Docker gateway (opt-in)
 
@@ -866,7 +866,7 @@ on typical riscv64 hardware.
 ### riscv64 notes
 
 - **Memory**: use `--memory=6g` minimum. WASM components (used by `openclaw
-  doctor` and HTTP internals) fail with out-of-memory at 4g.
+doctor` and HTTP internals) fail with out-of-memory at 4g.
 - **Network**: many riscv64 kernels lack the iptables `raw` table. Use
   `--network host` to bypass Docker networking, or set `"iptables": false` in
   `/etc/docker/daemon.json`.
@@ -883,10 +883,10 @@ on typical riscv64 hardware.
 
 ### Tested hardware
 
-| Board | RAM | Status |
-|---|---|---|
+| Board                     | RAM  | Status                                          |
+| ------------------------- | ---- | ----------------------------------------------- |
 | BananaPi F3 (SpacemiT K1) | 4 GB | Works with `--memory=4g --network host` (tight) |
-| SiFive Unmatched (U740) | 8 GB | Works with `--memory=6g` |
+| SiFive Unmatched (U740)   | 8 GB | Works with `--memory=6g`                        |
 
 ## Troubleshooting
 
