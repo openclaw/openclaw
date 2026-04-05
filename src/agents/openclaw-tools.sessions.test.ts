@@ -667,9 +667,9 @@ describe("sessions tools", () => {
       runId: "run-1",
       delivery: { status: "pending", mode: "announce" },
     });
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 4);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 4);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 4);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 5);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 5);
+    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 5);
 
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
@@ -683,14 +683,14 @@ describe("sessions tools", () => {
       delivery: { status: "pending", mode: "announce" },
     });
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 8);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 8);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 8);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 9);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 9);
+    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 10);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
     const historyOnlyCalls = calls.filter((call) => call.method === "chat.history");
-    expect(agentCalls).toHaveLength(8);
+    expect(agentCalls).toHaveLength(9);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
@@ -725,8 +725,8 @@ describe("sessions tools", () => {
           ),
       ),
     ).toBe(true);
-    expect(waitCalls).toHaveLength(8);
-    expect(historyOnlyCalls).toHaveLength(9);
+    expect(waitCalls).toHaveLength(9);
+    expect(historyOnlyCalls).toHaveLength(10);
     expect(sendCallCount).toBe(0);
   });
 

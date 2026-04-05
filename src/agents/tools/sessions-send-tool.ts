@@ -298,6 +298,7 @@ export function createSessionsSendTool(opts?: {
           requesterChannel,
           roundOneReply,
           waitRunId,
+          messageId: idempotencyKey,
         });
       };
 
@@ -315,6 +316,7 @@ export function createSessionsSendTool(opts?: {
         startA2AFlow(undefined, runId);
         return jsonResult({
           runId,
+          messageId: idempotencyKey,
           status: "accepted",
           sessionKey: displayKey,
           delivery,
@@ -343,6 +345,7 @@ export function createSessionsSendTool(opts?: {
       if (result.status === "timeout") {
         return jsonResult({
           runId,
+          messageId: idempotencyKey,
           status: "timeout",
           error: result.error,
           sessionKey: displayKey,
@@ -361,6 +364,7 @@ export function createSessionsSendTool(opts?: {
 
       return jsonResult({
         runId,
+        messageId: idempotencyKey,
         status: "ok",
         reply,
         sessionKey: displayKey,

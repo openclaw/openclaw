@@ -12,6 +12,7 @@ import {
   buildAgentToAgentReplyContext,
   isAnnounceSkip,
   isReplySkip,
+  ANNOUNCE_SKIP_TOKEN,
 } from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
@@ -36,6 +37,7 @@ export async function runSessionsSendA2AFlow(params: {
   requesterChannel?: GatewayMessageChannel;
   roundOneReply?: string;
   waitRunId?: string;
+  messageId?: string;
 }) {
   const runContextId = params.waitRunId ?? "unknown";
   try {
@@ -52,6 +54,31 @@ export async function runSessionsSendA2AFlow(params: {
           sessionKey: params.targetSessionKey,
         });
         latestReply = primaryReply;
+        // Emit "received" read receipt to the requester session (best-effort).
+        if (params.requesterSessionKey && params.requesterSessionKey !== params.targetSessionKey) {
+          const messageRef = params.messageId ? ` (messageId: ${params.messageId})` : "";
+          const receiptPrompt = [
+            `Read receipt: your message${messageRef} was delivered to ${params.displayKey} and the agent has started processing.`,
+            `If you have nothing to do with this receipt, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
+          ].join("\n");
+          try {
+            await runAgentStep({
+              sessionKey: params.requesterSessionKey,
+              message: receiptPrompt,
+              extraSystemPrompt: "This is a system read-receipt notification.",
+              timeoutMs: 15_000,
+              lane: AGENT_LANE_NESTED,
+              sourceSessionKey: params.targetSessionKey,
+              sourceTool: "sessions_send",
+            });
+          } catch (err) {
+            log.warn("sessions_send read-receipt delivery failed", {
+              runId: runContextId,
+              requesterSessionKey: params.requesterSessionKey,
+              error: formatErrorMessage(err),
+            });
+          }
+        }
       }
     }
     if (!latestReply) {
