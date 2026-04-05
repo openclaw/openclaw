@@ -125,14 +125,16 @@ function buildPluginSdkAliasMap(useDist) {
   const packageRoot = getPackageRoot();
   const pluginSdkDir = path.join(packageRoot, useDist ? "dist" : "src", "plugin-sdk");
   const ext = useDist ? ".js" : ".ts";
+  const normalizeTarget = (target) =>
+    process.platform === "win32" ? target.replace(/\\/g, "/") : target;
   const aliasMap = {
-    "openclaw/plugin-sdk": __filename,
+    "openclaw/plugin-sdk": normalizeTarget(__filename),
   };
 
   for (const subpath of listPluginSdkExportedSubpaths()) {
     const candidate = path.join(pluginSdkDir, `${subpath}${ext}`);
     if (fs.existsSync(candidate)) {
-      aliasMap[`openclaw/plugin-sdk/${subpath}`] = candidate;
+      aliasMap[`openclaw/plugin-sdk/${subpath}`] = normalizeTarget(candidate);
     }
   }
 
@@ -140,20 +142,22 @@ function buildPluginSdkAliasMap(useDist) {
 }
 
 function getJiti(tryNative) {
-  if (jitiLoaders.has(tryNative)) {
-    return jitiLoaders.get(tryNative);
+  const effectiveTryNative = process.platform === "win32" ? false : tryNative;
+
+  if (jitiLoaders.has(effectiveTryNative)) {
+    return jitiLoaders.get(effectiveTryNative);
   }
 
   const { createJiti } = require("jiti");
   const jitiLoader = createJiti(__filename, {
-    alias: buildPluginSdkAliasMap(tryNative),
+    alias: buildPluginSdkAliasMap(effectiveTryNative),
     interopDefault: true,
     // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
     // so local plugins do not create a second transpiled OpenClaw core graph.
-    tryNative,
+    tryNative: effectiveTryNative,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
-  jitiLoaders.set(tryNative, jitiLoader);
+  jitiLoaders.set(effectiveTryNative, jitiLoader);
   return jitiLoader;
 }
 

@@ -13,6 +13,7 @@ import {
   buildPluginLoaderJitiOptions,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
+  normalizeJitiAliasTargetPath,
   resolveExtensionApiAlias,
   resolvePluginRuntimeModulePath,
   resolvePluginSdkAliasFile,
@@ -657,6 +658,45 @@ describe("plugin sdk alias helpers", () => {
       Object.defineProperty(process, "versions", {
         configurable: true,
         value: originalVersions,
+      });
+    }
+  });
+
+  it("disables native Jiti loads on Windows even for built JavaScript entries", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "win32",
+    });
+
+    try {
+      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(shouldPreferNativeJiti(`/repo/${bundledDistPluginFile("browser", "index.js")}`)).toBe(
+        false,
+      );
+    } finally {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
+      });
+    }
+  });
+
+  it("normalizes Windows alias targets before handing them to Jiti", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "win32",
+    });
+
+    try {
+      expect(normalizeJitiAliasTargetPath(String.raw`C:\repo\dist\plugin-sdk\root-alias.cjs`)).toBe(
+        "C:/repo/dist/plugin-sdk/root-alias.cjs",
+      );
+    } finally {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
       });
     }
   });
