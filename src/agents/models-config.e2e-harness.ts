@@ -267,15 +267,6 @@ async function inferImplicitProviderTestPluginIds(params: {
       providerIds.add(providerId.trim());
     }
   }
-  const legacyGrokApiKey =
-    params.config?.tools?.web?.search &&
-    typeof params.config.tools.web.search === "object" &&
-    "grok" in params.config.tools.web.search
-      ? (params.config.tools.web.search.grok as { apiKey?: unknown } | undefined)?.apiKey
-      : undefined;
-  if (legacyGrokApiKey !== undefined) {
-    providerIds.add("xai");
-  }
   for (const [envVar, mappedProviderIds] of Object.entries(TEST_PROVIDER_ENV_TO_PROVIDER_IDS)) {
     if (!params.env[envVar]?.trim()) {
       continue;
