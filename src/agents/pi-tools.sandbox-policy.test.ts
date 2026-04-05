@@ -1,9 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createBundledBrowserPluginFixture } from "../../test/helpers/browser-bundled-plugin-fixture.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
+import { clearPluginLoaderCache } from "../plugins/loader.js";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
+
+function resetPluginState() {
+  clearPluginLoaderCache();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
+  resetPluginRuntimeStateForTest();
+}
 
 function listToolNames(params: {
   cfg: OpenClawConfig;
@@ -32,6 +44,21 @@ function listToolNames(params: {
 }
 
 describe("pi-tools sandbox policy", () => {
+  let bundledFixture: ReturnType<typeof createBundledBrowserPluginFixture> | null = null;
+
+  beforeEach(() => {
+    bundledFixture = createBundledBrowserPluginFixture();
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledFixture.rootDir);
+    resetPluginState();
+  });
+
+  afterEach(() => {
+    resetPluginState();
+    vi.unstubAllEnvs();
+    bundledFixture?.cleanup();
+    bundledFixture = null;
+  });
+
   it("re-exposes omitted sandbox tools via sandbox alsoAllow", () => {
     const names = listToolNames({
       cfg: {
@@ -71,14 +98,17 @@ describe("pi-tools sandbox policy", () => {
         tools: {
           sandbox: {
             tools: {
-              allow: ["gateway"],
+              allow: ["browser"],
             },
           },
+        },
+        plugins: {
+          allow: ["browser"],
         },
       } as OpenClawConfig,
     });
 
-    expect(names).toContain("gateway");
+    expect(names).toContain("browser");
   });
 
   it("prefers the resolved sandbox context policy for legacy main session aliases", () => {
@@ -94,13 +124,16 @@ describe("pi-tools sandbox policy", () => {
             tools: {
               sandbox: {
                 tools: {
-                  allow: ["gateway"],
+                  allow: ["browser"],
                   alsoAllow: ["message"],
                 },
               },
             },
           },
         ],
+      },
+      plugins: {
+        allow: ["browser"],
       },
     } as OpenClawConfig;
 
@@ -110,7 +143,7 @@ describe("pi-tools sandbox policy", () => {
       sandboxAgentId: "tavern",
     });
 
-    expect(names).toContain("gateway");
+    expect(names).toContain("browser");
     expect(names).toContain("message");
   });
 
@@ -127,14 +160,17 @@ describe("pi-tools sandbox policy", () => {
           sandbox: {
             tools: {
               allow: [],
-              alsoAllow: ["gateway"],
+              alsoAllow: ["browser"],
             },
           },
+        },
+        plugins: {
+          allow: ["browser"],
         },
       } as OpenClawConfig,
     });
 
-    expect(names).toContain("gateway");
+    expect(names).toContain("browser");
     expect(names).toContain("read");
   });
 
@@ -150,15 +186,18 @@ describe("pi-tools sandbox policy", () => {
         tools: {
           sandbox: {
             tools: {
-              allow: ["gateway", "message"],
-              deny: ["gateway"],
+              allow: ["browser", "message"],
+              deny: ["browser"],
             },
           },
+        },
+        plugins: {
+          allow: ["browser"],
         },
       } as OpenClawConfig,
     });
 
-    expect(names).not.toContain("gateway");
+    expect(names).not.toContain("browser");
     expect(names).toContain("message");
   });
 });
