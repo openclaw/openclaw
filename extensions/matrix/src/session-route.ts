@@ -1,14 +1,13 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  buildChannelOutboundSessionRoute,
+  type ChannelOutboundSessionRouteParams,
+} from "openclaw/plugin-sdk/channel-core";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
   resolveStorePath,
 } from "openclaw/plugin-sdk/config-runtime";
-import {
-  buildChannelOutboundSessionRoute,
-  normalizeAccountId,
-  type ChannelOutboundSessionRouteParams,
-} from "openclaw/plugin-sdk/channel-core";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import { resolveMatrixDirectUserId, resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 
