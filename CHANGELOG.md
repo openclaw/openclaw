@@ -40,7 +40,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Group chats/agent prompts: tell models to minimize empty lines and use normal chat-style spacing so group replies avoid document-style blank-line formatting.
 - ACP/agents: inherit the target agent workspace for cross-agent ACP spawns and fall back safely when the inherited workspace no longer exists. (#58438) Thanks @zssggle-rgb.
 - ACPX/Windows: preserve backslashes and absolute `.exe` paths in Claude CLI parsing, and fail fast on wrapper-script targets with guidance to use `cmd.exe /c`, `powershell.exe -File`, or `node <script>`. (#60689) Thanks @steipete.
 - Agents/Anthropic: preserve native `toolu_*` replay ids on direct Anthropic and Anthropic Vertex paths so cache-sensitive history stops rewriting known-valid Anthropic tool-use ids. (#52612)
@@ -51,17 +50,18 @@ Docs: https://docs.openclaw.ai
 - Agents/Claude CLI/security: force host-managed Claude CLI backdoor runs to `--setting-sources user`, even under custom backend arg overrides, so repo-local `.claude` project/local settings, hooks, and plugin discovery do not silently execute inside non-interactive OpenClaw sessions. Thanks @vincentkoc.
 - Agents/Claude CLI: keep non-interactive `--permission-mode bypassPermissions` when custom `cliBackends.claude-cli.args` override defaults, including fallback resolution before the runtime plugin registry is active, so cron and heartbeat Claude CLI runs do not regress to interactive approval mode. (#61114) Thanks @cathrynlavery and @thewilloftheshadow.
 - Agents/Claude CLI: persist explicit `openclaw agent --session-id` runs under a stable session key so follow-ups can reuse the stored CLI binding and resume the same underlying Claude session.
+- Agents/Claude CLI: persist routed Claude session bindings, rotate them on `/new` and `/reset`, and keep live Claude CLI model switches moving across the configured Claude family so resumed sessions follow the real active thread and model. Thanks @vincentkoc.
 - Agents/Claude CLI: treat malformed bare `--permission-mode` backend overrides as missing and fail safe back to `bypassPermissions`, so custom `cliBackends.claude-cli.args` security config cannot accidentally consume the next flag as a bogus permission mode. Thanks @vincentkoc.
 - Agents/CLI backends: invalidate stored CLI session reuse when local CLI login state or the selected auth profile credential changes, so relogin and token rotation stop resuming stale sessions.
 - Agents/compaction: keep assistant tool calls and displaced tool results in the same compaction chunk so strict summarization providers stop rejecting orphaned tool pairs. (#58849) Thanks @openperf.
 - Agents/errors: surface an explicit disk-full message when local session or transcript writes fail with `ENOSPC`/`disk full`, so those runs stop degrading into opaque `NO_REPLY`-style failures. Thanks @vincentkoc.
-- Agents/exec approvals: let `exec-approvals.json` agent security override stricter gateway tool defaults so approved subagents can use `security: "full"` without falling back to allowlist enforcement again. (#60310) Thanks @lml2468.
+- Agents/exec approvals: let `exec-approvals.json` agent security override stricter gateway tool defaults so approved subagents can use `security: “full”` without falling back to allowlist enforcement again. (#60310) Thanks @lml2468.
 - Agents/exec: restore `host=node` routing for node-pinned and `host=auto` sessions, while still blocking sandboxed `auto` sessions from jumping to gateway. (#60788) Thanks @openperf.
 - Agents/failover: scope Anthropic `An unknown error occurred` failover matching by provider so generic internal unknown-error text no longer triggers retryable timeout fallback. (#59325) Thanks @aaron-he-zhu.
 - Agents/GPT: add explicit work-item lifecycle events for embedded runs, use them to surface real progress more reliably, and stop counting tool-started turns as planning-only retries.
 - Agents/Kimi tool-call repair: preserve tool arguments that were already present on streamed tool calls when later malformed deltas fail reevaluation, while still dropping stale repair-only state before `toolcall_end`.
 - Agents/OpenAI: mark Claude-compatible file tool schemas as `additionalProperties: false` so direct OpenAI GPT-5 routes stop rejecting the `read` tool with invalid strict-schema errors.
-- Agents/output delivery: suppress `phase:"commentary"` assistant text at the embedded subscribe boundary so internal planning text cannot leak into user-visible replies or Telegram partials. (#61282) Thanks @mbelinky.
+- Agents/output delivery: suppress `phase:”commentary”` assistant text at the embedded subscribe boundary so internal planning text cannot leak into user-visible replies or Telegram partials. (#61282) Thanks @mbelinky.
 - Agents/pairing: merge completion announce delivery context with the requester session fallback so missing `to` still reaches the original channel, and include `operator.talk.secrets` in CLI default operator scopes for node-role device pairing approvals. (#56481) Thanks @maxpetrusenko.
 - Agents/runtime: make default subagent allowlists, inherited skills/workspaces, and duplicate session-id resolution behave more predictably, and include value-shape hints in missing-parameter tool errors. (#59944, #59992, #59858, #55317) Thanks @hclsys, @gumadeiras, @joelnishanth, and @priyansh19.
 - Agents/scheduling: steer background-now work toward automatic completion wake and treat `process` polling as on-demand inspection or intervention instead of default completion handling. (#60877) Thanks @vincentkoc.
@@ -108,8 +108,10 @@ Docs: https://docs.openclaw.ai
 - Google Gemini CLI auth: improve OAuth credential discovery across Windows nvm and Homebrew libexec installs, and align Code Assist metadata so Gemini login stops failing on packaged CLI layouts. (#40729) Thanks @hughcube.
 - Google Gemini CLI models: add forward-compat support for stable `gemini-2.5-*` model ids by letting the bundled CLI provider clone them from Google templates, so `gemini-2.5-flash-lite` and related configured models stop showing up as missing. (#35274) Thanks @mySebbe.
 - Google image generation: disable pinned DNS for Gemini image requests and honor explicit `pinDns` overrides in shared provider HTTP helpers so proxy-backed image generation works again. (#59873) Thanks @luoyanglang.
+- Group chats/agent prompts: tell models to minimize empty lines and use normal chat-style spacing so group replies avoid document-style blank-line formatting.
 - Heartbeat: skip wake delivery when the target session lane is already busy so the pending event is retried instead of getting drained too early. (#40526) Thanks @lucky7323.
 - Live model switching: only treat explicit user-driven model changes as pending live switches, so fallback rotation, heartbeat overrides, and compaction no longer trip `LiveSessionModelSwitchError` before making an API call. (#60266) Thanks @kiranvk-2011.
+- Matrix/exec approvals: anchor seeded approval reactions to the primary Matrix prompt event, resolve them from event metadata instead of prompt text, and clean up chunked approval prompts correctly. (#60931) Thanks @gumadeiras.
 - Matrix: recover more reliably when secret storage or recovery keys are missing by recreating secret storage during repair and backup reset, hold crypto snapshot locks during persistence, and surface explicit too-large attachment markers. (#59846, #59851, #60599, #60289) Thanks @al3mart, @emonty, and @efe-arv.
 - Mattermost/config schema: accept `groups.*.requireMention` again so existing Mattermost configs no longer fail strict validation after upgrade. (#58271) Thanks @MoerAI.
 - Media understanding: auto-register image-capable config providers for vision routing, so custom GLM-style provider ids with image models stop failing with “no media-understanding provider registered”. (#51418) Thanks @xydt-610.
@@ -139,8 +141,9 @@ Docs: https://docs.openclaw.ai
 - Plugins/OpenAI: tune the OpenAI prompt overlay for live-chat cadence so GPT replies stay shorter, more human, and less wall-of-text by default.
 - Prompt caching: order stable workspace project-context files before `HEARTBEAT.md` and keep `HEARTBEAT.md` below the system-prompt cache boundary so heartbeat churn does not invalidate the stable project-context prefix. (#58979) Thanks @yozu and @vincentkoc.
 - Prompt caching: route Codex Responses and Anthropic Vertex through boundary-aware cache shaping, and report the actual outbound system prompt in cache traces so cache reuse and misses line up with what providers really receive. Thanks @vincentkoc.
-- Providers/Anthropic Vertex: honor `cacheRetention: "long"` with the real 1-hour prompt-cache TTL on Vertex AI endpoints, and default `anthropic-vertex` cache retention like direct Anthropic. (#60888) Thanks @affsantos.
+- Providers/Anthropic Vertex: honor `cacheRetention: “long”` with the real 1-hour prompt-cache TTL on Vertex AI endpoints, and default `anthropic-vertex` cache retention like direct Anthropic. (#60888) Thanks @affsantos.
 - Providers/Anthropic: keep `claude-cli/*` auth on live Claude CLI credentials at runtime, avoid persisting stale bearer-token profiles, and suppress macOS Keychain prompts during non-interactive Claude CLI setup. (#61234) Thanks @darkamenosa.
+- Providers/Anthropic: when Claude CLI auth becomes the default, write a real `claude-cli` auth profile so local and gateway agent runs can use Claude CLI immediately without missing-API-key failures. Thanks @vincentkoc.
 - Providers/compat: stop forcing OpenAI-only defaults on proxy and custom OpenAI-compatible routes, preserve native vendor-specific reasoning/tool/streaming behavior across Anthropic-compatible, Moonshot, Mistral, ModelStudio, OpenRouter, xAI, and Z.ai endpoints, and route GitHub Copilot Claude models through Anthropic Messages instead of OpenAI Responses.
 - Providers/GitHub Copilot: send IDE identity headers on runtime model requests and GitHub token exchange so IDE-authenticated Copilot runs stop failing with missing `Editor-Version`. (#60641) Thanks @VACInc and @vincentkoc.
 - Providers/Google: add model-level `cacheRetention` support for direct Gemini system prompts by creating, reusing, and refreshing `cachedContents` automatically on Google AI Studio runs. (#51372) Thanks @rafaelmariano-glitch.
@@ -150,9 +153,9 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI GPT: treat short approval turns like `ok do it` and `go ahead` as immediate action turns, and trim overly memo-like GPT-5 chat confirmations so OpenAI replies stay shorter and more conversational by default.
 - Providers/OpenAI-compatible WS: compute fallback token totals from normalized usage when providers omit or zero `total_tokens`, so DashScope-compatible sessions stop storing zero totals after alias normalization. (#54940) Thanks @lyfuci.
 - Providers/OpenAI: make GPT-5 and Codex runs act sooner with lower-verbosity defaults, visible progress during tool work, and a one-shot retry when a turn only narrates the plan instead of taking action.
-- Providers/OpenAI: preserve native `reasoning.effort: "none"` and strict tool schemas on direct OpenAI-family endpoints, keep compat routes on compat shaping, fix Responses WebSocket warm-up behavior, keep stable session and turn metadata, and fall back more gracefully after early WebSocket failures.
+- Providers/OpenAI: preserve native `reasoning.effort: “none”` and strict tool schemas on direct OpenAI-family endpoints, keep compat routes on compat shaping, fix Responses WebSocket warm-up behavior, keep stable session and turn metadata, and fall back more gracefully after early WebSocket failures.
 - Providers/OpenAI: support GPT-5.4 assistant `phase` metadata across OpenAI-family Responses replay and the Gateway `/v1/responses` compatibility layer, including `commentary` tool preambles and `final_answer` replies.
-- Providers/OpenRouter failover: classify `403 "Key limit exceeded"` spending-limit responses as billing so model fallback continues instead of stopping on generic auth. (#59892) Thanks @rockcent.
+- Providers/OpenRouter failover: classify `403 “Key limit exceeded”` spending-limit responses as billing so model fallback continues instead of stopping on generic auth. (#59892) Thanks @rockcent.
 - Providers/Z.AI: preserve explicitly registered `glm-5-*` variants like `glm-5-turbo` instead of intercepting them with the generic GLM-5 forward-compat shim. (#48185) Thanks @haoyu-haoyu.
 - Security: preserve restrictive plugin-only tool allowlists, require owner access for `/allowlist add` and `/allowlist remove`, fail closed when `before_tool_call` hooks crash, block browser SSRF redirect bypasses earlier, and keep non-interactive auth-choice inference scoped to bundled and already-trusted plugins. (#58476, #59836, #59822, #58771, #59120) Thanks @eleqtrizit and @pgondhi987.
 - Slack: route live DM replies back to the concrete inbound DM channel while keeping persisted routing metadata user-scoped, so normal assistant replies stop disappearing when pairing and system messages still arrive. (#59030) Thanks @afurm.
@@ -174,9 +177,6 @@ Docs: https://docs.openclaw.ai
 - Voice-call/OpenAI: pass full plugin config into realtime transcription provider resolution so streaming calls can discover the bundled OpenAI realtime transcription provider again. Fixes #60936. Thanks @sliekens and @vincentkoc.
 - WhatsApp: restore `channels.whatsapp.blockStreaming` and reset watchdog timeouts after reconnect so quiet chats stop falling into reconnect loops. (#60007, #60069) Thanks @MonkeyLeeT and @mcaxtr.
 - Windows/restart: fall back to the installed Startup-entry launcher when the scheduled task was never registered, so `/restart` can relaunch the gateway on Windows setups where `schtasks` install fell back during onboarding. (#58943) Thanks @imechZhangLY.
-- Agents/Claude CLI: persist routed Claude session bindings, rotate them on `/new` and `/reset`, and keep live Claude CLI model switches moving across the configured Claude family so resumed sessions follow the real active thread and model. Thanks @vincentkoc.
-- Providers/Anthropic: when Claude CLI auth becomes the default, write a real `claude-cli` auth profile so local and gateway agent runs can use Claude CLI immediately without missing-API-key failures. Thanks @vincentkoc.
-- Matrix/exec approvals: anchor seeded approval reactions to the primary Matrix prompt event, resolve them from event metadata instead of prompt text, and clean up chunked approval prompts correctly. (#60931) thanks @gumadeiras.
 
 ## 2026.4.2
 
