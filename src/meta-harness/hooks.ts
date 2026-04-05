@@ -14,7 +14,7 @@
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createFlowTraceBuilder, checkWorkspaceGating } from "./index.js";
+import { createFlowTraceBuilder, checkWorkspaceGating, generateDailySummary } from "./index.js";
 import type { FlowTraceBuilder } from "./index.js";
 import type {
   RunOutcome,
@@ -23,6 +23,7 @@ import type {
   TriageDomain,
   AutomationLevel,
 } from "./types.js";
+import { generateTraceId } from "./writer.js";
 
 const log = createSubsystemLogger("meta-harness");
 
@@ -303,7 +304,7 @@ export async function recordDelegation(params: {
   }
 
   entry.builder.recordDelegation({
-    child_trace_id: params.childSessionId,
+    child_trace_id: generateTraceId(), // Use stable UUID instead of session key
     agent_type: params.agentType,
     task_brief: params.taskBrief,
     status: params.status,
@@ -368,8 +369,10 @@ async function handleDelegation(event: InternalHookEvent): Promise<void> {
     return;
   }
 
+  const childTraceId = generateTraceId(); // Use stable UUID instead of session key
+
   entry.builder.recordDelegation({
-    child_trace_id: childSessionId,
+    child_trace_id: childTraceId,
     agent_type: agentType,
     task_brief: taskBrief,
     status: (ctx.status as import("./types.js").RunOutcome) ?? "completed",
@@ -378,7 +381,7 @@ async function handleDelegation(event: InternalHookEvent): Promise<void> {
   // Write independent child trace file (fire-and-forget, never blocks main path)
   entry.builder
     .writeChildTrace({
-      child_trace_id: childSessionId,
+      child_trace_id: childTraceId,
       child_session_id: childSessionId,
       agent_type: agentType,
       task_brief: taskBrief,
@@ -388,6 +391,10 @@ async function handleDelegation(event: InternalHookEvent): Promise<void> {
       timestamp: new Date().toISOString(),
     })
     .catch(() => {});
+
+  // Refresh daily summary after delegation (fire-and-forget, idempotent)
+  const today = new Date().toISOString().slice(0, 10);
+  generateDailySummary(workspaceDir, today).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
