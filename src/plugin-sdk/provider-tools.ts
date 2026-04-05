@@ -158,3 +158,18 @@ export function inspectGeminiToolSchemas(
     return [{ toolName: tool.name, toolIndex, violations }];
   });
 }
+
+export type ProviderToolCompatFamily = "gemini";
+
+export function buildProviderToolCompatFamilyHooks(family: ProviderToolCompatFamily): {
+  normalizeToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => AnyAgentTool[];
+  inspectToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => ProviderToolSchemaDiagnostic[];
+} {
+  switch (family) {
+    case "gemini":
+      return {
+        normalizeToolSchemas: normalizeGeminiToolSchemas,
+        inspectToolSchemas: inspectGeminiToolSchemas,
+      };
+  }
+}

@@ -25,6 +25,11 @@ export type BlueBubblesActionConfig = {
   sendAttachment?: boolean;
 };
 
+export type BlueBubblesNetworkConfig = {
+  /** Dangerous opt-in for same-host or trusted private/internal BlueBubbles deployments. */
+  dangerouslyAllowPrivateNetwork?: boolean;
+};
+
 export type BlueBubblesAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -71,8 +76,8 @@ export type BlueBubblesAccountConfig = {
   mediaLocalRoots?: string[];
   /** Send read receipts for incoming messages (default: true). */
   sendReadReceipts?: boolean;
-  /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for same-host BlueBubbles setups. */
-  allowPrivateNetwork?: boolean;
+  /** Network policy overrides for same-host or trusted private/internal BlueBubbles deployments. */
+  network?: BlueBubblesNetworkConfig;
   /** Per-group configuration keyed by chat GUID or identifier. */
   groups?: Record<string, BlueBubblesGroupConfig>;
   /** Per-action tool gating (default: true for all). */

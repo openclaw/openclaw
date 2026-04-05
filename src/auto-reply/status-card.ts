@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import type { SessionEntry, SessionScope } from "../config/sessions/types.js";
@@ -58,15 +59,6 @@ type StatusArgs = {
   now?: number;
 };
 
-type UsageLike = {
-  input?: number | null;
-  output?: number | null;
-  total?: number | null;
-  promptTokens?: number | null;
-  cacheRead?: number | null;
-  cacheWrite?: number | null;
-};
-
 export const formatTokenCount = formatTokenCountShared;
 
 function parseModelRef(value?: string | null): { provider: string; model: string; label: string } {
@@ -93,48 +85,6 @@ function parseModelRef(value?: string | null): { provider: string; model: string
     model: model || DEFAULT_MODEL,
     label: `${provider || DEFAULT_PROVIDER}/${model || DEFAULT_MODEL}`,
   };
-}
-
-function normalizeUsage(value?: UsageLike | null): UsageLike | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const normalized: UsageLike = {};
-  if (typeof value.input === "number") {
-    normalized.input = value.input;
-  }
-  if (typeof value.output === "number") {
-    normalized.output = value.output;
-  }
-  if (typeof value.total === "number") {
-    normalized.total = value.total;
-  }
-  if (typeof value.promptTokens === "number") {
-    normalized.promptTokens = value.promptTokens;
-  }
-  if (typeof value.cacheRead === "number") {
-    normalized.cacheRead = value.cacheRead;
-  }
-  if (typeof value.cacheWrite === "number") {
-    normalized.cacheWrite = value.cacheWrite;
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-function derivePromptTokens(usage?: UsageLike | null): number | undefined {
-  if (!usage) {
-    return undefined;
-  }
-  if (typeof usage.promptTokens === "number") {
-    return usage.promptTokens;
-  }
-  if (typeof usage.total === "number" && typeof usage.output === "number") {
-    return Math.max(0, usage.total - usage.output);
-  }
-  if (typeof usage.input === "number") {
-    return usage.input;
-  }
-  return undefined;
 }
 
 function resolvePrimaryModelLabel(model: AgentConfig["model"]): string | undefined {

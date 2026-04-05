@@ -10,8 +10,10 @@ read_when:
 
 # Building Plugins
 
-Plugins extend OpenClaw with new capabilities: channels, model providers, speech,
-image generation, web search, agent tools, or any combination.
+Plugins extend OpenClaw with new capabilities: channels, model providers,
+speech, realtime transcription, realtime voice, media understanding, image
+generation, video generation, web fetch, web search, agent tools, or any
+combination.
 
 You do not need to add your plugin to the OpenClaw repository. Publish to
 [ClawHub](/tools/clawhub) or npm and users install with
@@ -37,6 +39,12 @@ falls back to npm automatically.
     Register agent tools, event hooks, or services — continue below
   </Card>
 </CardGroup>
+
+If a channel plugin is optional and may not be installed when onboarding/setup
+runs, use `createOptionalChannelSetupSurface(...)` from
+`openclaw/plugin-sdk/channel-setup`. It produces a setup adapter + wizard pair
+that advertises the install requirement and fails closed on real config writes
+until the plugin is installed.
 
 ## Quick start: tool plugin
 
@@ -140,23 +148,31 @@ and provider plugins have dedicated guides linked above.
 
 A single plugin can register any number of capabilities via the `api` object:
 
-| Capability            | Registration method                           | Detailed guide                                                                  |
-| --------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
-| Text inference (LLM)  | `api.registerProvider(...)`                   | [Provider Plugins](/plugins/sdk-provider-plugins)                               |
-| CLI inference backend | `api.registerCliBackend(...)`                 | [CLI Backends](/gateway/cli-backends)                                           |
-| Channel / messaging   | `api.registerChannel(...)`                    | [Channel Plugins](/plugins/sdk-channel-plugins)                                 |
-| Speech (TTS/STT)      | `api.registerSpeechProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Realtime voice        | `api.registerRealtimeVoiceProvider(...)`      | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Media understanding   | `api.registerMediaUnderstandingProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Image generation      | `api.registerImageGenerationProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Web search            | `api.registerWebSearchProvider(...)`          | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Agent tools           | `api.registerTool(...)`                       | Below                                                                           |
-| Custom commands       | `api.registerCommand(...)`                    | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| Event hooks           | `api.registerHook(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| HTTP routes           | `api.registerHttpRoute(...)`                  | [Internals](/plugins/architecture#gateway-http-routes)                          |
-| CLI subcommands       | `api.registerCli(...)`                        | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| Capability             | Registration method                              | Detailed guide                                                                  |
+| ---------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| Text inference (LLM)   | `api.registerProvider(...)`                      | [Provider Plugins](/plugins/sdk-provider-plugins)                               |
+| CLI inference backend  | `api.registerCliBackend(...)`                    | [CLI Backends](/gateway/cli-backends)                                           |
+| Channel / messaging    | `api.registerChannel(...)`                       | [Channel Plugins](/plugins/sdk-channel-plugins)                                 |
+| Speech (TTS/STT)       | `api.registerSpeechProvider(...)`                | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Media understanding    | `api.registerMediaUnderstandingProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Image generation       | `api.registerImageGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Video generation       | `api.registerVideoGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Web fetch              | `api.registerWebFetchProvider(...)`              | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Web search             | `api.registerWebSearchProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Agent tools            | `api.registerTool(...)`                          | Below                                                                           |
+| Custom commands        | `api.registerCommand(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| Event hooks            | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| HTTP routes            | `api.registerHttpRoute(...)`                     | [Internals](/plugins/architecture#gateway-http-routes)                          |
+| CLI subcommands        | `api.registerCli(...)`                           | [Entry Points](/plugins/sdk-entrypoints)                                        |
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
+
+If your plugin registers custom gateway RPC methods, keep them on a
+plugin-specific prefix. Core admin namespaces (`config.*`,
+`exec.approvals.*`, `wizard.*`, `update.*`) stay reserved and always resolve to
+`operator.admin`, even if a plugin asks for a narrower scope.
 
 Hook guard semantics to keep in mind:
 
@@ -168,7 +184,11 @@ Hook guard semantics to keep in mind:
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
 - `message_sending`: `{ cancel: false }` is treated as no decision.
 
-The `/approve` command handles both exec and plugin approvals with automatic fallback. Plugin approval forwarding can be configured independently via `approvals.plugin` in config.
+The `/approve` command handles both exec and plugin approvals with bounded fallback: when an exec approval id is not found, OpenClaw retries the same id through plugin approvals. Plugin approval forwarding can be configured independently via `approvals.plugin` in config.
+
+If custom approval plumbing needs to detect that same bounded fallback case,
+prefer `isApprovalNotFoundError` from `openclaw/plugin-sdk/error-runtime`
+instead of matching approval-expiry strings manually.
 
 See [SDK Overview hook decision semantics](/plugins/sdk-overview#hook-decision-semantics) for details.
 
@@ -232,6 +252,21 @@ For the full subpath reference, see [SDK Overview](/plugins/sdk-overview).
 
 Within your plugin, use local barrel files (`api.ts`, `runtime-api.ts`) for
 internal imports — never import your own plugin through its SDK path.
+
+For provider plugins, keep provider-specific helpers in those package-root
+barrels unless the seam is truly generic. Current bundled examples:
+
+- Anthropic: Claude stream wrappers and `service_tier` / beta helpers
+- OpenAI: provider builders, default-model helpers, realtime providers
+- OpenRouter: provider builder plus onboarding/config helpers
+
+If a helper is only useful inside one bundled provider package, keep it on that
+package-root seam instead of promoting it into `openclaw/plugin-sdk/*`.
+
+Some generated `openclaw/plugin-sdk/<bundled-id>` helper seams still exist for
+bundled-plugin maintenance and compatibility, for example
+`plugin-sdk/feishu-setup` or `plugin-sdk/zalo-setup`. Treat those as reserved
+surfaces, not as the default pattern for new third-party plugins.
 
 ## Pre-submission checklist
 

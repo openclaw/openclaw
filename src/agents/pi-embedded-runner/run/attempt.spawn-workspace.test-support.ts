@@ -76,6 +76,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
         getLastToolError: () => undefined,
         getUsageTotals: () => undefined,
         getCompactionCount: () => 0,
+        getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
         isCompacting: () => false,
         isCompactionInFlight: () => false,
       }) satisfies SubscriptionMock,
@@ -512,7 +513,11 @@ export type MutableSession = {
   isStreaming: boolean;
   agent: {
     streamFn?: unknown;
-    replaceMessages: (messages: unknown[]) => void;
+    transport?: string;
+    state: {
+      messages: unknown[];
+      systemPrompt?: string;
+    };
   };
   prompt: (prompt: string, options?: { images?: unknown[] }) => Promise<void>;
   abort: () => Promise<void>;
@@ -535,6 +540,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getLastToolError: () => undefined,
     getUsageTotals: () => undefined,
     getCompactionCount: () => 0,
+    getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
     isCompacting: () => false,
     isCompactionInFlight: () => false,
   };
@@ -608,8 +614,13 @@ export function createDefaultEmbeddedSession(params?: {
     isCompacting: false,
     isStreaming: false,
     agent: {
-      replaceMessages: (messages: unknown[]) => {
-        session.messages = [...messages];
+      state: {
+        get messages() {
+          return session.messages;
+        },
+        set messages(messages: unknown[]) {
+          session.messages = [...messages];
+        },
       },
     },
     prompt: async (prompt, options) => {

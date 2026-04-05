@@ -27,7 +27,7 @@ function textResponse(body: string): Response {
 function setMockFetch(
   impl: FetchMock = async (_input: RequestInfo | URL, _init?: RequestInit) => textResponse(""),
 ) {
-  const fetchSpy = vi.fn<FetchMock>(impl);
+  const fetchSpy = vi.fn(impl);
   global.fetch = withFetchPreconnect(fetchSpy);
   return fetchSpy;
 }
@@ -73,6 +73,7 @@ describe("web_fetch SSRF protection", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "");
     vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
       resolvePinnedHostname(hostname, lookupMock),
     );
@@ -81,6 +82,7 @@ describe("web_fetch SSRF protection", () => {
   afterEach(() => {
     global.fetch = priorFetch;
     lookupMock.mockClear();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 

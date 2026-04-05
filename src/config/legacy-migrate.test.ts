@@ -499,6 +499,49 @@ describe("legacy migrate channel streaming aliases", () => {
       streaming: "off",
     });
   });
+
+  it("removes legacy googlechat streamMode aliases", () => {
+    const raw = {
+      channels: {
+        googlechat: {
+          streamMode: "append",
+          accounts: {
+            work: {
+              streamMode: "replace",
+            },
+          },
+        },
+      },
+    };
+
+    const validated = validateConfigObjectWithPlugins(raw);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    expect(
+      (validated.config.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
+    expect(
+      (validated.config.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
+        ?.streamMode,
+    ).toBeUndefined();
+
+    const res = migrateLegacyConfig(raw);
+    expect(res.changes).toContain(
+      "Removed channels.googlechat.streamMode (legacy key no longer used).",
+    );
+    expect(res.changes).toContain(
+      "Removed channels.googlechat.accounts.work.streamMode (legacy key no longer used).",
+    );
+    expect(
+      (res.config?.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
+    expect(
+      (res.config?.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
+        ?.streamMode,
+    ).toBeUndefined();
+  });
 });
 
 describe("legacy migrate nested channel enabled aliases", () => {
@@ -725,6 +768,75 @@ describe("legacy migrate nested channel enabled aliases", () => {
     expect(res.config?.channels?.slack?.channels?.ops).toEqual({
       enabled: false,
     });
+  });
+});
+
+describe("legacy migrate bundled channel private-network aliases", () => {
+  it("accepts legacy Mattermost private-network aliases through validation and normalizes them", () => {
+    const raw = {
+      channels: {
+        mattermost: {
+          allowPrivateNetwork: true,
+          accounts: {
+            work: {
+              allowPrivateNetwork: false,
+            },
+          },
+        },
+      },
+    };
+
+    const validated = validateConfigObjectWithPlugins(raw);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    expect(validated.config.channels?.mattermost).toEqual({
+      dmPolicy: "pairing",
+      groupPolicy: "allowlist",
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+      accounts: {
+        work: {
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+          network: {
+            dangerouslyAllowPrivateNetwork: false,
+          },
+        },
+      },
+    });
+
+    const rawValidated = validateConfigObjectRawWithPlugins(raw);
+    expect(rawValidated.ok).toBe(true);
+    if (!rawValidated.ok) {
+      return;
+    }
+    expect(rawValidated.config.channels?.mattermost).toEqual({
+      dmPolicy: "pairing",
+      groupPolicy: "allowlist",
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+      accounts: {
+        work: {
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+          network: {
+            dangerouslyAllowPrivateNetwork: false,
+          },
+        },
+      },
+    });
+
+    const res = migrateLegacyConfig(raw);
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved channels.mattermost.allowPrivateNetwork → channels.mattermost.network.dangerouslyAllowPrivateNetwork (true).",
+        "Moved channels.mattermost.accounts.work.allowPrivateNetwork → channels.mattermost.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
+      ]),
+    );
   });
 });
 

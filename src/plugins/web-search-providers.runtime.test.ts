@@ -345,6 +345,32 @@ describe("resolvePluginWebSearchProviders", () => {
     expectLoaderCallCount(1);
   });
 
+  it("loads manifest-declared web-search providers in setup mode", () => {
+    const providers = resolvePluginWebSearchProviders({
+      config: {
+        plugins: {
+          allow: ["perplexity"],
+        },
+      },
+      mode: "setup",
+    });
+
+    expect(toRuntimeProviderKeys(providers)).toEqual(["brave:brave"]);
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["brave"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["perplexity", "brave"],
+            entries: {
+              brave: { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
+  });
+
   it("loads plugin web-search providers from the auto-enabled config snapshot", () => {
     const rawConfig = createBraveAllowConfig();
     const autoEnabledConfig = {
@@ -372,6 +398,35 @@ describe("resolvePluginWebSearchProviders", () => {
     expectScopedWebSearchCandidates(["brave"]);
   });
 
+  it("uses the active registry workspace for candidate discovery and snapshot loads when workspaceDir is omitted", () => {
+    const env = createWebSearchEnv();
+    const rawConfig = createBraveAllowConfig();
+
+    setActivePluginRegistry(
+      createEmptyPluginRegistry(),
+      undefined,
+      "default",
+      "/tmp/runtime-workspace",
+    );
+
+    resolvePluginWebSearchProviders({
+      config: rawConfig,
+      bundledAllowlistCompat: true,
+      env,
+    });
+
+    expect(loadPluginManifestRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/runtime-workspace",
+      }),
+    );
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/runtime-workspace",
+        onlyPluginIds: ["brave"],
+      }),
+    );
+  });
   it("memoizes snapshot provider resolution for the same config and env", () => {
     expectSnapshotMemoization({
       config: createBraveAllowConfig(),
@@ -423,6 +478,72 @@ describe("resolvePluginWebSearchProviders", () => {
 
     expectRuntimeProviderResolution(providers, ["brave:brave"]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("inherits workspaceDir from the active registry for compatible web-search snapshot reuse", () => {
+    const env = createWebSearchEnv();
+    const rawConfig = createBraveAllowConfig();
+    const { config, activationSourceConfig, autoEnabledReasons } =
+      webSearchProvidersSharedModule.resolveBundledWebSearchResolutionConfig({
+        config: rawConfig,
+        bundledAllowlistCompat: true,
+        workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
+        env,
+      });
+    const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
+      config,
+      activationSourceConfig,
+      autoEnabledReasons,
+      workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
+      env,
+      onlyPluginIds: ["brave"],
+      cache: false,
+      activate: false,
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push(
+      createRuntimeWebSearchProvider({
+        pluginId: "brave",
+        pluginName: "Brave",
+        id: "brave",
+        label: "Brave Search",
+        hint: "Brave runtime provider",
+        envVar: "BRAVE_API_KEY",
+        signupUrl: "https://example.com/brave",
+        credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+      }),
+    );
+    setActivePluginRegistry(registry, cacheKey, "default", DEFAULT_WEB_SEARCH_WORKSPACE);
+
+    const providers = resolvePluginWebSearchProviders({
+      config: rawConfig,
+      bundledAllowlistCompat: true,
+      env,
+    });
+
+    expectRuntimeProviderResolution(providers, ["brave:brave"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("keys web-search snapshot memoization by the inherited active workspace", () => {
+    const env = createWebSearchEnv();
+    const rawConfig = createBraveAllowConfig();
+
+    setActivePluginRegistry(createEmptyPluginRegistry(), undefined, "default", "/tmp/workspace-a");
+    resolvePluginWebSearchProviders({
+      config: rawConfig,
+      bundledAllowlistCompat: true,
+      env,
+    });
+
+    setActivePluginRegistry(createEmptyPluginRegistry(), undefined, "default", "/tmp/workspace-b");
+    resolvePluginWebSearchProviders({
+      config: rawConfig,
+      bundledAllowlistCompat: true,
+      env,
+    });
+
+    expectLoaderCallCount(2);
   });
 
   it.each([

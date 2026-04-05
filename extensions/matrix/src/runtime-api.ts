@@ -65,6 +65,7 @@ export {
   createPinnedDispatcher,
   isPrivateOrLoopbackHost,
   resolvePinnedHostnameWithPolicy,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   ssrfPolicyFromAllowPrivateNetwork,
   type LookupFn,
   type SsrFPolicy,

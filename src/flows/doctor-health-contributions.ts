@@ -25,7 +25,11 @@ import {
   maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices,
 } from "../commands/doctor-gateway-services.js";
-import { noteMemorySearchHealth } from "../commands/doctor-memory-search.js";
+import {
+  maybeRepairMemoryRecallHealth,
+  noteMemoryRecallHealth,
+  noteMemorySearchHealth,
+} from "../commands/doctor-memory-search.js";
 import {
   noteMacLaunchAgentOverrides,
   noteMacLaunchctlGatewayEnvOverrides,
@@ -416,9 +420,14 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): Promise<void> {
+  await maybeRepairMemoryRecallHealth({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+  });
   await noteMemorySearchHealth(ctx.cfg, {
     gatewayMemoryProbe: ctx.gatewayMemoryProbe ?? { checked: false, ready: false },
   });
+  await noteMemoryRecallHealth(ctx.cfg);
 }
 
 async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {

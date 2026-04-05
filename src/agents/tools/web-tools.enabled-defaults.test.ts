@@ -2,6 +2,7 @@ import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { clearSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { __testing as webSearchTesting } from "./web-search.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
@@ -152,8 +153,14 @@ function createProviderSuccessPayload(
   };
 }
 
+beforeEach(() => {
+  setActivePluginRegistry(createEmptyPluginRegistry());
+  clearSecretsRuntimeSnapshot();
+});
+
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
+  clearSecretsRuntimeSnapshot();
 });
 
 describe("web tools defaults", () => {
@@ -235,15 +242,6 @@ describe("web tools defaults", () => {
     setActivePluginRegistry(registry);
 
     const tool = createWebSearchTool({
-      config: {
-        tools: {
-          web: {
-            search: {
-              provider: "custom",
-            },
-          },
-        },
-      },
       sandboxed: true,
       runtimeWebSearch: {
         providerConfigured: "custom",
@@ -398,13 +396,13 @@ describe("web_search perplexity Search API", () => {
     vi.stubEnv("PERPLEXITY_API_KEY", "pplx-test");
     const mockFetch = installPerplexitySearchApiFetch();
     const tool = createPerplexitySearchTool();
-    const result = await tool?.execute?.("call-1", { query: "test" });
+    const result = await tool?.execute?.("call-1", { query: "annotations-test" });
 
     expect(mockFetch).toHaveBeenCalled();
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.perplexity.ai/search");
     expect((mockFetch.mock.calls[0]?.[1] as RequestInit | undefined)?.method).toBe("POST");
     const body = parseFirstRequestBody(mockFetch);
-    expect(body.query).toBe("test");
+    expect(body.query).toBe("annotations-test");
     expect(result?.details).toMatchObject({
       provider: "perplexity",
       externalContent: { untrusted: true, source: "web_search", wrapped: true },
@@ -432,7 +430,7 @@ describe("web_search perplexity Search API", () => {
   it("uses config API key when provided", async () => {
     const mockFetch = installPerplexitySearchApiFetch([]);
     const tool = createPerplexitySearchTool({ apiKey: "pplx-config" });
-    await tool?.execute?.("call-1", { query: "test" });
+    await tool?.execute?.("call-1", { query: "config-api-key-test" });
 
     expect(mockFetch).toHaveBeenCalled();
     const headers = (mockFetch.mock.calls[0]?.[1] as RequestInit | undefined)?.headers as
@@ -543,7 +541,7 @@ describe("web_search perplexity OpenRouter compatibility", () => {
     vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
     const mockFetch = installPerplexityChatFetch();
     const tool = createPerplexitySearchTool();
-    const result = await tool?.execute?.("call-1", { query: "test" });
+    const result = await tool?.execute?.("call-1", { query: "annotations-test" });
 
     expect(mockFetch).toHaveBeenCalled();
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
@@ -559,7 +557,7 @@ describe("web_search perplexity OpenRouter compatibility", () => {
   it("routes configured sk-or key through chat completions", async () => {
     const mockFetch = installPerplexityChatFetch();
     const tool = createPerplexitySearchTool({ apiKey: "sk-or-v1-test" }); // pragma: allowlist secret
-    await tool?.execute?.("call-1", { query: "test" });
+    await tool?.execute?.("call-1", { query: "configured-openrouter-key-test" });
 
     expect(mockFetch).toHaveBeenCalled();
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
@@ -582,7 +580,7 @@ describe("web_search perplexity OpenRouter compatibility", () => {
 
   it("falls back to message annotations when top-level citations are missing", async () => {
     vi.stubEnv("OPENROUTER_API_KEY", "sk-or-v1-test"); // pragma: allowlist secret
-    const mockFetch = installPerplexityChatFetch({
+    installPerplexityChatFetch({
       choices: [
         {
           message: {
@@ -606,9 +604,8 @@ describe("web_search perplexity OpenRouter compatibility", () => {
       ],
     });
     const tool = createPerplexitySearchTool();
-    const result = await tool?.execute?.("call-1", { query: "test" });
+    const result = await tool?.execute?.("call-1", { query: "annotations-fallback-test" });
 
-    expect(mockFetch).toHaveBeenCalled();
     expect(result?.details).toMatchObject({
       provider: "perplexity",
       citations: ["https://example.com/a", "https://example.com/b"],
@@ -771,7 +768,7 @@ describe("web_search kimi provider", () => {
     expect(result?.details).toMatchObject({ error: "missing_kimi_api_key" });
   });
 
-  it("runs the Kimi web_search tool flow and echoes tool results", async () => {
+  it("runs the Kimi web_search tool flow and echoes tool-call arguments", async () => {
     const mockFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
       const idx = mockFetch.mock.calls.length;
       if (idx === 1) {
@@ -833,9 +830,7 @@ describe("web_search kimi provider", () => {
       | { content?: string; tool_call_id?: string }
       | undefined;
     expect(toolMessage?.tool_call_id).toBe("call_1");
-    expect(JSON.parse(toolMessage?.content ?? "{}")).toMatchObject({
-      search_results: [{ url: "https://openclaw.ai/docs" }],
-    });
+    expect(JSON.parse(toolMessage?.content ?? "{}")).toMatchObject({ q: "openclaw" });
 
     const details = result?.details as {
       citations?: string[];

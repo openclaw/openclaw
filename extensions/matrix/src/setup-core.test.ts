@@ -105,6 +105,27 @@ describe("matrixSetupAdapter", () => {
     });
   });
 
+  it("stores canonical dangerous private-network opt-in from setup input", () => {
+    const next = matrixSetupAdapter.applyAccountConfig({
+      cfg: {} as CoreConfig,
+      accountId: "ops",
+      input: {
+        homeserver: "http://matrix.internal:8008",
+        accessToken: "ops-token",
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    }) as CoreConfig;
+
+    expect(next.channels?.matrix?.accounts?.ops).toMatchObject({
+      enabled: true,
+      homeserver: "http://matrix.internal:8008",
+      accessToken: "ops-token",
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
+  });
+
   it("keeps top-level block streaming as a shared default when named accounts already exist", () => {
     const cfg = {
       channels: {

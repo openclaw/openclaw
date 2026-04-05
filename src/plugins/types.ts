@@ -1,9 +1,9 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
   ApiKeyCredential,
   AuthProfileCredential,
@@ -11,6 +11,7 @@ import type {
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
@@ -68,6 +69,7 @@ import type {
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
@@ -473,7 +475,8 @@ export type ProviderPreparedRuntimeAuth = {
  * The helper methods cover the common OpenClaw auth resolution paths:
  *
  * - `resolveApiKeyFromConfigAndStore`: env/config/plain token/api_key profiles
- * - `resolveOAuthToken`: oauth/token profiles resolved through the auth store
+ * - `resolveOAuthToken`: oauth/token profiles resolved through the auth store,
+ *   optionally for an explicit provider override
  *
  * Plugins can still do extra provider-specific work on top (for example parse a
  * token blob, read a legacy credential file, or pick between aliases).
@@ -488,7 +491,7 @@ export type ProviderResolveUsageAuthContext = {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
   }) => string | undefined;
-  resolveOAuthToken: () => Promise<ProviderResolvedUsageAuth | null>;
+  resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderResolvedUsageAuth | null>;
 };
 
 /**
@@ -580,6 +583,7 @@ export type ProviderReplayPolicy = {
   sanitizeMode?: ProviderReplaySanitizeMode;
   sanitizeToolCallIds?: boolean;
   toolCallIdMode?: ProviderReplayToolCallIdMode;
+  preserveNativeAnthropicToolUseIds?: boolean;
   preserveSignatures?: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;
@@ -746,6 +750,30 @@ export type ProviderResolveWebSocketSessionPolicyContext = {
   modelId: string;
   model?: ProviderRuntimeModel;
   sessionId?: string;
+};
+
+/**
+ * Provider-owned failover error classification input.
+ *
+ * Use this when provider-specific transport or API errors need classification
+ * hints that generic string matching cannot express safely.
+ */
+export type ProviderFailoverErrorContext = {
+  provider?: string;
+  modelId?: string;
+  errorMessage: string;
+};
+
+/**
+ * Provider-owned config-default application input.
+ *
+ * Use this when a provider needs to add global config defaults that depend on
+ * provider auth mode or provider-specific model families.
+ */
+export type ProviderApplyConfigDefaultsContext = {
+  provider: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
 };
 
 /**
@@ -1289,6 +1317,20 @@ export type ProviderPlugin = {
     ctx: ProviderFetchUsageSnapshotContext,
   ) => Promise<ProviderUsageSnapshot | null | undefined> | ProviderUsageSnapshot | null | undefined;
   /**
+   * Provider-owned failover context-overflow matcher.
+   *
+   * Return true when the provider recognizes the raw error as a context-window
+   * overflow shape that generic heuristics would miss.
+   */
+  matchesContextOverflowError?: (ctx: ProviderFailoverErrorContext) => boolean | undefined;
+  /**
+   * Provider-owned failover error classification.
+   *
+   * Return a failover reason when the provider recognizes a provider-specific
+   * raw error shape. Return undefined to fall back to generic classification.
+   */
+  classifyFailoverReason?: (ctx: ProviderFailoverErrorContext) => FailoverReason | null | undefined;
+  /**
    * Provider-owned cache TTL eligibility.
    *
    * Use this when a proxy provider supports Anthropic-style prompt caching for
@@ -1359,6 +1401,15 @@ export type ProviderPlugin = {
   resolveDefaultThinkingLevel?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
+  /**
+   * Provider-owned global config defaults.
+   *
+   * Use this when config materialization needs provider-specific defaults that
+   * depend on auth mode, env, or provider model-family semantics.
+   */
+  applyConfigDefaults?: (
+    ctx: ProviderApplyConfigDefaultsContext,
+  ) => OpenClawConfig | null | undefined;
   /**
    * Provider-owned "modern model" matcher used by live profile/smoke filters.
    *
@@ -1649,6 +1700,7 @@ export type PluginRealtimeVoiceProviderEntry = RealtimeVoiceProviderPlugin & {
 
 export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;
 export type ImageGenerationProviderPlugin = ImageGenerationProvider;
+export type VideoGenerationProviderPlugin = VideoGenerationProvider;
 
 export type OpenClawPluginGatewayMethod = {
   method: string;
@@ -1944,6 +1996,13 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
+  /**
+   * Register a gateway RPC method for this plugin.
+   *
+   * Reserved core admin namespaces (`config.*`, `exec.approvals.*`,
+   * `wizard.*`, `update.*`) always normalize to `operator.admin` even if a
+   * narrower scope is requested.
+   */
   registerGatewayMethod: (
     method: string,
     handler: GatewayRequestHandler,
@@ -1979,6 +2038,8 @@ export type OpenClawPluginApi = {
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
+  /** Register a video generation provider (video generation capability). */
+  registerVideoGenerationProvider: (provider: VideoGenerationProviderPlugin) => void;
   /** Register a web fetch provider (web fetch capability). */
   registerWebFetchProvider: (provider: WebFetchProviderPlugin) => void;
   /** Register a web search provider (web search capability). */

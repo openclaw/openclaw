@@ -241,6 +241,8 @@ const readUsageFromSessionLog = (
   | {
       input: number;
       output: number;
+      cacheRead: number;
+      cacheWrite: number;
       promptTokens: number;
       total: number;
       model?: string;
@@ -321,7 +323,15 @@ const readUsageFromSessionLog = (
     if (promptTokens === 0 && total === 0) {
       return undefined;
     }
-    return { input, output, promptTokens, total, model };
+    return {
+      input,
+      output,
+      cacheRead: lastUsage.cacheRead ?? 0,
+      cacheWrite: lastUsage.cacheWrite ?? 0,
+      promptTokens,
+      total,
+      model,
+    };
   } catch {
     return undefined;
   }
@@ -553,6 +563,12 @@ export function buildStatusMessage(args: StatusArgs): string {
       }
       if (!outputTokens || outputTokens === 0) {
         outputTokens = logUsage.output;
+      }
+      if (typeof cacheRead !== "number" || cacheRead <= 0) {
+        cacheRead = logUsage.cacheRead;
+      }
+      if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
+        cacheWrite = logUsage.cacheWrite;
       }
     }
   }
@@ -907,6 +923,7 @@ const COMMANDS_PER_PAGE = 8;
 export type CommandsMessageOptions = {
   page?: number;
   surface?: string;
+  forcePaginatedList?: boolean;
 };
 
 export type CommandsMessageResult = {
@@ -1105,9 +1122,9 @@ export function buildCommandsMessagePaginated(
 ): CommandsMessageResult {
   const page = Math.max(1, options?.page ?? 1);
   const surface = options?.surface?.toLowerCase();
-  const prefersPaginatedList = Boolean(
-    surface && getChannelPlugin(surface)?.commands?.buildCommandsListChannelData,
-  );
+  const prefersPaginatedList =
+    options?.forcePaginatedList === true ||
+    Boolean(surface && getChannelPlugin(surface)?.commands?.buildCommandsListChannelData);
 
   const commands = cfg
     ? listChatCommandsForConfig(cfg, { skillCommands })

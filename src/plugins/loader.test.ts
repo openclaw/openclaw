@@ -74,6 +74,10 @@ function memoryPluginBody(id: string) {
   return `module.exports = { id: ${JSON.stringify(id)}, kind: "memory", register() {} };`;
 }
 
+const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
+const RESERVED_ADMIN_SCOPE_WARNING =
+  "gateway method scope coerced to operator.admin for reserved core namespace";
+
 function writeBundledPlugin(params: {
   id: string;
   body?: string;
@@ -962,6 +966,47 @@ describe("loadOpenClawPlugins", () => {
         const loaded = registry.plugins.find((entry) => entry.id === "allowed-config-path");
         expect(loaded?.status).toBe("loaded");
         expect(Object.keys(registry.gatewayHandlers)).toContain("allowed-config-path.ping");
+      },
+    },
+    {
+      label: "coerces reserved gateway method namespaces to operator.admin",
+      run: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "reserved-gateway-scope",
+          filename: "reserved-gateway-scope.cjs",
+          body: `module.exports = {
+  id: "reserved-gateway-scope",
+  register(api) {
+    api.registerGatewayMethod(
+      ${JSON.stringify(RESERVED_ADMIN_PLUGIN_METHOD)},
+      ({ respond }) => respond(true, { ok: true }),
+      { scope: "operator.read" },
+    );
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["reserved-gateway-scope"],
+            },
+          },
+        });
+
+        expect(Object.keys(registry.gatewayHandlers)).toContain(RESERVED_ADMIN_PLUGIN_METHOD);
+        expect(registry.gatewayMethodScopes?.[RESERVED_ADMIN_PLUGIN_METHOD]).toBe("operator.admin");
+        expect(
+          registry.diagnostics.some((diag) =>
+            String(diag.message).includes(
+              `${RESERVED_ADMIN_SCOPE_WARNING}: ${RESERVED_ADMIN_PLUGIN_METHOD}`,
+            ),
+          ),
+        ).toBe(true);
       },
     },
     {

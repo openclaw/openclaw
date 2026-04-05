@@ -1,6 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { collectBlueBubblesStatusIssues } from "openclaw/plugin-sdk/bluebubbles";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
@@ -12,8 +12,8 @@ import {
   buildProbeChannelStatusSummary,
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/channel-status";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -40,14 +40,17 @@ import {
   normalizeBlueBubblesAcpConversationId,
   resolveBlueBubblesConversationIdFromTarget,
 } from "./conversation-id.js";
+import { bluebubblesDoctor } from "./doctor.js";
 import {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
 } from "./group-policy.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "./runtime-api.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveBlueBubblesOutboundSessionRoute } from "./session-route.js";
 import { blueBubblesSetupAdapter } from "./setup-core.js";
 import { blueBubblesSetupWizard } from "./setup-surface.js";
+import { collectBlueBubblesStatusIssues } from "./status-issues.js";
 import {
   extractHandleFromChatGuid,
   inferBlueBubblesTargetChatType,
@@ -100,6 +103,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
         isConfigured: (account) => account.configured,
         describeAccount: (account): ChannelAccountSnapshot => describeBlueBubblesAccount(account),
       },
+      doctor: bluebubblesDoctor,
       conversationBindings: {
         supportsCurrentConversationBinding: true,
         createManager: ({ cfg, accountId }) =>
@@ -109,6 +113,10 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
           }),
       },
       actions: bluebubblesMessageActions,
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
+      },
       bindings: {
         compileConfiguredBinding: ({ conversationId }) =>
           normalizeBlueBubblesAcpConversationId(conversationId),
@@ -226,7 +234,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
             baseUrl: account.baseUrl,
             password: account.config.password ?? null,
             timeoutMs,
-            allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+            allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
           }),
         resolveAccountSnapshot: ({ account, runtime, probe }) => {
           const running = runtime?.running ?? false;

@@ -191,6 +191,13 @@ export function stubBootstrapContext(params: {
   hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce(params);
 }
 
+export function restoreCliRunnerPrepareTestDeps() {
+  setCliRunnerPrepareTestDeps({
+    makeBootstrapWarn: () => () => {},
+    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+  });
+}
+
 export async function runCliAgentWithBackendConfig(params: {
   runCliAgent: typeof import("./cli-runner.js").runCliAgent;
   backend: TestCliBackendConfig;
@@ -211,7 +218,7 @@ export async function runCliAgentWithBackendConfig(params: {
     } satisfies OpenClawConfig,
     prompt: "hi",
     provider: "codex-cli",
-    model: "gpt-5.2-codex",
+    model: "gpt-5.4",
     timeoutMs: 1_000,
     runId: params.runId,
     cliSessionId: "thread-123",

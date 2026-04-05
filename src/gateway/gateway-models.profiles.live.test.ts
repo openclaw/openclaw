@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { normalizeGoogleModelId } from "../../extensions/google/api.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
@@ -28,7 +29,6 @@ import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discover
 import { clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -71,7 +71,7 @@ const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3.1-flash-lite-preview",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
-  "openai/gpt-5.2-pro",
+  "openai/gpt-5.4-pro",
 ]);
 const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "google/gemini-3.1-flash-lite-preview",
@@ -453,10 +453,10 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
 
   it("strips scaffolding for known OpenAI transcript wrappers", () => {
     expect(
-      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.2-pro"),
+      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.4-pro"),
     ).toBe("Visible");
     expect(
-      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.2"),
+      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.4"),
     ).toBe("<final>Visible</final>");
   });
 
@@ -542,7 +542,11 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
     msg.includes("no allowed providers are available") ||
     msg.includes("provider unavailable") ||
     msg.includes("upstream provider unavailable") ||
-    msg.includes("upstream error from google")
+    msg.includes("upstream error from google") ||
+    msg.includes("temporarily rate-limited upstream") ||
+    msg.includes("unable to access non-serverless model") ||
+    msg.includes("create and start a new dedicated endpoint") ||
+    msg.includes("no available capacity was found for the model")
   );
 }
 
@@ -553,6 +557,21 @@ function isOllamaUnavailableErrorMessage(raw: string): boolean {
     (msg.includes("127.0.0.1:11434") && msg.includes("econnrefused")) ||
     (msg.includes("localhost:11434") && msg.includes("econnrefused"))
   );
+}
+
+function isAudioOnlyModelErrorMessage(raw: string): boolean {
+  return /requires that either input content or output modality contain audio/i.test(raw);
+}
+
+function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
+  return (
+    /does not support parameter reasoningeffort/i.test(raw) ||
+    /unsupported value:\s*'low'.*reasoning\.effort.*supported values are:\s*'medium'/i.test(raw)
+  );
+}
+
+function isUnsupportedThinkingToggleErrorMessage(raw: string): boolean {
+  return /does not support parameter [`"]?enable_thinking[`"]?/i.test(raw);
 }
 
 function isInstructionsRequiredError(error: string): boolean {
@@ -629,7 +648,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "xai/grok-4.1-fast", expected: true },
     { modelKey: "zai/glm-4.7", expected: true },
     { modelKey: "google/gemini-3-flash-preview", expected: true },
-    { modelKey: "openai/gpt-5.2", expected: false },
+    { modelKey: "openai/gpt-5.4", expected: false },
   ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
     expect(shouldSkipToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);
   });
@@ -1670,6 +1689,21 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           if (isProviderUnavailableErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (provider unavailable)`);
+            break;
+          }
+          if (isAudioOnlyModelErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (audio-only model)`);
+            break;
+          }
+          if (isUnsupportedReasoningEffortErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (reasoning unsupported)`);
+            break;
+          }
+          if (isUnsupportedThinkingToggleErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (thinking toggle unsupported)`);
             break;
           }
           if (model.provider === "openrouter" && isPromptProbeMiss(message)) {

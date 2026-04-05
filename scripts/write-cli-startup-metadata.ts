@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
+import type { OpenClawConfig } from "../src/config/config.js";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -44,6 +46,8 @@ type BundledChannelCatalog = {
   ids: string[];
   signature: string;
 };
+
+type RootHelpRenderContext = Pick<RootHelpRenderOptions, "config" | "env">;
 
 function resolveRootHelpBundleIdentity(
   distDirOverride: string = distDir,
@@ -118,25 +122,72 @@ export function readBundledChannelCatalogIds(
   return readBundledChannelCatalog(extensionsDirOverride).ids;
 }
 
+function createIsolatedRootHelpRenderContext(
+  bundledPluginsDir: string = extensionsDir,
+): RootHelpRenderContext {
+  const stateDir = path.join(rootDir, ".openclaw-build-root-help");
+  const workspaceDir = path.join(stateDir, "workspace");
+  const homeDir = path.join(stateDir, "home");
+  const env: NodeJS.ProcessEnv = {
+    HOME: homeDir,
+    LOGNAME: process.env.LOGNAME ?? process.env.USER ?? "openclaw-build",
+    USER: process.env.USER ?? process.env.LOGNAME ?? "openclaw-build",
+    PATH: process.env.PATH ?? "",
+    TMPDIR: process.env.TMPDIR ?? "/tmp",
+    LANG: process.env.LANG ?? "C.UTF-8",
+    LC_ALL: process.env.LC_ALL ?? "C.UTF-8",
+    TERM: process.env.TERM ?? "dumb",
+    NO_COLOR: "1",
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "",
+    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+    OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "0",
+    OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "0",
+    OPENCLAW_STATE_DIR: stateDir,
+  };
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: {
+        workspace: workspaceDir,
+      },
+    },
+    plugins: {
+      loadPaths: [],
+    },
+  };
+  return { config, env };
+}
+
 export async function renderBundledRootHelpText(
   _distDirOverride: string = distDir,
+  renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(
+    existsSync(path.join(_distDirOverride, "extensions"))
+      ? path.join(_distDirOverride, "extensions")
+      : extensionsDir,
+  ),
 ): Promise<string> {
   const bundleIdentity = resolveRootHelpBundleIdentity(_distDirOverride);
   if (!bundleIdentity) {
     throw new Error("No root-help bundle found in dist; cannot write CLI startup metadata.");
   }
   const moduleUrl = pathToFileURL(path.join(_distDirOverride, bundleIdentity.bundleName)).href;
+  const renderOptions = {
+    config: renderContext.config,
+    env: renderContext.env,
+  } satisfies RootHelpRenderOptions;
   const inlineModule = [
     `const mod = await import(${JSON.stringify(moduleUrl)});`,
     "if (typeof mod.outputRootHelp !== 'function') {",
     `  throw new Error(${JSON.stringify(`Bundle ${bundleIdentity.bundleName} does not export outputRootHelp.`)});`,
     "}",
-    "await mod.outputRootHelp();",
+    `await mod.outputRootHelp(${JSON.stringify(renderOptions)});`,
     "process.exit(0);",
   ].join("\n");
   const result = spawnSync(process.execPath, ["--input-type=module", "--eval", inlineModule], {
     cwd: _distDirOverride,
     encoding: "utf8",
+    env: renderContext.env,
     timeout: 30_000,
   });
   if (result.error) {
@@ -152,14 +203,21 @@ export async function renderBundledRootHelpText(
   return result.stdout ?? "";
 }
 
-function renderSourceRootHelpText(): string {
+function renderSourceRootHelpText(
+  renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
+): string {
   const moduleUrl = pathToFileURL(path.join(rootDir, "src/cli/program/root-help.ts")).href;
+  const renderOptions = {
+    pluginSdkResolution: "src",
+    config: renderContext.config,
+    env: renderContext.env,
+  } satisfies RootHelpRenderOptions;
   const inlineModule = [
     `const mod = await import(${JSON.stringify(moduleUrl)});`,
     "if (typeof mod.renderRootHelpText !== 'function') {",
     `  throw new Error(${JSON.stringify("Source root-help module does not export renderRootHelpText.")});`,
     "}",
-    "const output = await mod.renderRootHelpText({ pluginSdkResolution: 'src' });",
+    `const output = await mod.renderRootHelpText(${JSON.stringify(renderOptions)});`,
     "process.stdout.write(output);",
     "process.exit(0);",
   ].join("\n");
@@ -169,6 +227,7 @@ function renderSourceRootHelpText(): string {
     {
       cwd: rootDir,
       encoding: "utf8",
+      env: renderContext.env,
       timeout: 30_000,
     },
   );
@@ -195,6 +254,10 @@ export async function writeCliStartupMetadata(options?: {
   const resolvedExtensionsDir = options?.extensionsDir ?? extensionsDir;
   const channelCatalog = readBundledChannelCatalog(resolvedExtensionsDir);
   const bundleIdentity = resolveRootHelpBundleIdentity(resolvedDistDir);
+  const bundledPluginsDir = path.join(resolvedDistDir, "extensions");
+  const renderContext = createIsolatedRootHelpRenderContext(
+    existsSync(bundledPluginsDir) ? bundledPluginsDir : resolvedExtensionsDir,
+  );
   const channelOptions = dedupe([...CORE_CHANNEL_ORDER, ...channelCatalog.ids]);
 
   try {
@@ -215,9 +278,9 @@ export async function writeCliStartupMetadata(options?: {
 
   let rootHelpText: string;
   try {
-    rootHelpText = await renderBundledRootHelpText(resolvedDistDir);
+    rootHelpText = await renderBundledRootHelpText(resolvedDistDir, renderContext);
   } catch {
-    rootHelpText = renderSourceRootHelpText();
+    rootHelpText = renderSourceRootHelpText(renderContext);
   }
 
   mkdirSync(resolvedDistDir, { recursive: true });

@@ -1,20 +1,8 @@
 import { Type } from "@sinclair/typebox";
-import {
-  coerceSecretRef,
-  resolveNonEnvSecretRefApiKeyMarker,
-} from "openclaw/plugin-sdk/provider-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  composeProviderStreamWrappers,
-  createToolStreamWrapper,
-} from "openclaw/plugin-sdk/provider-stream";
-import {
-  jsonResult,
-  readProviderEnvValue,
-  resolveProviderWebSearchPluginConfig,
-} from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
 import {
   applyXaiModelCompat,
   normalizeXaiModelId,
@@ -25,70 +13,20 @@ import {
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
-import {
-  createXaiFastModeWrapper,
-  createXaiToolCallArgumentDecodingWrapper,
-  createXaiToolPayloadCompatibilityWrapper,
-} from "./stream.js";
+import { wrapXaiProviderStream } from "./stream.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
 const PROVIDER_ID = "xai";
-
-function readConfiguredOrManagedApiKey(value: unknown): string | undefined {
-  const literal = normalizeSecretInputString(value);
-  if (literal) {
-    return literal;
-  }
-  const ref = coerceSecretRef(value);
-  return ref ? resolveNonEnvSecretRefApiKeyMarker(ref.source) : undefined;
-}
-
-function readLegacyGrokFallback(
-  config: Record<string, unknown>,
-): { apiKey: string; source: string } | undefined {
-  const tools = config.tools;
-  if (!tools || typeof tools !== "object") {
-    return undefined;
-  }
-  const web = (tools as Record<string, unknown>).web;
-  if (!web || typeof web !== "object") {
-    return undefined;
-  }
-  const search = (web as Record<string, unknown>).search;
-  if (!search || typeof search !== "object") {
-    return undefined;
-  }
-  const grok = (search as Record<string, unknown>).grok;
-  if (!grok || typeof grok !== "object") {
-    return undefined;
-  }
-  const apiKey = readConfiguredOrManagedApiKey((grok as Record<string, unknown>).apiKey);
-  return apiKey ? { apiKey, source: "tools.web.search.grok.apiKey" } : undefined;
-}
-
-function resolveXaiProviderFallbackAuth(
-  config: unknown,
-): { apiKey: string; source: string } | undefined {
-  if (!config || typeof config !== "object") {
-    return undefined;
-  }
-  const record = config as Record<string, unknown>;
-  const pluginApiKey = readConfiguredOrManagedApiKey(
-    resolveProviderWebSearchPluginConfig(record, PROVIDER_ID)?.apiKey,
-  );
-  if (pluginApiKey) {
-    return {
-      apiKey: pluginApiKey,
-      source: "plugins.entries.xai.config.webSearch.apiKey",
-    };
-  }
-  return readLegacyGrokFallback(record);
-}
+const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "openai-compatible",
+});
 
 function hasResolvableXaiApiKey(config: unknown): boolean {
   return Boolean(
-    resolveXaiProviderFallbackAuth(config)?.apiKey || readProviderEnvValue(["XAI_API_KEY"]),
+    resolveFallbackXaiAuth(config as OpenClawConfig | undefined)?.apiKey ||
+    readProviderEnvValue(["XAI_API_KEY"]),
   );
 }
 
@@ -254,7 +192,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildXaiProvider,
     },
-    buildReplayPolicy: (ctx) => buildOpenAICompatibleReplayPolicy(ctx.modelApi),
+    ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
     prepareExtraParams: (ctx) => {
       const extraParams = ctx.extraParams;
       if (extraParams && extraParams.tool_stream !== undefined) {
@@ -265,25 +203,13 @@ export default defineSingleProviderPluginEntry({
         tool_stream: true,
       };
     },
-    wrapStreamFn: (ctx) => {
-      const extraParams = ctx.extraParams;
-      const fastMode = extraParams?.fastMode;
-      const toolStreamEnabled = extraParams?.tool_stream !== false;
-      return composeProviderStreamWrappers(ctx.streamFn, (streamFn) => {
-        let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn);
-        if (typeof fastMode === "boolean") {
-          wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
-        }
-        wrappedStreamFn = createXaiToolCallArgumentDecodingWrapper(wrappedStreamFn);
-        return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
-      });
-    },
+    wrapStreamFn: wrapXaiProviderStream,
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active
     // runtime snapshot or a non-secret SecretRef marker from source config.
     resolveSyntheticAuth: ({ config }) => {
-      const fallbackAuth = resolveXaiProviderFallbackAuth(config);
+      const fallbackAuth = resolveFallbackXaiAuth(config as OpenClawConfig | undefined);
       if (!fallbackAuth) {
         return undefined;
       }

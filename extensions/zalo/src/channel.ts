@@ -43,6 +43,7 @@ import { zaloMessageActions } from "./actions.js";
 import { zaloApprovalAuth } from "./approval-auth.js";
 import { ZaloConfigSchema } from "./config-schema.js";
 import type { ZaloProbeResult } from "./probe.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveZaloOutboundSessionRoute } from "./session-route.js";
 import { createZaloSetupWizardProxy, zaloSetupAdapter } from "./setup-core.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
@@ -198,6 +199,10 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
           }),
       },
       auth: zaloApprovalAuth,
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
+      },
       groups: {
         resolveRequireMention: () => true,
       },

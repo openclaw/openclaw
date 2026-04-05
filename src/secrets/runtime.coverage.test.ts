@@ -11,30 +11,18 @@ import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 type SecretRegistryEntry = ReturnType<typeof listSecretTargetRegistryEntries>[number];
 
-const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvidersMock } =
-  vi.hoisted(() => ({
-    resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-    resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-  }));
-const { resolveBundledPluginWebFetchProvidersMock, resolvePluginWebFetchProvidersMock } =
-  vi.hoisted(() => ({
-    resolveBundledPluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
-    resolvePluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
-  }));
+const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
+  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+}));
+const { resolvePluginWebFetchProvidersMock } = vi.hoisted(() => ({
+  resolvePluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
+}));
 
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 
-vi.mock("../plugins/web-search-providers.js", () => ({
-  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
-}));
-
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-}));
-
-vi.mock("../plugins/web-fetch-providers.js", () => ({
-  resolveBundledPluginWebFetchProviders: resolveBundledPluginWebFetchProvidersMock,
 }));
 
 vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
@@ -42,7 +30,7 @@ vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
 }));
 
 function createTestProvider(params: {
-  id: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl" | "tavily";
+  id: "brave" | "gemini" | "grok" | "kimi" | "minimax" | "perplexity" | "firecrawl" | "tavily";
   pluginId: string;
   order: number;
 }): PluginWebSearchProviderEntry {
@@ -100,6 +88,7 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
     createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
     createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
     createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
+    createTestProvider({ id: "minimax", pluginId: "minimax", order: 15 }),
     createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
     createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
     createTestProvider({ id: "tavily", pluginId: "tavily", order: 70 }),
@@ -260,6 +249,9 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id === "plugins.entries.firecrawl.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "firecrawl");
   }
+  if (entry.id === "plugins.entries.minimax.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "minimax");
+  }
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
   }
@@ -339,9 +331,7 @@ describe("secrets runtime target coverage", () => {
 
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
-    resolveBundledPluginWebSearchProvidersMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
-    resolveBundledPluginWebFetchProvidersMock.mockReset();
     resolvePluginWebFetchProvidersMock.mockReset();
   });
 

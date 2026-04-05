@@ -126,7 +126,7 @@ function resolveModelSelectionForCommand(params: {
     cfg: { commands: { text: true } } as unknown as OpenClawConfig,
     agentDir: TEST_AGENT_DIR,
     defaultProvider: "anthropic",
-    defaultModel: "claude-opus-4-5",
+    defaultModel: "claude-opus-4-6",
     aliasIndex: baseAliasIndex(),
     allowedModelKeys: params.allowedModelKeys,
     allowedModelCatalog: params.allowedModelCatalog,
@@ -162,14 +162,14 @@ async function persistModelDirectiveForTest(params: {
     elevatedEnabled: false,
     elevatedAllowed: false,
     defaultProvider: "anthropic",
-    defaultModel: "claude-opus-4-5",
+    defaultModel: "claude-opus-4-6",
     aliasIndex: params.aliasIndex ?? baseAliasIndex(),
     allowedModelKeys: new Set(params.allowedModelKeys),
     provider: params.provider ?? "anthropic",
-    model: params.model ?? "claude-opus-4-5",
+    model: params.model ?? "claude-opus-4-6",
     initialModelLabel:
       params.initialModelLabel ??
-      `${params.provider ?? "anthropic"}/${params.model ?? "claude-opus-4-5"}`,
+      `${params.provider ?? "anthropic"}/${params.model ?? "claude-opus-4-6"}`,
     formatModelSwitchEvent: (label) => label,
     agentCfg: cfg.agents?.defaults,
   });
@@ -185,9 +185,9 @@ async function resolveModelInfoReply(
     agentDir: TEST_AGENT_DIR,
     activeAgentId: "main",
     provider: "anthropic",
-    model: "claude-opus-4-5",
+    model: "claude-opus-4-6",
     defaultProvider: "anthropic",
-    defaultModel: "claude-opus-4-5",
+    defaultModel: "claude-opus-4-6",
     aliasIndex: baseAliasIndex(),
     allowedModelCatalog: [],
     resetModelOverride: false,
@@ -207,16 +207,18 @@ describe("/model chat UX", () => {
   it("shows active runtime model when different from selected model", async () => {
     const reply = await resolveModelInfoReply({
       provider: "fireworks",
-      model: "fireworks/minimax-m2p5",
+      model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
       defaultProvider: "fireworks",
-      defaultModel: "fireworks/minimax-m2p5",
+      defaultModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
       sessionEntry: {
         modelProvider: "deepinfra",
         model: "moonshotai/Kimi-K2.5",
       },
     });
 
-    expect(reply?.text).toContain("Current: fireworks/minimax-m2p5 (selected)");
+    expect(reply?.text).toContain(
+      "Current: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo (selected)",
+    );
     expect(reply?.text).toContain("Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)");
   });
 
@@ -229,16 +231,16 @@ describe("/model chat UX", () => {
       cfg,
       agentDir: "/tmp/agent",
       defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
+      defaultModel: "claude-opus-4-6",
       aliasIndex: baseAliasIndex(),
-      allowedModelKeys: new Set(["anthropic/claude-opus-4-5"]),
-      allowedModelCatalog: [{ provider: "anthropic", id: "claude-opus-4-5" }],
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
+      allowedModelCatalog: [{ provider: "anthropic", id: "claude-opus-4-6" }],
       provider: "anthropic",
     });
 
     expect(resolved.modelSelection).toEqual({
       provider: "anthropic",
-      model: "claude-opus-4-5",
+      model: "claude-opus-4-6",
       isDefault: true,
     });
     expect(resolved.errorText).toBeUndefined();
@@ -247,7 +249,7 @@ describe("/model chat UX", () => {
   it("rejects numeric /model selections with a guided error", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model 99",
-      allowedModelKeys: new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]),
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
       allowedModelCatalog: [],
     });
 
@@ -258,30 +260,30 @@ describe("/model chat UX", () => {
 
   it("treats explicit default /model selection as resettable default", () => {
     const resolved = resolveModelSelectionForCommand({
-      command: "/model anthropic/claude-opus-4-5",
-      allowedModelKeys: new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]),
+      command: "/model anthropic/claude-opus-4-6",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
       allowedModelCatalog: [],
     });
 
     expect(resolved.errorText).toBeUndefined();
     expect(resolved.modelSelection).toEqual({
       provider: "anthropic",
-      model: "claude-opus-4-5",
+      model: "claude-opus-4-6",
       isDefault: true,
     });
   });
 
   it("keeps openrouter provider/model split for exact selections", () => {
     const resolved = resolveModelSelectionForCommand({
-      command: "/model openrouter/anthropic/claude-opus-4-5",
-      allowedModelKeys: new Set(["openrouter/anthropic/claude-opus-4-5"]),
+      command: "/model openrouter/anthropic/claude-opus-4-6",
+      allowedModelKeys: new Set(["openrouter/anthropic/claude-opus-4-6"]),
       allowedModelCatalog: [],
     });
 
     expect(resolved.errorText).toBeUndefined();
     expect(resolved.modelSelection).toEqual({
       provider: "openrouter",
-      model: "anthropic/claude-opus-4-5",
+      model: "anthropic/claude-opus-4-6",
       isDefault: false,
     });
   });
@@ -327,7 +329,7 @@ describe("/model chat UX", () => {
       cfg: { commands: { text: true } } as unknown as OpenClawConfig,
       agentDir: TEST_AGENT_DIR,
       defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
+      defaultModel: "claude-opus-4-6",
       aliasIndex: createGptAliasIndex(),
       allowedModelKeys: new Set(["openai/gpt-4o"]),
       allowedModelCatalog: [],
@@ -461,9 +463,9 @@ describe("/model chat UX", () => {
 });
 
 describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
-  const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
+  const allowedModelKeys = new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]);
   const allowedModelCatalog = [
-    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
+    { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
     { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
   ];
   const sessionKey = "agent:main:dm:1";
@@ -486,14 +488,14 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       elevatedEnabled: false,
       elevatedAllowed: false,
       defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
+      defaultModel: "claude-opus-4-6",
       aliasIndex: baseAliasIndex(),
       allowedModelKeys,
       allowedModelCatalog,
       resetModelOverride: false,
       provider: "anthropic",
-      model: "claude-opus-4-5",
-      initialModelLabel: "anthropic/claude-opus-4-5",
+      model: "claude-opus-4-6",
+      initialModelLabel: "anthropic/claude-opus-4-6",
       formatModelSwitchEvent: (label) => `Switched to ${label}`,
       ...rest,
       sessionEntry: entry,
@@ -514,6 +516,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text).toContain("Model set to");
     expect(result?.text).toContain("openai/gpt-4o");
     expect(result?.text).not.toContain("failed");
+    expect(sessionEntry.liveModelSwitchPending).toBe(true);
   });
 
   it("does not request a live restart when /model mutates an active session", async () => {
@@ -667,7 +670,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
 describe("persistInlineDirectives internal exec scope gate", () => {
   it("skips exec persistence for internal operator.write callers", async () => {
-    const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
+    const allowedModelKeys = new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]);
     const directives = parseInlineDirectives(
       "/exec host=node security=allowlist ask=always node=worker-1",
     );
@@ -687,12 +690,12 @@ describe("persistInlineDirectives internal exec scope gate", () => {
       elevatedEnabled: true,
       elevatedAllowed: true,
       defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
+      defaultModel: "claude-opus-4-6",
       aliasIndex: baseAliasIndex(),
       allowedModelKeys,
       provider: "anthropic",
-      model: "claude-opus-4-5",
-      initialModelLabel: "anthropic/claude-opus-4-5",
+      model: "claude-opus-4-6",
+      initialModelLabel: "anthropic/claude-opus-4-6",
       formatModelSwitchEvent: (label) => `Switched to ${label}`,
       agentCfg: undefined,
       surface: "webchat",
@@ -706,7 +709,7 @@ describe("persistInlineDirectives internal exec scope gate", () => {
   });
 
   it("skips verbose persistence for internal operator.write callers", async () => {
-    const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
+    const allowedModelKeys = new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]);
     const directives = parseInlineDirectives("/verbose full");
     const sessionEntry = {
       sessionId: "s1",
@@ -724,12 +727,12 @@ describe("persistInlineDirectives internal exec scope gate", () => {
       elevatedEnabled: true,
       elevatedAllowed: true,
       defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
+      defaultModel: "claude-opus-4-6",
       aliasIndex: baseAliasIndex(),
       allowedModelKeys,
       provider: "anthropic",
-      model: "claude-opus-4-5",
-      initialModelLabel: "anthropic/claude-opus-4-5",
+      model: "claude-opus-4-6",
+      initialModelLabel: "anthropic/claude-opus-4-6",
       formatModelSwitchEvent: (label) => `Switched to ${label}`,
       agentCfg: undefined,
       surface: "webchat",
@@ -740,7 +743,7 @@ describe("persistInlineDirectives internal exec scope gate", () => {
   });
 
   it("treats internal provider context as authoritative over external surface metadata", async () => {
-    const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
+    const allowedModelKeys = new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]);
     const directives = parseInlineDirectives("/verbose full");
     const sessionEntry = {
       sessionId: "s1",
@@ -758,12 +761,12 @@ describe("persistInlineDirectives internal exec scope gate", () => {
       elevatedEnabled: true,
       elevatedAllowed: true,
       defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
+      defaultModel: "claude-opus-4-6",
       aliasIndex: baseAliasIndex(),
       allowedModelKeys,
       provider: "anthropic",
-      model: "claude-opus-4-5",
-      initialModelLabel: "anthropic/claude-opus-4-5",
+      model: "claude-opus-4-6",
+      initialModelLabel: "anthropic/claude-opus-4-6",
       formatModelSwitchEvent: (label) => `Switched to ${label}`,
       agentCfg: undefined,
       messageProvider: "webchat",

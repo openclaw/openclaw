@@ -1,6 +1,7 @@
 import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 
 type CronSessionEntry = {
   sessionId: string;
@@ -39,6 +40,7 @@ function normalizeModelSelectionForTest(value: unknown): string | undefined {
 
 export const buildWorkspaceSkillSnapshotMock = createMock();
 export const resolveAgentConfigMock = createMock();
+export const resolveEffectiveModelFallbacksMock = createMock();
 export const resolveAgentModelFallbacksOverrideMock = createMock();
 export const resolveAgentSkillsFilterMock = createMock();
 export const getModelRefStatusMock = createMock();
@@ -62,9 +64,10 @@ export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
+export const resolveFastModeStateMock = createMock();
+
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
-export const resolveFastModeStateMock = createMock();
 const resolveNestedAgentLaneMock = createMock();
 const resolveAgentTimeoutMsMock = createMock();
 const deriveSessionTotalTokensMock = createMock();
@@ -93,17 +96,12 @@ vi.mock("./run.runtime.js", () => ({
   resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
   resolveAgentSkillsFilter: resolveAgentSkillsFilterMock,
   resolveSessionAuthProfileOverride: resolveSessionAuthProfileOverrideMock,
-  resolveBootstrapWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeenMock,
   lookupContextTokens: lookupContextTokensMock,
   resolveCronStyleNow: resolveCronStyleNowMock,
   DEFAULT_CONTEXT_TOKENS: 128000,
   DEFAULT_MODEL: "gpt-4",
   DEFAULT_PROVIDER: "openai",
-  resolveFastModeState: resolveFastModeStateMock,
-  resolveNestedAgentLane: resolveNestedAgentLaneMock,
-  LiveSessionModelSwitchError,
   loadModelCatalog: loadModelCatalogMock,
-  runWithModelFallback: runWithModelFallbackMock,
   getModelRefStatus: getModelRefStatusMock,
   isCliProvider: isCliProviderMock,
   normalizeModelSelection: normalizeModelSelectionForTest,
@@ -111,22 +109,17 @@ vi.mock("./run.runtime.js", () => ({
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
   resolveThinkingDefault: resolveThinkingDefaultMock,
-  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
   buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
-  countActiveDescendantRuns: countActiveDescendantRunsMock,
-  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
   resolveAgentTimeoutMs: resolveAgentTimeoutMsMock,
   deriveSessionTotalTokens: deriveSessionTotalTokensMock,
   hasNonzeroUsage: hasNonzeroUsageMock,
   DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
   ensureAgentWorkspace: ensureAgentWorkspaceMock,
   normalizeThinkLevel: normalizeThinkLevelMock,
-  normalizeVerboseLevel: normalizeVerboseLevelMock,
   supportsXHighThinking: supportsXHighThinkingMock,
-  resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   setSessionRuntimeModel: setSessionRuntimeModelMock,
-  registerAgentRunContext: registerAgentRunContextMock,
+  setCliSessionId: vi.fn(),
   logWarn: (...args: unknown[]) => logWarnMock(...args),
   normalizeAgentId: vi.fn((id: string) => id),
   buildSafeExternalPrompt: buildSafeExternalPromptMock,
@@ -137,9 +130,26 @@ vi.mock("./run.runtime.js", () => ({
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
 }));
 
-vi.mock("../../agents/cli-runner.runtime.js", () => ({
-  runCliAgent: runCliAgentMock,
+vi.mock("./run-execution.runtime.js", () => ({
+  resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
+  resolveBootstrapWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeenMock,
   getCliSessionId: getCliSessionIdMock,
+  runCliAgent: runCliAgentMock,
+  resolveFastModeState: resolveFastModeStateMock,
+  resolveNestedAgentLane: resolveNestedAgentLaneMock,
+  LiveSessionModelSwitchError,
+  runWithModelFallback: runWithModelFallbackMock,
+  isCliProvider: isCliProviderMock,
+  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+  countActiveDescendantRuns: countActiveDescendantRunsMock,
+  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
+  normalizeVerboseLevel: normalizeVerboseLevelMock,
+  resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
+  registerAgentRunContext: registerAgentRunContextMock,
+  logWarn: (...args: unknown[]) => logWarnMock(...args),
+}));
+
+vi.mock("../../agents/cli-runner.runtime.js", () => ({
   setCliSessionId: vi.fn(),
 }));
 
@@ -215,41 +225,43 @@ export function mockRunCronFallbackPassthrough(): void {
   });
 }
 
-export function resetRunCronIsolatedAgentTurnHarness(): void {
-  vi.clearAllMocks();
-
+function resetRunConfigMocks(): void {
   buildWorkspaceSkillSnapshotMock.mockReturnValue({
     prompt: "<available_skills></available_skills>",
     resolvedSkills: [],
     version: 42,
   });
   resolveAgentConfigMock.mockReturnValue(undefined);
+  resolveEffectiveModelFallbacksMock.mockReset();
+  resolveEffectiveModelFallbacksMock.mockImplementation(
+    ({ cfg, agentId, hasSessionModelOverride }) => {
+      const agentFallbacksOverride = resolveAgentModelFallbacksOverrideMock(cfg, agentId) as
+        | string[]
+        | undefined;
+      if (!hasSessionModelOverride) {
+        return agentFallbacksOverride;
+      }
+      const defaultFallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.model);
+      return agentFallbacksOverride ?? defaultFallbacks;
+    },
+  );
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
   resolveAgentSkillsFilterMock.mockReturnValue(undefined);
-
   resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4" });
   resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);
   resolveThinkingDefaultMock.mockReturnValue("off");
   getModelRefStatusMock.mockReturnValue({ allowed: false });
-  isCliProviderMock.mockReturnValue(false);
-  resolveBootstrapWarningSignaturesSeenMock.mockReturnValue(new Set());
   resolveCronStyleNowMock.mockReturnValue({
     formattedTime: "2026-02-10 12:00",
     timeLine: "Current time: 2026-02-10 12:00 UTC",
   });
-  resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
-  resolveNestedAgentLaneMock.mockReturnValue(undefined);
   resolveAgentTimeoutMsMock.mockReturnValue(60_000);
   deriveSessionTotalTokensMock.mockReturnValue(30);
   hasNonzeroUsageMock.mockReturnValue(true);
   ensureAgentWorkspaceMock.mockResolvedValue({ dir: "/tmp/workspace" });
   normalizeThinkLevelMock.mockImplementation((value: unknown) => value);
-  normalizeVerboseLevelMock.mockImplementation((value: unknown) => value ?? "off");
   supportsXHighThinkingMock.mockReturnValue(false);
-  resolveSessionTranscriptPathMock.mockReturnValue("/tmp/transcript.jsonl");
-  setSessionRuntimeModelMock.mockReturnValue(undefined);
-  registerAgentRunContextMock.mockReturnValue(undefined);
   buildSafeExternalPromptMock.mockImplementation(
     ({ message }: { message?: string }) => message ?? "",
   );
@@ -260,27 +272,31 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   getSkillsSnapshotVersionMock.mockReturnValue(42);
   loadModelCatalogMock.mockResolvedValue({ models: [] });
   getRemoteSkillEligibilityMock.mockResolvedValue({ remoteSkillsEnabled: false });
+}
 
+function resetRunExecutionMocks(): void {
+  isCliProviderMock.mockReturnValue(false);
+  resolveBootstrapWarningSignaturesSeenMock.mockReturnValue(new Set());
+  resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
+  resolveNestedAgentLaneMock.mockReturnValue(undefined);
+  normalizeVerboseLevelMock.mockImplementation((value: unknown) => value ?? "off");
+  resolveSessionTranscriptPathMock.mockReturnValue("/tmp/transcript.jsonl");
+  registerAgentRunContextMock.mockReturnValue(undefined);
   runWithModelFallbackMock.mockReset();
   runWithModelFallbackMock.mockResolvedValue(makeDefaultModelFallbackResult());
   runEmbeddedPiAgentMock.mockReset();
   runEmbeddedPiAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
-
   runCliAgentMock.mockReset();
-  lookupContextTokensMock.mockReset();
-  lookupContextTokensMock.mockReturnValue(undefined);
   getCliSessionIdMock.mockReturnValue(undefined);
-
-  updateSessionStoreMock.mockReset();
-  updateSessionStoreMock.mockResolvedValue(undefined);
-
-  resolveCronSessionMock.mockReset();
-  resolveCronSessionMock.mockReturnValue(makeCronSession());
-
   countActiveDescendantRunsMock.mockReset();
   countActiveDescendantRunsMock.mockReturnValue(0);
   listDescendantRunsForRequesterMock.mockReset();
   listDescendantRunsForRequesterMock.mockReturnValue([]);
+}
+
+function resetRunOutcomeMocks(): void {
+  lookupContextTokensMock.mockReset();
+  lookupContextTokensMock.mockReturnValue(undefined);
   pickLastNonEmptyTextFromPayloadsMock.mockReset();
   pickLastNonEmptyTextFromPayloadsMock.mockReturnValue("test output");
   resolveCronPayloadOutcomeMock.mockReset();
@@ -314,7 +330,22 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   });
   resolveSessionAuthProfileOverrideMock.mockReset();
   resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+}
 
+function resetRunSessionMocks(): void {
+  updateSessionStoreMock.mockReset();
+  updateSessionStoreMock.mockResolvedValue(undefined);
+  resolveCronSessionMock.mockReset();
+  resolveCronSessionMock.mockReturnValue(makeCronSession());
+}
+
+export function resetRunCronIsolatedAgentTurnHarness(): void {
+  vi.clearAllMocks();
+  resetRunConfigMocks();
+  resetRunExecutionMocks();
+  resetRunOutcomeMocks();
+  resetRunSessionMocks();
+  setSessionRuntimeModelMock.mockReturnValue(undefined);
   logWarnMock.mockReset();
 }
 

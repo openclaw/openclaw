@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { z } from "openclaw/plugin-sdk/zod";
 import { AcpxPluginConfigSchema } from "./config-schema.js";
 import type {
   AcpxPluginConfig,
@@ -10,7 +11,6 @@ import type {
   AcpxMcpServer,
   ResolvedAcpxPluginConfig,
 } from "./config-schema.js";
-import type { z } from "openclaw/plugin-sdk/zod";
 export {
   ACPX_NON_INTERACTIVE_POLICIES,
   ACPX_PERMISSION_MODES,
@@ -62,11 +62,44 @@ function resolveWorkspaceAcpxPluginRoot(currentRoot: string): string | null {
   return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
 }
 
+function resolveRepoAcpxPluginRoot(currentRoot: string): string | null {
+  const workspaceRoot = path.join(currentRoot, "extensions", "acpx");
+  return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
+}
+
+function resolveAcpxPluginRootFromOpenClawLayout(moduleUrl: string): string | null {
+  let cursor = path.dirname(fileURLToPath(moduleUrl));
+  for (let i = 0; i < 5; i += 1) {
+    const candidates = [
+      path.join(cursor, "extensions", "acpx"),
+      path.join(cursor, "dist", "extensions", "acpx"),
+      path.join(cursor, "dist-runtime", "extensions", "acpx"),
+    ];
+    for (const candidate of candidates) {
+      if (isAcpxPluginRoot(candidate)) {
+        return candidate;
+      }
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return null;
+}
 export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
   const resolvedRoot = resolveNearestAcpxPluginRoot(moduleUrl);
   // In a live repo checkout, dist/ can be rebuilt out from under the running gateway.
   // Prefer the stable source plugin root when a built extension is running beside it.
-  return resolveWorkspaceAcpxPluginRoot(resolvedRoot) ?? resolvedRoot;
+  return (
+    resolveWorkspaceAcpxPluginRoot(resolvedRoot) ??
+    resolveRepoAcpxPluginRoot(resolvedRoot) ??
+    // Shared dist/dist-runtime chunks can load this module outside the plugin tree.
+    // Scan common OpenClaw layouts before falling back to the nearest path guess.
+    resolveAcpxPluginRootFromOpenClawLayout(moduleUrl) ??
+    resolvedRoot
+  );
 }
 
 export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();

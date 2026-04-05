@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -9,7 +9,18 @@ import {
   writeClaudeBundle,
   writeFakeClaudeCli,
 } from "./bundle-mcp.test-harness.js";
-import { runCliAgent } from "./cli-runner.js";
+
+vi.mock("./cli-runner/helpers.js", async () => {
+  const original =
+    await vi.importActual<typeof import("./cli-runner/helpers.js")>("./cli-runner/helpers.js");
+  return {
+    ...original,
+    // This e2e only validates bundle MCP wiring into the spawned CLI backend.
+    // Stub the large prompt-construction path so cold Vitest workers do not
+    // time out before the actual MCP roundtrip runs.
+    buildSystemPrompt: () => "Bundle MCP e2e test prompt.",
+  };
+});
 
 // This e2e spins a real stdio MCP server plus a spawned CLI process, which is
 // notably slower under Docker and cold Vitest imports.
@@ -20,6 +31,7 @@ describe("runCliAgent bundle MCP e2e", () => {
     "routes enabled bundle MCP config into the claude-cli backend and executes the tool",
     { timeout: E2E_TIMEOUT_MS },
     async () => {
+      const { runCliAgent } = await import("./cli-runner.js");
       const envSnapshot = captureEnv(["HOME"]);
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-bundle-mcp-"));
       process.env.HOME = tempHome;

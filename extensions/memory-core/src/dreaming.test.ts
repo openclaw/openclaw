@@ -28,7 +28,7 @@ function createLogger() {
 
 function createCronHarness(
   initialJobs: CronJobLike[] = [],
-  opts?: { removeResult?: "boolean" | "unknown" },
+  opts?: { removeResult?: "boolean" | "unknown"; removeThrowsForIds?: string[] },
 ) {
   const jobs: CronJobLike[] = [...initialJobs];
   const addCalls: CronAddInput[] = [];
@@ -79,6 +79,9 @@ function createCronHarness(
     },
     async remove(id) {
       removeCalls.push(id);
+      if (opts?.removeThrowsForIds?.includes(id)) {
+        throw new Error(`remove failed for ${id}`);
+      }
       const index = jobs.findIndex((entry) => entry.id === id);
       if (index >= 0) {
         jobs.splice(index, 1);
@@ -139,6 +142,51 @@ describe("short-term dreaming config", () => {
       minScore: 0.4,
       minRecallCount: 2,
       minUniqueQueries: 3,
+    });
+  });
+
+  it("accepts cron alias and numeric string thresholds", () => {
+    const resolved = resolveShortTermPromotionDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          mode: "deep",
+          cron: "5 1 * * *",
+          limit: "4",
+          minScore: "0.6",
+          minRecallCount: "2",
+          minUniqueQueries: "3",
+        },
+      },
+    });
+    expect(resolved).toEqual({
+      enabled: true,
+      cron: "5 1 * * *",
+      limit: 4,
+      minScore: 0.6,
+      minRecallCount: 2,
+      minUniqueQueries: 3,
+    });
+  });
+
+  it("treats blank numeric strings as unset and keeps preset defaults", () => {
+    const resolved = resolveShortTermPromotionDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          mode: "deep",
+          limit: " ",
+          minScore: "",
+          minRecallCount: "  ",
+          minUniqueQueries: "",
+        },
+      },
+    });
+    expect(resolved).toEqual({
+      enabled: true,
+      cron: constants.DREAMING_PRESET_DEFAULTS.deep.cron,
+      limit: constants.DREAMING_PRESET_DEFAULTS.deep.limit,
+      minScore: constants.DREAMING_PRESET_DEFAULTS.deep.minScore,
+      minRecallCount: constants.DREAMING_PRESET_DEFAULTS.deep.minRecallCount,
+      minUniqueQueries: constants.DREAMING_PRESET_DEFAULTS.deep.minUniqueQueries,
     });
   });
 
@@ -376,6 +424,40 @@ describe("short-term dreaming cron reconciliation", () => {
     expect(result.removed).toBe(0);
     expect(harness.removeCalls).toEqual(["job-managed"]);
   });
+
+  it("warns and continues when disabling managed jobs hits a remove error", async () => {
+    const managedJob: CronJobLike = {
+      id: "job-managed",
+      name: constants.MANAGED_DREAMING_CRON_NAME,
+      description: `${constants.MANAGED_DREAMING_CRON_TAG} test`,
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 3 * * *" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      createdAtMs: 10,
+    };
+    const harness = createCronHarness([managedJob], { removeThrowsForIds: ["job-managed"] });
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: false,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({ status: "disabled", removed: 0 });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to remove managed dreaming cron job job-managed"),
+    );
+  });
 });
 
 describe("short-term dreaming trigger", () => {
@@ -490,5 +572,112 @@ describe("short-term dreaming trigger", () => {
       logger,
     });
     expect(result).toBeUndefined();
+  });
+
+  it("skips dreaming promotion cleanly when limit is zero", async () => {
+    const logger = createLogger();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-limit-zero-"));
+    tempDirs.push(workspaceDir);
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 0,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({
+      handled: true,
+      reason: "memory-core: short-term dreaming disabled by limit",
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      "memory-core: dreaming promotion skipped because limit=0.",
+    );
+    await expect(fs.access(path.join(workspaceDir, "MEMORY.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("repairs recall artifacts before dreaming promotion runs", async () => {
+    const logger = createLogger();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-repair-"));
+    tempDirs.push(workspaceDir);
+    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-04-01T00:00:00.000Z",
+          entries: {
+            "memory:memory/2026-04-03.md:1:2": {
+              key: "memory:memory/2026-04-03.md:1:2",
+              path: "memory/2026-04-03.md",
+              startLine: 1,
+              endLine: 2,
+              source: "memory",
+              snippet: "Move backups to S3 Glacier and sync router failover notes.",
+              recallCount: 3,
+              totalScore: 2.7,
+              maxScore: 0.95,
+              firstRecalledAt: "2026-04-01T00:00:00.000Z",
+              lastRecalledAt: "2026-04-03T00:00:00.000Z",
+              queryHashes: ["abc", "abc", "def"],
+              recallDays: ["2026-04-01", "2026-04-01", "2026-04-03"],
+              conceptTags: [],
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      },
+      logger,
+    });
+
+    expect(result?.handled).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("normalized recall artifacts before dreaming"),
+    );
+    const repaired = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      entries: Record<
+        string,
+        { queryHashes?: string[]; recallDays?: string[]; conceptTags?: string[] }
+      >;
+    };
+    expect(repaired.entries["memory:memory/2026-04-03.md:1:2"]?.queryHashes).toEqual([
+      "abc",
+      "def",
+    ]);
+    expect(repaired.entries["memory:memory/2026-04-03.md:1:2"]?.recallDays).toEqual([
+      "2026-04-01",
+      "2026-04-03",
+    ]);
+    expect(repaired.entries["memory:memory/2026-04-03.md:1:2"]?.conceptTags).toEqual(
+      expect.arrayContaining(["glacier", "router", "failover"]),
+    );
   });
 });

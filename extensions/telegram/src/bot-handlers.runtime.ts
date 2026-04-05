@@ -1412,6 +1412,7 @@ export const registerTelegramHandlers = ({
         });
         const result = buildCommandsMessagePaginated(runtimeCfg, skillCommands, {
           page,
+          forcePaginatedList: true,
           surface: "telegram",
         });
 

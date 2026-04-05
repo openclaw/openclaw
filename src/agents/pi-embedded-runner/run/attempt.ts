@@ -6,6 +6,12 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../../../../extensions/ollama/runtime-api.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -14,12 +20,6 @@ import {
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
-import {
-  isOllamaCompatProvider,
-  resolveOllamaCompatNumCtxEnabled,
-  shouldInjectOllamaCompatNumCtx,
-  wrapOllamaCompatNumCtx,
-} from "../../../plugin-sdk/ollama.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -99,9 +99,17 @@ import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
+import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
+import {
+  collectPromptCacheToolNames,
+  beginPromptCacheObservation,
+  completePromptCacheObservation,
+  type PromptCacheChange,
+} from "../prompt-cache-observability.js";
+import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import {
   clearActiveEmbeddedRun,
@@ -114,7 +122,9 @@ import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manage
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
+  describeEmbeddedAgentStreamStrategy,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
+  resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
@@ -208,7 +218,7 @@ export {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "../../../plugin-sdk/ollama.js";
+} from "../../../../extensions/ollama/runtime-api.js";
 export {
   decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
@@ -917,13 +927,24 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
       });
       const wsApiKey = shouldUseWebSocketTransport
-        ? await params.authStorage.getApiKey(params.provider)
+        ? await resolveEmbeddedAgentApiKey({
+            provider: params.provider,
+            resolvedApiKey: params.resolvedApiKey,
+            authStorage: params.authStorage,
+          })
         : undefined;
       if (shouldUseWebSocketTransport && !wsApiKey) {
         log.warn(
           `[ws-stream] no API key for provider=${params.provider}; keeping session-managed HTTP transport`,
         );
       }
+      const streamStrategy = describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: defaultSessionStreamFn,
+        providerStreamFn,
+        shouldUseWebSocketTransport,
+        wsApiKey,
+        model: params.model,
+      });
       activeSession.agent.streamFn = resolveEmbeddedAgentStreamFn({
         currentStreamFn: defaultSessionStreamFn,
         providerStreamFn,
@@ -932,6 +953,7 @@ export async function runEmbeddedAttempt(
         sessionId: params.sessionId,
         signal: runAbortController.signal,
         model: params.model,
+        resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
       });
 
@@ -954,13 +976,21 @@ export async function runEmbeddedAttempt(
         settingsManager,
         effectiveExtraParams,
       });
+      const effectiveAgentTransport = agentTransportOverride ?? activeSession.agent.transport;
       if (agentTransportOverride && activeSession.agent.transport !== agentTransportOverride) {
+        const previousTransport = activeSession.agent.transport;
         log.debug(
-          `embedded agent transport override: ${activeSession.agent.transport} -> ${agentTransportOverride} ` +
+          `embedded agent transport override: ${previousTransport} -> ${agentTransportOverride} ` +
             `(${params.provider}/${params.modelId})`,
         );
-        activeSession.agent.setTransport(agentTransportOverride);
       }
+
+      const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
+      const promptCacheToolNames = collectPromptCacheToolNames([
+        ...builtInTools,
+        ...allCustomTools,
+      ] as Array<{ name?: string }>);
+      let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
@@ -1009,7 +1039,13 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(messages as AgentMessage[], mode);
+          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(
+            messages as AgentMessage[],
+            mode,
+            {
+              preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
+            },
+          );
           if (sanitized === messages) {
             return inner(model, context, options);
           }
@@ -1150,7 +1186,7 @@ export async function runEmbeddedAttempt(
           : truncated;
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+          activeSession.agent.state.messages = limited;
         }
 
         if (params.contextEngine) {
@@ -1168,7 +1204,7 @@ export async function runEmbeddedAttempt(
               throw new Error("context engine assemble returned no result");
             }
             if (assembled.messages !== activeSession.messages) {
-              activeSession.agent.replaceMessages(assembled.messages);
+              activeSession.agent.state.messages = assembled.messages;
             }
             if (assembled.systemPromptAddition) {
               systemPromptText = prependSystemPromptAddition({
@@ -1307,6 +1343,7 @@ export async function runEmbeddedAttempt(
         unsubscribe,
         waitForCompactionRetry,
         isCompactionInFlight,
+        getItemLifecycle,
         getMessagingToolSentTexts,
         getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
@@ -1480,6 +1517,57 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        if (cacheObservabilityEnabled) {
+          const cacheObservation = beginPromptCacheObservation({
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            provider: params.provider,
+            modelId: params.modelId,
+            modelApi: params.model.api,
+            cacheRetention: resolveCacheRetention(
+              effectiveExtraParams,
+              params.provider,
+              params.model.api,
+              params.modelId,
+            ),
+            streamStrategy,
+            transport: effectiveAgentTransport,
+            systemPrompt: systemPromptText,
+            toolNames: promptCacheToolNames,
+          });
+          promptCacheChangesForTurn = cacheObservation.changes;
+          cacheTrace?.recordStage("cache:state", {
+            options: {
+              snapshot: cacheObservation.snapshot,
+              previousCacheRead: cacheObservation.previousCacheRead ?? undefined,
+              changes:
+                cacheObservation.changes?.map((change) => ({
+                  code: change.code,
+                  detail: change.detail,
+                })) ?? undefined,
+            },
+          });
+        }
+
+        const googlePromptCacheStreamFn = await prepareGooglePromptCacheStreamFn({
+          apiKey: await resolveEmbeddedAgentApiKey({
+            provider: params.provider,
+            resolvedApiKey: params.resolvedApiKey,
+            authStorage: params.authStorage,
+          }),
+          extraParams: effectiveExtraParams,
+          model: params.model,
+          modelId: params.modelId,
+          provider: params.provider,
+          sessionManager,
+          signal: runAbortController.signal,
+          streamFn: activeSession.agent.streamFn,
+          systemPrompt: systemPromptText,
+        });
+        if (googlePromptCacheStreamFn) {
+          activeSession.agent.streamFn = googlePromptCacheStreamFn;
+        }
+
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {
           prompt: effectivePrompt,
@@ -1495,7 +1583,7 @@ export async function runEmbeddedAttempt(
             sessionManager.resetLeaf();
           }
           const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
+          activeSession.agent.state.messages = sessionContext.messages;
           const orphanRepairMessage =
             `Removed orphaned user message to prevent consecutive user turns. ` +
             `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
@@ -1509,12 +1597,12 @@ export async function runEmbeddedAttempt(
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
 
         try {
-          // Idempotent cleanup for legacy sessions with persisted image payloads.
-          // Only mutates user turns older than a few assistant replies so recent
-          // history stays byte-identical for prompt-cache prefix matching.
+          // Idempotent cleanup: prune old image blocks to limit context
+          // growth. Only mutates turns older than a few assistant replies;
+          // the delay also reduces prompt-cache churn.
           const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
           if (didPruneImages) {
-            activeSession.agent.replaceMessages(activeSession.messages);
+            activeSession.agent.state.messages = activeSession.messages;
           }
 
           // Detect and load images referenced in the prompt for vision-capable models.
@@ -1854,6 +1942,52 @@ export async function runEmbeddedAttempt(
             typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
+      const attemptUsage = getUsageTotals();
+      if (cacheObservabilityEnabled) {
+        const cacheBreak = completePromptCacheObservation({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          usage: attemptUsage,
+        });
+        if (cacheBreak) {
+          const changeSummary =
+            cacheBreak.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
+            "no tracked cache input change";
+          log.warn(
+            `[prompt-cache] cache read dropped ${cacheBreak.previousCacheRead} -> ${cacheBreak.cacheRead} ` +
+              `for ${params.provider}/${params.modelId} via ${streamStrategy}; ${changeSummary}`,
+          );
+          cacheTrace?.recordStage("cache:result", {
+            options: {
+              previousCacheRead: cacheBreak.previousCacheRead,
+              cacheRead: cacheBreak.cacheRead,
+              changes:
+                cacheBreak.changes?.map((change) => ({
+                  code: change.code,
+                  detail: change.detail,
+                })) ?? undefined,
+            },
+          });
+        } else if (cacheTrace && promptCacheChangesForTurn) {
+          cacheTrace.recordStage("cache:result", {
+            note: "state changed without a cache-read break",
+            options: {
+              cacheRead: attemptUsage?.cacheRead ?? 0,
+              changes: promptCacheChangesForTurn.map((change) => ({
+                code: change.code,
+                detail: change.detail,
+              })),
+            },
+          });
+        } else if (cacheTrace) {
+          cacheTrace.recordStage("cache:result", {
+            note: "stable cache inputs",
+            options: {
+              cacheRead: attemptUsage?.cacheRead ?? 0,
+            },
+          });
+        }
+      }
 
       if (hookRunner?.hasHooks("llm_output")) {
         hookRunner
@@ -1865,7 +1999,7 @@ export async function runEmbeddedAttempt(
               model: params.modelId,
               assistantTexts,
               lastAssistant,
-              usage: getUsageTotals(),
+              usage: attemptUsage,
             },
             {
               runId: params.runId,
@@ -1889,6 +2023,7 @@ export async function runEmbeddedAttempt(
           didSendViaMessagingTool: didSendViaMessagingTool(),
           successfulCronAdds: getSuccessfulCronAdds(),
         }),
+        itemLifecycle: getItemLifecycle(),
         aborted,
         timedOut,
         timedOutDuringCompaction,
@@ -1910,7 +2045,7 @@ export async function runEmbeddedAttempt(
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
         ),
-        attemptUsage: getUsageTotals(),
+        attemptUsage,
         compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,

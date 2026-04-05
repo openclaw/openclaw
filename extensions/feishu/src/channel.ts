@@ -9,13 +9,13 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
   projectConfigAccountIdWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -58,8 +58,10 @@ import {
   parseFeishuTargetId,
 } from "./conversation-id.js";
 import { listFeishuDirectoryPeers, listFeishuDirectoryGroups } from "./directory.static.js";
+import { messageActionTargetAliases } from "./message-action-contract.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
 import {
   resolveFeishuParentConversationCandidates,
@@ -641,7 +643,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           }),
       },
       auth: feishuApprovalAuth,
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
+      },
       actions: {
+        messageActionTargetAliases,
         describeMessageTool: describeFeishuMessageTool,
         handleAction: async (ctx) => {
           const account = resolveFeishuAccount({

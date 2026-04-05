@@ -2,6 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discoverModels } from "../pi-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
+vi.mock("../model-suppression.js", () => ({
+  shouldSuppressBuiltInModel: ({ provider, id }: { provider?: string; id?: string }) =>
+    (provider === "openai" || provider === "azure-openai-responses") &&
+    id?.trim().toLowerCase() === "gpt-5.3-codex-spark",
+  buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
+    if (
+      (provider !== "openai" && provider !== "azure-openai-responses") ||
+      id?.trim().toLowerCase() !== "gpt-5.3-codex-spark"
+    ) {
+      return undefined;
+    }
+    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.`;
+  },
+}));
+
 vi.mock("../pi-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
@@ -659,6 +674,34 @@ describe("resolveModel", () => {
     });
   });
 
+  it("matches prefixed Hugging Face ids against discovered registry models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "huggingface",
+      modelId: "deepseek-ai/DeepSeek-R1",
+      templateModel: {
+        ...makeModel("deepseek-ai/DeepSeek-R1"),
+        provider: "huggingface",
+        baseUrl: "https://router.huggingface.co/v1",
+        reasoning: true,
+        input: ["text"],
+      },
+    });
+
+    const result = resolveModelForTest(
+      "huggingface",
+      "huggingface/deepseek-ai/DeepSeek-R1",
+      "/tmp/agent",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "huggingface",
+      id: "deepseek-ai/DeepSeek-R1",
+      reasoning: true,
+      input: ["text"],
+    });
+  });
+
   it("preloads OpenRouter capabilities before first async resolve of an unknown model", async () => {
     mockLoadOpenRouterModelCapabilities.mockImplementation(async (modelId) => {
       if (modelId === "google/gemini-3.1-flash-image-preview") {
@@ -913,9 +956,9 @@ describe("resolveModel", () => {
   it("applies provider overrides to openai gpt-5.4 forward-compat models", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
       templateModel: buildForwardCompatTemplate({
-        id: "gpt-5.2",
+        id: "gpt-5.4",
         name: "GPT-5.2",
         provider: "openai",
         api: "openai-responses",
@@ -1003,12 +1046,12 @@ describe("resolveModel", () => {
     });
   });
 
-  it("builds an openai fallback for gpt-5.4 mini from the gpt-5-mini template", () => {
+  it("builds an openai fallback for gpt-5.4 mini from the gpt-5.4-mini template", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",
-      modelId: "gpt-5-mini",
+      modelId: "gpt-5.4-mini",
       templateModel: buildForwardCompatTemplate({
-        id: "gpt-5-mini",
+        id: "gpt-5.4-mini",
         name: "GPT-5 mini",
         provider: "openai",
         api: "openai-responses",
@@ -1035,12 +1078,12 @@ describe("resolveModel", () => {
     });
   });
 
-  it("builds an openai fallback for gpt-5.4 nano from the gpt-5-nano template", () => {
+  it("builds an openai fallback for gpt-5.4 nano from the gpt-5.4-nano template", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai",
-      modelId: "gpt-5-nano",
+      modelId: "gpt-5.4-nano",
       templateModel: buildForwardCompatTemplate({
-        id: "gpt-5-nano",
+        id: "gpt-5.4-nano",
         name: "GPT-5 nano",
         provider: "openai",
         api: "openai-responses",

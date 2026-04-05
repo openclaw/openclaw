@@ -348,7 +348,7 @@ describe("models list/status", () => {
       code: "MODEL_DISCOVERY_UNAVAILABLE",
     });
     modelRegistryState.available = [
-      makeGoogleAntigravityTemplate("claude-opus-4-5-thinking", "Claude Opus 4.5 Thinking"),
+      makeGoogleAntigravityTemplate("claude-opus-4-6-thinking", "Claude Opus 4.5 Thinking"),
     ];
 
     await expect(loadModelRegistry({})).rejects.toThrow("model discovery unavailable");

@@ -55,7 +55,7 @@ import {
 } from "../plugins/channel-plugin-ids.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
@@ -77,6 +77,7 @@ import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   getInspectableTaskRegistrySummary,
   startTaskRegistryMaintenance,
+  stopTaskRegistryMaintenance,
 } from "../tasks/task-registry.maintenance.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
@@ -288,15 +289,30 @@ async function prepareGatewayStartupConfig(params: {
       tailscale: params.tailscaleOverride,
     },
   );
-  await params.activateRuntimeSecrets(startupPreflightConfig, {
-    reason: "startup",
-    activate: false,
-  });
+  const preflightConfig = (
+    await params.activateRuntimeSecrets(startupPreflightConfig, {
+      reason: "startup",
+      activate: false,
+    })
+  ).config;
+  const preflightAuthOverride =
+    typeof preflightConfig.gateway?.auth?.token === "string" ||
+    typeof preflightConfig.gateway?.auth?.password === "string"
+      ? {
+          ...params.authOverride,
+          ...(typeof preflightConfig.gateway?.auth?.token === "string"
+            ? { token: preflightConfig.gateway.auth.token }
+            : {}),
+          ...(typeof preflightConfig.gateway?.auth?.password === "string"
+            ? { password: preflightConfig.gateway.auth.password }
+            : {}),
+        }
+      : params.authOverride;
 
   const authBootstrap = await ensureGatewayStartupAuth({
     cfg: params.runtimeConfig,
     env: process.env,
-    authOverride: params.authOverride,
+    authOverride: preflightAuthOverride,
     tailscaleOverride: params.tailscaleOverride,
     persist: true,
     baseHash: params.configSnapshot.hash,
@@ -599,7 +615,8 @@ export async function startGatewayServer(
       preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
     }));
   } else {
-    setActivePluginRegistry(emptyPluginRegistry);
+    pluginRegistry = getActivePluginRegistry() ?? emptyPluginRegistry;
+    setActivePluginRegistry(pluginRegistry);
   }
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
@@ -637,7 +654,8 @@ export async function startGatewayServer(
   } = runtimeConfig;
   const getResolvedAuth = () =>
     resolveGatewayAuth({
-      authConfig: getRuntimeConfig().gateway?.auth,
+      authConfig:
+        getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth ?? getRuntimeConfig().gateway?.auth,
       authOverride: opts.auth,
       env: process.env,
       tailscaleMode,
@@ -1513,6 +1531,7 @@ export async function startGatewayServer(
     cron,
     heartbeatRunner,
     updateCheckStop: stopGatewayUpdateCheck,
+    stopTaskRegistryMaintenance,
     nodePresenceTimers,
     broadcast,
     tickInterval,
