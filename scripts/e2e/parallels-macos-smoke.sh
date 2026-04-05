@@ -113,7 +113,8 @@ Options:
                              Default: "macOS 26.3.1 latest"
   --mode <fresh|upgrade|both>
                              fresh   = fresh snapshot -> target package/current main tgz -> onboard smoke
-                             upgrade = fresh snapshot -> latest release -> target package/current main tgz -> onboard smoke
+                             upgrade = fresh snapshot -> pinned latest stable -> dev channel update -> onboard smoke
+                                       (or latest stable -> target package tgz when --target-package-spec is set)
                              both    = run both lanes
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
@@ -266,6 +267,22 @@ fi
 
 discord_smoke_enabled() {
   [[ -n "$DISCORD_TOKEN_VALUE" && -n "$DISCORD_GUILD_ID" && -n "$DISCORD_CHANNEL_ID" ]]
+}
+
+upgrade_uses_host_tgz() {
+  [[ -n "$TARGET_PACKAGE_SPEC" ]]
+}
+
+needs_host_tgz() {
+  [[ "$MODE" == "fresh" || "$MODE" == "both" ]] || upgrade_uses_host_tgz
+}
+
+upgrade_summary_label() {
+  if upgrade_uses_host_tgz; then
+    printf 'latest->target-package'
+    return
+  fi
+  printf 'latest->dev'
 }
 
 discord_api_request() {
@@ -530,10 +547,18 @@ snapshot_switch_with_retry() {
   return "$rc"
 }
 
-guest_current_user_exec() {
+GUEST_EXEC_PATH="/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+guest_current_user_exec_path() {
+  local path_value="$1"
+  shift
   prlctl exec "$VM_NAME" --current-user /usr/bin/env \
-    PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin \
+    "PATH=$path_value" \
     "$@"
+}
+
+guest_current_user_exec() {
+  guest_current_user_exec_path "$GUEST_EXEC_PATH" "$@"
 }
 
 guest_current_user_cli() {
@@ -625,12 +650,10 @@ resolve_latest_version() {
 }
 
 install_latest_release() {
-  local install_url_q version_arg_q
+  local install_url_q version_arg_q version_to_install
   install_url_q="$(shell_quote "$INSTALL_URL")"
-  version_arg_q=""
-  if [[ -n "$INSTALL_VERSION" ]]; then
-    version_arg_q=" --version $(shell_quote "$INSTALL_VERSION")"
-  fi
+  version_to_install="${INSTALL_VERSION:-$LATEST_VERSION}"
+  version_arg_q=" --version $(shell_quote "$version_to_install")"
   guest_current_user_sh "$(cat <<EOF
 export OPENCLAW_NO_ONBOARD=1
 curl -fsSL $install_url_q -o /tmp/openclaw-install.sh
@@ -638,6 +661,47 @@ bash /tmp/openclaw-install.sh${version_arg_q}
 $GUEST_OPENCLAW_BIN --version
 EOF
 )"
+}
+
+ensure_guest_pnpm_for_dev_update() {
+  local bootstrap_root bootstrap_bin
+  bootstrap_root="/tmp/openclaw-smoke-pnpm-bootstrap"
+  bootstrap_bin="$bootstrap_root/node_modules/.bin"
+  if guest_current_user_exec /bin/test -x "$bootstrap_bin/pnpm"; then
+    printf 'bootstrap-pnpm: reuse\n'
+    return
+  fi
+  printf 'bootstrap-pnpm: check npm\n'
+  guest_current_user_exec /bin/test -x /opt/homebrew/bin/npm
+  printf 'bootstrap-pnpm: install\n'
+  guest_current_user_exec /bin/rm -rf "$bootstrap_root"
+  guest_current_user_exec /bin/mkdir -p "$bootstrap_root"
+  guest_current_user_exec /opt/homebrew/bin/node /opt/homebrew/bin/npm install \
+    --prefix "$bootstrap_root" \
+    --no-save \
+    pnpm@10
+  printf 'bootstrap-pnpm: verify\n'
+  guest_current_user_exec "$bootstrap_bin/pnpm" --version
+}
+
+run_dev_channel_update() {
+  local bootstrap_bin
+  bootstrap_bin="/tmp/openclaw-smoke-pnpm-bootstrap/node_modules/.bin"
+  ensure_guest_pnpm_for_dev_update
+  printf 'update-dev: run\n'
+  guest_current_user_exec_path "$bootstrap_bin:$GUEST_EXEC_PATH" \
+    "$GUEST_OPENCLAW_BIN" update --channel dev --yes --json
+  guest_current_user_exec "$GUEST_OPENCLAW_BIN" --version
+  guest_current_user_exec "$GUEST_OPENCLAW_BIN" update status --json
+}
+
+verify_dev_channel_update() {
+  local status_json
+  status_json="$(guest_current_user_exec "$GUEST_OPENCLAW_BIN" update status --json)"
+  printf '%s\n' "$status_json"
+  printf '%s\n' "$status_json" | grep -F '"installKind": "git"'
+  printf '%s\n' "$status_json" | grep -F '"value": "dev"'
+  printf '%s\n' "$status_json" | grep -F '"branch": "main"'
 }
 
 verify_version_contains() {
@@ -1192,9 +1256,11 @@ summary = {
         "discord": os.environ["SUMMARY_FRESH_DISCORD_STATUS"],
     },
     "upgrade": {
+        "path": os.environ["SUMMARY_UPGRADE_PATH_LABEL"],
         "precheck": os.environ["SUMMARY_UPGRADE_PRECHECK_STATUS"],
         "status": os.environ["SUMMARY_UPGRADE_STATUS"],
         "latestVersionInstalled": os.environ["SUMMARY_LATEST_INSTALLED_VERSION"],
+        "devVersion": os.environ["SUMMARY_UPGRADE_MAIN_VERSION"],
         "mainVersion": os.environ["SUMMARY_UPGRADE_MAIN_VERSION"],
         "gateway": os.environ["SUMMARY_UPGRADE_GATEWAY_STATUS"],
         "agent": os.environ["SUMMARY_UPGRADE_AGENT_STATUS"],
@@ -1263,10 +1329,16 @@ run_upgrade_lane() {
   else
     UPGRADE_PRECHECK_STATUS="skipped"
   fi
-  phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz"
-  UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
-  phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
-  phase_run "upgrade.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
+  if upgrade_uses_host_tgz; then
+    phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz"
+    UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
+    phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
+    phase_run "upgrade.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
+  else
+    phase_run "upgrade.update-dev" "$TIMEOUT_INSTALL_S" run_dev_channel_update
+    UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.update-dev)")"
+    phase_run "upgrade.verify-dev-channel" "$TIMEOUT_VERIFY_S" verify_dev_channel_update
+  fi
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
   phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway
   UPGRADE_GATEWAY_STATUS="pass"
@@ -1290,6 +1362,9 @@ IFS=$'\t' read -r SNAPSHOT_ID SNAPSHOT_STATE SNAPSHOT_NAME <<<"$(resolve_snapsho
 [[ -n "$SNAPSHOT_ID" ]] || die "failed to resolve snapshot id"
 [[ -n "$SNAPSHOT_NAME" ]] || SNAPSHOT_NAME="$SNAPSHOT_HINT"
 LATEST_VERSION="$(resolve_latest_version)"
+if [[ -z "$INSTALL_VERSION" ]]; then
+  INSTALL_VERSION="$LATEST_VERSION"
+fi
 HOST_IP="$(resolve_host_ip)"
 HOST_PORT="$(resolve_host_port)"
 
@@ -1305,8 +1380,10 @@ else
 fi
 say "Run logs: $RUN_DIR"
 
-pack_main_tgz
-start_server "$HOST_IP"
+if needs_host_tgz; then
+  pack_main_tgz
+  start_server "$HOST_IP"
+fi
 
 if [[ "$MODE" == "fresh" || "$MODE" == "both" ]]; then
   set +e
@@ -1362,6 +1439,7 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_UPGRADE_AGENT_STATUS="$UPGRADE_AGENT_STATUS" \
   SUMMARY_UPGRADE_DASHBOARD_STATUS="$UPGRADE_DASHBOARD_STATUS" \
   SUMMARY_UPGRADE_DISCORD_STATUS="$UPGRADE_DISCORD_STATUS" \
+  SUMMARY_UPGRADE_PATH_LABEL="$(upgrade_summary_label)" \
   write_summary_json
 )"
 
@@ -1376,8 +1454,8 @@ else
     printf '  baseline-install-version: %s\n' "$INSTALL_VERSION"
   fi
   printf '  fresh-main: %s (%s) discord=%s\n' "$FRESH_MAIN_STATUS" "$FRESH_MAIN_VERSION" "$FRESH_DISCORD_STATUS"
-  printf '  latest->main precheck: %s (%s)\n' "$UPGRADE_PRECHECK_STATUS" "$LATEST_INSTALLED_VERSION"
-  printf '  latest->main: %s (%s) discord=%s\n' "$UPGRADE_STATUS" "$UPGRADE_MAIN_VERSION" "$UPGRADE_DISCORD_STATUS"
+  printf '  latest precheck: %s (%s)\n' "$UPGRADE_PRECHECK_STATUS" "$LATEST_INSTALLED_VERSION"
+  printf '  %s: %s (%s) discord=%s\n' "$(upgrade_summary_label)" "$UPGRADE_STATUS" "$UPGRADE_MAIN_VERSION" "$UPGRADE_DISCORD_STATUS"
   printf '  logs: %s\n' "$RUN_DIR"
   printf '  summary: %s\n' "$SUMMARY_JSON_PATH"
 fi
