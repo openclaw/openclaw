@@ -245,12 +245,15 @@ describe("test scripts", () => {
     };
 
     expect(pkg.scripts?.["test:serial"]).toBe(
-      "OPENCLAW_VITEST_MAX_WORKERS=1 vitest run --config vitest.config.ts",
+      "OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config vitest.config.ts",
     );
     expect(pkg.scripts?.["test:fast"]).toBe(
       "node scripts/run-vitest.mjs run --config vitest.unit.config.ts",
     );
-    expect(pkg.scripts?.["test:gateway"]).toBe("vitest run --config vitest.gateway.config.ts");
+    expect(pkg.scripts?.["test"]).toBe("node scripts/run-vitest.mjs run --config vitest.config.ts");
+    expect(pkg.scripts?.["test:gateway"]).toBe(
+      "node scripts/run-vitest.mjs run --config vitest.gateway.config.ts",
+    );
     expect(pkg.scripts?.["test:single"]).toBeUndefined();
   });
 });
