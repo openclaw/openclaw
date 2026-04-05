@@ -1,6 +1,7 @@
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
+  extractAssistantVisibleText,
   stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
   stripModelSpecialTokens,
@@ -41,16 +42,29 @@ export function extractAssistantText(message: unknown): string | undefined {
   if (!Array.isArray(content)) {
     return undefined;
   }
-  const joined =
-    extractTextFromChatContent(content, {
-      sanitizeText: sanitizeTextContent,
-      joinWith: "",
-      normalizeText: (text) => text.trim(),
-    }) ?? "";
+  const hasPhaseMetadata = content.some(
+    (block) =>
+      block && typeof block === "object" && typeof (block as { textSignature?: unknown }).textSignature === "string",
+  );
+  const joined = hasPhaseMetadata
+    ? (extractAssistantVisibleText(message as Parameters<typeof extractAssistantVisibleText>[0]) ?? "")
+    : (
+        extractTextFromChatContent(content, {
+          sanitizeText: sanitizeTextContent,
+          joinWith: "",
+          normalizeText: (text) => text.trim(),
+        }) ?? ""
+      );
+  if (!joined.trim()) {
+    return undefined;
+  }
+  if (hasPhaseMetadata) {
+    return joined;
+  }
   const stopReason = (message as { stopReason?: unknown }).stopReason;
   // Gate on stopReason only — a non-error response with a stale/background errorMessage
   // should not have its content rewritten with error templates (#13935).
   const errorContext = stopReason === "error";
 
-  return joined ? sanitizeUserFacingText(joined, { errorContext }) : undefined;
+  return sanitizeUserFacingText(joined, { errorContext });
 }
