@@ -962,6 +962,40 @@ jobs:
 
           exit "$failures"
 
+  dependency-circular-report:
+    name: "dependency-circular-report"
+    needs: [preflight]
+    if: always() && needs.preflight.outputs.run_check == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Generate circular dependency report
+        run: pnpm deps:circular:report
+
+      - name: Publish circular dependency summary
+        if: always()
+        run: cat .artifacts/dependency-cruiser/step-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload circular dependency artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-circular-report
+          path: .artifacts/dependency-cruiser/
+          retention-days: 7
+
   build-smoke:
     name: "build-smoke"
     needs: [preflight, build-artifacts]

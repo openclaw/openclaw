@@ -1120,6 +1120,7 @@
     "deadcode:ts-unused": "pnpm dlx ts-unused-exports tsconfig.json --ignoreTestFiles --exitWithCount",
     "deps:circular": "depcruise --config .dependency-cruiser.mjs --output-type err-long --progress none src extensions scripts",
     "deps:circular:json": "depcruise --config .dependency-cruiser.mjs --output-type json --progress none src extensions scripts",
+    "deps:circular:report": "node scripts/depcruise-circular-report.mjs",
     "dev": "node scripts/run-node.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
