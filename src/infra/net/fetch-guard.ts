@@ -249,10 +249,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         ...(signal ? { signal } : {}),
       };
 
-      const fetcher =
-        dispatcher && !params.fetchImpl
-          ? (loadUndiciRuntimeDeps().fetch as unknown as FetchLike)
-          : defaultFetch;
+      // Keep the caller-provided/global fetch implementation on the hot path so
+      // tests can stub network behavior while still receiving the pinned
+      // dispatcher in RequestInit.
+      const fetcher = defaultFetch;
       const response = await fetcher(parsedUrl.toString(), init);
 
       if (isRedirectStatus(response.status)) {
