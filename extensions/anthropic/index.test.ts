@@ -26,8 +26,6 @@ describe("anthropic provider replay hooks", () => {
       } as never),
     ).toEqual({
       sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,

@@ -68,8 +68,6 @@ describe("anthropic-vertex provider plugin", () => {
       } as never),
     ).toEqual({
       sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
