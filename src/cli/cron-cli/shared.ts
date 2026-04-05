@@ -138,16 +138,17 @@ const CRON_TARGET_PAD = 9;
 const CRON_AGENT_PAD = 10;
 const CRON_MODEL_PAD = 20;
 
-const pad = (value: string, width: number) => value.padEnd(width);
+const pad = (value: string | undefined | null, width: number) => (value ?? "").padEnd(width);
 
-const truncate = (value: string, width: number) => {
-  if (value.length <= width) {
-    return value;
+const truncate = (value: string | undefined | null, width: number) => {
+  const str = value ?? "";
+  if (str.length <= width) {
+    return str;
   }
   if (width <= 3) {
-    return value.slice(0, width);
+    return str.slice(0, width);
   }
-  return `${value.slice(0, width - 3)}...`;
+  return `${str.slice(0, width - 3)}...`;
 };
 
 const formatIsoMinute = (iso: string) => {

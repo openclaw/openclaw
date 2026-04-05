@@ -61,6 +61,23 @@ describe("printCronList", () => {
     expect(logs.some((line) => line.includes("test-job-id"))).toBe(true);
   });
 
+  it("handles job with undefined fields without crashing on padEnd (#57872)", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+
+    // Simulate a job with undefined name (as reported in #57872)
+    // The error was: "Cannot read properties of undefined (reading 'padEnd')"
+    // which happens when pad() is called with undefined
+    const jobWithUndefinedName = createBaseJob({
+      id: "test-job-undefined-name",
+      name: undefined as unknown as string,
+      agentId: undefined,
+    });
+
+    // This should not throw "Cannot read properties of undefined (reading 'padEnd')"
+    expect(() => printCronList([jobWithUndefinedName], runtime)).not.toThrow();
+    expect(logs.length).toBeGreaterThan(1);
+  });
+
   it("handles job with defined sessionTarget", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const jobWithTarget = createBaseJob({
