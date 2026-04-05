@@ -2714,6 +2714,7 @@ describe("matrix monitor handler draft streaming", () => {
     await deliver({ text: "123456" }, { kind: "final" });
 
     expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     await finish();
