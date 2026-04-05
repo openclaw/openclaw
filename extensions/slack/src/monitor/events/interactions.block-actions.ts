@@ -621,6 +621,7 @@ function enqueueSlackBlockActionEvent(params: {
     channelId: params.parsed.channelId,
     channelType: params.auth.channelType,
     senderId: params.parsed.userId,
+    threadTs: params.parsed.threadTs,
   });
   const contextParts = [
     "slack:interaction",
@@ -631,6 +632,10 @@ function enqueueSlackBlockActionEvent(params: {
   enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
     sessionKey,
     contextKey: contextParts.join(":"),
+    wake: {
+      reason: "hook:slack-interaction",
+      coalesceMs: 0,
+    },
   });
 }
 

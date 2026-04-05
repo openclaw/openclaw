@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
+import * as heartbeatWake from "./heartbeat-wake.js";
 import {
   drainSystemEventEntries,
   enqueueSystemEvent,
@@ -74,6 +75,39 @@ describe("system events (session routing)", () => {
 
     expect(first).toBe(true);
     expect(second).toBe(false);
+  });
+
+  it("requests a heartbeat wake when enqueue succeeds with wake enabled", () => {
+    const requestHeartbeatNowSpy = vi.spyOn(heartbeatWake, "requestHeartbeatNow");
+
+    const enqueued = enqueueSystemEvent("Slack interaction: clicked", {
+      sessionKey: "agent:main:slack:channel:c1:thread:100.100",
+      wake: {
+        reason: "hook:slack-interaction",
+        coalesceMs: 0,
+      },
+    });
+
+    expect(enqueued).toBe(true);
+    expect(requestHeartbeatNowSpy).toHaveBeenCalledWith({
+      reason: "hook:slack-interaction",
+      sessionKey: "agent:main:slack:channel:c1:thread:100.100",
+      coalesceMs: 0,
+    });
+    requestHeartbeatNowSpy.mockRestore();
+  });
+
+  it("does not request a heartbeat wake when enqueue is skipped as a duplicate", () => {
+    const requestHeartbeatNowSpy = vi.spyOn(heartbeatWake, "requestHeartbeatNow");
+    const options = {
+      sessionKey: "agent:main:slack:channel:c1",
+      wake: { reason: "hook:slack-interaction", coalesceMs: 0 },
+    };
+
+    expect(enqueueSystemEvent("Slack interaction: clicked", options)).toBe(true);
+    expect(enqueueSystemEvent("Slack interaction: clicked", options)).toBe(false);
+    expect(requestHeartbeatNowSpy).toHaveBeenCalledTimes(1);
+    requestHeartbeatNowSpy.mockRestore();
   });
 
   it("normalizes context keys when checking for context changes", () => {

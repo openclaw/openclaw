@@ -9,6 +9,7 @@ import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/core";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -68,6 +69,7 @@ export type SlackMonitorContext = {
     channelId?: string | null;
     channelType?: string | null;
     senderId?: string | null;
+    threadTs?: string | null;
   }) => string;
   isChannelAllowed: (params: {
     channelId?: string;
@@ -158,6 +160,7 @@ export function createSlackMonitorContext(params: {
     channelId?: string | null;
     channelType?: string | null;
     senderId?: string | null;
+    threadTs?: string | null;
   }) => {
     const channelId = p.channelId?.trim() ?? "";
     if (!channelId) {
@@ -187,17 +190,27 @@ export function createSlackMonitorContext(params: {
           teamId: params.teamId,
           peer: { kind: peerKind, id: peerId },
         });
-        return route.sessionKey;
+        const threadKeys = resolveThreadSessionKeys({
+          baseSessionKey: route.sessionKey,
+          threadId: p.threadTs,
+          parentSessionKey: p.threadTs && params.threadInheritParent ? route.sessionKey : undefined,
+        });
+        return threadKeys.sessionKey;
       }
     } catch {
       // Fall through to legacy key derivation.
     }
 
-    return resolveSessionKey(
+    const baseSessionKey = resolveSessionKey(
       params.sessionScope,
       { From: from, ChatType: chatType, Provider: "slack" },
       params.mainKey,
     );
+    return resolveThreadSessionKeys({
+      baseSessionKey,
+      threadId: p.threadTs,
+      parentSessionKey: p.threadTs && params.threadInheritParent ? baseSessionKey : undefined,
+    }).sessionKey;
   };
 
   const resolveChannelName = async (channelId: string) => {
