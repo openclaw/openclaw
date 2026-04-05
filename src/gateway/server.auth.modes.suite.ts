@@ -25,6 +25,10 @@ export function registerAuthModesSuite(): void {
       server = await startGatewayServer(port);
     });
 
+    beforeEach(() => {
+      testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret
+    });
+
     afterAll(async () => {
       await server.close();
     });
@@ -53,8 +57,14 @@ export function registerAuthModesSuite(): void {
     beforeAll(async () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      testState.gatewayAuth = { mode: "token", token: "secret" };
       port = await getFreePort();
       server = await startGatewayServer(port);
+    });
+
+    beforeEach(() => {
+      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      testState.gatewayAuth = { mode: "token", token: "secret" };
     });
 
     afterAll(async () => {
@@ -114,6 +124,11 @@ export function registerAuthModesSuite(): void {
       server = await startGatewayServer(port);
     });
 
+    beforeEach(() => {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      testState.gatewayAuth = { mode: "none" };
+    });
+
     afterAll(async () => {
       await server.close();
       restoreGatewayToken(prevToken);
@@ -142,6 +157,7 @@ export function registerAuthModesSuite(): void {
     });
 
     beforeEach(() => {
+      testState.gatewayAuth = { mode: "token", token: "secret", allowTailscale: true };
       testTailscaleWhois.value = { login: "peter", name: "Peter" };
     });
 
