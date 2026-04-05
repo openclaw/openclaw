@@ -13,7 +13,6 @@ import {
   ensureApiKeyFromOptionEnvOrPrompt,
   listProfilesForProvider,
   normalizeApiKeyInput,
-  readClaudeCliCredentialsCached,
   type OpenClawConfig as ProviderAuthConfig,
   suggestOAuthProfileIdForLegacyDefault,
   type AuthProfileStore,
@@ -24,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
+import { readClaudeCliCredentialsForRuntime } from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-shared.js";
@@ -285,7 +285,7 @@ function buildAnthropicAuthDoctorHint(params: {
 }
 
 function resolveClaudeCliSyntheticAuth() {
-  const credential = readClaudeCliCredentialsCached({ allowKeychainPrompt: false });
+  const credential = readClaudeCliCredentialsForRuntime();
   if (!credential) {
     return undefined;
   }
