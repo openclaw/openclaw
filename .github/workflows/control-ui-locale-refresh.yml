@@ -1,6 +1,15 @@
 name: Control UI Locale Refresh
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ui/src/i18n/locales/en.ts
+      - ui/src/i18n/lib/types.ts
+      - scripts/control-ui-i18n.ts
+      - package.json
+      - .github/workflows/control-ui-locale-refresh.yml
   release:
     types:
       - published
