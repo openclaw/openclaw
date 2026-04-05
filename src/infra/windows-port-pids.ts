@@ -3,6 +3,10 @@ import { parseCmdScriptCommandLine } from "../daemon/cmd-argv.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
+export type WindowsListeningPidsResult =
+  | { ok: true; pids: number[] }
+  | { ok: false; permanent: boolean };
+
 // ---------------------------------------------------------------------------
 // Windows listening-PID discovery (PowerShell → netstat fallback)
 // ---------------------------------------------------------------------------
@@ -30,17 +34,9 @@ function readListeningPidsViaPowerShell(port: number, timeoutMs: number): number
     .filter((pid) => Number.isFinite(pid) && pid > 0);
 }
 
-function readListeningPidsViaNetstat(port: number, timeoutMs: number): number[] {
-  const netstat = spawnSync("netstat", ["-ano", "-p", "tcp"], {
-    encoding: "utf8",
-    timeout: timeoutMs,
-    windowsHide: true,
-  });
-  if (netstat.error || netstat.status !== 0) {
-    return [];
-  }
+function parseListeningPidsFromNetstat(stdout: string, port: number): number[] {
   const pids = new Set<number>();
-  for (const line of netstat.stdout.split(/\r?\n/)) {
+  for (const line of stdout.split(/\r?\n/)) {
     const match = line.match(/^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
     if (!match) {
       continue;
@@ -58,7 +54,31 @@ export function readWindowsListeningPidsOnPortSync(
   port: number,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): number[] {
-  return readListeningPidsViaPowerShell(port, timeoutMs) ?? readListeningPidsViaNetstat(port, timeoutMs);
+  const result = readWindowsListeningPidsResultSync(port, timeoutMs);
+  return result.ok ? result.pids : [];
+}
+
+export function readWindowsListeningPidsResultSync(
+  port: number,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): WindowsListeningPidsResult {
+  const powershellPids = readListeningPidsViaPowerShell(port, timeoutMs);
+  if (powershellPids != null) {
+    return { ok: true, pids: powershellPids };
+  }
+  const netstat = spawnSync("netstat", ["-ano", "-p", "tcp"], {
+    encoding: "utf8",
+    timeout: timeoutMs,
+    windowsHide: true,
+  });
+  if (netstat.error) {
+    const code = (netstat.error as NodeJS.ErrnoException).code;
+    return { ok: false, permanent: code === "ENOENT" || code === "EACCES" || code === "EPERM" };
+  }
+  if (netstat.status !== 0) {
+    return { ok: false, permanent: false };
+  }
+  return { ok: true, pids: parseListeningPidsFromNetstat(netstat.stdout, port) };
 }
 
 // ---------------------------------------------------------------------------

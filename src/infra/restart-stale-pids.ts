@@ -6,6 +6,7 @@ import { isGatewayArgv } from "./gateway-process-argv.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 import {
   readWindowsListeningPidsOnPortSync,
+  readWindowsListeningPidsResultSync,
   readWindowsProcessArgsSync,
 } from "./windows-port-pids.js";
 
@@ -212,8 +213,11 @@ function pollPortOnce(port: number): PollResult {
  */
 function pollPortOnceWindows(port: number): PollResult {
   try {
-    const pids = readWindowsListeningPidsOnPortSync(port, POLL_SPAWN_TIMEOUT_MS);
-    return pids.length === 0 ? { free: true } : { free: false };
+    const result = readWindowsListeningPidsResultSync(port, POLL_SPAWN_TIMEOUT_MS);
+    if (!result.ok) {
+      return { free: null, permanent: result.permanent };
+    }
+    return result.pids.length === 0 ? { free: true } : { free: false };
   } catch {
     return { free: null, permanent: false };
   }
@@ -267,37 +271,44 @@ function terminateStaleProcessesWindows(pids: number[]): number[] {
   );
   const killed: number[] = [];
   for (const pid of pids) {
-    try {
-      // Graceful termination (sends WM_CLOSE to the process tree)
-      spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
-        stdio: "ignore",
-        timeout: 5000,
-        windowsHide: true,
-      });
+    const graceful = spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
+      stdio: "ignore",
+      timeout: 5000,
+      windowsHide: true,
+    });
+    const gracefulFailed = graceful.error != null || (graceful.status ?? 0) !== 0;
+    if (!gracefulFailed && !isProcessAlive(pid)) {
       killed.push(pid);
-    } catch {
-      // Process may already be gone
+      continue;
+    }
+    sleepSync(STALE_SIGTERM_WAIT_MS);
+    if (!isProcessAlive(pid)) {
+      killed.push(pid);
+      continue;
+    }
+    const forced = spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
+      stdio: "ignore",
+      timeout: 5000,
+      windowsHide: true,
+    });
+    if (forced.error != null || (forced.status ?? 0) !== 0) {
+      continue;
+    }
+    sleepSync(STALE_SIGKILL_WAIT_MS);
+    if (!isProcessAlive(pid)) {
+      killed.push(pid);
     }
   }
-  if (killed.length === 0) {
-    return killed;
-  }
-  sleepSync(STALE_SIGTERM_WAIT_MS);
-  // Force-kill survivors
-  for (const pid of killed) {
-    try {
-      process.kill(pid, 0); // Check if still alive
-      spawnSync(taskkillPath, ["/F", "/T", "/PID", String(pid)], {
-        stdio: "ignore",
-        timeout: 5000,
-        windowsHide: true,
-      });
-    } catch {
-      // Already gone
-    }
-  }
-  sleepSync(STALE_SIGKILL_WAIT_MS);
   return killed;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
