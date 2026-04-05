@@ -193,13 +193,17 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
     expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
   });
 
-  it("returns true for default template content (header + comment)", () => {
-    const defaultTemplate = `# HEARTBEAT.md
-
-Keep this file empty unless you want a tiny checklist. Keep it small.
-`;
-    // Note: The template has actual text content, so it's NOT effectively empty
-    expect(isHeartbeatContentEffectivelyEmpty(defaultTemplate)).toBe(false);
+  it("returns true for the shipped markdown-fenced scaffold template", () => {
+    const scaffoldTemplate = [
+      "# HEARTBEAT.md Template",
+      "",
+      "```markdown",
+      "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
+      "",
+      "# Add tasks below when you want the agent to check something periodically.",
+      "```",
+    ].join("\n");
+    expect(isHeartbeatContentEffectivelyEmpty(scaffoldTemplate)).toBe(true);
   });
 
   it("returns true for header with only empty lines", () => {
@@ -218,6 +222,28 @@ Keep this file empty unless you want a tiny checklist. Keep it small.
 - Task 1
 - Task 2
 `;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
+  });
+
+  it("returns false for actionable content inside a markdown fence", () => {
+    const content = [
+      "# HEARTBEAT.md Template",
+      "",
+      "```markdown",
+      "- Check server logs",
+      "- Review pending PRs",
+      "```",
+    ].join("\n");
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
+  });
+
+  it("returns false for unclosed markdown fences", () => {
+    const content = [
+      "# HEARTBEAT.md Template",
+      "",
+      "```markdown",
+      "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
+    ].join("\n");
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
   });
 
