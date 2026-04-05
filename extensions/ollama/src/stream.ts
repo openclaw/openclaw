@@ -602,7 +602,7 @@ export function createOllamaStreamFn(
     const stream = createAssistantMessageEventStream();
 
     const run = async () => {
-      let release: (() => void) | undefined;
+      let release: (() => Promise<void>) | undefined;
       try {
         const ollamaMessages = convertToOllamaMessages(
           context.messages ?? [],
@@ -753,7 +753,7 @@ export function createOllamaStreamFn(
           }),
         });
       } finally {
-        release?.();
+        await release?.();
         stream.end();
       }
     };
