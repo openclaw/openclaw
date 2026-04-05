@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearSessionStoreCacheForTest,
+  resolveStorePath,
+  saveSessionStore,
+} from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { completeTaskRunByRunId, createRunningTaskRun } from "../tasks/task-executor.js";
 import {
@@ -30,12 +35,14 @@ function createRuntime(): RuntimeEnv {
 async function withTaskCommandStateDir(run: () => Promise<void>): Promise<void> {
   await withTempDir({ prefix: "openclaw-tasks-command-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
+    clearSessionStoreCacheForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests();
     try {
       await run();
     } finally {
+      clearSessionStoreCacheForTest();
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests();
       resetTaskFlowRegistryForTests();
@@ -55,6 +62,7 @@ describe("tasks commands", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
+    clearSessionStoreCacheForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests();
@@ -158,6 +166,15 @@ describe("tasks commands", () => {
         childSessionKey: "agent:main:child-1",
         parentFlowId: flow.flowId,
       });
+      const storePath = resolveStorePath(undefined, { agentId: "main" });
+      await saveSessionStore(storePath, {
+        "agent:main:child-1": {
+          sessionId: "session-child-1",
+          updatedAt: Date.now(),
+          status: "running",
+        },
+      });
+      clearSessionStoreCacheForTest();
 
       const runtime = createRuntime();
       await tasksListCommand({ json: true }, runtime);
@@ -251,10 +268,61 @@ describe("tasks commands", () => {
       expect(payload).toMatchObject({
         taskId: task.taskId,
         statusReason: {
-          code: "running",
-          summary: "Task is running.",
+          code: "missing_backing_session",
+          summary: "Backing session is missing; task may be orphaned.",
           backing: expect.arrayContaining([
             { kind: "session", relation: "child_session", id: "agent:main:child-3" },
+          ]),
+        },
+      });
+    });
+  });
+
+  it("surfaces blocked backing-session state in task detail JSON before registry reconciliation", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createRunningTaskRun({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-show-json-backed-failed",
+        task: "Inspect child session failure",
+        childSessionKey: "agent:main:subagent:child-failed-json",
+      });
+      const storePath = resolveStorePath(undefined, { agentId: "main" });
+      await saveSessionStore(storePath, {
+        "agent:main:subagent:child-failed-json": {
+          sessionId: "session-child-failed-json",
+          updatedAt: Date.now(),
+          status: "failed",
+        },
+      });
+      clearSessionStoreCacheForTest();
+
+      const runtime = createRuntime();
+      await tasksShowCommand({ json: true, lookup: task.taskId }, runtime);
+
+      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+        taskId: string;
+        statusReason?: {
+          code: string;
+          summary: string;
+          evidence?: Array<{ kind: string; data?: Record<string, string> }>;
+        };
+      };
+
+      expect(payload).toMatchObject({
+        taskId: task.taskId,
+        statusReason: {
+          code: "blocked_on_backing_session_state",
+          summary: "Backing session failed; task has not reconciled yet.",
+          evidence: expect.arrayContaining([
+            expect.objectContaining({
+              kind: "session_state",
+              data: {
+                state: "failed",
+                source: "session_status",
+              },
+            }),
           ]),
         },
       });

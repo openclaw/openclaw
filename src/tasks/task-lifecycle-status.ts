@@ -1,4 +1,7 @@
+import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/errors.js";
+import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { JsonValue, TaskFlowRecord } from "./task-flow-registry.types.js";
 import type { TaskRecord } from "./task-registry.types.js";
@@ -12,7 +15,8 @@ export type LifecycleStatusEvidenceKind =
   | "error"
   | "blocked_summary"
   | "current_step"
-  | "wait";
+  | "wait"
+  | "session_state";
 
 export type LifecycleStatusEvidence = {
   kind: LifecycleStatusEvidenceKind;
@@ -209,11 +213,152 @@ function resolveWaitTaskId(waitJson: JsonValue | undefined): string | undefined 
   return typeof waitJson.taskId === "string" ? normalizeId(waitJson.taskId) : undefined;
 }
 
+type BackingSessionState =
+  | "running"
+  | "done"
+  | "failed"
+  | "killed"
+  | "timeout"
+  | "idle"
+  | "error"
+  | "missing";
+
+type BackingSessionSnapshot = {
+  state: BackingSessionState;
+  source: "session_status" | "acp_state" | "missing";
+  summary: string;
+  recordedAt?: number;
+};
+
+function findSessionEntryByKey(
+  store: Record<string, SessionEntry>,
+  sessionKey: string,
+): SessionEntry | undefined {
+  const direct = store[sessionKey];
+  if (direct) {
+    return direct;
+  }
+  const normalized = sessionKey.toLowerCase();
+  for (const [key, entry] of Object.entries(store)) {
+    if (key.toLowerCase() === normalized) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function summarizeBackingSessionState(state: Exclude<BackingSessionState, "missing">): string {
+  switch (state) {
+    case "running":
+      return "Backing session is running.";
+    case "done":
+      return "Backing session finished; task has not reconciled yet.";
+    case "failed":
+      return "Backing session failed; task has not reconciled yet.";
+    case "killed":
+      return "Backing session was killed; task has not reconciled yet.";
+    case "timeout":
+      return "Backing session timed out; task has not reconciled yet.";
+    case "idle":
+      return "Backing session is idle; task is waiting for the next session turn.";
+    case "error":
+      return "Backing session hit an error; task has not reconciled yet.";
+  }
+}
+
+function mapPersistedSessionStatus(
+  status: SessionEntry["status"],
+  recordedAt?: number,
+): BackingSessionSnapshot | undefined {
+  if (!status) {
+    return undefined;
+  }
+  return {
+    state: status,
+    source: "session_status",
+    summary: summarizeBackingSessionState(status),
+    recordedAt,
+  };
+}
+
+function loadPersistedBackingSessionSnapshot(
+  sessionKey: string,
+): BackingSessionSnapshot | undefined {
+  const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+  const storePath = resolveStorePath(undefined, { agentId });
+  const store = loadSessionStore(storePath);
+  const entry = findSessionEntryByKey(store, sessionKey);
+  if (!entry) {
+    return {
+      state: "missing",
+      source: "missing",
+      summary: "Backing session is missing; task may be orphaned.",
+    };
+  }
+  return mapPersistedSessionStatus(entry.status, entry.updatedAt);
+}
+
+function resolveTaskBackingSessionSnapshot(
+  task: Pick<TaskRecord, "runtime" | "childSessionKey" | "status"> & {
+    runtime?: TaskRecord["runtime"];
+  },
+): BackingSessionSnapshot | undefined {
+  const childSessionKey = normalizeId(task.childSessionKey);
+  if (!childSessionKey || task.status !== "running") {
+    return undefined;
+  }
+
+  if (task.runtime === "acp") {
+    const acpEntry = readAcpSessionEntry({ sessionKey: childSessionKey });
+    if (!acpEntry || acpEntry.storeReadFailed) {
+      return undefined;
+    }
+    if (!acpEntry.entry) {
+      return {
+        state: "missing",
+        source: "missing",
+        summary: "Backing session is missing; task may be orphaned.",
+      };
+    }
+    const acpState = acpEntry.acp?.state;
+    if (acpState === "running" || acpState === "idle" || acpState === "error") {
+      return {
+        state: acpState,
+        source: "acp_state",
+        summary: summarizeBackingSessionState(acpState),
+        recordedAt: acpEntry.acp?.lastActivityAt ?? acpEntry.entry.updatedAt,
+      };
+    }
+    return mapPersistedSessionStatus(acpEntry.entry.status, acpEntry.entry.updatedAt);
+  }
+
+  try {
+    return loadPersistedBackingSessionSnapshot(childSessionKey);
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveTaskReasonCode(
-  task: Pick<TaskRecord, "status" | "terminalOutcome" | "error">,
+  task: Pick<TaskRecord, "status" | "terminalOutcome" | "error" | "progressSummary">,
+  backingSession?: BackingSessionSnapshot,
 ): string {
   if (task.status === "succeeded" && task.terminalOutcome === "blocked") {
     return "blocked";
+  }
+  if (task.status === "running") {
+    if (sanitizeLifecycleText(task.progressSummary)) {
+      return task.status;
+    }
+    if (backingSession?.state === "missing") {
+      return "missing_backing_session";
+    }
+    if (backingSession && backingSession.state !== "running") {
+      return "blocked_on_backing_session_state";
+    }
+    if (backingSession?.state === "running") {
+      return "waiting_on_backing_session";
+    }
   }
   if (task.status === "lost") {
     const error = task.error?.toLowerCase() ?? "";
@@ -222,13 +367,16 @@ function resolveTaskReasonCode(
   return task.status;
 }
 
-function resolveTaskReasonSummary(task: {
-  status: TaskRecord["status"];
-  terminalOutcome?: TaskRecord["terminalOutcome"];
-  progressSummary?: string;
-  terminalSummary?: string;
-  error?: string;
-}): string {
+function resolveTaskReasonSummary(
+  task: {
+    status: TaskRecord["status"];
+    terminalOutcome?: TaskRecord["terminalOutcome"];
+    progressSummary?: string;
+    terminalSummary?: string;
+    error?: string;
+  },
+  backingSession?: BackingSessionSnapshot,
+): string {
   const progress = sanitizeLifecycleText(task.progressSummary);
   const terminal = sanitizeLifecycleText(task.terminalSummary, { errorContext: true });
   const error = sanitizeLifecycleText(task.error, { errorContext: true });
@@ -236,7 +384,16 @@ function resolveTaskReasonSummary(task: {
     case "queued":
       return progress || "Queued for execution.";
     case "running":
-      return progress || "Task is running.";
+      if (progress) {
+        return progress;
+      }
+      if (backingSession?.state === "missing") {
+        return backingSession.summary;
+      }
+      if (backingSession && backingSession.state !== "running") {
+        return backingSession.summary;
+      }
+      return backingSession?.summary || "Task is running.";
     case "succeeded":
       if (task.terminalOutcome === "blocked") {
         return terminal || progress || "Task needs operator follow-up.";
@@ -256,6 +413,7 @@ function resolveTaskReasonSummary(task: {
 export function resolveTaskLifecycleStatusReason(
   task: Pick<
     TaskRecord,
+    | "runtime"
     | "status"
     | "terminalOutcome"
     | "progressSummary"
@@ -267,11 +425,12 @@ export function resolveTaskLifecycleStatusReason(
     | "ownerKey"
     | "lastEventAt"
     | "endedAt"
-  >,
+  > & { runtime?: TaskRecord["runtime"] },
 ): LifecycleStatusReason {
   const evidence: LifecycleStatusEvidence[] = [];
   const backing: LifecycleBackingLink[] = [];
   const recordedAt = task.endedAt ?? task.lastEventAt;
+  const backingSession = resolveTaskBackingSessionSnapshot(task);
 
   pushEvidence(
     evidence,
@@ -301,6 +460,20 @@ export function resolveTaskLifecycleStatusReason(
       value: task.error,
       errorContext: true,
       recordedAt: task.endedAt ?? task.lastEventAt,
+    }),
+  );
+  pushEvidence(
+    evidence,
+    makeEvidence({
+      kind: "session_state",
+      value: backingSession?.summary,
+      data: backingSession
+        ? {
+            state: backingSession.state,
+            source: backingSession.source,
+          }
+        : undefined,
+      recordedAt: backingSession?.recordedAt,
     }),
   );
 
@@ -334,8 +507,8 @@ export function resolveTaskLifecycleStatusReason(
   );
 
   return buildReason({
-    code: resolveTaskReasonCode(task),
-    summary: resolveTaskReasonSummary(task),
+    code: resolveTaskReasonCode(task, backingSession),
+    summary: resolveTaskReasonSummary(task, backingSession),
     evidence,
     backing,
   });
