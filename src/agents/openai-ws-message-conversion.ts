@@ -349,10 +349,21 @@ export function convertMessagesToInputItems(
 
     if (m.role === "assistant") {
       const content = m.content;
-      let assistantPhase = normalizeAssistantPhase(m.phase);
+      const assistantMessagePhase = normalizeAssistantPhase(m.phase);
       if (Array.isArray(content)) {
         const textParts: string[] = [];
-        const pushAssistantText = () => {
+        let currentTextPhase: OpenAIResponsesAssistantPhase | undefined;
+        const hasExplicitBlockPhase = content.some((block) => {
+          if (!block || typeof block !== "object") {
+            return false;
+          }
+          const record = block as { type?: unknown; textSignature?: unknown };
+          return (
+            record.type === "text" &&
+            Boolean(parseAssistantTextSignature(record.textSignature)?.phase)
+          );
+        });
+        const pushAssistantText = (phase?: OpenAIResponsesAssistantPhase) => {
           if (textParts.length === 0) {
             return;
           }
@@ -360,7 +371,7 @@ export function convertMessagesToInputItems(
             type: "message",
             role: "assistant",
             content: textParts.join(""),
-            ...(assistantPhase ? { phase: assistantPhase } : {}),
+            ...(phase ? { phase } : {}),
           });
           textParts.length = 0;
         };
@@ -376,15 +387,18 @@ export function convertMessagesToInputItems(
         }>) {
           if (block.type === "text" && typeof block.text === "string") {
             const parsedSignature = parseAssistantTextSignature(block.textSignature);
-            if (!assistantPhase) {
-              assistantPhase = parsedSignature?.phase;
+            const blockPhase =
+              parsedSignature?.phase ?? (hasExplicitBlockPhase ? undefined : assistantMessagePhase);
+            if (textParts.length > 0 && blockPhase !== currentTextPhase) {
+              pushAssistantText(currentTextPhase);
             }
             textParts.push(block.text);
+            currentTextPhase = blockPhase;
             continue;
           }
 
           if (block.type === "thinking") {
-            pushAssistantText();
+            pushAssistantText(currentTextPhase);
             const reasoningItem = parseThinkingSignature(block.thinkingSignature);
             if (reasoningItem) {
               items.push(reasoningItem);
@@ -396,7 +410,7 @@ export function convertMessagesToInputItems(
             continue;
           }
 
-          pushAssistantText();
+          pushAssistantText(currentTextPhase);
           const replayId = decodeToolCallReplayId(block.id);
           const toolName = toNonEmptyString(block.name);
           if (!replayId || !toolName) {
@@ -414,7 +428,7 @@ export function convertMessagesToInputItems(
           });
         }
 
-        pushAssistantText();
+        pushAssistantText(currentTextPhase);
         continue;
       }
 
@@ -426,7 +440,7 @@ export function convertMessagesToInputItems(
         type: "message",
         role: "assistant",
         content: text,
-        ...(assistantPhase ? { phase: assistantPhase } : {}),
+        ...(assistantMessagePhase ? { phase: assistantMessagePhase } : {}),
       });
       continue;
     }
@@ -471,16 +485,20 @@ export function buildAssistantMessageFromResponse(
   modelInfo: { api: string; provider: string; id: string },
 ): AssistantMessage {
   const content: AssistantMessage["content"] = [];
-  let assistantPhase: OpenAIResponsesAssistantPhase | undefined;
+  const assistantPhases = new Set<OpenAIResponsesAssistantPhase>();
+  let hasUnphasedAssistantText = false;
 
   for (const item of response.output ?? []) {
     if (item.type === "message") {
       const itemPhase = normalizeAssistantPhase(item.phase);
       if (itemPhase) {
-        assistantPhase = itemPhase;
+        assistantPhases.add(itemPhase);
       }
       for (const part of item.content ?? []) {
         if (part.type === "output_text" && part.text) {
+          if (!itemPhase) {
+            hasUnphasedAssistantText = true;
+          }
           content.push({
             type: "text",
             text: part.text,
@@ -553,7 +571,10 @@ export function buildAssistantMessageFromResponse(
     }),
   });
 
-  return assistantPhase
-    ? ({ ...message, phase: assistantPhase } as AssistantMessageWithPhase)
+  const finalAssistantPhase =
+    assistantPhases.size === 1 && !hasUnphasedAssistantText ? [...assistantPhases][0] : undefined;
+
+  return finalAssistantPhase
+    ? ({ ...message, phase: finalAssistantPhase } as AssistantMessageWithPhase)
     : message;
 }

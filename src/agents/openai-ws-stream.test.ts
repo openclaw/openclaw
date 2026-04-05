@@ -570,6 +570,142 @@ describe("convertMessagesToInputItems", () => {
     });
   });
 
+  it("splits replayed assistant text on phase changes from block signatures", () => {
+    const msg = {
+      role: "assistant" as const,
+      phase: "final_answer" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: "Working... ",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text" as const,
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+
+    expect(
+      convertMessagesToInputItems([msg] as Parameters<typeof convertMessagesToInputItems>[0]),
+    ).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: "Working... ",
+        phase: "commentary",
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: "Done.",
+        phase: "final_answer",
+      },
+    ]);
+  });
+
+  it("splits legacy unphased text from later phased text during replay", () => {
+    const msg = {
+      role: "assistant" as const,
+      phase: "final_answer" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: "Legacy. ",
+        },
+        {
+          type: "text" as const,
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+
+    expect(
+      convertMessagesToInputItems([msg] as Parameters<typeof convertMessagesToInputItems>[0]),
+    ).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: "Legacy. ",
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: "Done.",
+        phase: "final_answer",
+      },
+    ]);
+  });
+
+  it("preserves ordering when commentary text, tool calls, and final answer share one stored assistant message", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: "Working... ",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "toolCall" as const,
+          id: "call_1|fc_1",
+          name: "exec",
+          arguments: { cmd: "ls" },
+        },
+        {
+          type: "text" as const,
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      stopReason: "toolUse",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+
+    expect(
+      convertMessagesToInputItems([msg] as Parameters<typeof convertMessagesToInputItems>[0]),
+    ).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: "Working... ",
+        phase: "commentary",
+      },
+      {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_1",
+        name: "exec",
+        arguments: JSON.stringify({ cmd: "ls" }),
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: "Done.",
+        phase: "final_answer",
+      },
+    ]);
+  });
+
   it("preserves assistant phase from textSignature metadata without local phase field", () => {
     const msg = {
       role: "assistant" as const,
@@ -926,6 +1062,97 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.content[0]?.text).toBe("Final answer");
   });
 
+  it("omits top-level phase when a response contains mixed assistant phases", () => {
+    const response = {
+      id: "resp_mixed_phase",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.2",
+      output: [
+        {
+          type: "message",
+          id: "item_commentary",
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "Working... " }],
+        },
+        {
+          type: "message",
+          id: "item_final",
+          role: "assistant",
+          phase: "final_answer",
+          content: [{ type: "output_text", text: "Done." }],
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo) as {
+      phase?: string;
+      content: Array<{ type: string; text?: string; textSignature?: string }>;
+    };
+
+    expect(msg.phase).toBeUndefined();
+    expect(msg.content).toMatchObject([
+      {
+        type: "text",
+        text: "Working... ",
+        textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+      },
+      {
+        type: "text",
+        text: "Done.",
+        textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+      },
+    ]);
+  });
+
+  it("omits top-level phase when unphased legacy text and phased final text coexist", () => {
+    const response = {
+      id: "resp_unphased_plus_final",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.2",
+      output: [
+        {
+          type: "message",
+          id: "item_legacy",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Legacy. " }],
+        },
+        {
+          type: "message",
+          id: "item_final",
+          role: "assistant",
+          phase: "final_answer",
+          content: [{ type: "output_text", text: "Done." }],
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo) as {
+      phase?: string;
+      content: Array<{ type: string; text?: string; textSignature?: string }>;
+    };
+
+    expect(msg.phase).toBeUndefined();
+    expect(msg.content).toMatchObject([
+      {
+        type: "text",
+        text: "Legacy. ",
+        textSignature: JSON.stringify({ v: 1, id: "item_legacy" }),
+      },
+      {
+        type: "text",
+        text: "Done.",
+        textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+      },
+    ]);
+  });
+
   it("maps reasoning output items to thinking blocks with signature", () => {
     const response = {
       id: "resp_reasoning",
@@ -1244,6 +1471,8 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-incremental");
     releaseWsSession("sess-full");
     releaseWsSession("sess-phase");
+    releaseWsSession("sess-phase-stream");
+    releaseWsSession("sess-phase-late-map");
     releaseWsSession("sess-tools");
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
@@ -1480,6 +1709,151 @@ describe("createOpenAIWebSocketStreamFn", () => {
       | undefined;
     expect(doneEvent?.message.phase).toBe("commentary");
     expect(doneEvent?.message.stopReason).toBe("toolUse");
+  });
+
+  it("emits phase-aware partials only after output item mapping is available", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-stream");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: Array<{
+      type?: string;
+      delta?: string;
+      partial?: { phase?: string; content?: Array<{ text?: string; textSignature?: string }> };
+    }> = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev as (typeof events)[number]);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      item: { type: "message", id: "item_final", phase: "final_answer" },
+      output_index: 0,
+      response_id: "resp_phase_stream",
+    });
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_final",
+      content_index: 0,
+      delta: "Done",
+      output_index: 0,
+      response_id: "resp_phase_stream",
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_phase_stream", "Done", undefined, "final_answer"),
+    });
+
+    await done;
+
+    const textDeltaEvents = events.filter((event) => event.type === "text_delta");
+    expect(textDeltaEvents).toHaveLength(1);
+    expect(textDeltaEvents[0]?.delta).toBe("Done");
+    expect(textDeltaEvents[0]?.partial?.phase).toBe("final_answer");
+    expect(textDeltaEvents[0]?.partial?.content?.[0]?.textSignature).toBe(
+      JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+    );
+  });
+
+  it("buffers early text deltas until phase metadata arrives and suppresses commentary output", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-late-map");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: Array<{
+      type?: string;
+      delta?: string;
+      partial?: { phase?: string; content?: Array<{ text?: string; textSignature?: string }> };
+    }> = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev as (typeof events)[number]);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_commentary",
+      content_index: 0,
+      delta: "Working",
+      output_index: 0,
+      response_id: "resp_phase_late",
+    });
+
+    await new Promise((r) => setImmediate(r));
+    expect(events.filter((event) => event.type === "text_delta")).toHaveLength(0);
+
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      item: { type: "message", id: "item_commentary", phase: "commentary" },
+      output_index: 0,
+      response_id: "resp_phase_late",
+    });
+
+    await new Promise((r) => setImmediate(r));
+    expect(events.filter((event) => event.type === "text_delta")).toHaveLength(0);
+
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      item: { type: "message", id: "item_final", phase: "final_answer" },
+      output_index: 1,
+      response_id: "resp_phase_late",
+    });
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_final",
+      content_index: 0,
+      delta: "Done",
+      output_index: 1,
+      response_id: "resp_phase_late",
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        id: "resp_phase_late",
+        object: "response",
+        created_at: Date.now(),
+        status: "completed",
+        model: "gpt-5.4",
+        output: [
+          {
+            type: "message",
+            id: "item_commentary",
+            role: "assistant",
+            phase: "commentary",
+            content: [{ type: "output_text", text: "Working" }],
+          },
+          {
+            type: "message",
+            id: "item_final",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Done" }],
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      } as ResponseObject,
+    });
+
+    await done;
+
+    const textDeltaEvents = events.filter((event) => event.type === "text_delta");
+    expect(textDeltaEvents).toHaveLength(1);
+    expect(textDeltaEvents[0]?.delta).toBe("Done");
+    expect(textDeltaEvents[0]?.partial?.phase).toBe("final_answer");
+    expect(textDeltaEvents[0]?.partial?.content?.[0]?.textSignature).toBe(
+      JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+    );
   });
 
   it("falls back to HTTP when WebSocket connect fails (session pre-broken via flag)", async () => {
