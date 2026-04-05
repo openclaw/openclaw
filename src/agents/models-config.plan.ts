@@ -5,11 +5,13 @@ import {
   mergeWithExistingProviderSecrets,
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
-import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
-import { normalizeProviders } from "./models-config.providers.normalize.js";
-import { applyNativeStreamingUsageCompat } from "./models-config.providers.policy.js";
-import type { ProviderConfig } from "./models-config.providers.secrets.js";
-import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
+import {
+  applyNativeStreamingUsageCompat,
+  enforceSourceManagedProviderSecrets,
+  normalizeProviders,
+  resolveImplicitProviders,
+  type ProviderConfig,
+} from "./models-config.providers.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
