@@ -827,7 +827,7 @@ export async function syncSkillsToWorkspace(params: {
           force: true,
           filter: (src) => {
             const name = path.basename(src);
-            return name !== ".git" && name !== "node_modules";
+            return !(name === ".git" || name === "node_modules");
           },
         });
       } catch (error) {
