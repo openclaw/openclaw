@@ -2,7 +2,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  approveDevicePairing,
   clearDeviceBootstrapTokens,
   definePluginEntry,
   issueDeviceBootstrapToken,
@@ -23,6 +22,14 @@ import {
   handleNotifyCommand,
   registerPairingNotifierService,
 } from "./notify.js";
+import {
+  approvePendingPairingRequest,
+  selectPendingApprovalRequest,
+} from "./pair-command-approve.js";
+import {
+  buildMissingPairingScopeReply,
+  resolvePairingCommandAuthState,
+} from "./pair-command-auth.js";
 
 async function renderQrDataUrl(data: string): Promise<string> {
   const pngBase64 = await renderQrPngBase64(data);
@@ -75,7 +82,6 @@ type QrCommandContext = {
 };
 
 type QrChannelSender = {
-  resolveSend: (api: OpenClawPluginApi) => QrSendFn | undefined;
   createOpts: (params: {
     ctx: QrCommandContext;
     qrFilePath: string;
@@ -84,24 +90,16 @@ type QrChannelSender = {
   }) => Record<string, unknown>;
 };
 
-type QrSendFn = (to: string, text: string, opts: Record<string, unknown>) => Promise<unknown>;
-
-function coerceQrSend(send: unknown): QrSendFn | undefined {
-  return typeof send === "function" ? (send as QrSendFn) : undefined;
-}
-
 const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
   telegram: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.telegram?.sendMessageTelegram),
     createOpts: ({ ctx, qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
-      ...(typeof ctx.messageThreadId === "number" ? { messageThreadId: ctx.messageThreadId } : {}),
+      ...(ctx.messageThreadId != null ? { threadId: ctx.messageThreadId } : {}),
       ...(accountId ? { accountId } : {}),
     }),
   },
   discord: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.discord?.sendMessageDiscord),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
@@ -109,16 +107,14 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
     }),
   },
   slack: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.slack?.sendMessageSlack),
     createOpts: ({ ctx, qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
-      ...(ctx.messageThreadId != null ? { threadTs: String(ctx.messageThreadId) } : {}),
+      ...(ctx.messageThreadId != null ? { threadId: String(ctx.messageThreadId) } : {}),
       ...(accountId ? { accountId } : {}),
     }),
   },
   signal: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.signal?.sendMessageSignal),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
@@ -126,7 +122,6 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
     }),
   },
   imessage: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.imessage?.sendMessageIMessage),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
@@ -134,7 +129,6 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
     }),
   },
   whatsapp: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.whatsapp?.sendMessageWhatsApp),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       verbose: false,
       mediaUrl: qrFilePath,
@@ -494,6 +488,20 @@ function resolveQrReplyTarget(ctx: QrCommandContext): string {
   return ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
 }
 
+const PAIR_SETUP_NON_ISSUING_ACTIONS = new Set([
+  "approve",
+  "cleanup",
+  "clear",
+  "notify",
+  "pending",
+  "revoke",
+  "status",
+]);
+
+function issuesPairSetupCode(action: string): boolean {
+  return !action || action === "qr" || !PAIR_SETUP_NON_ISSUING_ACTIONS.has(action);
+}
+
 async function issueSetupPayload(url: string): Promise<SetupPayload> {
   const issuedBootstrap = await issueDeviceBootstrapToken({
     profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -518,20 +526,22 @@ async function sendQrPngToSupportedChannel(params: {
   if (!sender) {
     return false;
   }
-  const send = sender.resolveSend(params.api);
+  const adapter = await params.api.runtime.channel.outbound.loadAdapter(params.ctx.channel);
+  const send = adapter?.sendMedia;
   if (!send) {
     return false;
   }
-  await send(
-    params.target,
-    params.caption,
-    sender.createOpts({
+  await send({
+    cfg: params.api.config,
+    to: params.target,
+    text: params.caption,
+    ...sender.createOpts({
       ctx: params.ctx,
       qrFilePath: params.qrFilePath,
       mediaLocalRoots,
       accountId,
     }),
-  );
+  });
   return true;
 }
 
@@ -552,7 +562,11 @@ export default definePluginEntry({
         const action = tokens[0]?.toLowerCase() ?? "";
         const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
           ? ctx.gatewayClientScopes
-          : null;
+          : undefined;
+        const authState = resolvePairingCommandAuthState({
+          channel: ctx.channel,
+          gatewayClientScopes,
+        });
         api.logger.info?.(
           `device-pair: /pair invoked channel=${ctx.channel} sender=${ctx.senderId ?? "unknown"} action=${
             action || "new"
@@ -574,54 +588,31 @@ export default definePluginEntry({
         }
 
         if (action === "approve") {
-          if (
-            gatewayClientScopes &&
-            !gatewayClientScopes.includes("operator.pairing") &&
-            !gatewayClientScopes.includes("operator.admin")
-          ) {
-            return {
-              text: "⚠️ This command requires operator.pairing for internal gateway callers.",
-            };
+          if (authState.isMissingInternalPairingPrivilege) {
+            return buildMissingPairingScopeReply();
           }
-          const requested = tokens[1]?.trim();
           const list = await listDevicePairing();
-          if (list.pending.length === 0) {
-            return { text: "No pending device pairing requests." };
+          const selected = selectPendingApprovalRequest({
+            pending: list.pending,
+            requested: tokens[1]?.trim(),
+          });
+          if (selected.reply) {
+            return selected.reply;
           }
-
-          let pending: (typeof list.pending)[number] | undefined;
-          if (requested) {
-            if (requested.toLowerCase() === "latest") {
-              pending = [...list.pending].toSorted((a, b) => (b.ts ?? 0) - (a.ts ?? 0))[0];
-            } else {
-              pending = list.pending.find((entry) => entry.requestId === requested);
-            }
-          } else if (list.pending.length === 1) {
-            pending = list.pending[0];
-          } else {
-            return {
-              text:
-                `${formatPendingRequests(list.pending)}\n\n` +
-                "Multiple pending requests found. Approve one explicitly:\n" +
-                "/pair approve <requestId>\n" +
-                "Or approve the most recent:\n" +
-                "/pair approve latest",
-            };
-          }
+          const pending = selected.pending;
           if (!pending) {
             return { text: "Pairing request not found." };
           }
-          const approved = await approveDevicePairing(pending.requestId);
-          if (!approved) {
-            return { text: "Pairing request not found." };
-          }
-          const label = approved.device.displayName?.trim() || approved.device.deviceId;
-          const platform = approved.device.platform?.trim();
-          const platformLabel = platform ? ` (${platform})` : "";
-          return { text: `✅ Paired ${label}${platformLabel}.` };
+          return await approvePendingPairingRequest({
+            requestId: pending.requestId,
+            callerScopes: authState.approvalCallerScopes,
+          });
         }
 
         if (action === "cleanup" || action === "clear" || action === "revoke") {
+          if (authState.isMissingInternalPairingPrivilege) {
+            return buildMissingPairingScopeReply();
+          }
           const cleared = await clearDeviceBootstrapTokens();
           return {
             text:
@@ -634,6 +625,9 @@ export default definePluginEntry({
         const authLabelResult = resolveAuthLabel(api.config);
         if (authLabelResult.error) {
           return { text: `Error: ${authLabelResult.error}` };
+        }
+        if (issuesPairSetupCode(action) && authState.isMissingInternalPairingPrivilege) {
+          return buildMissingPairingScopeReply();
         }
 
         const urlResult = await resolveGatewayUrl(api);
@@ -762,7 +756,8 @@ export default definePluginEntry({
                 channelKeys.join(",") || "none"
               }`,
             );
-            const send = api.runtime?.channel?.telegram?.sendMessageTelegram;
+            const adapter = await api.runtime.channel.outbound.loadAdapter("telegram");
+            const send = adapter?.sendText;
             if (!send) {
               throw new Error(
                 `telegram runtime unavailable (runtime keys: ${runtimeKeys.join(",")}; channel keys: ${channelKeys.join(
@@ -770,10 +765,11 @@ export default definePluginEntry({
                 )})`,
               );
             }
-            await send(target, formatSetupInstructions(payload.expiresAtMs), {
-              ...(typeof ctx.messageThreadId === "number"
-                ? { messageThreadId: ctx.messageThreadId }
-                : {}),
+            await send({
+              cfg: api.config,
+              to: target,
+              text: formatSetupInstructions(payload.expiresAtMs),
+              ...(ctx.messageThreadId != null ? { threadId: ctx.messageThreadId } : {}),
               ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
             });
             api.logger.info?.(

@@ -9,6 +9,7 @@ import {
   hasBinaryMock,
   runCommandWithTimeoutMock,
 } from "./skills-install.test-mocks.js";
+import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
 import type { SkillEntry, SkillInstallSpec } from "./skills/types.js";
 
@@ -20,8 +21,8 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
-vi.mock("./skills.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./skills.js")>()),
+vi.mock("./skills.js", async () => ({
+  ...(await vi.importActual<typeof import("./skills.js")>("./skills.js")),
   hasBinary: (bin: string) => hasBinaryMock(bin),
 }));
 
@@ -54,17 +55,27 @@ const TAR_GZ_TRAVERSAL_BUFFER = Buffer.from(
 
 function buildEntry(name: string): SkillEntry {
   const skillDir = path.join(workspaceDir, "skills", name);
+  const filePath = path.join(skillDir, "SKILL.md");
   return {
-    skill: {
+    skill: createFixtureSkill({
       name,
       description: `${name} test skill`,
-      source: "openclaw-workspace",
-      filePath: path.join(skillDir, "SKILL.md"),
+      filePath,
       baseDir: skillDir,
-      disableModelInvocation: false,
-    },
+      source: "openclaw-workspace",
+    }),
     frontmatter: {},
   };
+}
+
+function createFixtureSkill(params: {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  source: string;
+}): SkillEntry["skill"] {
+  return createCanonicalFixtureSkill(params);
 }
 
 function buildDownloadSpec(params: {

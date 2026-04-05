@@ -1,10 +1,14 @@
+import type { ChannelSetupWizardAdapter } from "./setup-wizard-types.js";
 import type { ChannelSetupWizard } from "./setup-wizard.js";
 import type {
+  ChannelApprovalAdapter,
+  ChannelApprovalCapability,
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelConfigAdapter,
+  ChannelConversationBindingSupport,
+  ChannelDoctorAdapter,
   ChannelDirectoryAdapter,
-  ChannelExecApprovalAdapter,
   ChannelResolverAdapter,
   ChannelElevatedAdapter,
   ChannelGatewayAdapter,
@@ -44,13 +48,36 @@ export type ChannelConfigUiHint = {
   itemTemplate?: unknown;
 };
 
+export type ChannelConfigRuntimeIssue = {
+  path?: Array<string | number>;
+  message?: string;
+  code?: string;
+} & Record<string, unknown>;
+
+export type ChannelConfigRuntimeParseResult =
+  | {
+      success: true;
+      data: unknown;
+    }
+  | {
+      success: false;
+      issues: ChannelConfigRuntimeIssue[];
+    };
+
+export type ChannelConfigRuntimeSchema = {
+  safeParse: (value: unknown) => ChannelConfigRuntimeParseResult;
+};
+
 /** JSON-schema-like config description published by a channel plugin. */
 export type ChannelConfigSchema = {
   schema: Record<string, unknown>;
   uiHints?: Record<string, ChannelConfigUiHint>;
+  runtime?: ChannelConfigRuntimeSchema;
 };
 
 /** Full capability contract for a native channel plugin. */
+type ChannelPluginSetupWizard = ChannelSetupWizard | ChannelSetupWizardAdapter;
+
 // oxlint-disable-next-line typescript/no-explicit-any
 export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
   id: ChannelId;
@@ -62,7 +89,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
     };
   };
   reload?: { configPrefixes: string[]; noopPrefixes?: string[] };
-  setupWizard?: ChannelSetupWizard;
+  setupWizard?: ChannelPluginSetupWizard;
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
   setup?: ChannelSetupAdapter;
@@ -75,12 +102,15 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   gatewayMethods?: string[];
   gateway?: ChannelGatewayAdapter<ResolvedAccount>;
   auth?: ChannelAuthAdapter;
+  approvalCapability?: ChannelApprovalCapability;
   elevated?: ChannelElevatedAdapter;
   commands?: ChannelCommandAdapter;
   lifecycle?: ChannelLifecycleAdapter;
-  execApprovals?: ChannelExecApprovalAdapter;
+  approvals?: ChannelApprovalAdapter;
   allowlist?: ChannelAllowlistAdapter;
+  doctor?: ChannelDoctorAdapter;
   bindings?: ChannelConfiguredBindingProvider;
+  conversationBindings?: ChannelConversationBindingSupport;
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
   messaging?: ChannelMessagingAdapter;

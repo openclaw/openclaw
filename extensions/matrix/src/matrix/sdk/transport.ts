@@ -1,3 +1,4 @@
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildTimeoutAbortSignal,
   closeDispatcher,
@@ -5,6 +6,7 @@ import {
   resolvePinnedHostnameWithPolicy,
   type SsrFPolicy,
 } from "../../runtime-api.js";
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
@@ -88,6 +90,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   signal?: AbortSignal;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
   let currentUrl = new URL(params.url);
   let method = (params.init?.method ?? "GET").toUpperCase();
@@ -106,7 +109,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
       const pinned = await resolvePinnedHostnameWithPolicy(currentUrl.hostname, {
         policy: params.ssrfPolicy,
       });
-      dispatcher = createPinnedDispatcher(pinned, undefined, params.ssrfPolicy);
+      dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.ssrfPolicy);
       const response = await fetch(currentUrl.toString(), {
         ...params.init,
         method,
@@ -184,7 +187,10 @@ async function fetchWithMatrixGuardedRedirects(params: {
   throw new Error(`Too many redirects while requesting ${params.url}`);
 }
 
-export function createMatrixGuardedFetch(params: { ssrfPolicy?: SsrFPolicy }): typeof fetch {
+export function createMatrixGuardedFetch(params: {
+  ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+}): typeof fetch {
   return (async (resource: RequestInfo | URL, init?: RequestInit) => {
     const url = toFetchUrl(resource);
     const { signal, ...requestInit } = init ?? {};
@@ -193,6 +199,7 @@ export function createMatrixGuardedFetch(params: { ssrfPolicy?: SsrFPolicy }): t
       init: requestInit,
       signal: signal ?? undefined,
       ssrfPolicy: params.ssrfPolicy,
+      dispatcherPolicy: params.dispatcherPolicy,
     });
 
     try {
@@ -220,6 +227,7 @@ export async function performMatrixRequest(params: {
   maxBytes?: number;
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   allowAbsoluteEndpoint?: boolean;
 }): Promise<{ response: Response; text: string; buffer: Buffer }> {
   const isAbsoluteEndpoint =
@@ -264,6 +272,7 @@ export async function performMatrixRequest(params: {
     },
     timeoutMs: params.timeoutMs,
     ssrfPolicy: params.ssrfPolicy,
+    dispatcherPolicy: params.dispatcherPolicy,
   });
 
   try {
@@ -272,7 +281,7 @@ export async function performMatrixRequest(params: {
       if (params.maxBytes && contentLength) {
         const length = Number(contentLength);
         if (Number.isFinite(length) && length > params.maxBytes) {
-          throw new Error(
+          throw new MatrixMediaSizeLimitError(
             `Matrix media exceeds configured size limit (${length} bytes > ${params.maxBytes} bytes)`,
           );
         }
@@ -280,7 +289,7 @@ export async function performMatrixRequest(params: {
       const bytes = params.maxBytes
         ? await readResponseWithLimit(response, params.maxBytes, {
             onOverflow: ({ maxBytes, size }) =>
-              new Error(
+              new MatrixMediaSizeLimitError(
                 `Matrix media exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
               ),
             chunkTimeoutMs: params.readIdleTimeoutMs,

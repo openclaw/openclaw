@@ -1,6 +1,10 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import {
+  listFeishuAccountIds,
+  resolveFeishuAccount,
+  resolveFeishuRuntimeAccount,
+} from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveToolsConfig } from "./tools-config.js";
 import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
@@ -21,6 +25,38 @@ function readConfiguredDefaultAccountId(config: OpenClawPluginApi["config"]): st
   return normalizeOptionalAccountId(value);
 }
 
+function resolveImplicitToolAccountId(params: {
+  api: Pick<OpenClawPluginApi, "config">;
+  executeParams?: AccountAwareParams;
+  defaultAccountId?: string;
+}): string | undefined {
+  const explicitAccountId = normalizeOptionalAccountId(params.executeParams?.accountId);
+  if (explicitAccountId) {
+    return explicitAccountId;
+  }
+
+  const contextualAccountId = normalizeOptionalAccountId(params.defaultAccountId);
+  if (
+    contextualAccountId &&
+    listFeishuAccountIds(params.api.config).includes(contextualAccountId)
+  ) {
+    const contextualAccount = resolveFeishuAccount({
+      cfg: params.api.config,
+      accountId: contextualAccountId,
+    });
+    if (contextualAccount.enabled) {
+      return contextualAccountId;
+    }
+  }
+
+  const configuredDefaultAccountId = readConfiguredDefaultAccountId(params.api.config);
+  if (configuredDefaultAccountId) {
+    return configuredDefaultAccountId;
+  }
+
+  return undefined;
+}
+
 export function resolveFeishuToolAccount(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
@@ -31,10 +67,7 @@ export function resolveFeishuToolAccount(params: {
   }
   return resolveFeishuRuntimeAccount({
     cfg: params.api.config,
-    accountId:
-      normalizeOptionalAccountId(params.executeParams?.accountId) ??
-      readConfiguredDefaultAccountId(params.api.config) ??
-      normalizeOptionalAccountId(params.defaultAccountId),
+    accountId: resolveImplicitToolAccountId(params),
   });
 }
 

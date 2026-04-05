@@ -133,7 +133,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       Status: formatSkillStatus(skill),
       Skill: formatSkillName(skill),
       Description: theme.muted(skill.description),
-      Source: skill.source ?? "",
+      Source: skill.source,
       Missing: missing ? theme.warn(missing) : "",
     };
   });
@@ -282,7 +282,7 @@ export function formatSkillInfo(
       `  Save via CLI: ${formatCliCommand(`openclaw config set skills.entries.${safeSkillKey}.apiKey YOUR_KEY`)}`,
     );
     lines.push(
-      `  Stored in: ${theme.muted("~/.openclaw/openclaw.json")} ${theme.muted(`(skills.entries.${safeSkillKey}.apiKey)`)}`,
+      `  Stored in: ${theme.muted("$OPENCLAW_CONFIG_PATH")} ${theme.muted("(default: ~/.openclaw/openclaw.json)")}`,
     );
   }
 

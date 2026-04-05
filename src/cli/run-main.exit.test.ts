@@ -1,14 +1,23 @@
 import process from "node:process";
+import { CommanderError } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runCli } from "./run-main.js";
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
 const loadDotEnvMock = vi.hoisted(() => vi.fn());
 const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
-const closeAllMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
+const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
+const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
+const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
+const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
+const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const buildProgramMock = vi.hoisted(() => vi.fn());
+const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
+const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
+const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
 const maybeRunCliInContainerMock = vi.hoisted(() =>
   vi.fn<
     (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
@@ -40,23 +49,52 @@ vi.mock("../infra/runtime-guard.js", () => ({
   assertSupportedRuntime: assertRuntimeMock,
 }));
 
-vi.mock("../memory/search-manager.js", () => ({
-  closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
+vi.mock("../plugins/memory-runtime.js", () => ({
+  closeActiveMemorySearchManagers: closeActiveMemorySearchManagersMock,
+}));
+
+vi.mock("../plugins/memory-state.js", () => ({
+  hasMemoryRuntime: hasMemoryRuntimeMock,
+}));
+
+vi.mock("../tasks/task-registry.js", () => ({
+  ensureTaskRegistryReady: ensureTaskRegistryReadyMock,
+}));
+
+vi.mock("../tasks/task-registry.maintenance.js", () => ({
+  startTaskRegistryMaintenance: startTaskRegistryMaintenanceMock,
 }));
 
 vi.mock("./program/root-help.js", () => ({
   outputRootHelp: outputRootHelpMock,
 }));
 
+vi.mock("./root-help-metadata.js", () => ({
+  outputPrecomputedRootHelpText: outputPrecomputedRootHelpTextMock,
+}));
+
 vi.mock("./program.js", () => ({
   buildProgram: buildProgramMock,
 }));
 
-const { runCli } = await import("./run-main.js");
+vi.mock("./program/program-context.js", () => ({
+  getProgramContext: getProgramContextMock,
+}));
+
+vi.mock("./program/command-registry.js", () => ({
+  registerCoreCliByName: registerCoreCliByNameMock,
+}));
+
+vi.mock("./program/register.subclis.js", () => ({
+  registerSubCliByName: registerSubCliByNameMock,
+}));
 
 describe("runCli exit behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    hasMemoryRuntimeMock.mockReturnValue(false);
+    outputPrecomputedRootHelpTextMock.mockReturnValue(false);
+    getProgramContextMock.mockReturnValue(null);
   });
 
   it("does not force process.exit after successful routed command", async () => {
@@ -69,7 +107,9 @@ describe("runCli exit behavior", () => {
 
     expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
-    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
+    expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
+    expect(ensureTaskRegistryReadyMock).not.toHaveBeenCalled();
+    expect(startTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
@@ -83,11 +123,21 @@ describe("runCli exit behavior", () => {
 
     expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "--help"]);
     expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(outputPrecomputedRootHelpTextMock).toHaveBeenCalledTimes(1);
     expect(outputRootHelpMock).toHaveBeenCalledTimes(1);
     expect(buildProgramMock).not.toHaveBeenCalled();
-    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
+    expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("closes memory managers when a runtime was registered", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    hasMemoryRuntimeMock.mockReturnValue(true);
+
+    await runCli(["node", "openclaw", "status"]);
+
+    expect(closeActiveMemorySearchManagersMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns after a handled container-target invocation", async () => {
@@ -104,7 +154,7 @@ describe("runCli exit behavior", () => {
     ]);
     expect(loadDotEnvMock).not.toHaveBeenCalled();
     expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(closeAllMemorySearchManagersMock).not.toHaveBeenCalled();
+    expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
   });
 
   it("propagates a handled container-target exit code", async () => {
@@ -114,6 +164,24 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "--container", "demo", "status"]);
 
     expect(process.exitCode).toBe(7);
+    process.exitCode = exitCode;
+  });
+
+  it("swallows Commander parse exits after recording the exit code", async () => {
+    const exitCode = process.exitCode;
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "status" }],
+      parseAsync: vi
+        .fn()
+        .mockRejectedValueOnce(
+          new CommanderError(1, "commander.excessArguments", "too many arguments for 'status'"),
+        ),
+    });
+
+    await expect(runCli(["node", "openclaw", "status"])).resolves.toBeUndefined();
+
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "status");
+    expect(process.exitCode).toBe(1);
     process.exitCode = exitCode;
   });
 });

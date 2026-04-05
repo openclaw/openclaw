@@ -1,12 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   loadConfigMock as loadConfig,
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
   resolveGatewayPortMock as resolveGatewayPort,
 } from "./gateway-connection.test-mocks.js";
+
+const deviceIdentityState = vi.hoisted(() => ({
+  value: {
+    deviceId: "test-device-identity",
+    publicKeyPem: "test-public-key",
+    privateKeyPem: "test-private-key",
+  } satisfies DeviceIdentity,
+  throwOnLoad: false,
+}));
 
 let lastClientOptions: {
   url?: string;
@@ -28,6 +39,51 @@ let startMode: StartMode = "hello";
 let closeCode = 1006;
 let closeReason = "";
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
+
+vi.mock("./client.js", () => ({
+  describeGatewayCloseCode: (code: number) => {
+    if (code === 1000) {
+      return "normal closure";
+    }
+    if (code === 1006) {
+      return "abnormal closure (no close frame)";
+    }
+    return undefined;
+  },
+  GatewayClient: class {
+    constructor(opts: {
+      url?: string;
+      token?: string;
+      password?: string;
+      scopes?: string[];
+      onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
+      onClose?: (code: number, reason: string) => void;
+    }) {
+      lastClientOptions = opts;
+    }
+    async request(
+      method: string,
+      params: unknown,
+      opts?: { expectFinal?: boolean; timeoutMs?: number | null },
+    ) {
+      lastRequestOptions = { method, params, opts };
+      return { ok: true };
+    }
+    start() {
+      if (startMode === "hello") {
+        void lastClientOptions?.onHelloOk?.({
+          features: {
+            methods: helloMethods,
+          },
+        });
+      } else if (startMode === "close") {
+        lastClientOptions?.onClose?.(closeCode, closeReason);
+      }
+    }
+    stop() {}
+  },
+}));
+
 const { __testing, buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
   await import("./call.js");
 
@@ -84,8 +140,15 @@ function resetGatewayCallMocks() {
     createGatewayClient: (opts) =>
       new StubGatewayClient(opts as ConstructorParameters<typeof StubGatewayClient>[0]) as never,
     loadConfig: loadConfigForTests,
+    loadOrCreateDeviceIdentity: () => {
+      if (deviceIdentityState.throwOnLoad) {
+        throw new Error("read-only identity dir");
+      }
+      return deviceIdentityState.value;
+    },
     resolveGatewayPort: resolveGatewayPortForTests,
   });
+  deviceIdentityState.throwOnLoad = false;
 }
 
 function setGatewayNetworkDefaults(port = 18789) {
@@ -221,7 +284,22 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
     expect(lastClientOptions?.token).toBe("explicit-token");
-    expect(lastClientOptions?.deviceIdentity).toBeDefined();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("falls back to token/password auth when device identity cannot be persisted", async () => {
+    setLocalLoopbackGatewayConfig();
+    deviceIdentityState.throwOnLoad = true;
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+    expect(lastRequestOptions?.method).toBe("health");
   });
 
   it("uses OPENCLAW_GATEWAY_URL env override in remote mode when remote URL is missing", async () => {
@@ -347,6 +425,54 @@ describe("callGateway url resolution", () => {
     await callGatewayScoped({ method: "health", scopes: [] });
     expect(lastClientOptions?.scopes).toEqual([]);
   });
+
+  it("yields one event-loop turn before starting CLI pairing requests", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    let preConnectYieldRan = false;
+    let sawYieldBeforeStart = false;
+    setImmediate(() => {
+      preConnectYieldRan = true;
+    });
+
+    __testing.setDepsForTests({
+      createGatewayClient: (opts) =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            return { ok: true };
+          },
+          start() {
+            sawYieldBeforeStart = preConnectYieldRan;
+            void opts.onHelloOk?.({
+              features: {
+                methods: helloMethods ?? [],
+                events: [],
+              },
+            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
+          },
+          stop() {},
+        }) as never,
+      loadConfig: loadConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    await callGateway({
+      method: "device.pair.list",
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+    });
+
+    expect(sawYieldBeforeStart).toBe(true);
+  });
 });
 
 describe("buildGatewayConnectionDetails", () => {
@@ -451,6 +577,19 @@ describe("buildGatewayConnectionDetails", () => {
         process.env.OPENCLAW_GATEWAY_URL = prevUrl;
       }
     }
+  });
+
+  it("falls back to the default config loader when test deps drift", () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    resolveGatewayPort.mockReturnValue(18800);
+    __testing.setDepsForTests({
+      loadConfig: {} as never,
+    });
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://127.0.0.1:18789");
+    expect(details.urlSource).toBe("local loopback");
   });
 
   it("throws for insecure ws:// remote URLs (CWE-319)", () => {

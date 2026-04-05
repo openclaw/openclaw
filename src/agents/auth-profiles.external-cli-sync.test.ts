@@ -3,7 +3,6 @@ import type { AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js
 
 const mocks = vi.hoisted(() => ({
   readCodexCliCredentialsCached: vi.fn<() => OAuthCredential | null>(() => null),
-  readQwenCliCredentialsCached: vi.fn<() => OAuthCredential | null>(() => null),
   readMiniMaxCliCredentialsCached: vi.fn<() => OAuthCredential | null>(() => null),
 }));
 
@@ -11,7 +10,6 @@ let syncExternalCliCredentials: typeof import("./auth-profiles/external-cli-sync
 let shouldReplaceStoredOAuthCredential: typeof import("./auth-profiles/external-cli-sync.js").shouldReplaceStoredOAuthCredential;
 let CODEX_CLI_PROFILE_ID: typeof import("./auth-profiles/constants.js").CODEX_CLI_PROFILE_ID;
 let OPENAI_CODEX_DEFAULT_PROFILE_ID: typeof import("./auth-profiles/constants.js").OPENAI_CODEX_DEFAULT_PROFILE_ID;
-let QWEN_CLI_PROFILE_ID: typeof import("./auth-profiles/constants.js").QWEN_CLI_PROFILE_ID;
 let MINIMAX_CLI_PROFILE_ID: typeof import("./auth-profiles/constants.js").MINIMAX_CLI_PROFILE_ID;
 
 function makeOAuthCredential(
@@ -47,12 +45,6 @@ function getProviderCases() {
       legacyProfileId: CODEX_CLI_PROFILE_ID,
     },
     {
-      label: "Qwen",
-      profileId: QWEN_CLI_PROFILE_ID,
-      provider: "qwen-portal" as const,
-      readMock: mocks.readQwenCliCredentialsCached,
-    },
-    {
       label: "MiniMax",
       profileId: MINIMAX_CLI_PROFILE_ID,
       provider: "minimax-portal" as const,
@@ -65,21 +57,15 @@ describe("syncExternalCliCredentials", () => {
   beforeEach(async () => {
     vi.resetModules();
     mocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
-    mocks.readQwenCliCredentialsCached.mockReset().mockReturnValue(null);
     mocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
     vi.doMock("./cli-credentials.js", () => ({
       readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
-      readQwenCliCredentialsCached: mocks.readQwenCliCredentialsCached,
       readMiniMaxCliCredentialsCached: mocks.readMiniMaxCliCredentialsCached,
     }));
     ({ syncExternalCliCredentials, shouldReplaceStoredOAuthCredential } =
       await import("./auth-profiles/external-cli-sync.js"));
-    ({
-      CODEX_CLI_PROFILE_ID,
-      OPENAI_CODEX_DEFAULT_PROFILE_ID,
-      QWEN_CLI_PROFILE_ID,
-      MINIMAX_CLI_PROFILE_ID,
-    } = await import("./auth-profiles/constants.js"));
+    ({ CODEX_CLI_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID, MINIMAX_CLI_PROFILE_ID } =
+      await import("./auth-profiles/constants.js"));
   });
 
   describe("shouldReplaceStoredOAuthCredential", () => {
@@ -122,7 +108,7 @@ describe("syncExternalCliCredentials", () => {
     });
   });
 
-  it.each([{ providerLabel: "Codex" }, { providerLabel: "Qwen" }, { providerLabel: "MiniMax" }])(
+  it.each([{ providerLabel: "Codex" }, { providerLabel: "MiniMax" }])(
     "syncs $providerLabel CLI credentials into the target auth profile",
     ({ providerLabel }) => {
       const providerCase = getProviderCases().find((entry) => entry.label === providerLabel);
@@ -154,6 +140,7 @@ describe("syncExternalCliCredentials", () => {
         refresh: `${current.provider}-refresh-token`,
         expires,
         accountId: "acct_123",
+        managedBy: current.provider === "openai-codex" ? "codex-cli" : ("minimax-cli" as const),
       });
       if (current.legacyProfileId) {
         expect(store.profiles[current.legacyProfileId]).toBeUndefined();
@@ -192,10 +179,11 @@ describe("syncExternalCliCredentials", () => {
       access: "new-access-token",
       refresh: "new-refresh-token",
       expires: freshExpiry,
+      managedBy: "codex-cli",
     });
   });
 
-  it.each([{ providerLabel: "Codex" }, { providerLabel: "Qwen" }, { providerLabel: "MiniMax" }])(
+  it.each([{ providerLabel: "Codex" }, { providerLabel: "MiniMax" }])(
     "does not overwrite newer stored $providerLabel credentials",
     ({ providerLabel }) => {
       const providerCase = getProviderCases().find((entry) => entry.label === providerLabel);
@@ -234,4 +222,36 @@ describe("syncExternalCliCredentials", () => {
       });
     },
   );
+
+  it("upgrades matching Codex CLI credentials with external ownership metadata", () => {
+    const expires = Date.now() + 60_000;
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai-codex",
+        access: "same-access-token",
+        refresh: "same-refresh-token",
+        expires,
+      }),
+    );
+
+    const store = makeStore(
+      OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      makeOAuthCredential({
+        provider: "openai-codex",
+        access: "same-access-token",
+        refresh: "same-refresh-token",
+        expires,
+      }),
+    );
+
+    const mutated = syncExternalCliCredentials(store);
+
+    expect(mutated).toBe(true);
+    expect(store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
+      access: "same-access-token",
+      refresh: "same-refresh-token",
+      expires,
+      managedBy: "codex-cli",
+    });
+  });
 });

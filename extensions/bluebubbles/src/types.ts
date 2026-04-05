@@ -1,5 +1,7 @@
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
+export type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
 
 export type BlueBubblesGroupConfig = {
@@ -7,6 +9,20 @@ export type BlueBubblesGroupConfig = {
   requireMention?: boolean;
   /** Optional tool policy overrides for this group. */
   tools?: { allow?: string[]; deny?: string[] };
+};
+
+export type BlueBubblesActionConfig = {
+  reactions?: boolean;
+  edit?: boolean;
+  unsend?: boolean;
+  reply?: boolean;
+  sendWithEffect?: boolean;
+  renameGroup?: boolean;
+  setGroupIcon?: boolean;
+  addParticipant?: boolean;
+  removeParticipant?: boolean;
+  leaveGroup?: boolean;
+  sendAttachment?: boolean;
 };
 
 export type BlueBubblesAccountConfig = {
@@ -31,6 +47,8 @@ export type BlueBubblesAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /** Group message handling policy. */
   groupPolicy?: GroupPolicy;
+  /** Enrich unnamed group participants with local macOS Contacts names after gating. Default: true. */
+  enrichGroupParticipantsFromContacts?: boolean;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
@@ -57,33 +75,22 @@ export type BlueBubblesAccountConfig = {
   allowPrivateNetwork?: boolean;
   /** Per-group configuration keyed by chat GUID or identifier. */
   groups?: Record<string, BlueBubblesGroupConfig>;
+  /** Per-action tool gating (default: true for all). */
+  actions?: BlueBubblesActionConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: {
     enabled?: boolean;
   };
 };
 
-export type BlueBubblesActionConfig = {
-  reactions?: boolean;
-  edit?: boolean;
-  unsend?: boolean;
-  reply?: boolean;
-  sendWithEffect?: boolean;
-  renameGroup?: boolean;
-  addParticipant?: boolean;
-  removeParticipant?: boolean;
-  leaveGroup?: boolean;
-  sendAttachment?: boolean;
-};
-
-export type BlueBubblesConfig = {
+export type BlueBubblesConfig = Omit<BlueBubblesAccountConfig, "actions"> & {
   /** Optional per-account BlueBubbles configuration (multi-account). */
   accounts?: Record<string, BlueBubblesAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: BlueBubblesActionConfig;
-} & BlueBubblesAccountConfig;
+};
 
 export type BlueBubblesSendTarget =
   | { kind: "chat_id"; chatId: number }
@@ -126,11 +133,43 @@ export function buildBlueBubblesApiUrl(params: {
   return url.toString();
 }
 
+// Overridable guard for testing; production code uses fetchWithSsrFGuard.
+let _fetchGuard = fetchWithSsrFGuard;
+
+/** @internal Replace the SSRF fetch guard in tests. */
+export function _setFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+  _fetchGuard = impl ?? fetchWithSsrFGuard;
+}
+
 export async function blueBubblesFetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs = DEFAULT_TIMEOUT_MS,
-) {
+  ssrfPolicy?: SsrFPolicy,
+): Promise<Response> {
+  if (ssrfPolicy !== undefined) {
+    // Use SSRF-guarded fetch; buffer the body so the dispatcher can be released
+    // before the caller reads the response (API responses are small JSON payloads).
+    const { response, release } = await _fetchGuard({
+      url,
+      init,
+      timeoutMs,
+      policy: ssrfPolicy,
+      auditContext: "bluebubbles-api",
+    });
+    // Null-body status codes per Fetch spec — Response constructor rejects a body for these.
+    const isNullBody =
+      response.status === 101 ||
+      response.status === 204 ||
+      response.status === 205 ||
+      response.status === 304;
+    try {
+      const bodyBytes = isNullBody ? null : await response.arrayBuffer();
+      return new Response(bodyBytes, { status: response.status, headers: response.headers });
+    } finally {
+      await release();
+    }
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {

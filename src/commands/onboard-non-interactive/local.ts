@@ -1,6 +1,6 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveGatewayPort, writeConfigFile } from "../../config/config.js";
+import { replaceConfigFile, resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
@@ -71,8 +71,9 @@ export async function runNonInteractiveLocalSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  baseHash?: string;
 }) {
-  const { opts, runtime, baseConfig } = params;
+  const { opts, runtime, baseConfig, baseHash } = params;
   const mode = "local" as const;
 
   const workspaceDir = resolveNonInteractiveWorkspaceDir({
@@ -83,7 +84,11 @@ export async function runNonInteractiveLocalSetup(params: {
 
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
 
-  const inferredAuthChoice = inferAuthChoiceFromFlags(opts);
+  const inferredAuthChoice = inferAuthChoiceFromFlags(opts, {
+    config: nextConfig,
+    workspaceDir,
+    env: process.env,
+  });
   if (!opts.authChoice && inferredAuthChoice.matches.length > 1) {
     runtime.error(
       [
@@ -126,7 +131,10 @@ export async function runNonInteractiveLocalSetup(params: {
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  await writeConfigFile(nextConfig);
+  await replaceConfigFile({
+    nextConfig,
+    ...(baseHash !== undefined ? { baseHash } : {}),
+  });
   logConfigUpdated(runtime);
 
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {

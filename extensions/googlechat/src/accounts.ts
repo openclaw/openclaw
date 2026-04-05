@@ -6,6 +6,8 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { isSecretRef, type OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { z } from "zod";
 import type { GoogleChatAccountConfig } from "./types.config.js";
 
 export type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
@@ -22,6 +24,7 @@ export type ResolvedGoogleChatAccount = {
 
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
 const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
+const JsonRecordSchema = z.record(z.string(), z.unknown());
 
 const {
   listAccountIds: listGoogleChatAccountIds,
@@ -62,24 +65,19 @@ function mergeGoogleChatAccountConfig(
 }
 
 function parseServiceAccount(value: unknown): Record<string, unknown> | null {
-  if (value && typeof value === "object") {
-    if (isSecretRef(value)) {
+  if (isSecretRef(value)) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
       return null;
     }
-    return value as Record<string, unknown>;
+    return safeParseJsonWithSchema(JsonRecordSchema, trimmed);
   }
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  try {
-    return JSON.parse(trimmed) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+
+  return safeParseWithSchema(JsonRecordSchema, value);
 }
 
 function resolveCredentialsFromConfig(params: {
@@ -132,7 +130,9 @@ export function resolveGoogleChatAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedGoogleChatAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? params.cfg.channels?.["googlechat"]?.defaultAccount,
+  );
   const baseEnabled = params.cfg.channels?.["googlechat"]?.enabled !== false;
   const merged = mergeGoogleChatAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;

@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
     store,
     resolveOpenClawAgentDir: vi.fn().mockReturnValue("/tmp/openclaw-agent"),
     resolveAgentDir: vi.fn().mockReturnValue("/tmp/openclaw-agent"),
+    resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/openclaw-agent/workspace"),
     resolveAgentExplicitModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentEffectiveModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
@@ -46,6 +47,7 @@ const mocks = vi.hoisted(() => {
     resolveAuthStorePathForDisplay: vi
       .fn()
       .mockReturnValue("/tmp/openclaw-agent/auth-profiles.json"),
+    resolveProfileUnusableUntilForDisplay: vi.fn().mockReturnValue(undefined),
     resolveEnvApiKey: vi.fn((provider: string) => {
       if (provider === "openai") {
         return {
@@ -72,8 +74,8 @@ const mocks = vi.hoisted(() => {
     loadConfig: vi.fn().mockReturnValue({
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-opus-4-5", fallbacks: [] },
-          models: { "anthropic/claude-opus-4-5": { alias: "Opus" } },
+          model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] },
+          models: { "anthropic/claude-opus-4-6": { alias: "Opus" } },
         },
       },
       models: { providers: {} },
@@ -92,21 +94,19 @@ async function loadFreshModelsStatusCommandModuleForTest() {
   }));
   vi.doMock("../../agents/agent-scope.js", () => ({
     resolveAgentDir: mocks.resolveAgentDir,
+    resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
     resolveAgentExplicitModelPrimary: mocks.resolveAgentExplicitModelPrimary,
     resolveAgentEffectiveModelPrimary: mocks.resolveAgentEffectiveModelPrimary,
     resolveAgentModelFallbacksOverride: mocks.resolveAgentModelFallbacksOverride,
     listAgentIds: mocks.listAgentIds,
   }));
-  vi.doMock("../../agents/auth-profiles.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../../agents/auth-profiles.js")>();
-    return {
-      ...actual,
-      ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-      listProfilesForProvider: mocks.listProfilesForProvider,
-      resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
-      resolveAuthStorePathForDisplay: mocks.resolveAuthStorePathForDisplay,
-    };
-  });
+  vi.doMock("../../agents/auth-profiles.js", () => ({
+    ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+    listProfilesForProvider: mocks.listProfilesForProvider,
+    resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
+    resolveAuthStorePathForDisplay: mocks.resolveAuthStorePathForDisplay,
+    resolveProfileUnusableUntilForDisplay: mocks.resolveProfileUnusableUntilForDisplay,
+  }));
   vi.doMock("../../agents/model-auth.js", () => ({
     resolveEnvApiKey: mocks.resolveEnvApiKey,
     hasUsableCustomProviderApiKey: mocks.hasUsableCustomProviderApiKey,
@@ -117,21 +117,23 @@ async function loadFreshModelsStatusCommandModuleForTest() {
     getShellEnvAppliedKeys: mocks.getShellEnvAppliedKeys,
     shouldEnableShellEnvFallback: mocks.shouldEnableShellEnvFallback,
   }));
-  vi.doMock("../../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../../config/config.js")>();
+  vi.doMock("../../config/config.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
     return {
       ...actual,
       createConfigIO: mocks.createConfigIO,
       loadConfig: mocks.loadConfig,
     };
   });
-  vi.doMock("../../infra/provider-usage.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../../infra/provider-usage.js")>();
-    return {
-      ...actual,
-      loadProviderUsageSummary: mocks.loadProviderUsageSummary,
-    };
-  });
+  vi.doMock("./load-config.js", () => ({
+    loadModelsConfig: vi.fn(async () => mocks.loadConfig()),
+  }));
+  vi.doMock("../../infra/provider-usage.js", () => ({
+    formatUsageWindowSummary: vi.fn().mockReturnValue("-"),
+    loadProviderUsageSummary: mocks.loadProviderUsageSummary,
+    resolveUsageProviderId: vi.fn((providerId: string) => providerId),
+  }));
   ({ modelsStatusCommand } = await import("./list.status-command.js"));
 }
 
@@ -209,7 +211,7 @@ describe("modelsStatusCommand auth overview", () => {
     const payload = JSON.parse(String((runtime.log as Mock).mock.calls[0]?.[0]));
 
     expect(mocks.resolveOpenClawAgentDir).toHaveBeenCalled();
-    expect(payload.defaultModel).toBe("anthropic/claude-opus-4-5");
+    expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
     expect(payload.configPath).toBe("/tmp/openclaw-dev/openclaw.json");
     expect(payload.auth.storePath).toBe("/tmp/openclaw-agent/auth-profiles.json");
     expect(payload.auth.shellEnvFallback.enabled).toBe(true);
@@ -291,6 +293,87 @@ describe("modelsStatusCommand auth overview", () => {
         });
       },
     );
+  });
+
+  it("does not report cli backends as missing auth", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "claude-cli/claude-sonnet-4-6", fallbacks: [] },
+          models: { "claude-cli/claude-sonnet-4-6": {} },
+          cliBackends: { "claude-cli": {} },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    });
+    mocks.resolveEnvApiKey.mockImplementation(() => null);
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      expect(payload.defaultModel).toBe("claude-cli/claude-sonnet-4-6");
+      expect(payload.auth.missingProvidersInUse).toEqual([]);
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+    }
+  });
+
+  it("dedupes alias and canonical provider ids in auth provider summaries", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalResolveEnvApiKey = mocks.resolveEnvApiKey.getMockImplementation();
+
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "z.ai/glm-4.7", fallbacks: [] },
+          models: { "z.ai/glm-4.7": {} },
+        },
+      },
+      models: { providers: { "z.ai": {} } },
+      env: { shellEnv: { enabled: true } },
+    });
+    mocks.resolveEnvApiKey.mockImplementation((provider: string) => {
+      if (provider === "zai" || provider === "z.ai" || provider === "z-ai") {
+        return {
+          apiKey: "sk-zai-0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
+          source: "shell env: ZAI_API_KEY",
+        };
+      }
+      return null;
+    });
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const providers = payload.auth.providers as Array<{ provider: string }>;
+      expect(providers.filter((provider) => provider.provider === "zai")).toHaveLength(1);
+      expect(providers.some((provider) => provider.provider === "z.ai")).toBe(false);
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalResolveEnvApiKey) {
+        mocks.resolveEnvApiKey.mockImplementation(originalResolveEnvApiKey);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+    }
   });
 
   it("labels defaults when --agent has no overrides", async () => {

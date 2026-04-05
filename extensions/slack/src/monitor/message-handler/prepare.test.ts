@@ -2,11 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { App } from "@slack/bolt";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../../src/channels/plugins/contracts/suites.js";
-import type { OpenClawConfig } from "../../../../../src/config/config.js";
-import { resolveAgentRoute } from "../../../../../src/routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../../../src/routing/session-key.js";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../../src/channels/plugins/contracts/test-helpers.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -212,6 +212,33 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared).toBeTruthy();
     // oxlint-disable-next-line typescript/no-explicit-any
     expectInboundContextContract(prepared!.ctxPayload as any);
+  });
+
+  it("does not enable Slack status reactions when the message timestamp is missing", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "all",
+          statusReactions: { enabled: true },
+        },
+        channels: { slack: { enabled: true } },
+      } as OpenClawConfig,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+      channel: "D123",
+      channel_type: "im",
+      user: "U1",
+      text: "hi",
+      event_ts: "1.000",
+    } as SlackMessageEvent);
+
+    expect(prepared).toBeTruthy();
+    expect(prepared?.ackReactionMessageTs).toBeUndefined();
+    expect(prepared?.ackReactionPromise).toBeNull();
   });
 
   it("includes forwarded shared attachment text in raw body", async () => {

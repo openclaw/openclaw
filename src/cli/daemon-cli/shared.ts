@@ -4,12 +4,12 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
+import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
 import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
 import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
-import { getResolvedLoggerSettings } from "../../logging.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
@@ -17,6 +17,7 @@ import { createDaemonActionContext } from "./response.js";
 
 export { formatRuntimeStatus };
 export { parsePort };
+export { resolveDaemonContainerContext };
 
 export function createDaemonInstallActionContext(jsonFlag: unknown) {
   const json = Boolean(jsonFlag);
@@ -145,18 +146,13 @@ export function normalizeListenerAddress(raw: string): string {
 export function renderRuntimeHints(
   runtime: { missingUnit?: boolean; status?: string } | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  logFile?: string | null,
 ): string[] {
   if (!runtime) {
     return [];
   }
   const hints: string[] = [];
-  const fileLog = (() => {
-    try {
-      return getResolvedLoggerSettings().file;
-    } catch {
-      return null;
-    }
-  })();
+  const fileLog = logFile ?? null;
   if (runtime.missingUnit) {
     hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
     if (fileLog) {
@@ -181,7 +177,7 @@ export function renderRuntimeHints(
 
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const profile = env.OPENCLAW_PROFILE;
-  const container = env.OPENCLAW_CONTAINER_HINT?.trim() || env.OPENCLAW_CONTAINER?.trim();
+  const container = resolveDaemonContainerContext(env);
   const hints = buildPlatformServiceStartHints({
     installCommand: formatCliCommand("openclaw gateway install", env),
     startCommand: formatCliCommand("openclaw gateway", env),
@@ -199,7 +195,7 @@ export function filterContainerGenericHints(
   hints: string[],
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  if (!(env.OPENCLAW_CONTAINER_HINT?.trim() || env.OPENCLAW_CONTAINER?.trim())) {
+  if (!resolveDaemonContainerContext(env)) {
     return hints;
   }
   return hints.filter(

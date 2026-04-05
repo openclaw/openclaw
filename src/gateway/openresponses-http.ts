@@ -30,6 +30,7 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+import { wrapExternalContent } from "../security/external-content.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -41,6 +42,8 @@ import {
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
+  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
@@ -64,6 +67,13 @@ type OpenResponsesHttpOptions = {
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
+
+function wrapUntrustedFileContent(content: string): string {
+  return wrapExternalContent(content, {
+    source: "unknown",
+    includeWarning: false,
+  });
+}
 
 // In-memory map from responseId -> sessionKey for previous_response_id continuity.
 // Entries are evicted after 30 minutes to bound memory usage.
@@ -195,6 +205,7 @@ export const __testing = {
   resetResponseSessionState() {
     responseSessionMap.clear();
   },
+  wrapUntrustedFileContent,
   storeResponseSessionAt(
     responseId: string,
     sessionKey: string,
@@ -255,7 +266,16 @@ function resolveResponsesLimits(
 }
 
 function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
-  return (body.tools ?? []) as ClientToolDefinition[];
+  // Normalize from Responses API flat format to the internal wrapped format.
+  return (body.tools ?? []).map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: tool.strict,
+    },
+  }));
 }
 
 function applyToolChoice(params: {
@@ -415,6 +435,7 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  senderIsOwner: boolean;
   deps: ReturnType<typeof createDefaultDeps>;
 }) {
   return agentCommandFromIngress(
@@ -430,8 +451,7 @@ async function runResponsesAgentCommand(params: {
       deliver: false,
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
-      // HTTP API callers are authenticated operator clients for this gateway context.
-      senderIsOwner: true,
+      senderIsOwner: params.senderIsOwner,
       allowModelOverride: true,
     },
     defaultRuntime,
@@ -452,6 +472,10 @@ export async function handleOpenResponsesHttpRequest(
       : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/responses",
+    requiredOperatorMethod: "chat.send",
+    // Compat HTTP uses a different scope model from generic HTTP helpers:
+    // shared-secret bearer auth is treated as full operator access here.
+    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
@@ -464,6 +488,9 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return true;
   }
+  // On the compat surface, shared-secret bearer auth is also treated as an
+  // owner sender so owner-only tool policy matches the documented contract.
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
 
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
@@ -575,11 +602,12 @@ export async function handleOpenResponsesHttpRequest(
                       },
                 limits: limits.files,
               });
-              if (file.text?.trim()) {
+              const rawText = file.text;
+              if (rawText?.trim()) {
                 fileContexts.push(
                   renderFileContextBlock({
                     filename: file.filename,
-                    content: file.text,
+                    content: wrapUntrustedFileContent(rawText),
                   }),
                 );
               } else if (file.images && file.images.length > 0) {
@@ -694,6 +722,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner,
         deps,
       });
 
@@ -901,6 +930,11 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
+      const text = evt.data?.text;
+      const replace = evt.data?.replace === true;
+      if (replace && typeof text === "string") {
+        accumulatedText = text;
+      }
       const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
@@ -946,6 +980,7 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        senderIsOwner,
         deps,
       });
 

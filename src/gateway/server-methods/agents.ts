@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { movePathToTrash } from "../../../extensions/browser/runtime-api.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -18,7 +19,6 @@ import {
   ensureAgentWorkspace,
   isWorkspaceSetupCompleted,
 } from "../../agents/workspace.js";
-import { movePathToTrash } from "../../browser/trash.js";
 import {
   applyAgentConfig,
   findAgentEntryIndex,

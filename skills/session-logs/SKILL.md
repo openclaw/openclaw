@@ -38,7 +38,9 @@ Use this skill when the user asks about prior chats, parent conversations, or hi
 
 ## Location
 
-Session logs live at: `~/.openclaw/agents/<agentId>/sessions/` (use the `agent=<id>` value from the system prompt Runtime line).
+Session logs live under the active state directory:
+`$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/` (default: `~/.openclaw/agents/<agentId>/sessions/`).
+Use the `agent=<id>` value from the system prompt Runtime line.
 
 - **`sessions.json`** - Index mapping session keys to session IDs
 - **`<session-id>.jsonl`** - Full conversation transcript per session
@@ -58,7 +60,9 @@ Each `.jsonl` file contains messages with:
 ### List all sessions by date and size
 
 ```bash
-for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl; do
+AGENT_ID="<agentId>"
+SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
+for f in "$SESSION_DIR"/*.jsonl; do
   date=$(head -1 "$f" | jq -r '.timestamp' | cut -dT -f1)
   size=$(ls -lh "$f" | awk '{print $5}')
   echo "$date $size $(basename $f)"
@@ -68,7 +72,9 @@ done | sort -r
 ### Find sessions from a specific day
 
 ```bash
-for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl; do
+AGENT_ID="<agentId>"
+SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
+for f in "$SESSION_DIR"/*.jsonl; do
   head -1 "$f" | jq -r '.timestamp' | grep -q "2026-01-06" && echo "$f"
 done
 ```
@@ -94,7 +100,9 @@ jq -s '[.[] | .message.usage.cost.total // 0] | add' <session>.jsonl
 ### Daily cost summary
 
 ```bash
-for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl; do
+AGENT_ID="<agentId>"
+SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
+for f in "$SESSION_DIR"/*.jsonl; do
   date=$(head -1 "$f" | jq -r '.timestamp' | cut -dT -f1)
   cost=$(jq -s '[.[] | .message.usage.cost.total // 0] | add' "$f")
   echo "$date $cost"
@@ -122,7 +130,9 @@ jq -r '.message.content[]? | select(.type == "toolCall") | .name' <session>.json
 ### Search across ALL sessions for a phrase
 
 ```bash
-rg -l "phrase" ~/.openclaw/agents/<agentId>/sessions/*.jsonl
+AGENT_ID="<agentId>"
+SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
+rg -l "phrase" "$SESSION_DIR"/*.jsonl
 ```
 
 ## Tips
@@ -135,5 +145,7 @@ rg -l "phrase" ~/.openclaw/agents/<agentId>/sessions/*.jsonl
 ## Fast text-only hint (low noise)
 
 ```bash
-jq -r 'select(.type=="message") | .message.content[]? | select(.type=="text") | .text' ~/.openclaw/agents/<agentId>/sessions/<id>.jsonl | rg 'keyword'
+AGENT_ID="<agentId>"
+SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
+jq -r 'select(.type=="message") | .message.content[]? | select(.type=="text") | .text' "$SESSION_DIR"/<id>.jsonl | rg 'keyword'
 ```

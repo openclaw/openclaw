@@ -212,19 +212,34 @@ async function approvePendingPairingIfNeeded() {
   const pending = list.pending.at(0);
   expect(pending?.requestId).toBeDefined();
   if (pending?.requestId) {
-    await approveDevicePairing(pending.requestId);
+    await approveDevicePairing(pending.requestId, {
+      callerScopes: pending.scopes ?? ["operator.admin"],
+    });
   }
 }
 
 async function configureTrustedProxyControlUiAuth() {
-  testState.gatewayAuth = {
-    mode: "trusted-proxy",
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-    },
+  const { writeConfigFile } = await import("../config/config.js");
+  testState.gatewayAuth = undefined;
+  testState.gatewayControlUi = {
+    ...testState.gatewayControlUi,
+    allowedOrigins: ["https://localhost"],
   };
-  await writeTrustedProxyControlUiConfig();
+  await writeConfigFile({
+    gateway: {
+      auth: {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["x-forwarded-proto"],
+        },
+      },
+      trustedProxies: ["127.0.0.1"],
+      controlUi: {
+        allowedOrigins: ["https://localhost"],
+      },
+    },
+  });
 }
 
 async function writeTrustedProxyControlUiConfig(params?: { allowInsecureAuth?: boolean }) {
@@ -313,7 +328,9 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
     // oxlint-disable-next-line typescript/no-explicit-any
   } as any;
 
-  const { server, ws, port, prevToken } = await startServerWithClient();
+  const { server, ws, port, prevToken } = await startServerWithClient(undefined, {
+    controlUiEnabled: true,
+  });
   const deviceIdentityPath = nextAuthIdentityPath("openclaw-auth-rate-limit");
   try {
     const initial = await connectReq(ws, { token: "secret", deviceIdentityPath });
@@ -390,6 +407,6 @@ export {
   writeTrustedProxyControlUiConfig,
 };
 export { ConnectErrorDetailCodes } from "./protocol/connect-error-details.js";
-export { getHandshakeTimeoutMs } from "./server-constants.js";
+export { getPreauthHandshakeTimeoutMsFromEnv } from "./handshake-timeouts.js";
 export { PROTOCOL_VERSION } from "./protocol/index.js";
 export { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";

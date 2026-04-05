@@ -6,7 +6,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VM_NAME="macOS Tahoe"
 SNAPSHOT_HINT="macOS 26.3.1 latest"
 MODE="both"
-OPENAI_API_KEY_ENV="OPENAI_API_KEY"
+PROVIDER="openai"
+API_KEY_ENV=""
+AUTH_CHOICE=""
+AUTH_KEY_FLAG=""
+MODEL_ID=""
 INSTALL_URL="https://openclaw.ai/install.sh"
 HOST_PORT="18425"
 HOST_PORT_EXPLICIT=0
@@ -111,8 +115,11 @@ Options:
                              fresh   = fresh snapshot -> target package/current main tgz -> onboard smoke
                              upgrade = fresh snapshot -> latest release -> target package/current main tgz -> onboard smoke
                              both    = run both lanes
-  --openai-api-key-env <var> Host env var name for OpenAI API key.
-                             Default: OPENAI_API_KEY
+  --provider <openai|anthropic|minimax>
+                             Provider auth/model lane. Default: openai
+  --api-key-env <var>        Host env var name for provider API key.
+                             Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
+  --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
   --install-url <url>        Installer URL for latest release. Default: https://openclaw.ai/install.sh
   --host-port <port>         Host HTTP port for current-main tgz. Default: 18425
   --host-ip <ip>             Override Parallels host IP.
@@ -148,8 +155,12 @@ while [[ $# -gt 0 ]]; do
       MODE="$2"
       shift 2
       ;;
-    --openai-api-key-env)
-      OPENAI_API_KEY_ENV="$2"
+    --provider)
+      PROVIDER="$2"
+      shift 2
+      ;;
+    --api-key-env|--openai-api-key-env)
+      API_KEY_ENV="$2"
       shift 2
       ;;
     --install-url)
@@ -218,8 +229,32 @@ case "$MODE" in
     ;;
 esac
 
-OPENAI_API_KEY_VALUE="${!OPENAI_API_KEY_ENV:-}"
-[[ -n "$OPENAI_API_KEY_VALUE" ]] || die "$OPENAI_API_KEY_ENV is required"
+case "$PROVIDER" in
+  openai)
+    AUTH_CHOICE="openai-api-key"
+    AUTH_KEY_FLAG="openai-api-key"
+    MODEL_ID="openai/gpt-5.4"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
+    ;;
+  anthropic)
+    AUTH_CHOICE="apiKey"
+    AUTH_KEY_FLAG="anthropic-api-key"
+    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
+    ;;
+  minimax)
+    AUTH_CHOICE="minimax-global-api"
+    AUTH_KEY_FLAG="minimax-api-key"
+    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
+    ;;
+  *)
+    die "invalid --provider: $PROVIDER"
+    ;;
+esac
+
+API_KEY_VALUE="${!API_KEY_ENV:-}"
+[[ -n "$API_KEY_VALUE" ]] || die "$API_KEY_ENV is required"
 
 if [[ -n "$DISCORD_TOKEN_ENV" || -n "$DISCORD_GUILD_ID" || -n "$DISCORD_CHANNEL_ID" ]]; then
   [[ -n "$DISCORD_TOKEN_ENV" ]] || die "--discord-token-env is required when Discord smoke args are set"
@@ -439,6 +474,62 @@ wait_for_current_user() {
   return 1
 }
 
+host_timeout_exec() {
+  local timeout_s="$1"
+  shift
+  HOST_TIMEOUT_S="$timeout_s" python3 - "$@" <<'PY'
+import os
+import subprocess
+import sys
+
+timeout = int(os.environ["HOST_TIMEOUT_S"])
+args = sys.argv[1:]
+
+try:
+    completed = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+except subprocess.TimeoutExpired as exc:
+    if exc.stdout:
+        sys.stdout.buffer.write(exc.stdout)
+    if exc.stderr:
+        sys.stderr.buffer.write(exc.stderr)
+    sys.stderr.write(f"host timeout after {timeout}s\n")
+    raise SystemExit(124)
+
+if completed.stdout:
+    sys.stdout.buffer.write(completed.stdout)
+if completed.stderr:
+    sys.stderr.buffer.write(completed.stderr)
+raise SystemExit(completed.returncode)
+PY
+}
+
+snapshot_switch_with_retry() {
+  local snapshot_id="$1"
+  local attempt rc status
+  rc=0
+  for attempt in 1 2; do
+    set +e
+    host_timeout_exec "$TIMEOUT_SNAPSHOT_S" prlctl snapshot-switch "$VM_NAME" --id "$snapshot_id" >/dev/null
+    rc=$?
+    set -e
+    if [[ $rc -eq 0 ]]; then
+      return 0
+    fi
+    # Tahoe occasionally gets stuck mid snapshot-switch and leaves the guest
+    # running or suspended. Reset that state and try once more before failing
+    # the whole lane.
+    warn "snapshot-switch attempt $attempt failed (rc=$rc)"
+    status="$(prlctl status "$VM_NAME" 2>/dev/null || true)"
+    [[ -n "$status" ]] && warn "vm status after snapshot-switch failure: $status"
+    if [[ "$status" == *" running" || "$status" == *" suspended" ]]; then
+      prlctl stop "$VM_NAME" --kill >/dev/null 2>&1 || true
+      wait_for_vm_status "stopped" || true
+    fi
+    sleep 3
+  done
+  return "$rc"
+}
+
 guest_current_user_exec() {
   prlctl exec "$VM_NAME" --current-user /usr/bin/env \
     PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin \
@@ -516,7 +607,7 @@ guest_current_user_sh() {
 restore_snapshot() {
   local snapshot_id="$1"
   say "Restore snapshot $SNAPSHOT_HINT ($snapshot_id)"
-  prlctl snapshot-switch "$VM_NAME" --id "$snapshot_id" >/dev/null
+  snapshot_switch_with_retry "$snapshot_id" || die "snapshot switch failed for $VM_NAME"
   if [[ "$SNAPSHOT_STATE" == "poweroff" ]]; then
     wait_for_vm_status "stopped" || die "restored poweroff snapshot did not reach stopped state in $VM_NAME"
     say "Start restored poweroff snapshot $SNAPSHOT_NAME"
@@ -712,11 +803,11 @@ EOF
 
 run_ref_onboard() {
   guest_current_user_cli \
-    /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" \
+    /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" \
     "$GUEST_OPENCLAW_BIN" onboard \
     --non-interactive \
     --mode local \
-    --auth-choice openai-api-key \
+    --auth-choice "$AUTH_CHOICE" \
     --secret-input-mode ref \
     --gateway-port 18789 \
     --gateway-bind loopback \
@@ -739,7 +830,9 @@ show_gateway_status_compat() {
 }
 
 verify_turn() {
+  guest_current_user_cli "$GUEST_OPENCLAW_BIN" models set "$MODEL_ID"
   guest_current_user_cli \
+    /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" \
     "$GUEST_OPENCLAW_BIN" agent \
     --agent main \
     --message "Reply with exact ASCII text OK only." \
@@ -1081,6 +1174,7 @@ import sys
 
 summary = {
     "vm": os.environ["SUMMARY_VM"],
+    "provider": os.environ["SUMMARY_PROVIDER"],
     "snapshotHint": os.environ["SUMMARY_SNAPSHOT_HINT"],
     "snapshotId": os.environ["SUMMARY_SNAPSHOT_ID"],
     "mode": os.environ["SUMMARY_MODE"],
@@ -1245,13 +1339,14 @@ fi
 
 SUMMARY_JSON_PATH="$(
   SUMMARY_VM="$VM_NAME" \
+  SUMMARY_PROVIDER="$PROVIDER" \
   SUMMARY_SNAPSHOT_HINT="$SNAPSHOT_HINT" \
   SUMMARY_SNAPSHOT_ID="$SNAPSHOT_ID" \
   SUMMARY_MODE="$MODE" \
   SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
   SUMMARY_INSTALL_VERSION="$INSTALL_VERSION" \
   SUMMARY_TARGET_PACKAGE_SPEC="$TARGET_PACKAGE_SPEC" \
-  SUMMARY_CURRENT_HEAD="$(git rev-parse --short HEAD)" \
+  SUMMARY_CURRENT_HEAD="${PACKED_MAIN_COMMIT_SHORT:-$(git rev-parse --short HEAD)}" \
   SUMMARY_RUN_DIR="$RUN_DIR" \
   SUMMARY_FRESH_MAIN_STATUS="$FRESH_MAIN_STATUS" \
   SUMMARY_FRESH_MAIN_VERSION="$FRESH_MAIN_VERSION" \

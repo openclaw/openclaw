@@ -1,6 +1,9 @@
 import os from "node:os";
-import { formatSkillsForPrompt, type Skill } from "@mariozechner/pi-coding-agent";
+import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
+import { createCanonicalFixtureSkill } from "../skills.test-helpers.js";
+import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import type { SkillEntry } from "./types.js";
 import {
   formatSkillsCompact,
@@ -9,18 +12,25 @@ import {
 } from "./workspace.js";
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
-  return {
+  return createCanonicalFixtureSkill({
     name,
     description: desc,
     filePath,
     baseDir: `/skills/${name}`,
     source: "workspace",
-    disableModelInvocation: false,
-  };
+  });
 }
 
 function makeEntry(skill: Skill): SkillEntry {
-  return { skill, frontmatter: {} };
+  return {
+    skill,
+    frontmatter: {},
+    exposure: {
+      includeInRuntimeRegistry: true,
+      includeInAvailableSkillsPrompt: true,
+      userInvocable: true,
+    },
+  };
 }
 
 function buildPrompt(
@@ -36,11 +46,26 @@ function buildPrompt(
           ...(limits.maxCount !== undefined && { maxSkillsInPrompt: limits.maxCount }),
         },
       },
-    } as any,
+    } satisfies OpenClawConfig,
   });
 }
 
 describe("formatSkillsCompact", () => {
+  it("keeps the full-format XML output aligned with the upstream formatter for visible skills", () => {
+    const skills = [
+      makeSkill("weather", "Get weather <data> & forecasts"),
+      makeSkill("notes", "Summarize notes", "/tmp/notes/SKILL.md"),
+    ];
+    expect(formatSkillsForPrompt(skills)).toBe(upstreamFormatSkillsForPrompt(skills));
+  });
+
+  it("renders all passed skills in the full formatter without reapplying visibility policy", () => {
+    const hidden: Skill = { ...makeSkill("hidden"), disableModelInvocation: true };
+    const out = formatSkillsForPrompt([makeSkill("visible"), hidden]);
+    expect(out).toContain("visible");
+    expect(out).toContain("hidden");
+  });
+
   it("returns empty string for no skills", () => {
     expect(formatSkillsCompact([])).toBe("");
   });
@@ -53,11 +78,11 @@ describe("formatSkillsCompact", () => {
     expect(out).not.toContain("<description>");
   });
 
-  it("filters out disableModelInvocation skills", () => {
+  it("renders all passed skills without reapplying visibility policy", () => {
     const hidden: Skill = { ...makeSkill("hidden"), disableModelInvocation: true };
     const out = formatSkillsCompact([makeSkill("visible"), hidden]);
     expect(out).toContain("visible");
-    expect(out).not.toContain("hidden");
+    expect(out).toContain("hidden");
   });
 
   it("escapes XML special characters", () => {
@@ -75,6 +100,29 @@ describe("formatSkillsCompact", () => {
 });
 
 describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
+  it("respects explicit exposure metadata before compact formatting", () => {
+    const hidden = makeEntry({ ...makeSkill("hidden"), disableModelInvocation: true });
+    hidden.exposure = {
+      includeInRuntimeRegistry: true,
+      includeInAvailableSkillsPrompt: false,
+      userInvocable: true,
+    };
+
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [makeEntry(makeSkill("visible")), hidden],
+      config: {
+        skills: {
+          limits: {
+            maxSkillsPromptChars: 4_000,
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+
+    expect(prompt).toContain("visible");
+    expect(prompt).not.toContain("hidden");
+  });
+
   it("tier 1: uses full format when under budget", () => {
     const skills = [makeSkill("weather", "Get weather data")];
     const prompt = buildPrompt(skills, { maxChars: 50_000 });

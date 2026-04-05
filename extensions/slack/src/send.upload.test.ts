@@ -4,6 +4,14 @@ import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
 
 // --- Module mocks (must precede dynamic import) ---
 installSlackBlockTestMocks();
+const loadOutboundMediaFromUrlMock = vi.hoisted(() =>
+  vi.fn(async (_mediaUrl: string, _options?: unknown) => ({
+    buffer: Buffer.from("fake-image"),
+    contentType: "image/png",
+    kind: "image",
+    fileName: "screenshot.png",
+  })),
+);
 const fetchWithSsrFGuard = vi.fn(
   async (params: { url: string; init?: RequestInit }) =>
     ({
@@ -22,17 +30,20 @@ vi.mock("../../../src/infra/net/fetch-guard.js", () => ({
   }),
 }));
 
-vi.mock("openclaw/plugin-sdk/web-media", () => ({
-  loadWebMedia: vi.fn(async () => ({
-    buffer: Buffer.from("fake-image"),
-    contentType: "image/png",
-    kind: "image",
-    fileName: "screenshot.png",
-  })),
-}));
+vi.mock("./runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+  const mockedLoadOutboundMediaFromUrl =
+    loadOutboundMediaFromUrlMock as unknown as typeof actual.loadOutboundMediaFromUrl;
+  return {
+    ...actual,
+    loadOutboundMediaFromUrl: (...args: Parameters<typeof actual.loadOutboundMediaFromUrl>) =>
+      mockedLoadOutboundMediaFromUrl(...args),
+  };
+});
 
 let sendMessageSlack: typeof import("./send.js").sendMessageSlack;
 let clearSlackDmChannelCache: typeof import("./send.js").clearSlackDmChannelCache;
+({ sendMessageSlack, clearSlackDmChannelCache } = await import("./send.js"));
 
 type UploadTestClient = WebClient & {
   conversations: { open: ReturnType<typeof vi.fn> };
@@ -65,16 +76,12 @@ function createUploadTestClient(): UploadTestClient {
 describe("sendMessageSlack file upload with user IDs", () => {
   const originalFetch = globalThis.fetch;
 
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ sendMessageSlack, clearSlackDmChannelCache } = await import("./send.js"));
-  });
-
   beforeEach(() => {
     globalThis.fetch = vi.fn(
       async () => new Response("ok", { status: 200 }),
     ) as unknown as typeof fetch;
     fetchWithSsrFGuard.mockClear();
+    loadOutboundMediaFromUrlMock.mockClear();
     clearSlackDmChannelCache();
   });
 
@@ -225,6 +232,49 @@ describe("sendMessageSlack file upload with user IDs", () => {
         channel_id: "C123CHAN",
         initial_comment: "caption",
         thread_ts: "171.222",
+      }),
+    );
+  });
+
+  it("uses explicit upload filename and title overrides when provided", async () => {
+    const client = createUploadTestClient();
+
+    await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      client,
+      mediaUrl: "/tmp/threaded.png",
+      uploadFileName: "custom-name.bin",
+      uploadTitle: "Custom Title",
+    });
+
+    expect(client.files.getUploadURLExternal).toHaveBeenCalledWith({
+      filename: "custom-name.bin",
+      length: Buffer.from("fake-image").length,
+    });
+    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        files: [expect.objectContaining({ id: "F001", title: "Custom Title" })],
+      }),
+    );
+  });
+
+  it("uses uploadFileName as the title fallback when uploadTitle is omitted", async () => {
+    const client = createUploadTestClient();
+
+    await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      client,
+      mediaUrl: "/tmp/threaded.png",
+      uploadFileName: "custom-name.bin",
+    });
+
+    expect(client.files.getUploadURLExternal).toHaveBeenCalledWith({
+      filename: "custom-name.bin",
+      length: Buffer.from("fake-image").length,
+    });
+    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        files: [expect.objectContaining({ id: "F001", title: "custom-name.bin" })],
       }),
     );
   });

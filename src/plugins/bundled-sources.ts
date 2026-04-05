@@ -84,3 +84,20 @@ export function findBundledPluginSource(params: {
     lookup: params.lookup,
   });
 }
+
+export function resolveBundledPluginInstallCommandHint(params: {
+  pluginId: string;
+  workspaceDir?: string;
+  /** Use an explicit env when bundled roots should resolve independently from process.env. */
+  env?: NodeJS.ProcessEnv;
+}): string | null {
+  const bundledSource = findBundledPluginSource({
+    lookup: { kind: "pluginId", value: params.pluginId },
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  if (!bundledSource?.localPath) {
+    return null;
+  }
+  return `openclaw plugins install ${bundledSource.localPath}`;
+}

@@ -27,8 +27,12 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   })),
   providers: [],
   speechProviders: [],
+  realtimeTranscriptionProviders: [],
+  realtimeVoiceProviders: [],
   mediaUnderstandingProviders: [],
   imageGenerationProviders: [],
+  videoGenerationProviders: [],
+  webFetchProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
@@ -43,6 +47,7 @@ export const createChannelTestPluginBase = (params: {
   id: ChannelId;
   label?: string;
   docsPath?: string;
+  markdownCapable?: boolean;
   capabilities?: ChannelCapabilities;
   config?: Partial<ChannelPlugin["config"]>;
 }): Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> => ({
@@ -53,6 +58,7 @@ export const createChannelTestPluginBase = (params: {
     selectionLabel: params.label ?? String(params.id),
     docsPath: params.docsPath ?? `/channels/${params.id}`,
     blurb: "test stub.",
+    ...(params.markdownCapable !== undefined ? { markdownCapable: params.markdownCapable } : {}),
   },
   capabilities: params.capabilities ?? { chatTypes: ["direct"] },
   config: {
@@ -115,4 +121,35 @@ export const createOutboundTestPlugin = (params: {
   }),
   outbound: params.outbound,
   ...(params.messaging ? { messaging: params.messaging } : {}),
+});
+
+export type BindingResolverTestPlugin = Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config"
+> & {
+  setup?: Pick<NonNullable<ChannelPlugin["setup"]>, "resolveBindingAccountId">;
+};
+
+export const createBindingResolverTestPlugin = (params: {
+  id: ChannelId;
+  label?: string;
+  docsPath?: string;
+  capabilities?: ChannelCapabilities;
+  config?: Partial<ChannelPlugin["config"]>;
+  resolveBindingAccountId?: NonNullable<ChannelPlugin["setup"]>["resolveBindingAccountId"];
+}): BindingResolverTestPlugin => ({
+  ...createChannelTestPluginBase({
+    id: params.id,
+    label: params.label,
+    docsPath: params.docsPath,
+    capabilities: params.capabilities,
+    config: params.config,
+  }),
+  ...(params.resolveBindingAccountId
+    ? {
+        setup: {
+          resolveBindingAccountId: params.resolveBindingAccountId,
+        },
+      }
+    : {}),
 });

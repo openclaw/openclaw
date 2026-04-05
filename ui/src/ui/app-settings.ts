@@ -8,6 +8,7 @@ import {
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import type { OpenClawApp } from "./app.ts";
+import { loadAgentFiles } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents } from "./controllers/agents.ts";
@@ -16,6 +17,7 @@ import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
 import { loadCronJobs, loadCronRuns, loadCronStatus } from "./controllers/cron.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
+import { loadDreamingStatus } from "./controllers/dreaming.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
@@ -58,6 +60,10 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
   systemThemeCleanup?: (() => void) | null;
   pendingGatewayToken?: string | null;
+  dreamingStatusLoading: boolean;
+  dreamingStatusError: string | null;
+  dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
+  dreamingModeSaving: boolean;
 };
 
 export function applySettings(host: SettingsHost, next: UiSettings) {
@@ -246,6 +252,9 @@ export async function refreshActiveTab(host: SettingsHost) {
       host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
     if (agentId) {
       void loadAgentIdentity(host as unknown as OpenClawApp, agentId);
+      if (host.agentsPanel === "files") {
+        void loadAgentFiles(host as unknown as OpenClawApp, agentId);
+      }
       if (host.agentsPanel === "skills") {
         void loadAgentSkills(host as unknown as OpenClawApp, agentId);
       }
@@ -262,6 +271,10 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadDevices(host as unknown as OpenClawApp);
     await loadConfig(host as unknown as OpenClawApp);
     await loadExecApprovals(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "dreams") {
+    await loadConfig(host as unknown as OpenClawApp);
+    await loadDreamingStatus(host as unknown as OpenClawApp);
   }
   if (host.tab === "chat") {
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);

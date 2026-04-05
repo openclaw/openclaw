@@ -120,18 +120,18 @@ export async function sanitizeSessionMessagesImages(
       }
       const content = assistantMsg.content;
       if (Array.isArray(content)) {
+        const strippedContent = options?.preserveSignatures
+          ? content // Keep signatures for Antigravity Claude
+          : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
         if (!allowNonImageSanitization) {
           const nextContent = (await sanitizeContentBlocksImages(
-            content as unknown as ContentBlock[],
+            strippedContent as unknown as ContentBlock[],
             label,
             imageSanitization,
           )) as unknown as typeof assistantMsg.content;
           out.push({ ...assistantMsg, content: nextContent });
           continue;
         }
-        const strippedContent = options?.preserveSignatures
-          ? content // Keep signatures for Antigravity Claude
-          : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
 
         const filteredContent =
           options?.preserveSignatures &&

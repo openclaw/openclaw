@@ -28,18 +28,130 @@ shared `message` tool in core. Your plugin owns:
 - **Config** — account resolution and setup wizard
 - **Security** — DM policy and allowlists
 - **Pairing** — DM approval flow
+- **Session grammar** — how provider-specific conversation ids map to base chats, thread ids, and parent fallbacks
 - **Outbound** — sending text, media, and polls to the platform
 - **Threading** — how replies are threaded
 
-Core owns the shared message tool, prompt wiring, session bookkeeping, and
-dispatch.
+Core owns the shared message tool, prompt wiring, the outer session-key shape,
+generic `:thread:` bookkeeping, and dispatch.
+
+If your platform stores extra scope inside conversation ids, keep that parsing
+in the plugin with `messaging.resolveSessionConversation(...)`. That is the
+canonical hook for mapping `rawId` to the base conversation id, optional thread
+id, explicit `baseConversationId`, and any `parentConversationCandidates`.
+When you return `parentConversationCandidates`, keep them ordered from the
+narrowest parent to the broadest/base conversation.
+
+Bundled plugins that need the same parsing before the channel registry boots
+can also expose a top-level `session-key-api.ts` file with a matching
+`resolveSessionConversation(...)` export. Core uses that bootstrap-safe surface
+only when the runtime plugin registry is not available yet.
+
+`messaging.resolveParentConversationCandidates(...)` remains available as a
+legacy compatibility fallback when a plugin only needs parent fallbacks on top
+of the generic/raw id. If both hooks exist, core uses
+`resolveSessionConversation(...).parentConversationCandidates` first and only
+falls back to `resolveParentConversationCandidates(...)` when the canonical hook
+omits them.
+
+## Approvals and channel capabilities
+
+Most channel plugins do not need approval-specific code.
+
+- Core owns same-chat `/approve`, shared approval button payloads, and generic fallback delivery.
+- Prefer one `approvalCapability` object on the channel plugin when the channel needs approval-specific behavior.
+- `approvalCapability.authorizeActorAction` and `approvalCapability.getActionAvailabilityState` are the canonical approval-auth seam.
+- Use `outbound.shouldSuppressLocalPayloadPrompt` or `outbound.beforeDeliverPayload` for channel-specific payload lifecycle behavior such as hiding duplicate local approval prompts or sending typing indicators before delivery.
+- Use `approvalCapability.delivery` only for native approval routing or fallback suppression.
+- Use `approvalCapability.render` only when a channel truly needs custom approval payloads instead of the shared renderer.
+- If a channel can infer stable owner-like DM identities from existing config, use `createResolvedApproverActionAuthAdapter` from `openclaw/plugin-sdk/approval-runtime` to restrict same-chat `/approve` without adding approval-specific core logic.
+- If a channel needs native approval delivery, keep channel code focused on target normalization and transport hooks. Use `createChannelExecApprovalProfile`, `createChannelNativeOriginTargetResolver`, `createChannelApproverDmTargetResolver`, `createApproverRestrictedNativeApprovalCapability`, and `createChannelNativeApprovalRuntime` from `openclaw/plugin-sdk/approval-runtime` so core owns request filtering, routing, dedupe, expiry, and gateway subscription.
+- Native approval channels must route both `accountId` and `approvalKind` through those helpers. `accountId` keeps multi-account approval policy scoped to the right bot account, and `approvalKind` keeps exec vs plugin approval behavior available to the channel without hardcoded branches in core.
+- Preserve the delivered approval id kind end-to-end. Native clients should not
+  guess or rewrite exec vs plugin approval routing from channel-local state.
+- Different approval kinds can intentionally expose different native surfaces.
+  Current bundled examples:
+  - Slack keeps native approval routing available for both exec and plugin ids.
+  - Matrix keeps native DM/channel routing for exec approvals only and leaves
+    plugin approvals on the shared same-chat `/approve` path.
+- `createApproverRestrictedNativeApprovalAdapter` still exists as a compatibility wrapper, but new code should prefer the capability builder and expose `approvalCapability` on the plugin.
+
+For hot channel entrypoints, prefer the narrower runtime subpaths when you only
+need one part of that family:
+
+- `openclaw/plugin-sdk/approval-auth-runtime`
+- `openclaw/plugin-sdk/approval-client-runtime`
+- `openclaw/plugin-sdk/approval-delivery-runtime`
+- `openclaw/plugin-sdk/approval-native-runtime`
+- `openclaw/plugin-sdk/approval-reply-runtime`
+
+Likewise, prefer `openclaw/plugin-sdk/setup-runtime`,
+`openclaw/plugin-sdk/setup-adapter-runtime`,
+`openclaw/plugin-sdk/reply-runtime`,
+`openclaw/plugin-sdk/reply-dispatch-runtime`,
+`openclaw/plugin-sdk/reply-reference`, and
+`openclaw/plugin-sdk/reply-chunking` when you do not need the broader umbrella
+surface.
+
+For setup specifically:
+
+- `openclaw/plugin-sdk/setup-runtime` covers the runtime-safe setup helpers:
+  import-safe setup patch adapters (`createPatchedAccountSetupAdapter`,
+  `createEnvPatchedAccountSetupAdapter`,
+  `createSetupInputPresenceValidator`), lookup-note output,
+  `promptResolvedAllowFrom`, `splitSetupEntries`, and the delegated
+  setup-proxy builders
+- `openclaw/plugin-sdk/setup-adapter-runtime` is the narrow env-aware adapter
+  seam for `createEnvPatchedAccountSetupAdapter`
+- `openclaw/plugin-sdk/channel-setup` covers the optional-install setup
+  builders plus a few setup-safe primitives:
+  `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`,
+  `createOptionalChannelSetupWizard`, `DEFAULT_ACCOUNT_ID`,
+  `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, and
+  `splitSetupEntries`
+- use the broader `openclaw/plugin-sdk/setup` seam only when you also need the
+  heavier shared setup/config helpers such as
+  `moveSingleAccountChannelSectionToDefaultAccount(...)`
+
+If your channel only wants to advertise "install this plugin first" in setup
+surfaces, prefer `createOptionalChannelSetupSurface(...)`. The generated
+adapter/wizard fail closed on config writes and finalization, and they reuse
+the same install-required message across validation, finalize, and docs-link
+copy.
+
+For other hot channel paths, prefer the narrow helpers over broader legacy
+surfaces:
+
+- `openclaw/plugin-sdk/account-core`,
+  `openclaw/plugin-sdk/account-id`,
+  `openclaw/plugin-sdk/account-resolution`, and
+  `openclaw/plugin-sdk/account-helpers` for multi-account config and
+  default-account fallback
+- `openclaw/plugin-sdk/inbound-envelope` and
+  `openclaw/plugin-sdk/inbound-reply-dispatch` for inbound route/envelope and
+  record-and-dispatch wiring
+- `openclaw/plugin-sdk/messaging-targets` for target parsing/matching
+- `openclaw/plugin-sdk/outbound-media` and
+  `openclaw/plugin-sdk/outbound-runtime` for media loading plus outbound
+  identity/send delegates
+- `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
+  and adapter registration
+- `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
+  payload field layout is still required
+- `openclaw/plugin-sdk/telegram-command-config` for Telegram custom-command
+  normalization, duplicate/conflict validation, and a fallback-stable command
+  config contract
+
+Auth-only channels can usually stop at the default path: core handles approvals and the plugin just exposes outbound/auth capabilities. Native approval channels such as Matrix, Slack, Telegram, and custom chat transports should use the shared native helpers instead of rolling their own approval lifecycle.
 
 ## Walkthrough
 
 <Steps>
+  <a id="step-1-package-and-manifest"></a>
   <Step title="Package and manifest">
     Create the standard plugin files. The `channel` field in `package.json` is
-    what makes this a channel plugin:
+    what makes this a channel plugin. For the full package-metadata surface,
+    see [Plugin Setup and Config](/plugins/sdk-setup#openclawchannel):
 
     <CodeGroup>
     ```json package.json
@@ -98,8 +210,8 @@ dispatch.
     import {
       createChatChannelPlugin,
       createChannelPluginBase,
-    } from "openclaw/plugin-sdk/core";
-    import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+    } from "openclaw/plugin-sdk/channel-core";
+    import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
     import { acmeChatApi } from "./client.js"; // your platform API client
 
     type ResolvedAccount = {
@@ -206,7 +318,7 @@ dispatch.
     Create `index.ts`:
 
     ```typescript index.ts
-    import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+    import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
     import { acmeChatPlugin } from "./src/channel.js";
 
     export default defineChannelPluginEntry({
@@ -214,21 +326,39 @@ dispatch.
       name: "Acme Chat",
       description: "Acme Chat channel plugin",
       plugin: acmeChatPlugin,
-      registerFull(api) {
+      registerCliMetadata(api) {
         api.registerCli(
           ({ program }) => {
             program
               .command("acme-chat")
               .description("Acme Chat management");
           },
-          { commands: ["acme-chat"] },
+          {
+            descriptors: [
+              {
+                name: "acme-chat",
+                description: "Acme Chat management",
+                hasSubcommands: false,
+              },
+            ],
+          },
         );
+      },
+      registerFull(api) {
+        api.registerGatewayMethod(/* ... */);
       },
     });
     ```
 
-    `defineChannelPluginEntry` handles the setup/full registration split
-    automatically. See
+    Put channel-owned CLI descriptors in `registerCliMetadata(...)` so OpenClaw
+    can show them in root help without activating the full channel runtime,
+    while normal full loads still pick up the same descriptors for real command
+    registration. Keep `registerFull(...)` for runtime-only work.
+    If `registerFull(...)` registers gateway RPC methods, use a
+    plugin-specific prefix. Core admin namespaces (`config.*`,
+    `exec.approvals.*`, `wizard.*`, `update.*`) stay reserved and always
+    resolve to `operator.admin`.
+    `defineChannelPluginEntry` handles the registration-mode split automatically. See
     [Entry Points](/plugins/sdk-entrypoints#definechannelpluginentry) for all
     options.
 
@@ -238,7 +368,7 @@ dispatch.
     Create `setup-entry.ts` for lightweight loading during onboarding:
 
     ```typescript setup-entry.ts
-    import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+    import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";
     import { acmeChatPlugin } from "./src/channel.js";
 
     export default defineSetupPluginEntry(acmeChatPlugin);
@@ -265,7 +395,7 @@ dispatch.
 
           // Your inbound handler dispatches the message to OpenClaw.
           // The exact wiring depends on your platform SDK —
-          // see a real example in extensions/msteams or extensions/googlechat.
+          // see a real example in the bundled Microsoft Teams or Google Chat plugin package.
           await handleAcmeChatInbound(api, event);
 
           res.statusCode = 200;
@@ -279,13 +409,14 @@ dispatch.
     <Note>
       Inbound message handling is channel-specific. Each channel plugin owns
       its own inbound pipeline. Look at bundled channel plugins
-      (e.g. `extensions/msteams`, `extensions/googlechat`) for real patterns.
+      (for example the Microsoft Teams or Google Chat plugin package) for real patterns.
     </Note>
 
   </Step>
 
-  <Step title="Test">
-    Write colocated tests in `src/channel.test.ts`:
+<a id="step-6-test"></a>
+<Step title="Test">
+Write colocated tests in `src/channel.test.ts`:
 
     ```typescript src/channel.test.ts
     import { describe, it, expect } from "vitest";
@@ -320,7 +451,7 @@ dispatch.
     ```
 
     ```bash
-    pnpm test -- extensions/acme-chat/
+    pnpm test -- <bundled-plugin-root>/acme-chat/
     ```
 
     For shared test helpers, see [Testing](/plugins/sdk-testing).
@@ -331,7 +462,7 @@ dispatch.
 ## File structure
 
 ```
-extensions/acme-chat/
+<bundled-plugin-root>/acme-chat/
 ├── package.json              # openclaw.channel metadata
 ├── openclaw.plugin.json      # Manifest with config schema
 ├── index.ts                  # defineChannelPluginEntry
@@ -361,6 +492,14 @@ extensions/acme-chat/
     TTS, STT, media, subagent via api.runtime
   </Card>
 </CardGroup>
+
+<Note>
+Reserved bundled-helper seams such as `plugin-sdk/whatsapp-surface` still
+exist for bundled-plugin maintenance and compatibility. They are not the
+recommended pattern for new channel plugins; prefer the generic channel/setup/
+reply/runtime subpaths from the common SDK surface unless you are maintaining
+that bundled plugin family directly.
+</Note>
 
 ## Next steps
 

@@ -1,5 +1,11 @@
-import type { DmPolicy, GroupPolicy, SecretInput } from "./runtime-api.js";
-export type { DmPolicy, GroupPolicy };
+import type {
+  ContextVisibilityMode,
+  DmPolicy,
+  GroupPolicy,
+  OpenClawConfig,
+  SecretInput,
+} from "./runtime-api.js";
+export type { ContextVisibilityMode, DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all";
 
@@ -10,13 +16,15 @@ export type MatrixDmConfig = {
   policy?: DmPolicy;
   /** Allowlist for DM senders (matrix user IDs or "*"). */
   allowFrom?: Array<string | number>;
+  /** Per-DM thread reply behavior override (off|inbound|always). Overrides top-level threadReplies for direct messages. */
+  threadReplies?: "off" | "inbound" | "always";
 };
 
 export type MatrixRoomConfig = {
-  /** If false, disable the bot in this room (alias for allow: false). */
+  /** Restrict this room entry to a specific Matrix account in multi-account setups. */
+  account?: string;
+  /** If false, disable the bot in this room. */
   enabled?: boolean;
-  /** Legacy room allow toggle; prefer enabled. */
-  allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
   /**
@@ -54,6 +62,21 @@ export type MatrixThreadBindingsConfig = {
   spawnAcpSessions?: boolean;
 };
 
+export type MatrixExecApprovalTarget = "dm" | "channel" | "both";
+
+export type MatrixExecApprovalConfig = {
+  /** If true, deliver exec approvals through Matrix-native prompts. */
+  enabled?: boolean;
+  /** Optional approver Matrix user IDs. Falls back to dm.allowFrom. */
+  approvers?: Array<string | number>;
+  /** Optional agent allowlist for approval delivery. */
+  agentFilter?: string[];
+  /** Optional session allowlist for approval delivery. */
+  sessionFilter?: string[];
+  /** Where approval prompts should go. Default: dm. */
+  target?: MatrixExecApprovalTarget;
+};
+
 /** Per-account Matrix config (excludes the accounts field to prevent recursion). */
 export type MatrixAccountConfig = Omit<MatrixConfig, "accounts">;
 
@@ -70,10 +93,12 @@ export type MatrixConfig = {
   homeserver?: string;
   /** Allow Matrix homeserver traffic to private/internal hosts. */
   allowPrivateNetwork?: boolean;
+  /** Optional HTTP(S) proxy URL for Matrix connections (e.g. http://127.0.0.1:7890). */
+  proxy?: string;
   /** Matrix user id (@user:server). */
   userId?: string;
   /** Matrix access token. */
-  accessToken?: string;
+  accessToken?: SecretInput;
   /** Matrix password (used only to fetch access token). */
   password?: SecretInput;
   /** Optional Matrix device id (recommended when using access tokens + E2EE). */
@@ -95,6 +120,15 @@ export type MatrixConfig = {
   allowBots?: boolean | "mentions";
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
+  /**
+   * Enable shared block-streaming replies for Matrix.
+   *
+   * Default: false. Matrix keeps `streaming: "off"` as final-only delivery
+   * unless block streaming is explicitly enabled.
+   */
+  blockStreaming?: boolean;
   /** Allowlist for group senders (matrix user IDs). */
   groupAllowFrom?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all). */
@@ -121,18 +155,39 @@ export type MatrixConfig = {
   startupVerificationCooldownHours?: number;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
+  /**
+   * Number of recent room messages shown to the agent as context when it is mentioned
+   * in a group chat (0 = disabled). Applies to room messages that did not directly
+   * trigger a reply. Default: 0 (disabled).
+   */
+  historyLimit?: number;
   /** Auto-join invites (always|allowlist|off). Default: off. */
   autoJoin?: "always" | "allowlist" | "off";
   /** Allowlist for auto-join invites (room IDs, aliases). */
   autoJoinAllowlist?: Array<string | number>;
   /** Direct message policy + allowlist overrides. */
   dm?: MatrixDmConfig;
+  /** Matrix-native exec approval delivery config. */
+  execApprovals?: MatrixExecApprovalConfig;
   /** Room config allowlist keyed by room ID or alias (names resolved to IDs when possible). */
   groups?: Record<string, MatrixRoomConfig>;
   /** Room config allowlist keyed by room ID or alias. Legacy; use groups. */
   rooms?: Record<string, MatrixRoomConfig>;
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
+  /**
+   * Streaming mode for Matrix replies.
+   * - `"partial"`: edit a single draft message in place for the current
+   *   assistant block as the model generates text.
+   * - `"off"`: deliver the full reply once the model finishes.
+   * - Use `blockStreaming: true` when you want completed assistant blocks to
+   *   stay visible as separate progress messages. When combined with
+   *   `"partial"`, Matrix keeps a live draft for the current block and
+   *   preserves completed blocks as separate messages.
+   * - `true` maps to `"partial"`, `false` maps to `"off"`.
+   * Default: `"off"`.
+   */
+  streaming?: "partial" | "off" | boolean;
 };
 
 export type CoreConfig = {
@@ -140,6 +195,7 @@ export type CoreConfig = {
     matrix?: MatrixConfig;
     defaults?: {
       groupPolicy?: "open" | "allowlist" | "disabled";
+      contextVisibility?: ContextVisibilityMode;
     };
   };
   commands?: {
@@ -152,5 +208,6 @@ export type CoreConfig = {
     ackReaction?: string;
     ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "none" | "off";
   };
+  secrets?: OpenClawConfig["secrets"];
   [key: string]: unknown;
 };

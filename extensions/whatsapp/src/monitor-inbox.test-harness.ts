@@ -29,7 +29,7 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
     responsePrefix: undefined,
   },
 } as const;
-export const mockLoadConfig = loadConfigMock;
+export const mockLoadConfig: typeof loadConfigMock = loadConfigMock;
 export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
 export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
@@ -39,6 +39,7 @@ export type MockSock = {
   sendPresenceUpdate: AnyMockFn;
   sendMessage: AnyMockFn;
   readMessages: AnyMockFn;
+  groupFetchAllParticipating: AnyMockFn;
   updateMediaMessage: AnyMockFn;
   logger: Record<string, unknown>;
   signalRepository: {
@@ -65,6 +66,7 @@ function createMockSock(): MockSock {
     sendPresenceUpdate: createResolvedMock(),
     sendMessage: createResolvedMock(),
     readMessages: createResolvedMock(),
+    groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
     updateMediaMessage: vi.fn(),
     logger: {},
     signalRepository: {
@@ -76,10 +78,8 @@ function createMockSock(): MockSock {
   };
 }
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+vi.mock("./inbound/save-media.runtime.js", () => {
   return {
-    ...actual,
     saveMediaBuffer: vi.fn().mockResolvedValue({
       id: "mid",
       path: "/tmp/mid",
@@ -115,6 +115,25 @@ type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
 export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
 let monitorWebInbox: MonitorWebInbox;
 
+function expectInboxPairingReplyText(
+  text: string,
+  params: {
+    channel: string;
+    idLine: string;
+    code?: string;
+  },
+): string {
+  const code = text.match(/Pairing code:\s*```[\r\n]+([A-Z2-9]{6,})/)?.[1];
+  expect(code).toBeDefined();
+  const resolvedCode = params.code ?? code ?? "";
+  expect(text).toContain("OpenClaw: access not configured.");
+  expect(text).toContain(params.idLine);
+  expect(text).toContain("Pairing code:");
+  expect(text).toContain(`\n\`\`\`\n${resolvedCode}\n\`\`\`\n`);
+  expect(text).toContain(`pairing approve ${params.channel} ${resolvedCode}`);
+  return resolvedCode;
+}
+
 export function getMonitorWebInbox(): MonitorWebInbox {
   if (!monitorWebInbox) {
     throw new Error("monitorWebInbox not initialized");
@@ -136,7 +155,10 @@ export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, c
   );
 }
 
-export async function startInboxMonitor(onMessage: InboxOnMessage) {
+export async function startInboxMonitor(
+  onMessage: InboxOnMessage,
+  options: { selfChatMode?: boolean } = {},
+) {
   if (!monitorWebInbox) {
     ({ monitorWebInbox } = await import("./inbound.js"));
   }
@@ -145,6 +167,7 @@ export async function startInboxMonitor(onMessage: InboxOnMessage) {
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),
+    selfChatMode: options.selfChatMode,
   });
   return { listener, sock: getSock() };
 }
@@ -177,12 +200,16 @@ export function buildNotifyMessageUpsert(params: {
 
 export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-  expect(sock.sendMessage).toHaveBeenCalledWith(jid, {
-    text: expect.stringContaining(`Your WhatsApp phone number: ${senderE164}`),
-  });
-  expect(sock.sendMessage).toHaveBeenCalledWith(jid, {
-    text: expect.stringContaining("Pairing code: PAIRCODE"),
-  });
+  const sendCall = sock.sendMessage.mock.calls[0];
+  expect(sendCall?.[0]).toBe(jid);
+  expectInboxPairingReplyText(
+    String((sendCall?.[1] as { text?: string } | undefined)?.text ?? ""),
+    {
+      channel: "whatsapp",
+      idLine: `Your WhatsApp phone number: ${senderE164}`,
+      code: "PAIRCODE",
+    },
+  );
 }
 
 let authDir: string | undefined;

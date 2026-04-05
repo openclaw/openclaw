@@ -7,6 +7,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.j
 import { resetCliCredentialCachesForTest } from "../agents/cli-credentials.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -83,19 +84,19 @@ const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalo
   loadModelCatalog: vi.fn().mockResolvedValue([
     {
       provider: "anthropic",
-      id: "claude-opus-4-5",
+      id: "claude-opus-4-6",
       name: "Claude Opus 4.5",
       contextWindow: 200000,
     },
     {
       provider: "openrouter",
-      id: "anthropic/claude-opus-4-5",
+      id: "anthropic/claude-opus-4-6",
       name: "Claude Opus 4.5 (OpenRouter)",
       contextWindow: 200000,
     },
     { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
-    { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
-    { provider: "openai-codex", id: "gpt-5.2", name: "GPT-5.2 (Codex)" },
+    { provider: "openai", id: "gpt-5.4", name: "GPT-5.2" },
+    { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.2 (Codex)" },
     { provider: "minimax", id: "MiniMax-M2.7", name: "MiniMax M2.7" },
   ]),
   resetModelCatalogCacheForTest: vi.fn(),
@@ -158,12 +159,17 @@ const webSessionMocks = getSharedMocks("openclaw.trigger-handling.web-session-mo
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
 }));
 
+const whatsappRuntimeApiModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "whatsapp",
+  artifactBasename: "runtime-api.js",
+});
+
 export function getWebSessionMocks(): AnyMocks {
   return webSessionMocks;
 }
 
-const installWebSessionMock = () =>
-  vi.doMock("../../extensions/whatsapp/runtime-api.js", () => webSessionMocks);
+const installWebSessionMock = () => vi.doMock(whatsappRuntimeApiModuleId, () => webSessionMocks);
 
 installWebSessionMock();
 
@@ -268,7 +274,7 @@ export function makeCfg(home: string): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        model: { primary: "anthropic/claude-opus-4-5" },
+        model: { primary: "anthropic/claude-opus-4-6" },
         workspace: join(home, "openclaw"),
         // Test harness: avoid 1s coalescer idle sleeps that dominate trigger suites.
         blockStreamingCoalesce: { idleMs: 1 },

@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...original,
   };
@@ -214,9 +215,7 @@ describe("FS tools with workspaceOnly=false", () => {
       config: {
         tools: {
           exec: {
-            applyPatch: {
-              enabled: true,
-            },
+            applyPatch: {},
           },
         },
       },

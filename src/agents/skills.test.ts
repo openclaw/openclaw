@@ -164,6 +164,35 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
   });
 
+  it("inherits agents.defaults.skills when agentId is provided", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "alpha-skill"),
+      name: "alpha-skill",
+      description: "Alpha skill",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "beta-skill"),
+      name: "beta-skill",
+      description: "Beta skill",
+    });
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config: {
+        agents: {
+          defaults: {
+            skills: ["alpha-skill"],
+          },
+          list: [{ id: "writer", workspace: workspaceDir }],
+        },
+      },
+      agentId: "writer",
+    });
+
+    expect(commands.map((entry) => entry.skillName)).toEqual(["alpha-skill"]);
+  });
+
   it("includes enabled Claude bundle markdown commands as native OpenClaw slash commands", async () => {
     const workspaceDir = await makeWorkspace();
     const pluginRoot = path.join(tempHome!.home, ".openclaw", "extensions", "compound-bundle");
@@ -210,7 +239,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     );
     expect(
       commands.find((entry) => entry.skillName === "workflows:review")?.sourceFilePath,
-    ).toContain("/.openclaw/extensions/compound-bundle/commands/workflows-review.md");
+    ).toContain(path.join(pluginRoot, "commands", "workflows-review.md"));
   });
 });
 
@@ -302,6 +331,24 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("demo-skill");
     expect(prompt).toContain("Does demo things");
     expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
+  });
+
+  it("omits disable-model-invocation skills from available_skills for freshly loaded entries", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "hidden-skill");
+
+    await writeSkill({
+      dir: skillDir,
+      name: "hidden-skill",
+      description: "Hidden from the prompt",
+      frontmatterExtra: "disable-model-invocation: true",
+    });
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    expect(prompt).not.toContain("hidden-skill");
+    expect(prompt).not.toContain("Hidden from the prompt");
+    expect(prompt).not.toContain(path.join(skillDir, "SKILL.md"));
   });
 });
 
@@ -500,6 +547,50 @@ describe("applySkillEnvOverrides", () => {
         restore();
         expect(process.env.BASH_ENV).toBeUndefined();
         expect(process.env.SHELL).toBeUndefined();
+      }
+    });
+  });
+
+  it("blocks override-only host env overrides in skill config", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "override-env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "override-env-skill",
+      description: "Needs env",
+      metadata:
+        '{"openclaw":{"requires":{"env":["HTTPS_PROXY","NODE_TLS_REJECT_UNAUTHORIZED","DOCKER_HOST"]}}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["HTTPS_PROXY", "NODE_TLS_REJECT_UNAUTHORIZED", "DOCKER_HOST"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "override-env-skill": {
+                env: {
+                  HTTPS_PROXY: "http://proxy.example.test:8080",
+                  NODE_TLS_REJECT_UNAUTHORIZED: "0",
+                  DOCKER_HOST: "tcp://docker.example.test:2376",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.HTTPS_PROXY).toBeUndefined();
+        expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+        expect(process.env.DOCKER_HOST).toBeUndefined();
+      } finally {
+        restore();
+        expect(process.env.HTTPS_PROXY).toBeUndefined();
+        expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+        expect(process.env.DOCKER_HOST).toBeUndefined();
       }
     });
   });

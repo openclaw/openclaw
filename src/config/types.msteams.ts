@@ -1,5 +1,6 @@
 import type {
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -83,10 +84,16 @@ export type MSTeamsConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Send native Teams typing indicator before replies. Default: true for groups/channels; DMs use informative stream status. */
+  typingIndicator?: boolean;
+  /** Enable progressive block-by-block message delivery instead of a single reply. */
+  blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /**
@@ -134,3 +141,9 @@ export type MSTeamsConfig = {
   /** Minimum interval (ms) between reflections per session. Default: 300000 (5 min). */
   feedbackReflectionCooldownMs?: number;
 };
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    msteams?: MSTeamsConfig;
+  }
+}

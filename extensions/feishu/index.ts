@@ -6,12 +6,10 @@ import { registerFeishuDocTools } from "./src/docx.js";
 import { registerFeishuDriveTools } from "./src/drive.js";
 import { registerFeishuPermTools } from "./src/perm.js";
 import { setFeishuRuntime } from "./src/runtime.js";
-import { registerFeishuSubagentHooks } from "./src/subagent-hooks.js";
 import { registerFeishuWikiTools } from "./src/wiki.js";
 
 export { feishuPlugin } from "./src/channel.js";
 export { setFeishuRuntime } from "./src/runtime.js";
-export { monitorFeishuProvider } from "./src/monitor.js";
 export {
   sendMessageFeishu,
   sendCardFeishu,
@@ -46,6 +44,29 @@ export {
   type MentionTarget,
 } from "./src/mention.js";
 
+type MonitorFeishuProvider = typeof import("./src/monitor.js").monitorFeishuProvider;
+type FeishuSubagentHooksModule = typeof import("./src/subagent-hooks.js");
+
+let feishuMonitorPromise: Promise<typeof import("./src/monitor.js")> | null = null;
+let feishuSubagentHooksPromise: Promise<FeishuSubagentHooksModule> | null = null;
+
+function loadFeishuMonitorModule() {
+  feishuMonitorPromise ??= import("./src/monitor.js");
+  return feishuMonitorPromise;
+}
+
+function loadFeishuSubagentHooksModule() {
+  feishuSubagentHooksPromise ??= import("./src/subagent-hooks.js");
+  return feishuSubagentHooksPromise;
+}
+
+export async function monitorFeishuProvider(
+  ...args: Parameters<MonitorFeishuProvider>
+): ReturnType<MonitorFeishuProvider> {
+  const { monitorFeishuProvider } = await loadFeishuMonitorModule();
+  return await monitorFeishuProvider(...args);
+}
+
 export default defineChannelPluginEntry({
   id: "feishu",
   name: "Feishu",
@@ -53,7 +74,18 @@ export default defineChannelPluginEntry({
   plugin: feishuPlugin,
   setRuntime: setFeishuRuntime,
   registerFull(api) {
-    registerFeishuSubagentHooks(api);
+    api.on("subagent_spawning", async (event, ctx) => {
+      const { handleFeishuSubagentSpawning } = await loadFeishuSubagentHooksModule();
+      return await handleFeishuSubagentSpawning(event, ctx);
+    });
+    api.on("subagent_delivery_target", async (event) => {
+      const { handleFeishuSubagentDeliveryTarget } = await loadFeishuSubagentHooksModule();
+      return await handleFeishuSubagentDeliveryTarget(event);
+    });
+    api.on("subagent_ended", async (event) => {
+      const { handleFeishuSubagentEnded } = await loadFeishuSubagentHooksModule();
+      await handleFeishuSubagentEnded(event);
+    });
     registerFeishuDocTools(api);
     registerFeishuChatTools(api);
     registerFeishuWikiTools(api);

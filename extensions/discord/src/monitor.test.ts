@@ -1,6 +1,6 @@
 import { ChannelType, type Guild } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { typedCases } from "../../../test/helpers/extensions/typed-cases.js";
+import { typedCases } from "../../../test/helpers/plugins/typed-cases.js";
 import {
   allowListMatches,
   buildDiscordMediaPayload,
@@ -18,7 +18,12 @@ import {
   sanitizeDiscordThreadName,
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
-import { DiscordMessageListener, DiscordReactionListener } from "./monitor/listeners.js";
+type DiscordReactionEvent = Parameters<
+  import("./monitor/listeners.js").DiscordReactionListener["handle"]
+>[0];
+type DiscordReactionClient = Parameters<
+  import("./monitor/listeners.js").DiscordReactionListener["handle"]
+>[1];
 
 const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 
@@ -49,7 +54,7 @@ function createAutoThreadMentionContext() {
   const guildInfo: DiscordGuildEntryResolved = {
     requireMention: true,
     channels: {
-      general: { allow: true, autoThread: true },
+      general: { enabled: true, autoThread: true },
     },
   };
   const channelConfig = resolveDiscordChannelConfig({
@@ -94,6 +99,11 @@ describe("DiscordMessageListener", () => {
     };
   }
 
+  async function flushAsyncWork() {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
   it("returns immediately while handler continues in background", async () => {
     let handlerResolved = false;
     const deferred = createDeferred();
@@ -110,9 +120,8 @@ describe("DiscordMessageListener", () => {
 
     // handle() returns immediately while the background queue starts on the next tick.
     await expect(handlePromise).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(handler).toHaveBeenCalledOnce();
-    });
+    await flushAsyncWork();
+    expect(handler).toHaveBeenCalledOnce();
     expect(handlerResolved).toBe(false);
 
     // Release and let background handler finish.
@@ -149,9 +158,8 @@ describe("DiscordMessageListener", () => {
     ).resolves.toBeUndefined();
 
     // Both handlers are dispatched concurrently (fire-and-forget).
-    await vi.waitFor(() => {
-      expect(handler).toHaveBeenCalledTimes(2);
-    });
+    await flushAsyncWork();
+    expect(handler).toHaveBeenCalledTimes(2);
 
     first.resolve();
     second.resolve();
@@ -163,7 +171,7 @@ describe("DiscordMessageListener", () => {
       warn: vi.fn(),
       error: vi.fn(),
     } as unknown as ReturnType<
-      typeof import("../../../src/logging/subsystem.js").createSubsystemLogger
+      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
     >;
     const handler = vi.fn(async () => {
       throw new Error("boom");
@@ -174,9 +182,8 @@ describe("DiscordMessageListener", () => {
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
       {} as unknown as import("@buape/carbon").Client,
     );
-    await vi.waitFor(() => {
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
-    });
+    await flushAsyncWork();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
   });
 
   it("does not apply its own slow-listener logging (owned by inbound worker)", async () => {
@@ -186,7 +193,7 @@ describe("DiscordMessageListener", () => {
       warn: vi.fn(),
       error: vi.fn(),
     } as unknown as ReturnType<
-      typeof import("../../../src/logging/subsystem.js").createSubsystemLogger
+      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
     >;
     const listener = new DiscordMessageListener(handler, logger);
 
@@ -197,9 +204,8 @@ describe("DiscordMessageListener", () => {
     await expect(handlePromise).resolves.toBeUndefined();
 
     deferred.resolve();
-    await vi.waitFor(() => {
-      expect(handler).toHaveBeenCalledOnce();
-    });
+    await flushAsyncWork();
+    expect(handler).toHaveBeenCalledOnce();
     // The listener no longer wraps handlers with slow-listener logging;
     // that responsibility moved to the inbound worker.
     expect(logger.warn).not.toHaveBeenCalled();
@@ -295,12 +301,11 @@ describe("discord guild/channel resolution", () => {
   it("resolves channel config by slug", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
+        general: { enabled: true },
         help: {
-          allow: true,
+          enabled: true,
           requireMention: true,
           skills: ["search"],
-          enabled: false,
           users: ["123"],
           systemPrompt: "Use short answers.",
           autoThread: true,
@@ -325,7 +330,7 @@ describe("discord guild/channel resolution", () => {
     expect(help?.allowed).toBe(true);
     expect(help?.requireMention).toBe(true);
     expect(help?.skills).toEqual(["search"]);
-    expect(help?.enabled).toBe(false);
+    expect(help?.enabled).toBe(true);
     expect(help?.users).toEqual(["123"]);
     expect(help?.systemPrompt).toBe("Use short answers.");
     expect(help?.autoThread).toBe(true);
@@ -334,7 +339,7 @@ describe("discord guild/channel resolution", () => {
   it("denies channel when config present but no match", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
+        general: { enabled: true },
       },
     };
     const channel = resolveDiscordChannelConfig({
@@ -362,8 +367,8 @@ describe("discord guild/channel resolution", () => {
   it("inherits parent config for thread channels", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
-        random: { allow: false },
+        general: { enabled: true },
+        random: { enabled: false },
       },
     };
     const thread = resolveDiscordChannelConfigWithFallback({
@@ -382,8 +387,8 @@ describe("discord guild/channel resolution", () => {
   it("does not match thread name/slug when resolving allowlists", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
-        random: { allow: false },
+        general: { enabled: true },
+        random: { enabled: false },
       },
     };
     const thread = resolveDiscordChannelConfigWithFallback({
@@ -402,8 +407,8 @@ describe("discord guild/channel resolution", () => {
   it("applies wildcard channel config when no specific match", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true, requireMention: false },
-        "*": { allow: true, autoThread: true, requireMention: true },
+        general: { enabled: true, requireMention: false },
+        "*": { enabled: true, autoThread: true, requireMention: true },
       },
     };
     // Specific channel should NOT use wildcard
@@ -434,7 +439,7 @@ describe("discord guild/channel resolution", () => {
   it("falls back to wildcard when thread channel and parent are missing", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        "*": { allow: true, requireMention: false },
+        "*": { enabled: true, requireMention: false },
       },
     };
     const thread = resolveDiscordChannelConfigWithFallback({
@@ -475,7 +480,7 @@ describe("discord mention gating", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       requireMention: true,
       channels: {
-        general: { allow: true },
+        general: { enabled: true },
       },
     };
     const channelConfig = resolveDiscordChannelConfig({
@@ -521,7 +526,7 @@ describe("discord mention gating", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       requireMention: true,
       channels: {
-        "parent-1": { allow: true, requireMention: false },
+        "parent-1": { enabled: true, requireMention: false },
       },
     };
     const channelConfig = resolveDiscordChannelConfigWithFallback({
@@ -893,33 +898,20 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
     channel: "discord",
     accountId: "acc-1",
     sessionKey: "discord:acc-1:dm:user-1",
+    mainSessionKey: "discord:acc-1:dm:user-1",
+    lastRoutePolicy: "session" as const,
+    matchedBy: "default" as const,
     ...(typeof params === "object" && params !== null ? { _params: params } : {}),
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
-  return {
-    ...actual,
-    enqueueSystemEvent: enqueueSystemEventSpy,
-  };
-});
+const channelRuntimeModule = await import("openclaw/plugin-sdk/infra-runtime");
+vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
 
-vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
-  return {
-    ...actual,
-    resolveAgentRoute: resolveAgentRouteMock,
-  };
-});
+const routingModule = await import("openclaw/plugin-sdk/routing");
+vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
 
-vi.mock("../../../src/infra/system-events.js", () => ({
-  enqueueSystemEvent: enqueueSystemEventSpy,
-}));
-
-vi.mock("../../../src/routing/resolve-route.js", () => ({
-  resolveAgentRoute: resolveAgentRouteMock,
-}));
+const { DiscordMessageListener, DiscordReactionListener } = await import("./monitor/listeners.js");
 
 function makeReactionEvent(overrides?: {
   guildId?: string;
@@ -961,7 +953,7 @@ function makeReactionEvent(overrides?: {
     message: {
       fetch: messageFetch,
     },
-  } as unknown as Parameters<DiscordReactionListener["handle"]>[0];
+  } as DiscordReactionEvent;
 }
 
 function makeReactionClient(options?: {
@@ -983,7 +975,7 @@ function makeReactionClient(options?: {
       }
       return { type: channelType, name: channelName, parentId };
     }),
-  } as unknown as Parameters<DiscordReactionListener["handle"]>[1];
+  } as unknown as DiscordReactionClient;
 }
 
 function makeReactionListenerParams(overrides?: {
@@ -998,9 +990,9 @@ function makeReactionListenerParams(overrides?: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
   return {
-    cfg: {} as ReturnType<typeof import("../../../src/config/config.js").loadConfig>,
+    cfg: {} as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>,
     accountId: "acc-1",
-    runtime: {} as import("../../../src/runtime.js").RuntimeEnv,
+    runtime: {} as import("openclaw/plugin-sdk/runtime-env").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
     dmEnabled: overrides?.dmEnabled ?? true,
     groupDmEnabled: overrides?.groupDmEnabled ?? true,
@@ -1016,7 +1008,7 @@ function makeReactionListenerParams(overrides?: {
       error: vi.fn(),
       debug: vi.fn(),
     } as unknown as ReturnType<
-      typeof import("../../../src/logging/subsystem.js").createSubsystemLogger
+      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
     >,
   };
 }
@@ -1161,6 +1153,9 @@ describe("discord DM reaction handling", () => {
       channel: "discord",
       accountId: "acc-1",
       sessionKey: "discord:acc-1:guild-123:channel-1",
+      mainSessionKey: "discord:acc-1:guild-123:channel-1",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
     });
 
     const data = makeReactionEvent({
@@ -1178,7 +1173,7 @@ describe("discord DM reaction handling", () => {
             roles: ["role:blocked-role"],
             channels: {
               "channel-1": {
-                allow: true,
+                enabled: true,
                 roles: ["role:trusted-role"],
               },
             },

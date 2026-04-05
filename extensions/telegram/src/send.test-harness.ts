@@ -1,3 +1,10 @@
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import {
+  buildOutboundMediaLoadOptions,
+  isGifMedia,
+  kindFromMime,
+  normalizePollInput,
+} from "openclaw/plugin-sdk/media-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
 
@@ -28,8 +35,18 @@ const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
 
-const { loadConfig } = vi.hoisted(() => ({
+const { imageMetadata } = vi.hoisted(() => ({
+  imageMetadata: {
+    width: 1200 as number | undefined,
+    height: 800 as number | undefined,
+  },
+}));
+
+const { loadConfig, resolveStorePath } = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
+  resolveStorePath: vi.fn(
+    (storePath?: string) => storePath ?? "/tmp/openclaw-telegram-send-tests.json",
+  ),
 }));
 
 const { maybePersistResolvedTelegramTarget } = vi.hoisted(() => ({
@@ -69,8 +86,10 @@ type TelegramSendTestMocks = {
   botApi: Record<string, MockFn>;
   botCtorSpy: MockFn;
   loadConfig: MockFn;
+  resolveStorePath: MockFn;
   loadWebMedia: MockFn;
   maybePersistResolvedTelegramTarget: MockFn;
+  imageMetadata: { width: number | undefined; height: number | undefined };
 };
 
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
@@ -116,26 +135,41 @@ vi.mock("undici", () => ({
   setGlobalDispatcher: undiciSetGlobalDispatcher,
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig,
-  };
-});
+vi.mock("./send.runtime.js", () => ({
+  buildOutboundMediaLoadOptions,
+  getImageMetadata: vi.fn(async () => ({ ...imageMetadata })),
+  isGifMedia,
+  kindFromMime,
+  loadConfig,
+  loadWebMedia,
+  normalizePollInput,
+  resolveMarkdownTableMode,
+  resolveStorePath,
+}));
 
 vi.mock("./target-writeback.js", () => ({
   maybePersistResolvedTelegramTarget,
 }));
 
 export function getTelegramSendTestMocks(): TelegramSendTestMocks {
-  return { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegramTarget };
+  return {
+    botApi,
+    botCtorSpy,
+    loadConfig,
+    resolveStorePath,
+    loadWebMedia,
+    maybePersistResolvedTelegramTarget,
+    imageMetadata,
+  };
 }
 
 export function installTelegramSendTestHooks() {
   beforeEach(() => {
     loadConfig.mockReturnValue({});
+    resolveStorePath.mockReturnValue("/tmp/openclaw-telegram-send-tests.json");
     loadWebMedia.mockReset();
+    imageMetadata.width = 1200;
+    imageMetadata.height = 800;
     maybePersistResolvedTelegramTarget.mockReset();
     maybePersistResolvedTelegramTarget.mockResolvedValue(undefined);
     undiciFetch.mockReset();

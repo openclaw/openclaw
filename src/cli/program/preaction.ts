@@ -27,8 +27,9 @@ function setProcessTitleForCommand(actionCommand: Command) {
   process.title = `${cliName}-${name}`;
 }
 
-// Commands that need channel plugins loaded
+// Commands that need plugins loaded before execution.
 const PLUGIN_REQUIRED_COMMANDS = new Set([
+  "agent",
   "message",
   "channels",
   "directory",
@@ -49,9 +50,7 @@ function shouldBypassConfigGuard(commandPath: string[]): boolean {
   if (CONFIG_GUARD_BYPASS_COMMANDS.has(primary)) {
     return true;
   }
-  // config validate is the explicit validation command; let it render
-  // validation failures directly without preflight guard output duplication.
-  if (primary === "config" && secondary === "validate") {
+  if (primary === "config" && (secondary === "validate" || secondary === "schema")) {
     return true;
   }
   return false;
@@ -93,7 +92,7 @@ function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: 
         commandPath,
         argv: process.argv,
       }),
-    ) === "recover-matrix-only"
+    ) === "allow-bundled-recovery"
   );
 }
 

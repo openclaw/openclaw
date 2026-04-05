@@ -1,5 +1,5 @@
 ---
-summary: "Install OpenClaw — installer script, npm/pnpm, from source, Docker, and more"
+summary: "Install OpenClaw — installer script, npm/pnpm/bun, from source, Docker, and more"
 read_when:
   - You need an install method other than the Getting Started quickstart
   - You want to deploy to a cloud platform
@@ -45,13 +45,25 @@ For all flags and CI/automation options, see [Installer internals](/install/inst
 
 ## System requirements
 
-- **Node 24** (recommended) or Node 22.16+ — the installer script handles this automatically
+- **Node 24** (recommended) or Node 22.14+ — the installer script handles this automatically
 - **macOS, Linux, or Windows** — both native Windows and WSL2 are supported; WSL2 is more stable. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source
 
 ## Alternative install methods
 
-### npm or pnpm
+### Local prefix installer (`install-cli.sh`)
+
+Use this when you want OpenClaw and Node kept under a local prefix such as
+`~/.openclaw`, without depending on a system-wide Node install:
+
+```bash
+curl -fsSL https://openclaw.ai/install-cli.sh | bash
+```
+
+It supports npm installs by default, plus git-checkout installs under the same
+prefix flow. Full reference: [Installer internals](/install/installer#install-clish).
+
+### npm, pnpm, or bun
 
 If you already manage Node yourself:
 
@@ -71,6 +83,17 @@ If you already manage Node yourself:
 
     <Note>
     pnpm requires explicit approval for packages with build scripts. Run `pnpm approve-builds -g` after the first install.
+    </Note>
+
+  </Tab>
+  <Tab title="bun">
+    ```bash
+    bun add -g openclaw@latest
+    openclaw onboard --install-daemon
+    ```
+
+    <Note>
+    Bun is supported for the global CLI install path. For the Gateway runtime, Node remains the recommended daemon runtime.
     </Note>
 
   </Tab>
@@ -132,6 +155,12 @@ openclaw --version      # confirm the CLI is available
 openclaw doctor         # check for config issues
 openclaw gateway status # verify the Gateway is running
 ```
+
+If you want managed startup after install:
+
+- macOS: LaunchAgent via `openclaw onboard --install-daemon` or `openclaw gateway install`
+- Linux/WSL2: systemd user service via the same commands
+- Native Windows: Scheduled Task first, with a per-user Startup-folder login item fallback if task creation is denied
 
 ## Hosting and deployment
 

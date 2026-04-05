@@ -116,7 +116,7 @@ export class CallManager {
           ctx: this.getContext(),
           callId,
           onTimeout: async (id) => {
-            await endCallWithContext(this.getContext(), id);
+            await endCallWithContext(this.getContext(), id, { reason: "timeout" });
           },
         });
         console.log(`[voice-call] Restarted max-duration timer for restored call ${callId}`);

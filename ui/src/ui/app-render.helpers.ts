@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
@@ -11,12 +10,19 @@ import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "./chat-model-select-state.ts";
+import { refreshVisibleToolsEffectiveForCurrentSession } from "./controllers/agents.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { parseAgentSessionKey } from "./session-key.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
+import {
+  listThinkingLevelLabels,
+  normalizeThinkLevel,
+  resolveThinkingDefaultForModel,
+} from "./thinking.ts";
 import type { SessionsListResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
@@ -108,9 +114,8 @@ function renderCronFilterIcon(hiddenCount: number) {
         <circle cx="12" cy="12" r="10"></circle>
         <polyline points="12 6 12 12 16 14"></polyline>
       </svg>
-      ${
-        hiddenCount > 0
-          ? html`<span
+      ${hiddenCount > 0
+        ? html`<span
             style="
               position: absolute;
               top: -5px;
@@ -123,10 +128,9 @@ function renderCronFilterIcon(hiddenCount: number) {
               padding: 1px 3px;
               pointer-events: none;
             "
-          >${hiddenCount}</span
+            >${hiddenCount}</span
           >`
-          : ""
-      }
+        : ""}
     </span>
   `;
 }
@@ -134,11 +138,16 @@ function renderCronFilterIcon(hiddenCount: number) {
 export function renderChatSessionSelect(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
   const modelSelect = renderChatModelSelect(state);
+  const thinkingSelect = renderChatThinkingSelect(state);
+  const selectedSessionLabel =
+    sessionGroups.flatMap((group) => group.options).find((entry) => entry.key === state.sessionKey)
+      ?.label ?? state.sessionKey;
   return html`
     <div class="chat-controls__session-row">
       <label class="field chat-controls__session">
         <select
           .value=${state.sessionKey}
+          title=${selectedSessionLabel}
           ?disabled=${!state.connected || sessionGroups.length === 0}
           @change=${(e: Event) => {
             const next = (e.target as HTMLSelectElement).value;
@@ -157,15 +166,13 @@ export function renderChatSessionSelect(state: AppViewState) {
                   group.options,
                   (entry) => entry.key,
                   (entry) =>
-                    html`<option value=${entry.key} title=${entry.title}>
-                      ${entry.label}
-                    </option>`,
+                    html`<option value=${entry.key} title=${entry.title}>${entry.label}</option>`,
                 )}
               </optgroup>`,
           )}
         </select>
       </label>
-      ${modelSelect}
+      ${modelSelect} ${thinkingSelect}
     </div>
   `;
 }
@@ -314,13 +321,11 @@ export function renderChatControls(state: AppViewState) {
           state.sessionsHideCron = !hideCron;
         }}
         aria-pressed=${hideCron}
-        title=${
-          hideCron
-            ? hiddenCronCount > 0
-              ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-              : t("chat.showCronSessions")
-            : t("chat.hideCronSessions")
-        }
+        title=${hideCron
+          ? hiddenCronCount > 0
+            ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+            : t("chat.showCronSessions")
+          : t("chat.hideCronSessions")}
       >
         ${renderCronFilterIcon(hiddenCronCount)}
       </button>
@@ -397,14 +402,28 @@ export function renderChatMobileToggle(state: AppViewState) {
         title="Chat settings"
         aria-label="Chat settings"
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
           <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          <path
+            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+          ></path>
         </svg>
       </button>
-      <div class="chat-controls-dropdown" @click=${(e: Event) => {
-        e.stopPropagation();
-      }}>
+      <div
+        class="chat-controls-dropdown"
+        @click=${(e: Event) => {
+          e.stopPropagation();
+        }}
+      >
         <div class="chat-controls">
           <label class="field chat-controls__session">
             <select
@@ -419,9 +438,7 @@ export function renderChatMobileToggle(state: AppViewState) {
                   <optgroup label=${group.label}>
                     ${group.options.map(
                       (opt) => html`
-                        <option value=${opt.key} title=${opt.title}>
-                          ${opt.label}
-                        </option>
+                        <option value=${opt.key} title=${opt.title}>${opt.label}</option>
                       `,
                     )}
                   </optgroup>
@@ -429,6 +446,7 @@ export function renderChatMobileToggle(state: AppViewState) {
               )}
             </select>
           </label>
+          ${renderChatThinkingSelect(state)}
           <div class="chat-controls__thinking">
             <button
               class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
@@ -525,15 +543,139 @@ function renderChatModelSelect(state: AppViewState) {
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
   const disabled =
     !state.connected || busy || (state.chatModelsLoading && options.length === 0) || !state.client;
+  const selectedLabel =
+    currentOverride === ""
+      ? defaultLabel
+      : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
   return html`
     <label class="field chat-controls__session chat-controls__model">
       <select
         data-chat-model-select="true"
         aria-label="Chat model"
+        title=${selectedLabel}
         ?disabled=${disabled}
         @change=${async (e: Event) => {
           const next = (e.target as HTMLSelectElement).value.trim();
           await switchChatModel(state, next);
+        }}
+      >
+        <option value="" ?selected=${currentOverride === ""}>${defaultLabel}</option>
+        ${repeat(
+          options,
+          (entry) => entry.value,
+          (entry) =>
+            html`<option value=${entry.value} ?selected=${entry.value === currentOverride}>
+              ${entry.label}
+            </option>`,
+        )}
+      </select>
+    </label>
+  `;
+}
+
+type ChatThinkingSelectOption = {
+  value: string;
+  label: string;
+};
+
+type ChatThinkingSelectState = {
+  currentOverride: string;
+  defaultLabel: string;
+  options: ChatThinkingSelectOption[];
+};
+
+function resolveThinkingTargetModel(state: AppViewState): {
+  provider: string | null;
+  model: string | null;
+} {
+  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  return {
+    provider: activeRow?.modelProvider ?? state.sessionsResult?.defaults?.modelProvider ?? null,
+    model: activeRow?.model ?? state.sessionsResult?.defaults?.model ?? null,
+  };
+}
+
+function buildThinkingOptions(
+  provider: string | null,
+  model: string | null,
+  currentOverride: string,
+): ChatThinkingSelectOption[] {
+  const seen = new Set<string>();
+  const options: ChatThinkingSelectOption[] = [];
+
+  const addOption = (value: string, label?: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    options.push({
+      value: trimmed,
+      label:
+        label ??
+        trimmed
+          .split(/[-_]/g)
+          .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+          .join(" "),
+    });
+  };
+
+  for (const label of listThinkingLevelLabels(provider)) {
+    const normalized = normalizeThinkLevel(label) ?? label.trim().toLowerCase();
+    addOption(normalized);
+  }
+  if (currentOverride) {
+    addOption(currentOverride);
+  }
+  return options;
+}
+
+function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelectState {
+  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  const persisted = activeRow?.thinkingLevel;
+  const currentOverride =
+    typeof persisted === "string" && persisted.trim()
+      ? (normalizeThinkLevel(persisted) ?? persisted.trim())
+      : "";
+  const { provider, model } = resolveThinkingTargetModel(state);
+  const defaultLevel =
+    provider && model
+      ? resolveThinkingDefaultForModel({
+          provider,
+          model,
+          catalog: state.chatModelCatalog ?? [],
+        })
+      : "off";
+  return {
+    currentOverride,
+    defaultLabel: `Default (${defaultLevel})`,
+    options: buildThinkingOptions(provider, model, currentOverride),
+  };
+}
+
+function renderChatThinkingSelect(state: AppViewState) {
+  const { currentOverride, defaultLabel, options } = resolveChatThinkingSelectState(state);
+  const busy =
+    state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
+  const disabled = !state.connected || busy || !state.client;
+  const selectedLabel =
+    currentOverride === ""
+      ? defaultLabel
+      : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
+  return html`
+    <label class="field chat-controls__session chat-controls__thinking-select">
+      <select
+        data-chat-thinking-select="true"
+        aria-label="Chat thinking level"
+        title=${selectedLabel}
+        ?disabled=${disabled}
+        @change=${async (e: Event) => {
+          const next = (e.target as HTMLSelectElement).value.trim();
+          await switchChatThinkingLevel(state, next);
         }}
       >
         <option value="" ?selected=${currentOverride === ""}>${defaultLabel}</option>
@@ -571,11 +713,66 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
       key: targetSessionKey,
       model: nextModel || null,
     });
+    void refreshVisibleToolsEffectiveForCurrentSession(state);
     await refreshSessionOptions(state);
   } catch (err) {
     // Roll back so the picker reflects the actual server model.
     state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
     state.lastError = `Failed to set model: ${String(err)}`;
+  }
+}
+
+function patchSessionThinkingLevel(
+  state: AppViewState,
+  sessionKey: string,
+  thinkingLevel: string | undefined,
+) {
+  const current = state.sessionsResult;
+  if (!current) {
+    return;
+  }
+  state.sessionsResult = {
+    ...current,
+    sessions: current.sessions.map((row) =>
+      row.key === sessionKey
+        ? {
+            ...row,
+            thinkingLevel,
+          }
+        : row,
+    ),
+  };
+}
+
+async function switchChatThinkingLevel(state: AppViewState, nextThinkingLevel: string) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const targetSessionKey = state.sessionKey;
+  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
+  const previousThinkingLevel = activeRow?.thinkingLevel;
+  const normalizedNext =
+    (normalizeThinkLevel(nextThinkingLevel) ?? nextThinkingLevel.trim()) || undefined;
+  const normalizedPrev =
+    typeof previousThinkingLevel === "string" && previousThinkingLevel.trim()
+      ? (normalizeThinkLevel(previousThinkingLevel) ?? previousThinkingLevel.trim())
+      : undefined;
+  if ((normalizedPrev ?? "") === (normalizedNext ?? "")) {
+    return;
+  }
+  state.lastError = null;
+  patchSessionThinkingLevel(state, targetSessionKey, normalizedNext);
+  state.chatThinkingLevel = normalizedNext ?? null;
+  try {
+    await state.client.request("sessions.patch", {
+      key: targetSessionKey,
+      thinkingLevel: normalizedNext ?? null,
+    });
+    await refreshSessionOptions(state);
+  } catch (err) {
+    patchSessionThinkingLevel(state, targetSessionKey, previousThinkingLevel);
+    state.chatThinkingLevel = normalizedPrev ?? null;
+    state.lastError = `Failed to set thinking level: ${String(err)}`;
   }
 }
 
@@ -933,7 +1130,9 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
         (opt) => html`
           <button
             type="button"
-            class="topbar-theme-mode__btn ${opt.id === state.themeMode ? "topbar-theme-mode__btn--active" : ""}"
+            class="topbar-theme-mode__btn ${opt.id === state.themeMode
+              ? "topbar-theme-mode__btn--active"
+              : ""}"
             title=${opt.label}
             aria-label="Color mode: ${opt.label}"
             aria-pressed=${opt.id === state.themeMode}
@@ -1017,19 +1216,22 @@ export function renderThemeToggle(state: AppViewState) {
         aria-haspopup="menu"
         aria-expanded="false"
         @click=${toggleOpen}
-      >${currentThemeIcon(state.theme)}</button>
+      >
+        ${currentThemeIcon(state.theme)}
+      </button>
       <div class="theme-orb__menu" role="menu" aria-hidden="true">
         ${THEME_OPTIONS.map(
-          (opt) => html`
-            <button
-              type="button"
-              class="theme-orb__option ${opt.id === state.theme ? "theme-orb__option--active" : ""}"
-              title=${opt.label}
-              role="menuitemradio"
-              aria-checked=${opt.id === state.theme}
-              aria-label=${opt.label}
-              @click=${(e: Event) => pick(opt, e)}
-            >${opt.icon}</button>`,
+          (opt) => html` <button
+            type="button"
+            class="theme-orb__option ${opt.id === state.theme ? "theme-orb__option--active" : ""}"
+            title=${opt.label}
+            role="menuitemradio"
+            aria-checked=${opt.id === state.theme}
+            aria-label=${opt.label}
+            @click=${(e: Event) => pick(opt, e)}
+          >
+            ${opt.icon}
+          </button>`,
         )}
       </div>
     </div>

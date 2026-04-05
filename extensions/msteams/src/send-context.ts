@@ -9,6 +9,7 @@ import type {
   MSTeamsConversationStore,
   StoredConversationReference,
 } from "./conversation-store.js";
+import { formatUnknownError } from "./errors.js";
 import { resolveGraphChatId } from "./graph-upload.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -92,7 +93,7 @@ async function findConversationReference(recipient: {
     return null;
   }
 
-  const found = await recipient.store.findByUserId(recipient.id);
+  const found = await recipient.store.findPreferredDmByUserId(recipient.id);
   if (!found) {
     return null;
   }
@@ -190,7 +191,7 @@ export async function resolveMSTeamsSendContext(params: {
         "failed to resolve Graph chat ID; file uploads may fall back to Bot Framework ID",
         {
           conversationId,
-          error: String(err),
+          error: formatUnknownError(err),
         },
       );
       graphChatId = null;

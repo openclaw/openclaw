@@ -55,16 +55,14 @@ function applyAgentDefaultModelConfig(
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: { workspaceOnly?: boolean },
+  _mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
   if (options?.workspaceOnly) {
     return workspaceDir ? [workspaceDir] : [];
   }
   const roots = getDefaultLocalRoots();
-  if (!workspaceDir) {
-    return [...roots];
-  }
-  return Array.from(new Set([...roots, workspaceDir]));
+  return workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
 }
 
 export function resolvePromptAndModelOverride(

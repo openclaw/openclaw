@@ -30,25 +30,34 @@ const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeSurface(
 
 function buildIsolatedProviderResolutionConfig(
   cfg: OpenClawConfig,
-  providerId: string | undefined,
+  ids: Iterable<string | undefined>,
 ): OpenClawConfig {
-  if (!providerId) {
+  const allow = new Set(cfg.plugins?.allow ?? []);
+  const entries = {
+    ...cfg.plugins?.entries,
+  };
+  let changed = false;
+  for (const rawId of ids) {
+    const id = rawId?.trim();
+    if (!id) {
+      continue;
+    }
+    allow.add(id);
+    entries[id] = {
+      ...cfg.plugins?.entries?.[id],
+      enabled: true,
+    };
+    changed = true;
+  }
+  if (!changed) {
     return cfg;
   }
-  const allow = new Set(cfg.plugins?.allow ?? []);
-  allow.add(providerId);
   return {
     ...cfg,
     plugins: {
       ...cfg.plugins,
       allow: Array.from(allow),
-      entries: {
-        ...cfg.plugins?.entries,
-        [providerId]: {
-          ...cfg.plugins?.entries?.[providerId],
-          enabled: true,
-        },
-      },
+      entries,
     },
   };
 }
@@ -81,20 +90,21 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       choice: params.authChoice,
       config: params.nextConfig,
       workspaceDir,
+      includeUntrustedWorkspacePlugins: false,
     }));
-  const resolutionConfig = buildIsolatedProviderResolutionConfig(
-    params.nextConfig,
-    preferredProviderId,
-  );
   const { resolveOwningPluginIdsForProvider, resolveProviderPluginChoice, resolvePluginProviders } =
     await loadAuthChoicePluginProvidersRuntime();
   const owningPluginIds = preferredProviderId
     ? resolveOwningPluginIdsForProvider({
         provider: preferredProviderId,
-        config: resolutionConfig,
+        config: params.nextConfig,
         workspaceDir,
       })
     : undefined;
+  const resolutionConfig = buildIsolatedProviderResolutionConfig(params.nextConfig, [
+    preferredProviderId,
+    ...(owningPluginIds ?? []),
+  ]);
   const providerChoice = resolveProviderPluginChoice({
     providers: resolvePluginProviders({
       config: resolutionConfig,

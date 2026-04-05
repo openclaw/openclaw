@@ -5,7 +5,7 @@ summary: "`openclaw configure` 的 CLI 参考（交互式配置提示）"
 title: configure
 x-i18n:
   generated_at: "2026-02-03T07:44:46Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 9cb2bb5237b02b3a2dca71b5e43b11bd6b9939b9e4aa9ce1882457464b51efd2
   source_path: cli/configure.md

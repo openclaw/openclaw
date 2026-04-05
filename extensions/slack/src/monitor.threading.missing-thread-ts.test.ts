@@ -1,5 +1,5 @@
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
 import {
   flush,
   getSlackClient,
@@ -75,7 +75,7 @@ beforeAll(async () => {
   ({ monitorSlackProvider } = await import("./monitor.js"));
 });
 
-beforeEach(async () => {
+beforeEach(() => {
   resetInboundDedupe();
   resetSlackTestState({
     messages: { responsePrefix: "PFX" },

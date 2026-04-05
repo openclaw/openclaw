@@ -4,7 +4,7 @@ summary: 针对 OpenClaw 最高风险路径的机器检查安全模型。
 title: 形式化验证（安全模型）
 x-i18n:
   generated_at: "2026-02-03T07:54:04Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 8dff6ea41a37fb6b870424e4e788015c3f8a6099075eece5dbf909883c045106
   source_path: security/formal-verification.md
@@ -69,9 +69,9 @@ make <target>
 
 另见：模型仓库中的 `docs/gateway-exposure-matrix.md`。
 
-### Nodes.run 管道（最高风险能力）
+### 节点 exec 管道（最高风险能力）
 
-**声明：** `nodes.run` 需要（a）节点命令允许列表加上声明的命令以及（b）配置时的实时批准；批准被令牌化以防止重放（在模型中）。
+**声明：** `exec host=node` 需要（a）节点命令允许列表加上声明的命令以及（b）配置时的实时批准；批准被令牌化以防止重放（在模型中）。
 
 - 绿色运行：
   - `make nodes-pipeline`

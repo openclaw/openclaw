@@ -6,6 +6,7 @@ import {
 import { resolveInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   resolveOutboundSendDep,
+  sanitizeForPlainText,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/outbound-runtime";
 import {
@@ -30,6 +31,7 @@ function resolveTelegramSendContext(params: {
   accountId?: string | null;
   replyToId?: string | null;
   threadId?: string | number | null;
+  gatewayClientScopes?: readonly string[];
 }): {
   send: TelegramSendFn;
   baseOpts: {
@@ -39,6 +41,7 @@ function resolveTelegramSendContext(params: {
     messageThreadId?: number;
     replyToMessageId?: number;
     accountId?: string;
+    gatewayClientScopes?: readonly string[];
   };
 } {
   const send =
@@ -52,6 +55,7 @@ function resolveTelegramSendContext(params: {
       messageThreadId: parseTelegramThreadId(params.threadId),
       replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
       accountId: params.accountId ?? undefined,
+      gatewayClientScopes: params.gatewayClientScopes,
     },
   };
 }
@@ -106,18 +110,29 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   chunker: markdownToTelegramHtmlChunks,
   chunkerMode: "markdown",
   textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+  sanitizeText: ({ text }) => sanitizeForPlainText(text),
   shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
   resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
     typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
   ...createAttachedChannelResultAdapter({
     channel: "telegram",
-    sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId }) => {
+    sendText: async ({
+      cfg,
+      to,
+      text,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      gatewayClientScopes,
+    }) => {
       const { send, baseOpts } = resolveTelegramSendContext({
         cfg,
         deps,
         accountId,
         replyToId,
         threadId,
+        gatewayClientScopes,
       });
       return await send(to, text, {
         ...baseOpts,
@@ -129,11 +144,13 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       text,
       mediaUrl,
       mediaLocalRoots,
+      mediaReadFile,
       accountId,
       deps,
       replyToId,
       threadId,
       forceDocument,
+      gatewayClientScopes,
     }) => {
       const { send, baseOpts } = resolveTelegramSendContext({
         cfg,
@@ -141,11 +158,13 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         accountId,
         replyToId,
         threadId,
+        gatewayClientScopes,
       });
       return await send(to, text, {
         ...baseOpts,
         mediaUrl,
         mediaLocalRoots,
+        mediaReadFile,
         forceDocument: forceDocument ?? false,
       });
     },
@@ -155,11 +174,13 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     to,
     payload,
     mediaLocalRoots,
+    mediaReadFile,
     accountId,
     deps,
     replyToId,
     threadId,
     forceDocument,
+    gatewayClientScopes,
   }) => {
     const { send, baseOpts } = resolveTelegramSendContext({
       cfg,
@@ -167,6 +188,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       accountId,
       replyToId,
       threadId,
+      gatewayClientScopes,
     });
     const result = await sendTelegramPayloadMessages({
       send,
@@ -175,6 +197,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       baseOpts: {
         ...baseOpts,
         mediaLocalRoots,
+        mediaReadFile,
         forceDocument: forceDocument ?? false,
       },
     });

@@ -4,7 +4,7 @@ read_when:
 summary: BOOT.md 的工作区模板
 x-i18n:
   generated_at: "2026-02-01T21:37:16Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 63f6c97e2eab74b1d8a7309cdb2ba92e7651b62af01dc9907755a3f139909b08
   source_path: reference/templates/BOOT.md

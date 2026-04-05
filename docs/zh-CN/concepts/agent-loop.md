@@ -5,7 +5,7 @@ summary: 智能体循环生命周期、流和等待语义
 title: 智能体循环
 x-i18n:
   generated_at: "2026-02-03T10:05:11Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 0775b96eb3451e137297661a1095eaefb2bafeebb5f78123174a46290e18b014
   source_path: concepts/agent-loop.md
@@ -136,7 +136,7 @@ OpenClaw 有两个钩子系统：
 ## 超时
 
 - `agent.wait` 默认：30 秒（仅等待）。`timeoutMs` 参数可覆盖。
-- 智能体运行时：`agents.defaults.timeoutSeconds` 默认 600 秒；在 `runEmbeddedPiAgent` 中止计时器中强制执行。
+- 智能体运行时：`agents.defaults.timeoutSeconds` 默认 172800 秒（48 小时）；在 `runEmbeddedPiAgent` 中止计时器中强制执行。使用 `0` 可完全禁用超时。
 
 ## 可能提前结束的情况
 
