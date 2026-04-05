@@ -29,14 +29,14 @@ vi.mock("../../agents/defaults.js", () => ({
   DEFAULT_MODEL: "gpt-5.4",
 }));
 
+import { createFollowupRunner } from "../../auto-reply/reply/followup-runner.js";
 import { buildFollowupRunForSession } from "../../auto-reply/reply/queue/build-followup-run.js";
-import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import {
   kickFollowupDrainIfIdle,
   rememberFollowupDrainCallback,
 } from "../../auto-reply/reply/queue/drain.js";
+import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { getExistingFollowupQueue } from "../../auto-reply/reply/queue/state.js";
-import { createFollowupRunner } from "../../auto-reply/reply/followup-runner.js";
 import { createTypingController } from "../../auto-reply/reply/typing.js";
 import { createRuntimeFollowup } from "./runtime-followup.js";
 
@@ -94,8 +94,8 @@ describe("createRuntimeFollowup", () => {
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
   });
 
-  it("returns true and enqueues run on happy path", async () => {
-    // Cold session: no existing callback, queue is not draining after kick
+  it("returns true and enqueues run on happy path (cold session defaults to followup mode)", async () => {
+    // Cold session: no existing queue
     (getExistingFollowupQueue as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
 
     const followup = createRuntimeFollowup();
@@ -109,6 +109,30 @@ describe("createRuntimeFollowup", () => {
       SESSION_KEY,
       expect.objectContaining({ prompt: "continue" }),
       { mode: "followup" },
+      "none",
+      undefined,
+      false,
+    );
+  });
+
+  it("preserves existing queue mode instead of forcing followup", async () => {
+    // Hot session with "collect" mode already set
+    (getExistingFollowupQueue as ReturnType<typeof vi.fn>).mockReturnValue({
+      mode: "collect",
+      draining: true,
+    });
+
+    const followup = createRuntimeFollowup();
+    const result = await followup.enqueueFollowupTurn({
+      sessionKey: SESSION_KEY,
+      prompt: "hello",
+    });
+
+    expect(result).toBe(true);
+    expect(enqueueFollowupRun).toHaveBeenCalledWith(
+      SESSION_KEY,
+      expect.objectContaining({ prompt: "continue" }),
+      { mode: "collect" },
       "none",
       undefined,
       false,

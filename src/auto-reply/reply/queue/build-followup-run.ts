@@ -1,5 +1,4 @@
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
-import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { resolveDefaultModelForAgent } from "../../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../../agents/timeout.js";
@@ -7,10 +6,12 @@ import { loadConfig } from "../../../config/config.js";
 import {
   loadSessionStore,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveStorePath,
 } from "../../../config/sessions.js";
 import { logVerbose } from "../../../globals.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import type { FollowupRun } from "./types.js";
 
 export type BuildFollowupRunParams = {
@@ -42,7 +43,8 @@ export async function buildFollowupRunForSession(
   const cfg = loadConfig();
   const agentDir = resolveAgentDir(cfg, agentId);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const store = loadSessionStore(resolveStorePath(cfg.session?.store, { agentId }));
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const store = loadSessionStore(storePath);
   const sessionEntry = store[params.sessionKey];
 
   if (!sessionEntry) {
@@ -65,9 +67,10 @@ export async function buildFollowupRunForSession(
     sessionEntry.model?.trim() ||
     agentDefaults.model ||
     DEFAULT_MODEL;
+  const sessionFileOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const sessionFile =
     sessionEntry.sessionFile?.trim() ||
-    resolveSessionFilePath(sessionEntry.sessionId, sessionEntry, { agentId });
+    resolveSessionFilePath(sessionEntry.sessionId, sessionEntry, sessionFileOpts);
   const timeoutMs = resolveAgentTimeoutMs({
     cfg,
     overrideMs: params.timeoutMs,
@@ -107,17 +110,23 @@ export async function buildFollowupRunForSession(
       // Session runtime levels
       thinkLevel: (sessionEntry.thinkingLevel as FollowupRun["run"]["thinkLevel"]) ?? undefined,
       verboseLevel: (sessionEntry.verboseLevel as FollowupRun["run"]["verboseLevel"]) ?? undefined,
-      reasoningLevel: (sessionEntry.reasoningLevel as FollowupRun["run"]["reasoningLevel"]) ?? undefined,
-      elevatedLevel: (sessionEntry.elevatedLevel as FollowupRun["run"]["elevatedLevel"]) ?? undefined,
+      reasoningLevel:
+        (sessionEntry.reasoningLevel as FollowupRun["run"]["reasoningLevel"]) ?? undefined,
+      elevatedLevel:
+        (sessionEntry.elevatedLevel as FollowupRun["run"]["elevatedLevel"]) ?? undefined,
       // Exec overrides from session
-      execOverrides: (sessionEntry.execHost || sessionEntry.execSecurity || sessionEntry.execAsk || sessionEntry.execNode)
-        ? ({
-            host: sessionEntry.execHost,
-            security: sessionEntry.execSecurity,
-            ask: sessionEntry.execAsk,
-            node: sessionEntry.execNode,
-          } as FollowupRun["run"]["execOverrides"])
-        : undefined,
+      execOverrides:
+        sessionEntry.execHost ||
+        sessionEntry.execSecurity ||
+        sessionEntry.execAsk ||
+        sessionEntry.execNode
+          ? ({
+              host: sessionEntry.execHost,
+              security: sessionEntry.execSecurity,
+              ask: sessionEntry.execAsk,
+              node: sessionEntry.execNode,
+            } as FollowupRun["run"]["execOverrides"])
+          : undefined,
       // Message provider for reply routing
       messageProvider: sessionEntry.lastChannel ?? undefined,
       // Enforce final reasoning tag for providers that use tagged reasoning output
