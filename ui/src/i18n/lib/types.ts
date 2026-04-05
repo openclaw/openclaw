@@ -12,7 +12,8 @@ export type Locale =
   | "fr"
   | "tr"
   | "id"
-  | "pl";
+  | "pl"
+  | "uk-UA";
 
 export interface I18nConfig {
   locale: Locale;
