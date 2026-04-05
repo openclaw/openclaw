@@ -1,15 +1,35 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
   withModelsTempHome,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
+const { planOpenClawModelsJsonMock } = vi.hoisted(() => ({
+  planOpenClawModelsJsonMock: vi.fn(),
+}));
+
+vi.mock("./models-config.plan.js", () => ({
+  planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
+}));
+
 installModelsConfigTestHooks();
+
+let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+
+beforeEach(async () => {
+  vi.resetModules();
+  planOpenClawModelsJsonMock.mockImplementation(
+    async (params: { cfg?: typeof CUSTOM_PROXY_MODELS_CONFIG }) => ({
+      action: "write",
+      contents: `${JSON.stringify({ providers: params.cfg?.models?.providers ?? {} }, null, 2)}\n`,
+    }),
+  );
+  ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+});
 
 describe("models-config write serialization", () => {
   it("serializes concurrent models.json writes to avoid overlap", async () => {
