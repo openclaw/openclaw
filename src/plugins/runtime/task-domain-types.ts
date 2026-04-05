@@ -78,6 +78,12 @@ export type TaskFlowDetail = TaskFlowView & {
     taskId?: string;
     summary?: string;
   };
+  resolution?: {
+    code: "retry_available" | "user_action_required";
+    retryable: boolean;
+    needsUserAction: boolean;
+    summary: string;
+  };
   tasks: TaskRunView[];
   taskSummary: TaskRunAggregateSummary;
 };

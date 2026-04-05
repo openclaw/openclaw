@@ -81,6 +81,7 @@ export type SpawnSubagentParams = {
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
   expectsCompletionMessage?: boolean;
+  parentFlowId?: string;
   attachments?: Array<{
     name: string;
     content: string;
@@ -828,6 +829,7 @@ export async function spawnSubagentDirect(
       runTimeoutSeconds,
       expectsCompletionMessage,
       spawnMode,
+      parentFlowId: params.parentFlowId,
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,

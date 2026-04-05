@@ -3,9 +3,17 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
   const spawnAcpDirectMock = vi.fn();
+  const createManagedMock = vi.fn();
+  const getFlowMock = vi.fn();
+  const setWaitingMock = vi.fn();
+  const failFlowMock = vi.fn();
   return {
     spawnSubagentDirectMock,
     spawnAcpDirectMock,
+    createManagedMock,
+    getFlowMock,
+    setWaitingMock,
+    failFlowMock,
   };
 });
 
@@ -20,6 +28,32 @@ vi.mock("../acp-spawn.js", () => ({
   isSpawnAcpAcceptedResult: (result: { status?: string }) => result?.status === "accepted",
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
 }));
+
+vi.mock("../../plugins/runtime/runtime-taskflow.js", () => ({
+  createRuntimeTaskFlow: () => ({
+    bindSession: () => ({
+      createManaged: (...args: unknown[]) => hoisted.createManagedMock(...args),
+      get: (...args: unknown[]) => hoisted.getFlowMock(...args),
+      setWaiting: (...args: unknown[]) => hoisted.setWaitingMock(...args),
+      fail: (...args: unknown[]) => hoisted.failFlowMock(...args),
+    }),
+  }),
+}));
+
+vi.mock("../subagent-capabilities.js", async () => {
+  const actual = await vi.importActual<Record<string, unknown>>("../subagent-capabilities.js");
+  return {
+    ...actual,
+    SUBAGENT_INTENT_LANES: ["research", "planning", "execution", "verification"],
+    normalizeSubagentIntentLane: (value: unknown) =>
+      value === "research" ||
+      value === "planning" ||
+      value === "execution" ||
+      value === "verification"
+        ? value
+        : undefined,
+  };
+});
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
 
@@ -39,6 +73,16 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
     });
+    hoisted.createManagedMock.mockReset().mockReturnValue({
+      flowId: "flow-1",
+      revision: 1,
+    });
+    hoisted.getFlowMock.mockReset().mockReturnValue({
+      flowId: "flow-1",
+      revision: 1,
+    });
+    hoisted.setWaitingMock.mockReset().mockReturnValue({ applied: true });
+    hoisted.failFlowMock.mockReset().mockReturnValue({ applied: true });
   });
 
   it("uses subagent runtime by default", async () => {
@@ -101,6 +145,54 @@ describe("sessions_spawn tool", () => {
         workspaceDir: "/parent/workspace",
       }),
     );
+  });
+
+  it("can create a managed TaskFlow around a spawned subagent", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+      agentAccountId: "default",
+      agentTo: "channel:123",
+      agentThreadId: "456",
+    });
+
+    const result = await tool.execute("call-flow", {
+      task: "review repo",
+      lane: "research",
+      taskFlow: {
+        controllerId: "tests/long-task",
+        goal: "Review repository",
+      },
+    });
+
+    expect(hoisted.createManagedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        controllerId: "tests/long-task",
+        goal: "Review repository",
+      }),
+    );
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "review repo",
+        parentFlowId: "flow-1",
+      }),
+      expect.any(Object),
+    );
+    expect(hoisted.setWaitingMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flowId: "flow-1",
+        currentStep: "wait_worker",
+      }),
+    );
+    expect(hoisted.setWaitingMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        blockedSummary: expect.anything(),
+      }),
+    );
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      flowId: "flow-1",
+    });
   });
 
   it("routes to ACP runtime when runtime=acp", async () => {

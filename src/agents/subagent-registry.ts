@@ -617,6 +617,7 @@ export function registerSubagentRun(params: {
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
   spawnMode?: "run" | "session";
+  parentFlowId?: string;
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;

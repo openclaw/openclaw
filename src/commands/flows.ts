@@ -3,6 +3,7 @@ import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
+import { getTaskFlowGuidance } from "../tasks/task-flow-guidance.js";
 import type { TaskFlowRecord, TaskFlowStatus } from "../tasks/task-flow-registry.types.js";
 import {
   getTaskFlowById,
@@ -210,6 +211,7 @@ export async function flowsShowCommand(
     return;
   }
 
+  const guidance = getTaskFlowGuidance(flow);
   const lines = [
     "TaskFlow:",
     `flowId: ${flow.flowId}`,
@@ -219,6 +221,7 @@ export async function flowsShowCommand(
     `owner: ${safeFlowDisplayText(flow.ownerKey)}`,
     `notify: ${flow.notifyPolicy}`,
     ...(stateSummary ? [`state: ${safeFlowDisplayText(stateSummary)}`] : []),
+    ...(guidance ? [`nextAction: ${safeFlowDisplayText(guidance.summary)}`] : []),
     ...(flow.cancelRequestedAt
       ? [`cancelRequestedAt: ${new Date(flow.cancelRequestedAt).toISOString()}`]
       : []),
