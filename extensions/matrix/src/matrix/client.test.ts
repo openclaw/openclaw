@@ -17,6 +17,7 @@ function createLookupFn(addresses: Array<{ address: string; family: number }>): 
 
 const saveMatrixCredentialsMock = vi.hoisted(() => vi.fn());
 const touchMatrixCredentialsMock = vi.hoisted(() => vi.fn());
+const repairCurrentTokenStorageMetaDeviceIdMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./credentials-read.js", () => ({
   loadMatrixCredentials: vi.fn(() => null),
@@ -27,6 +28,14 @@ vi.mock("./credentials-write.runtime.js", () => ({
   saveMatrixCredentials: saveMatrixCredentialsMock,
   touchMatrixCredentials: touchMatrixCredentialsMock,
 }));
+
+vi.mock("./client/storage.js", async () => {
+  const actual = await vi.importActual<typeof import("./client/storage.js")>("./client/storage.js");
+  return {
+    ...actual,
+    repairCurrentTokenStorageMetaDeviceId: repairCurrentTokenStorageMetaDeviceIdMock,
+  };
+});
 
 const {
   backfillMatrixAuthDeviceIdAfterStartup,
@@ -743,6 +752,7 @@ describe("resolveMatrixAuth", () => {
     vi.mocked(readModule.credentialsMatchConfig).mockReturnValue(false);
     saveMatrixCredentialsMock.mockReset();
     touchMatrixCredentialsMock.mockReset();
+    repairCurrentTokenStorageMetaDeviceIdMock.mockReset();
     ensureMatrixSdkLoggingConfiguredMock.mockReset();
     matrixDoRequestMock.mockReset();
     setMatrixAuthClientDepsForTest({
@@ -1228,6 +1238,14 @@ describe("resolveMatrixAuth", () => {
       expect.any(Object),
       "default",
     );
+    expect(repairCurrentTokenStorageMetaDeviceIdMock).toHaveBeenCalledWith({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "tok-123",
+      accountId: "default",
+      deviceId: "DEVICE123",
+      env: expect.any(Object),
+    });
     expect(deviceId).toBe("DEVICE123");
   });
 
@@ -1245,6 +1263,7 @@ describe("resolveMatrixAuth", () => {
 
     expect(matrixDoRequestMock).not.toHaveBeenCalled();
     expect(saveMatrixCredentialsMock).not.toHaveBeenCalled();
+    expect(repairCurrentTokenStorageMetaDeviceIdMock).not.toHaveBeenCalled();
     expect(deviceId).toBe("DEVICE123");
   });
 

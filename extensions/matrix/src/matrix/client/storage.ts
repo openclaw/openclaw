@@ -198,6 +198,15 @@ function resolvePreferredMatrixStorageRoot(params: {
     mtimeMs: resolveStorageRootMtimeMs(params.canonicalRootDir),
   };
 
+  // Without a confirmed device identity, reusing a populated sibling root after
+  // token rotation can silently bind this run to the wrong Matrix device state.
+  if (!params.deviceId?.trim()) {
+    return {
+      rootDir: best.rootDir,
+      tokenHash: best.tokenHash,
+    };
+  }
+
   let siblingEntries: fs.Dirent[] = [];
   try {
     siblingEntries = fs.readdirSync(parentDir, { withFileTypes: true });
@@ -450,4 +459,30 @@ export function writeStorageMeta(params: {
   } catch {
     // ignore meta write failures
   }
+}
+
+export function repairCurrentTokenStorageMetaDeviceId(params: {
+  homeserver: string;
+  userId: string;
+  accessToken: string;
+  accountId?: string | null;
+  deviceId: string;
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+}): void {
+  const storagePaths = resolveMatrixStoragePaths({
+    homeserver: params.homeserver,
+    userId: params.userId,
+    accessToken: params.accessToken,
+    accountId: params.accountId,
+    env: params.env,
+    stateDir: params.stateDir,
+  });
+  writeStorageMeta({
+    storagePaths,
+    homeserver: params.homeserver,
+    userId: params.userId,
+    accountId: params.accountId,
+    deviceId: params.deviceId,
+  });
 }

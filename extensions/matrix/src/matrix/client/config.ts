@@ -26,6 +26,7 @@ import {
   normalizeOptionalAccountId,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "./config-runtime-api.js";
+import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
 type MatrixAuthClientDeps = {
@@ -976,5 +977,13 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     params.env ?? process.env,
     params.auth.accountId,
   );
+  repairCurrentTokenStorageMetaDeviceId({
+    homeserver: params.auth.homeserver,
+    userId: params.auth.userId,
+    accessToken: params.auth.accessToken,
+    accountId: params.auth.accountId,
+    deviceId,
+    env: params.env,
+  });
   return deviceId;
 }
