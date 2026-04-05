@@ -9,7 +9,7 @@ import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers
 import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
-import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
+import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
 type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web

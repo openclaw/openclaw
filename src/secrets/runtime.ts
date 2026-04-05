@@ -34,6 +34,11 @@ import {
   createResolverContext,
   type SecretResolverWarning,
 } from "./runtime-shared.js";
+import {
+  clearActiveRuntimeWebToolsMetadata,
+  getActiveRuntimeWebToolsMetadata as getActiveRuntimeWebToolsMetadataFromState,
+  setActiveRuntimeWebToolsMetadata,
+} from "./runtime-web-tools-state.js";
 import { resolveRuntimeWebTools, type RuntimeWebToolsMetadata } from "./runtime-web-tools.js";
 
 export type { SecretResolverWarning } from "./runtime-shared.js";
@@ -98,6 +103,7 @@ function cloneRefreshContext(context: SecretsRuntimeRefreshContext): SecretsRunt
 function clearActiveSecretsRuntimeState(): void {
   activeSnapshot = null;
   activeRefreshContext = null;
+  clearActiveRuntimeWebToolsMetadata();
   setRuntimeConfigSnapshotRefreshHandler(null);
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();
@@ -256,6 +262,7 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
   activeSnapshot = next;
   activeRefreshContext = cloneRefreshContext(refreshContext);
+  setActiveRuntimeWebToolsMetadata(next.webTools);
   setRuntimeConfigSnapshotRefreshHandler({
     refresh: async ({ sourceConfig }) => {
       if (!activeSnapshot || !activeRefreshContext) {
@@ -286,10 +293,7 @@ export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapsho
 }
 
 export function getActiveRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata | null {
-  if (!activeSnapshot) {
-    return null;
-  }
-  return structuredClone(activeSnapshot.webTools);
+  return getActiveRuntimeWebToolsMetadataFromState();
 }
 
 export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
