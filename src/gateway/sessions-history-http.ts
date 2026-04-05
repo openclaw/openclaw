@@ -25,8 +25,10 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
+import { sanitizeChatHistoryMessages } from "./server-methods/chat.js";
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
+const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 function resolveSessionHistoryPath(req: IncomingMessage): string | null {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/history$/);
@@ -273,16 +275,16 @@ export async function handleSessionHistoryHttpRequest(
             : readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile).length,
       });
       if (limit === undefined && cursor === undefined) {
+        sentHistory = {
+          items: [...sentHistory.items, nextMessage],
+          messages: [...sentHistory.items, nextMessage],
+          hasMore: false,
+        };
         const sanitized = sanitizeChatHistoryMessages([nextMessage], effectiveMaxChars);
         if (sanitized.length === 0) {
           return;
         }
         const sanitizedMessage = sanitized[0];
-        sentHistory = {
-          items: [...sentHistory.items, sanitizedMessage],
-          messages: [...sentHistory.items, sanitizedMessage],
-          hasMore: false,
-        };
         sseWrite(res, "message", {
           sessionKey: target.canonicalKey,
           message: sanitizedMessage,
