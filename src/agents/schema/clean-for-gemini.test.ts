@@ -96,4 +96,46 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.required).toEqual(["nested"]);
     expect(cleaned.properties?.nested).not.toHaveProperty("required");
   });
+
+  // Regression: #61206 — `not` keyword is not part of the OpenAPI 3.0 subset
+  // and must be stripped to avoid HTTP 400 from Gemini-backed providers.
+  it("strips the not keyword from schemas", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      not: { const: true },
+      properties: {
+        name: { type: "string" },
+      },
+    }) as Record<string, unknown>;
+
+    expect(cleaned).not.toHaveProperty("not");
+    expect(cleaned.type).toBe("object");
+    expect(cleaned.properties).toEqual({ name: { type: "string" } });
+  });
+
+  // Regression: #61206 — type arrays like ["string", "null"] must be
+  // collapsed to a single scalar type for OpenAPI 3.0 compatibility.
+  it("collapses type arrays by stripping null entries", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: ["string", "null"],
+      description: "nullable field",
+    }) as Record<string, unknown>;
+
+    expect(cleaned.type).toBe("string");
+    expect(cleaned.description).toBe("nullable field");
+  });
+
+  it("collapses type arrays in nested property schemas", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        agentId: {
+          type: ["string", "null"],
+          description: "Agent id",
+        },
+      },
+    }) as { properties?: { agentId?: Record<string, unknown> } };
+
+    expect(cleaned.properties?.agentId?.type).toBe("string");
+  });
 });
