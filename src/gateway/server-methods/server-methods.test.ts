@@ -312,21 +312,21 @@ describe("sanitizeChatSendMessageInput", () => {
   });
 
   it("extracts text from object with .text property", () => {
-    expect(sanitizeChatSendMessageInput({ text: "hello", entities: [] } as unknown as string)).toEqual({
+    expect(sanitizeChatSendMessageInput({ text: "hello", entities: [] })).toEqual({
       ok: true,
       message: "hello",
     });
   });
 
   it("extracts caption from object with .caption property", () => {
-    expect(sanitizeChatSendMessageInput({ caption: "photo caption" } as unknown as string)).toEqual({
+    expect(sanitizeChatSendMessageInput({ caption: "photo caption" })).toEqual({
       ok: true,
       message: "photo caption",
     });
   });
 
   it("extracts body from WhatsApp/Baileys object", () => {
-    expect(sanitizeChatSendMessageInput({ body: "whatsapp msg" } as unknown as string)).toEqual({
+    expect(sanitizeChatSendMessageInput({ body: "whatsapp msg" })).toEqual({
       ok: true,
       message: "whatsapp msg",
     });
@@ -334,19 +334,19 @@ describe("sanitizeChatSendMessageInput", () => {
 
   it("extracts conversation from Baileys raw message", () => {
     expect(
-      sanitizeChatSendMessageInput({ conversation: "baileys text" } as unknown as string),
+      sanitizeChatSendMessageInput({ conversation: "baileys text" }),
     ).toEqual({ ok: true, message: "baileys text" });
   });
 
   it("rejects object with no extractable text fields", () => {
-    expect(sanitizeChatSendMessageInput({ foo: "bar" } as unknown as string)).toEqual({
+    expect(sanitizeChatSendMessageInput({ foo: "bar" })).toEqual({
       ok: false,
       error: "message must be a string (received unsupported object)",
     });
   });
 
   it("rejects non-string non-object values", () => {
-    expect(sanitizeChatSendMessageInput(42 as unknown as string)).toEqual({
+    expect(sanitizeChatSendMessageInput(42)).toEqual({
       ok: false,
       error: "message must be a string",
     });

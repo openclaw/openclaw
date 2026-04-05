@@ -308,7 +308,7 @@ export function sanitizeChatSendMessageInput(
       (typeof obj.body === "string" ? obj.body : undefined) ??
       (typeof obj.conversation === "string" ? obj.conversation : undefined) ??
       (typeof obj.content === "string" ? obj.content : undefined);
-    if (!extracted) {
+    if (extracted === undefined) {
       return { ok: false, error: "message must be a string (received unsupported object)" };
     }
     text = extracted;
