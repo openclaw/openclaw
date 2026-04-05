@@ -4,7 +4,6 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { resolveRequiredHomeDir } from "openclaw/plugin-sdk/provider-auth";
-import { createBackupArchive } from "openclaw/plugin-sdk/runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 import { detectLegacyMatrixState } from "./legacy-state.js";
@@ -103,6 +102,7 @@ export async function maybeCreateMatrixMigrationSnapshot(params: {
   outputDir?: string;
   log?: { info?: (message: string) => void; warn?: (message: string) => void };
 }): Promise<MatrixMigrationSnapshotResult> {
+  const { createBackupArchive } = await import("openclaw/plugin-sdk/runtime");
   const env = params.env ?? process.env;
   const markerPath = resolveMatrixMigrationSnapshotMarkerPath(env);
   const existingMarker = loadSnapshotMarker(markerPath);

@@ -1,4 +1,4 @@
-import { defineChannelPluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/channel-core";
 import { linePlugin } from "./src/channel.js";
 import { setLineRuntime } from "./src/runtime.js";
 
@@ -15,7 +15,7 @@ async function loadLineCardCommand(api: OpenClawPluginApi): Promise<RegisteredLi
     const { registerLineCardCommand } = await import("./src/card-command.js");
     registerLineCardCommand({
       ...api,
-      registerCommand(command) {
+      registerCommand(command: RegisteredLineCardCommand) {
         registered = command;
       },
     });

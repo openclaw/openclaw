@@ -1,7 +1,7 @@
 import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { getBootstrapChannelPlugin } from "./bootstrap-registry.js";
+import { getChannelPlugin } from "./registry.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
@@ -417,7 +417,7 @@ type ChannelSetupPromotionSurface = {
 };
 
 function getChannelSetupPromotionSurface(channelKey: string): ChannelSetupPromotionSurface | null {
-  const setup = getBootstrapChannelPlugin(channelKey)?.setup;
+  const setup = getChannelPlugin(channelKey)?.setup;
   if (!setup || typeof setup !== "object") {
     return null;
   }

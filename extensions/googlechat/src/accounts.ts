@@ -2,11 +2,12 @@ import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
+  type OpenClawConfig,
   resolveAccountEntry,
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import { isSecretRef, type OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { isSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
 import type { GoogleChatAccountConfig } from "./types.config.js";
 

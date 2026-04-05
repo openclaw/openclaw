@@ -1,5 +1,5 @@
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
