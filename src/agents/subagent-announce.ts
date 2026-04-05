@@ -338,8 +338,7 @@ export async function runSubagentAnnounceFlow(params: {
   const announceType = params.announceType ?? "subagent task";
   let shouldDeleteChildSession = params.cleanup === "delete";
   try {
-    let targetRequesterSessionKey =
-      params.requesterDisplayKey?.trim() || params.requesterSessionKey;
+    let targetRequesterSessionKey = params.requesterSessionKey;
     let targetRequesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
     const childSessionId = (() => {
       const entry = loadSessionEntryByKey(params.childSessionKey);

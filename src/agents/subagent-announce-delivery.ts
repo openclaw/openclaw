@@ -94,15 +94,38 @@ function summarizeDeliveryError(error: unknown): string {
   }
 }
 
+function parseTelegramAnnounceTarget(to: string): {
+  chatId: string;
+  chatType: "direct" | "group" | "unknown";
+} {
+  const trimmed = to.trim();
+  const parsed = parseExplicitTargetForChannel("telegram", trimmed);
+  const rawChatId = parsed?.to?.trim() || trimmed;
+  const chatId = rawChatId
+    .replace(/^telegram:(?:group:)?/i, "")
+    .replace(/^tg:/i, "")
+    .replace(/^group:/i, "")
+    .replace(/:topic:\d+$/i, "")
+    .trim();
+  const inferredGroup = /^-\d+$/.test(chatId);
+  const chatType =
+    parsed?.chatType === "direct" || parsed?.chatType === "group"
+      ? parsed.chatType
+      : inferredGroup
+        ? "group"
+        : "unknown";
+  return { chatId, chatType };
+}
+
 function normalizeTelegramAnnounceTarget(target: string | undefined): string | undefined {
   const trimmed = target?.trim();
   if (!trimmed) {
     return undefined;
   }
-  if (trimmed.startsWith("group:")) {
+  if (/^group:/i.test(trimmed)) {
     return `telegram:${trimmed.slice("group:".length)}`;
   }
-  if (!trimmed.startsWith("telegram:")) {
+  if (!/^telegram:/i.test(trimmed)) {
     return undefined;
   }
   const raw = trimmed.slice("telegram:".length);
