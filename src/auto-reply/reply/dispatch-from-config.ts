@@ -779,26 +779,6 @@ export async function dispatchReplyFromConfig(params: {
           };
           return run();
         },
-        onToolStart: ({ name, phase }) => {
-          if (phase !== "start") {
-            return;
-          }
-          if (typeof name !== "string") {
-            return;
-          }
-          return maybeSendWorkingStatus(name);
-        },
-        onItemEvent: ({ phase, name, title, kind }) => {
-          if (phase !== "start") {
-            return;
-          }
-          if (kind === "tool" && typeof name === "string" && name.trim()) {
-            return maybeSendWorkingStatus(name);
-          }
-          if (typeof title === "string") {
-            return maybeSendWorkingStatus(title);
-          }
-        },
         onPlanUpdate: ({ phase, explanation, steps }) => {
           if (phase !== "update") {
             return;
