@@ -171,6 +171,7 @@ export const pt_BR: TranslationMap = {
     reloadConfig: "Recarregar config",
     save: "Salvar",
     saving: "Salvando…",
+    loading: "Carregando…",
     removeAllowlistTitle: "Remover allowlist por agente e usar todas as habilidades",
     filter: "Filtro",
     searchSkillsPlaceholder: "Pesquisar habilidades",

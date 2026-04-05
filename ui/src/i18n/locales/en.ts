@@ -168,6 +168,7 @@ export const en: TranslationMap = {
     reloadConfig: "Reload Config",
     save: "Save",
     saving: "Saving…",
+    loading: "Loading…",
     removeAllowlistTitle: "Remove per-agent allowlist and use all skills",
     filter: "Filter",
     searchSkillsPlaceholder: "Search skills",
