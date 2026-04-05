@@ -117,6 +117,7 @@ describe("short-term dreaming config", () => {
       minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
       minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
       minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+      verboseLogging: false,
     });
   });
 
@@ -131,6 +132,7 @@ describe("short-term dreaming config", () => {
           minScore: 0.4,
           minRecallCount: 2,
           minUniqueQueries: 3,
+          verboseLogging: true,
         },
       },
     });
@@ -142,6 +144,7 @@ describe("short-term dreaming config", () => {
       minScore: 0.4,
       minRecallCount: 2,
       minUniqueQueries: 3,
+      verboseLogging: true,
     });
   });
 
@@ -165,6 +168,7 @@ describe("short-term dreaming config", () => {
       minScore: 0.6,
       minRecallCount: 2,
       minUniqueQueries: 3,
+      verboseLogging: false,
     });
   });
 
@@ -187,6 +191,7 @@ describe("short-term dreaming config", () => {
       minScore: constants.DREAMING_PRESET_DEFAULTS.deep.minScore,
       minRecallCount: constants.DREAMING_PRESET_DEFAULTS.deep.minRecallCount,
       minUniqueQueries: constants.DREAMING_PRESET_DEFAULTS.deep.minUniqueQueries,
+      verboseLogging: false,
     });
   });
 
@@ -200,6 +205,28 @@ describe("short-term dreaming config", () => {
       },
     });
     expect(resolved.limit).toBe(0);
+  });
+
+  it("accepts verboseLogging as a boolean or boolean string", () => {
+    const enabled = resolveShortTermPromotionDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          mode: "core",
+          verboseLogging: true,
+        },
+      },
+    });
+    const disabled = resolveShortTermPromotionDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          mode: "core",
+          verboseLogging: "false",
+        },
+      },
+    });
+
+    expect(enabled.verboseLogging).toBe(true);
+    expect(disabled.verboseLogging).toBe(false);
   });
 
   it("falls back to defaults when thresholds are negative", () => {
@@ -263,6 +290,7 @@ describe("short-term dreaming cron reconciliation", () => {
         minScore: 0.5,
         minRecallCount: 4,
         minUniqueQueries: 5,
+        verboseLogging: false,
       },
       logger,
     });
@@ -294,6 +322,7 @@ describe("short-term dreaming cron reconciliation", () => {
       minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
       minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
       minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+      verboseLogging: false,
     } as const;
     const desired = __testing.buildManagedDreamingCronJob(desiredConfig);
     const stalePrimary: CronJobLike = {
@@ -384,6 +413,7 @@ describe("short-term dreaming cron reconciliation", () => {
         minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
         minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
         minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        verboseLogging: false,
       },
       logger,
     });
@@ -417,6 +447,7 @@ describe("short-term dreaming cron reconciliation", () => {
         minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
         minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
         minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        verboseLogging: false,
       },
       logger,
     });
@@ -449,6 +480,7 @@ describe("short-term dreaming cron reconciliation", () => {
         minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
         minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
         minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        verboseLogging: false,
       },
       logger,
     });
@@ -499,6 +531,7 @@ describe("short-term dreaming trigger", () => {
         minScore: 0,
         minRecallCount: 0,
         minUniqueQueries: 0,
+        verboseLogging: false,
       },
       logger,
     });
@@ -539,6 +572,7 @@ describe("short-term dreaming trigger", () => {
         minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
         minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
         minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        verboseLogging: false,
       },
       logger,
     });
@@ -568,6 +602,7 @@ describe("short-term dreaming trigger", () => {
         minScore: 0,
         minRecallCount: 0,
         minUniqueQueries: 0,
+        verboseLogging: false,
       },
       logger,
     });
@@ -590,6 +625,7 @@ describe("short-term dreaming trigger", () => {
         minScore: 0,
         minRecallCount: 0,
         minUniqueQueries: 0,
+        verboseLogging: false,
       },
       logger,
     });
@@ -654,6 +690,7 @@ describe("short-term dreaming trigger", () => {
         minScore: 0,
         minRecallCount: 0,
         minUniqueQueries: 0,
+        verboseLogging: false,
       },
       logger,
     });
@@ -678,6 +715,54 @@ describe("short-term dreaming trigger", () => {
     ]);
     expect(repaired.entries["memory:memory/2026-04-03.md:1:2"]?.conceptTags).toEqual(
       expect.arrayContaining(["glacier", "router", "failover"]),
+    );
+  });
+
+  it("emits detailed run logs when verboseLogging is enabled", async () => {
+    const logger = createLogger();
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-verbose-"));
+    tempDirs.push(workspaceDir);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "backup policy",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        verboseLogging: true,
+      },
+      logger,
+    });
+
+    expect(result?.handled).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("memory-core: dreaming verbose enabled"),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("memory-core: dreaming candidate details"),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("memory-core: dreaming applied details"),
     );
   });
 });

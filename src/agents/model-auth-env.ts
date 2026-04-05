@@ -1,6 +1,6 @@
 import { getEnvApiKey } from "@mariozechner/pi-ai";
-import { hasAnthropicVertexAvailableAuth } from "../../extensions/anthropic-vertex/api.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
@@ -44,13 +44,21 @@ export function resolveEnvApiKey(
     return { apiKey: envKey, source: "gcloud adc" };
   }
 
-  if (normalized === "anthropic-vertex") {
-    // Vertex AI uses GCP credentials (SA JSON or ADC), not API keys.
-    // Return a sentinel so the model resolver still treats this provider as available.
-    if (hasAnthropicVertexAvailableAuth(env)) {
-      return { apiKey: GCP_VERTEX_CREDENTIALS_MARKER, source: "gcloud adc" };
+  const setupProvider = resolvePluginSetupProvider({
+    provider: normalized,
+    env,
+  });
+  if (setupProvider?.resolveConfigApiKey) {
+    const resolved = setupProvider.resolveConfigApiKey({
+      provider: normalized,
+      env,
+    });
+    if (resolved?.trim()) {
+      return {
+        apiKey: resolved,
+        source: resolved === GCP_VERTEX_CREDENTIALS_MARKER ? "gcloud adc" : "env",
+      };
     }
-    return null;
   }
 
   return null;

@@ -3,7 +3,6 @@ import {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
-  DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
   OPENAI_BATCH_ENDPOINT,
@@ -11,7 +10,6 @@ import {
   createGeminiEmbeddingProvider,
   createLocalEmbeddingProvider,
   createMistralEmbeddingProvider,
-  createOllamaEmbeddingProvider,
   createOpenAiEmbeddingProvider,
   createVoyageEmbeddingProvider,
   hasNonTextEmbeddingParts,
@@ -289,29 +287,6 @@ const mistralAdapter: MemoryEmbeddingProviderAdapter = {
   },
 };
 
-const ollamaAdapter: MemoryEmbeddingProviderAdapter = {
-  id: "ollama",
-  defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
-  transport: "remote",
-  create: async (options) => {
-    const { provider, client } = await createOllamaEmbeddingProvider({
-      ...options,
-      provider: "ollama",
-      fallback: "none",
-    });
-    return {
-      provider,
-      runtime: {
-        id: "ollama",
-        cacheKeyData: {
-          provider: "ollama",
-          model: client.model,
-        },
-      },
-    };
-  },
-};
-
 const localAdapter: MemoryEmbeddingProviderAdapter = {
   id: "local",
   defaultModel: DEFAULT_LOCAL_MODEL,
@@ -344,7 +319,6 @@ export const builtinMemoryEmbeddingProviderAdapters = [
   geminiAdapter,
   voyageAdapter,
   mistralAdapter,
-  ollamaAdapter,
 ] as const;
 
 const builtinMemoryEmbeddingProviderAdapterById = new Map(
@@ -403,7 +377,6 @@ export {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
-  DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
   canAutoSelectLocal,

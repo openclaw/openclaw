@@ -1,7 +1,8 @@
 import {
   ELEVENLABS_TALK_LEGACY_CONFIG_RULES,
-  migrateElevenLabsLegacyTalkConfig,
+  hasLegacyTalkFields,
 } from "../plugin-sdk/elevenlabs.js";
+import { runPluginSetupLegacyConfigMigrations } from "../plugins/setup-registry.js";
 import {
   buildDefaultControlUiAllowedOrigins,
   hasConfiguredControlUiAllowedOrigins,
@@ -154,19 +155,6 @@ function hasLegacyAgentListSandboxPerSession(value: unknown): boolean {
   }
   return value.some((agent) => hasLegacySandboxPerSession(getRecord(agent)?.sandbox));
 }
-
-function migrateLegacyTalkFields(raw: Record<string, unknown>, changes: string[]): void {
-  const migrated = migrateElevenLabsLegacyTalkConfig(raw);
-  if (migrated.changes.length === 0) {
-    return;
-  }
-  for (const key of Object.keys(raw)) {
-    delete raw[key];
-  }
-  Object.assign(raw, migrated.config);
-  changes.push(...migrated.changes);
-}
-
 function hasLegacyPluginEntryTtsProviderKeys(value: unknown): boolean {
   const entries = getRecord(value);
   if (!entries) {
@@ -346,7 +334,10 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
     describe: "Move legacy Talk flat fields into talk.providers.<provider>",
     legacyRules: ELEVENLABS_TALK_LEGACY_CONFIG_RULES,
     apply: (raw, changes) => {
-      migrateLegacyTalkFields(raw, changes);
+      if (!hasLegacyTalkFields(raw.talk)) {
+        return;
+      }
+      runPluginSetupLegacyConfigMigrations({ raw, changes });
     },
   }),
   defineLegacyConfigMigration({

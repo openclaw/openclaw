@@ -143,7 +143,7 @@ export function buildGroupIntro(params: {
   const lurkLine =
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.";
   const styleLine =
-    "Write like a human. Avoid Markdown tables. Don't type literal \\n sequences; use real line breaks sparingly.";
+    "Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
   return [activationLine, silenceLine, cautionLine, lurkLine, styleLine]
     .filter(Boolean)
     .join(" ")

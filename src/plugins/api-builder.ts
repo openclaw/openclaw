@@ -26,6 +26,9 @@ export type BuildPluginApiParams = {
       | "registerCli"
       | "registerService"
       | "registerCliBackend"
+      | "registerConfigMigration"
+      | "registerLegacyConfigMigration"
+      | "registerAutoEnableProbe"
       | "registerProvider"
       | "registerSpeechProvider"
       | "registerRealtimeTranscriptionProvider"
@@ -56,6 +59,10 @@ const noopRegisterGatewayMethod: OpenClawPluginApi["registerGatewayMethod"] = ()
 const noopRegisterCli: OpenClawPluginApi["registerCli"] = () => {};
 const noopRegisterService: OpenClawPluginApi["registerService"] = () => {};
 const noopRegisterCliBackend: OpenClawPluginApi["registerCliBackend"] = () => {};
+const noopRegisterConfigMigration: OpenClawPluginApi["registerConfigMigration"] = () => {};
+const noopRegisterLegacyConfigMigration: OpenClawPluginApi["registerLegacyConfigMigration"] =
+  () => {};
+const noopRegisterAutoEnableProbe: OpenClawPluginApi["registerAutoEnableProbe"] = () => {};
 const noopRegisterProvider: OpenClawPluginApi["registerProvider"] = () => {};
 const noopRegisterSpeechProvider: OpenClawPluginApi["registerSpeechProvider"] = () => {};
 const noopRegisterRealtimeTranscriptionProvider: OpenClawPluginApi["registerRealtimeTranscriptionProvider"] =
@@ -104,6 +111,10 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerCli: handlers.registerCli ?? noopRegisterCli,
     registerService: handlers.registerService ?? noopRegisterService,
     registerCliBackend: handlers.registerCliBackend ?? noopRegisterCliBackend,
+    registerConfigMigration: handlers.registerConfigMigration ?? noopRegisterConfigMigration,
+    registerLegacyConfigMigration:
+      handlers.registerLegacyConfigMigration ?? noopRegisterLegacyConfigMigration,
+    registerAutoEnableProbe: handlers.registerAutoEnableProbe ?? noopRegisterAutoEnableProbe,
     registerProvider: handlers.registerProvider ?? noopRegisterProvider,
     registerSpeechProvider: handlers.registerSpeechProvider ?? noopRegisterSpeechProvider,
     registerRealtimeTranscriptionProvider:

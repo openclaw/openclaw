@@ -28,6 +28,7 @@ import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestContracts } from "./manifest.js";
 import {
   clearMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviders,
@@ -565,6 +566,7 @@ function createPluginRecord(params: {
   enabled: boolean;
   activationState?: PluginActivationState;
   configSchema: boolean;
+  contracts?: PluginManifestContracts;
 }): PluginRecord {
   return {
     id: params.id,
@@ -597,6 +599,7 @@ function createPluginRecord(params: {
     videoGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    memoryEmbeddingProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
@@ -606,6 +609,7 @@ function createPluginRecord(params: {
     configSchema: params.configSchema,
     configUiHints: undefined,
     configJsonSchema: undefined,
+    contracts: params.contracts,
   };
 }
 
@@ -1185,6 +1189,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         enabled: false,
         activationState,
         configSchema: Boolean(manifestRecord.configSchema),
+        contracts: manifestRecord.contracts,
       });
       record.status = "disabled";
       record.error = `overridden by ${existingOrigin} plugin`;
@@ -1217,6 +1222,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       enabled: enableState.enabled,
       activationState,
       configSchema: Boolean(manifestRecord.configSchema),
+      contracts: manifestRecord.contracts,
     });
     record.kind = manifestRecord.kind;
     record.configUiHints = manifestRecord.configUiHints;
@@ -1743,6 +1749,7 @@ export async function loadOpenClawPluginCliRegistry(
         enabled: false,
         activationState,
         configSchema: Boolean(manifestRecord.configSchema),
+        contracts: manifestRecord.contracts,
       });
       record.status = "disabled";
       record.error = `overridden by ${existingOrigin} plugin`;
@@ -1775,6 +1782,7 @@ export async function loadOpenClawPluginCliRegistry(
       enabled: enableState.enabled,
       activationState,
       configSchema: Boolean(manifestRecord.configSchema),
+      contracts: manifestRecord.contracts,
     });
     record.kind = manifestRecord.kind;
     record.configUiHints = manifestRecord.configUiHints;

@@ -41,6 +41,11 @@
       "label": "Promotion Min Queries",
       "placeholder": "2",
       "help": "Minimum unique query count required for automatic promotion."
+    },
+    "dreaming.verboseLogging": {
+      "label": "Dreaming Verbose Logging",
+      "placeholder": "false",
+      "help": "Emit detailed dreaming-run logs for candidate ranking and promotion decisions."
     }
   },
   "configSchema": {
@@ -80,6 +85,9 @@
           "minUniqueQueries": {
             "type": "number",
             "minimum": 0
+          },
+          "verboseLogging": {
+            "type": "boolean"
           }
         },
         "required": ["mode"]

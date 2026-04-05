@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
@@ -132,7 +134,17 @@ describe("model-selection", () => {
   });
 
   describe("isCliProvider", () => {
-    it("treats claude-cli as a CLI provider even without explicit cliBackends config", () => {
+    it("treats runtime-registered CLI backends as CLI providers", () => {
+      const registry = createEmptyPluginRegistry();
+      registry.cliBackends.push({
+        pluginId: "anthropic",
+        backend: {
+          id: "claude-cli",
+          label: "Claude CLI",
+          command: ["claude"],
+        },
+      });
+      setActivePluginRegistry(registry);
       expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
     });
   });
