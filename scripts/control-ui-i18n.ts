@@ -71,6 +71,7 @@ const BATCH_SIZE = 40;
 const TRANSLATE_MAX_ATTEMPTS = 3;
 const TRANSLATE_BASE_DELAY_MS = 15_000;
 const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
+const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
 const ENV_PI_EXECUTABLE = "OPENCLAW_CONTROL_UI_I18N_PI_EXECUTABLE";
@@ -445,6 +446,27 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function formatDuration(ms: number): string {
+  if (ms < 1_000) {
+    return `${Math.round(ms)}ms`;
+  }
+  if (ms < 60_000) {
+    return `${(ms / 1_000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+  }
+  const totalSeconds = Math.round(ms / 1_000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
+}
+
+function logProgress(message: string) {
+  process.stdout.write(`control-ui-i18n: ${message}\n`);
+}
+
+function isPromptTimeoutError(error: Error): boolean {
+  return error.message.toLowerCase().includes("timed out");
+}
+
 function resolvePromptTimeoutMs(): number {
   const raw = process.env[ENV_PROMPT_TIMEOUT]?.trim();
   if (!raw) {
@@ -583,6 +605,32 @@ type PendingPrompt = {
   responseReceived: boolean;
 };
 
+type LocaleRunContext = {
+  localeCount: number;
+  localeIndex: number;
+};
+
+type TranslationBatchContext = LocaleRunContext & {
+  batchCount: number;
+  batchIndex: number;
+  locale: string;
+  segmentLabel?: string;
+};
+
+type ClientAccess = {
+  getClient: () => Promise<PiRpcClient>;
+  resetClient: () => Promise<void>;
+};
+
+function formatLocaleLabel(locale: string, context: LocaleRunContext): string {
+  return `[${context.localeIndex}/${context.localeCount}] ${locale}`;
+}
+
+function formatBatchLabel(context: TranslationBatchContext): string {
+  const suffix = context.segmentLabel ? `.${context.segmentLabel}` : "";
+  return `${formatLocaleLabel(context.locale, context)} batch ${context.batchIndex}/${context.batchCount}${suffix}`;
+}
+
 class PiRpcClient {
   private readonly stderrChunks: string[] = [];
   private closed = false;
@@ -712,7 +760,7 @@ class PiRpcClient {
     }
   }
 
-  async prompt(message: string): Promise<string> {
+  async prompt(message: string, label: string): Promise<string> {
     this.sequence = this.sequence.then(async () => {
       if (this.closed) {
         throw new Error(`pi process unavailable${this.stderr() ? ` (${this.stderr()})` : ""}`);
@@ -721,12 +769,28 @@ class PiRpcClient {
       const id = `req-${++this.requestCount}`;
       const payload = JSON.stringify({ type: "prompt", id, message });
       const timeoutMs = resolvePromptTimeoutMs();
+      const startedAt = Date.now();
 
       return await new Promise<string>((resolve, reject) => {
+        const heartbeat = setInterval(() => {
+          const responseState = this.pending?.responseReceived
+            ? "response=received"
+            : "response=pending";
+          logProgress(
+            `${label}: still waiting (${formatDuration(Date.now() - startedAt)} / ${formatDuration(timeoutMs)}, ${responseState})`,
+          );
+        }, PROGRESS_HEARTBEAT_MS);
         const timer = setTimeout(() => {
           if (this.pending?.id === id) {
             this.pending = null;
-            reject(new Error(`translation prompt timed out after ${timeoutMs}ms`));
+            clearInterval(heartbeat);
+            void this.close();
+            const stderr = this.stderr();
+            reject(
+              new Error(
+                `${label}: translation prompt timed out after ${timeoutMs}ms${stderr ? ` (pi stderr: ${stderr})` : ""}`,
+              ),
+            );
           }
         }, timeoutMs);
 
@@ -734,10 +798,12 @@ class PiRpcClient {
           id,
           reject: (reason) => {
             clearTimeout(timer);
+            clearInterval(heartbeat);
             reject(reason);
           },
           resolve: (value) => {
             clearTimeout(timer);
+            clearInterval(heartbeat);
             resolve(value);
           },
           responseReceived: false,
@@ -748,6 +814,7 @@ class PiRpcClient {
             return;
           }
           clearTimeout(timer);
+          clearInterval(heartbeat);
           if (this.pending?.id === id) {
             this.pending = null;
           }
@@ -805,13 +872,21 @@ function extractTranslationResult(payload: Record<string, unknown>): string {
 }
 
 async function translateBatch(
-  client: PiRpcClient,
+  clientAccess: ClientAccess,
   items: readonly TranslationBatchItem[],
+  context: TranslationBatchContext,
 ): Promise<Map<string, string>> {
+  const batchLabel = formatBatchLabel(context);
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < TRANSLATE_MAX_ATTEMPTS; attempt += 1) {
+    const attemptNumber = attempt + 1;
+    const attemptLabel = `${batchLabel} attempt ${attemptNumber}/${TRANSLATE_MAX_ATTEMPTS}`;
+    const startedAt = Date.now();
+    logProgress(`${attemptLabel}: start keys=${items.length}`);
     try {
-      const raw = await client.prompt(buildBatchPrompt(items));
+      const raw = await (
+        await clientAccess.getClient()
+      ).prompt(buildBatchPrompt(items), attemptLabel);
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const translated = new Map<string, string>();
       for (const item of items) {
@@ -821,11 +896,33 @@ async function translateBatch(
         }
         translated.set(item.key, value);
       }
+      logProgress(`${attemptLabel}: done (${formatDuration(Date.now() - startedAt)})`);
       return translated;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
+      await clientAccess.resetClient();
+      logProgress(
+        `${attemptLabel}: failed after ${formatDuration(Date.now() - startedAt)}: ${lastError.message}`,
+      );
+      if (isPromptTimeoutError(lastError) && items.length > 1) {
+        const midpoint = Math.ceil(items.length / 2);
+        logProgress(
+          `${batchLabel}: splitting timed out batch into ${midpoint} + ${items.length - midpoint} keys`,
+        );
+        const left = await translateBatch(clientAccess, items.slice(0, midpoint), {
+          ...context,
+          segmentLabel: `${context.segmentLabel ?? ""}a`,
+        });
+        const right = await translateBatch(clientAccess, items.slice(midpoint), {
+          ...context,
+          segmentLabel: `${context.segmentLabel ?? ""}b`,
+        });
+        return new Map([...left, ...right]);
+      }
       if (attempt + 1 < TRANSLATE_MAX_ATTEMPTS) {
-        await sleep(TRANSLATE_BASE_DELAY_MS * (attempt + 1));
+        const delayMs = TRANSLATE_BASE_DELAY_MS * attemptNumber;
+        logProgress(`${attemptLabel}: retrying in ${formatDuration(delayMs)}`);
+        await sleep(delayMs);
       }
     }
   }
@@ -842,7 +939,10 @@ type SyncOutcome = {
 async function syncLocale(
   entry: LocaleEntry,
   options: { checkOnly: boolean; force: boolean; write: boolean },
+  context: LocaleRunContext,
 ) {
+  const localeLabel = formatLocaleLabel(entry.locale, context);
+  const localeStartedAt = Date.now();
   const sourceRaw = await readFile(SOURCE_LOCALE_PATH, "utf8");
   const sourceHash = sha256(sourceRaw);
   const sourceMap = (await loadLocaleMap(SOURCE_LOCALE_PATH, "en")) ?? {};
@@ -893,11 +993,35 @@ async function syncLocale(
   }
 
   if (allowTranslate && pending.length > 0) {
-    const client = await PiRpcClient.create(buildSystemPrompt(entry.locale, glossary));
+    const batchCount = Math.ceil(pending.length / BATCH_SIZE);
+    logProgress(
+      `${localeLabel}: start keys=${sourceFlat.size} pending=${pending.length} batches=${batchCount} provider=${resolveConfiguredProvider()} model=${resolveConfiguredModel()} timeout=${formatDuration(resolvePromptTimeoutMs())}`,
+    );
+    let client: PiRpcClient | null = null;
+    const clientAccess: ClientAccess = {
+      async getClient() {
+        if (!client) {
+          client = await PiRpcClient.create(buildSystemPrompt(entry.locale, glossary));
+        }
+        return client;
+      },
+      async resetClient() {
+        if (!client) {
+          return;
+        }
+        await client.close();
+        client = null;
+      },
+    };
     try {
       for (let index = 0; index < pending.length; index += BATCH_SIZE) {
         const batch = pending.slice(index, index + BATCH_SIZE);
-        const translated = await translateBatch(client, batch);
+        const translated = await translateBatch(clientAccess, batch, {
+          ...context,
+          batchCount,
+          batchIndex: Math.floor(index / BATCH_SIZE) + 1,
+          locale: entry.locale,
+        });
         for (const item of batch) {
           const value = translated.get(item.key);
           if (!value) {
@@ -920,8 +1044,14 @@ async function syncLocale(
         }
       }
     } finally {
-      await client.close();
+      await clientAccess.resetClient();
     }
+  } else if (allowTranslate) {
+    logProgress(
+      `${localeLabel}: no translation work needed (all keys reused from cache or existing files)`,
+    );
+  } else {
+    logProgress(`${localeLabel}: no provider configured, using English fallback for pending keys`);
   }
 
   for (const item of pending) {
@@ -1011,6 +1141,9 @@ async function syncLocale(
       !options.checkOnly &&
       !options.write)
   ) {
+    logProgress(
+      `${localeLabel}: done changed=${changed} fallbacks=${nextMeta.fallbackKeys.length} elapsed=${formatDuration(Date.now() - localeStartedAt)}`,
+    );
     return {
       changed,
       fallbackCount: nextMeta.fallbackKeys.length,
@@ -1032,6 +1165,9 @@ async function syncLocale(
     }
   }
 
+  logProgress(
+    `${localeLabel}: done changed=${changed} fallbacks=${nextMeta.fallbackKeys.length} elapsed=${formatDuration(Date.now() - localeStartedAt)}${!options.checkOnly && options.write && changed ? " wrote" : ""}`,
+  );
   return {
     changed,
     fallbackCount: nextMeta.fallbackKeys.length,
@@ -1081,13 +1217,23 @@ async function main() {
     throw new Error(`unknown locale: ${args.localeFilter}`);
   }
 
+  logProgress(
+    `command=${args.command} locales=${entries.length} provider=${hasTranslationProvider() ? resolveConfiguredProvider() : "fallback-only"} model=${hasTranslationProvider() ? resolveConfiguredModel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())}`,
+  );
   const outcomes: SyncOutcome[] = [];
-  for (const entry of entries) {
-    const outcome = await syncLocale(entry, {
-      checkOnly: args.command === "check",
-      force: args.force,
-      write: args.write,
-    });
+  for (const [index, entry] of entries.entries()) {
+    const outcome = await syncLocale(
+      entry,
+      {
+        checkOnly: args.command === "check",
+        force: args.force,
+        write: args.write,
+      },
+      {
+        localeCount: entries.length,
+        localeIndex: index + 1,
+      },
+    );
     outcomes.push(outcome);
   }
 
