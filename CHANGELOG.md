@@ -110,6 +110,7 @@ Docs: https://docs.openclaw.ai
 - Agents/exec: restore `host=node` routing for node-pinned and `host=auto` sessions, while still blocking sandboxed `auto` sessions from jumping to gateway. (#60788) Thanks @openperf.
 - Agents/compaction: keep assistant tool calls and displaced tool results in the same compaction chunk so strict summarization providers stop rejecting orphaned tool pairs. (#58849) Thanks @openperf.
 - Outbound/sanitizer: strip leaked `<tool_call>`, `<function_calls>`, and model special tokens from shared user-visible assistant text, including truncated tool-call streams, so internal scaffolding no longer bleeds into replies across surfaces. (#60619) Thanks @oliviareid-svg.
+- Telegram: restore DM voice-note preflight transcription so direct-message audio stops arriving as raw `<media:audio>` placeholders. (#61008) Thanks @manueltarouca.
 - Control UI/avatar: honor `ui.assistant.avatar` when serving `/avatar/:agentId` so Appearance UI avatar paths stop falling back to initials placeholders. (#60778) Thanks @hannasdev.
 - Control UI/Overview: prevent gateway access token/password visibility toggle buttons from overlapping their inputs at narrow widths. (#56924) Thanks @bbddbb1.
 - Control UI/cron: highlight the Cron refresh button while refresh is in flight so the page's loading state stays visible even when prior data remains on screen. (#60394) Thanks @coder-zhuzm.
