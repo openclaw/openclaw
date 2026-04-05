@@ -377,26 +377,29 @@ Default is DM-only. `match.keyPrefix` matches the normalized session key;
 
 Dreaming is configured under `plugins.entries.memory-core.config.dreaming`,
 not under `agents.defaults.memorySearch`. For conceptual details and chat
-commands, see [Dreaming](/concepts/memory-dreaming).
+commands, see [Dreaming](/concepts/dreaming).
 
-| Key                | Type     | Default        | Description                               |
-| ------------------ | -------- | -------------- | ----------------------------------------- |
-| `mode`             | `string` | `"off"`        | Preset: `off`, `core`, `rem`, or `deep`   |
-| `cron`             | `string` | preset default | Cron expression override for the schedule |
-| `timezone`         | `string` | user timezone  | Timezone for schedule evaluation          |
-| `limit`            | `number` | preset default | Max candidates to promote per cycle       |
-| `minScore`         | `number` | preset default | Minimum weighted score for promotion      |
-| `minRecallCount`   | `number` | preset default | Minimum recall count threshold            |
-| `minUniqueQueries` | `number` | preset default | Minimum distinct query count threshold    |
+| Key                   | Type      | Default        | Description                               |
+| --------------------- | --------- | -------------- | ----------------------------------------- |
+| `mode`                | `string`  | `"off"`        | Preset: `off`, `core`, `rem`, or `deep`   |
+| `cron`                | `string`  | preset default | Cron expression override for the schedule |
+| `timezone`            | `string`  | user timezone  | Timezone for schedule evaluation          |
+| `limit`               | `number`  | preset default | Max candidates to promote per cycle       |
+| `minScore`            | `number`  | preset default | Minimum weighted score for promotion      |
+| `minRecallCount`      | `number`  | preset default | Minimum recall count threshold            |
+| `minUniqueQueries`    | `number`  | preset default | Minimum distinct query count threshold    |
+| `recencyHalfLifeDays` | `number`  | `14`           | Days for recency score to decay by half   |
+| `maxAgeDays`          | `number`  | unset          | Optional max daily-note age for promotion |
+| `verboseLogging`      | `boolean` | `false`        | Emit detailed per-run dreaming logs       |
 
 ### Preset defaults
 
-| Mode   | Cadence        | minScore | minRecallCount | minUniqueQueries |
-| ------ | -------------- | -------- | -------------- | ---------------- |
-| `off`  | Disabled       | --       | --             | --               |
-| `core` | Daily 3 AM     | 0.75     | 3              | 2                |
-| `rem`  | Every 6 hours  | 0.85     | 4              | 3                |
-| `deep` | Every 12 hours | 0.80     | 3              | 3                |
+| Mode   | Cadence        | minScore | minRecallCount | minUniqueQueries | recencyHalfLifeDays |
+| ------ | -------------- | -------- | -------------- | ---------------- | ------------------- |
+| `off`  | Disabled       | --       | --             | --               | --                  |
+| `core` | Daily 3 AM     | 0.75     | 3              | 2                | 14                  |
+| `rem`  | Every 6 hours  | 0.85     | 4              | 3                | 14                  |
+| `deep` | Every 12 hours | 0.80     | 3              | 3                | 14                  |
 
 ### Example
 

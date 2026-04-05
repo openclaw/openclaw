@@ -53,9 +53,9 @@ function hasLegacyMattermostAllowPrivateNetworkInAccounts(value: unknown): boole
   const accounts = isRecord(value) ? value : null;
   return Boolean(
     accounts &&
-      Object.values(accounts).some((account) =>
-        hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
-      ),
+    Object.values(accounts).some((account) =>
+      hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
+    ),
   );
 }
 
@@ -63,18 +63,20 @@ export const MATTERMOST_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "mattermost"],
     message:
-      "channels.mattermost.allowPrivateNetwork is legacy; use channels.mattermost.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+      'channels.mattermost.allowPrivateNetwork is legacy; use channels.mattermost.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(isRecord(value) ? value : {}),
   },
   {
     path: ["channels", "mattermost", "accounts"],
     message:
-      "channels.mattermost.accounts.<id>.allowPrivateNetwork is legacy; use channels.mattermost.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+      'channels.mattermost.accounts.<id>.allowPrivateNetwork is legacy; use channels.mattermost.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
     match: hasLegacyMattermostAllowPrivateNetworkInAccounts,
   },
 ];
 
-export function normalizeMattermostCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
+export function normalizeMattermostCompatibilityConfig(
+  cfg: OpenClawConfig,
+): ChannelDoctorConfigMutation {
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   const mattermost = isRecord(channels?.mattermost) ? channels.mattermost : null;
   if (!mattermost) {

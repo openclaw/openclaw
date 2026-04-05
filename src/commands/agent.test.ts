@@ -572,8 +572,8 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store, {
-        model: { primary: "claude-cli/claude-sonnet-4-6" },
-        models: { "claude-cli/claude-sonnet-4-6": {} },
+        model: { primary: "codex-cli/gpt-5.4" },
+        models: { "codex-cli/gpt-5.4": {} },
       });
       vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => true);
       runCliAgentSpy.mockResolvedValue({
@@ -581,11 +581,11 @@ describe("agentCommand", () => {
         meta: {
           durationMs: 5,
           agentMeta: {
-            sessionId: "claude-cli-session-1",
-            provider: "claude-cli",
-            model: "claude-sonnet-4-6",
+            sessionId: "codex-cli-session-1",
+            provider: "codex-cli",
+            model: "gpt-5.4",
             cliSessionBinding: {
-              sessionId: "claude-cli-session-1",
+              sessionId: "codex-cli-session-1",
             },
           },
         },

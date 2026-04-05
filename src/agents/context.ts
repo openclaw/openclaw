@@ -129,6 +129,7 @@ function getCommandPathFromArgv(argv: string[]): string[] {
 }
 
 const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
+  "agent",
   "backup",
   "completion",
   "config",
@@ -138,6 +139,7 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "health",
   "hooks",
   "logs",
+  "models",
   "plugins",
   "secrets",
   "status",

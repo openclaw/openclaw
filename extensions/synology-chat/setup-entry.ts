@@ -1,4 +1,9 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import { synologyChatPlugin } from "./src/channel.js";
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export default defineSetupPluginEntry(synologyChatPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "synologyChatPlugin",
+  },
+});

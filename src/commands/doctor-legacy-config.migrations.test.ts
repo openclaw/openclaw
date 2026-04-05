@@ -736,7 +736,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       talk: {
         voiceId: "voice-123",
         voiceAliases: {
-          Clawd: "EXAVITQu4vr4xnSDxMaL",
+          Clawd: "VoiceAlias1234567890",
         },
         modelId: "eleven_v3",
         outputFormat: "pcm_44100",
@@ -751,7 +751,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         elevenlabs: {
           voiceId: "voice-123",
           voiceAliases: {
-            Clawd: "EXAVITQu4vr4xnSDxMaL",
+            Clawd: "VoiceAlias1234567890",
           },
           modelId: "eleven_v3",
           outputFormat: "pcm_44100",

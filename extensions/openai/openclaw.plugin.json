@@ -46,11 +46,11 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "personalityOverlay": {
+      "personality": {
         "type": "string",
         "enum": ["friendly", "off"],
         "default": "friendly",
-        "description": "Controls the default OpenAI-specific prompt overlay used for OpenAI and OpenAI Codex runs."
+        "description": "Controls the default OpenAI-specific personality used for OpenAI and OpenAI Codex runs."
       }
     }
   }

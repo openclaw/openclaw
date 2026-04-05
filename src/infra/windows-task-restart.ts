@@ -19,10 +19,7 @@ function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
 }
 
-function buildScheduledTaskRestartScript(
-  taskName: string,
-  taskScriptPath?: string,
-): string {
+function buildScheduledTaskRestartScript(taskName: string, taskScriptPath?: string): string {
   const quotedTaskName = quoteCmdScriptArg(taskName);
   const lines = [
     "@echo off",
@@ -41,11 +38,7 @@ function buildScheduledTaskRestartScript(
   ];
   if (taskScriptPath) {
     const quotedScript = quoteCmdScriptArg(taskScriptPath);
-    lines.push(
-      `if exist ${quotedScript} (`,
-      `  start "" /min cmd.exe /d /c ${quotedScript}`,
-      ")",
-    );
+    lines.push(`if exist ${quotedScript} (`, `  start "" /min cmd.exe /d /c ${quotedScript}`, ")");
   }
   lines.push(":cleanup", 'del "%~f0" >nul 2>&1');
   return lines.join("\r\n");

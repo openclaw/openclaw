@@ -68,7 +68,7 @@ const ZAI_GLM5_CASE = {
 
 function createRuntimeHooks() {
   return createProviderRuntimeTestMock({
-    handledDynamicProviders: ["anthropic", "claude-cli", "zai", "openai-codex"],
+    handledDynamicProviders: ["anthropic", "zai", "openai-codex"],
   });
 }
 
@@ -123,28 +123,6 @@ function runAnthropicSonnetForwardCompatFallback() {
   });
 }
 
-function runClaudeCliSonnetForwardCompatFallback() {
-  expectResolvedForwardCompatFallbackWithRegistryResult({
-    result: resolveModelWithRegistry({
-      provider: "claude-cli",
-      modelId: "claude-sonnet-4-6",
-      agentDir: "/tmp/agent",
-      modelRegistry: createRegistry([
-        {
-          provider: "anthropic",
-          modelId: "claude-sonnet-4-5",
-          model: ANTHROPIC_SONNET_TEMPLATE,
-        },
-      ]),
-      runtimeHooks: createRuntimeHooks(),
-    }),
-    expectedModel: {
-      ...ANTHROPIC_SONNET_EXPECTED,
-      provider: "claude-cli",
-    },
-  });
-}
-
 function runZaiForwardCompatFallback() {
   const result = resolveModelWithRegistry({
     provider: ZAI_GLM5_CASE.provider,
@@ -174,11 +152,6 @@ describe("resolveModel forward-compat tail", () => {
   it(
     "builds an anthropic forward-compat fallback for claude-sonnet-4-6",
     runAnthropicSonnetForwardCompatFallback,
-  );
-
-  it(
-    "preserves the claude-cli provider for anthropic forward-compat fallback models",
-    runClaudeCliSonnetForwardCompatFallback,
   );
 
   it("builds a zai forward-compat fallback for glm-5", runZaiForwardCompatFallback);

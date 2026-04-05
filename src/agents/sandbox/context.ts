@@ -2,11 +2,11 @@ import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
-import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../plugin-sdk/browser-config.js";
 import {
   ensureBrowserControlAuth,
   resolveBrowserControlAuth,
 } from "../../plugin-sdk/browser-control-auth.js";
+import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { syncSkillsToWorkspace } from "../skills.js";

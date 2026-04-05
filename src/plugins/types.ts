@@ -16,6 +16,8 @@ import type { ProviderRequestTransportOverrides } from "../agents/provider-reque
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
@@ -26,6 +28,7 @@ import type {
   ModelProviderConfig,
 } from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import type { TtsAutoMode } from "../config/types.tts.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
@@ -1946,7 +1949,7 @@ export type OpenClawPluginService = {
 
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
 export type CliBackendPlugin = {
-  /** Provider id used in model refs, for example `claude-cli/opus`. */
+  /** Provider id used in model refs, for example `codex-cli/gpt-5`. */
   id: string;
   /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
   config: CliBackendConfig;
@@ -1995,8 +1998,6 @@ export type PluginConfigMigration = (config: OpenClawConfig) =>
     }
   | null
   | undefined;
-
-export type PluginLegacyConfigMigration = (raw: Record<string, unknown>, changes: string[]) => void;
 
 export type PluginSetupAutoEnableContext = {
   config: OpenClawConfig;
@@ -2070,8 +2071,6 @@ export type OpenClawPluginApi = {
   registerCliBackend: (backend: CliBackendPlugin) => void;
   /** Register a lightweight config migration that can run before plugin runtime loads. */
   registerConfigMigration: (migrate: PluginConfigMigration) => void;
-  /** Register a lightweight raw legacy-config migration for pre-schema config repair. */
-  registerLegacyConfigMigration: (migrate: PluginLegacyConfigMigration) => void;
   /** Register a lightweight config probe that can auto-enable this plugin generically. */
   registerAutoEnableProbe: (probe: PluginSetupAutoEnableProbe) => void;
   /** Register a native model/provider plugin (text inference capability). */
@@ -2173,6 +2172,7 @@ export type PluginHookName =
   | "gateway_start"
   | "gateway_stop"
   | "before_dispatch"
+  | "reply_dispatch"
   | "before_install";
 
 export const PLUGIN_HOOK_NAMES = [
@@ -2203,6 +2203,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "before_dispatch",
+  "reply_dispatch",
   "before_install",
 ] as const satisfies readonly PluginHookName[];
 
@@ -2480,6 +2481,44 @@ export type PluginHookBeforeDispatchResult = {
   handled: boolean;
   /** Plugin-defined reply text (used when handled=true). */
   text?: string;
+};
+
+// reply_dispatch hook
+export type PluginHookReplyDispatchEvent = {
+  ctx: FinalizedMsgContext;
+  runId?: string;
+  sessionKey?: string;
+  inboundAudio: boolean;
+  sessionTtsAuto?: TtsAutoMode;
+  ttsChannel?: string;
+  suppressUserDelivery?: boolean;
+  shouldRouteToOriginating: boolean;
+  originatingChannel?: string;
+  originatingTo?: string;
+  shouldSendToolSummaries: boolean;
+  sendPolicy: "allow" | "deny";
+  isTailDispatch?: boolean;
+};
+
+export type PluginHookReplyDispatchContext = {
+  cfg: OpenClawConfig;
+  dispatcher: ReplyDispatcher;
+  abortSignal?: AbortSignal;
+  onReplyStart?: () => Promise<void> | void;
+  recordProcessed: (
+    outcome: "completed" | "skipped" | "error",
+    opts?: {
+      reason?: string;
+      error?: string;
+    },
+  ) => void;
+  markIdle: (reason: string) => void;
+};
+
+export type PluginHookReplyDispatchResult = {
+  handled: boolean;
+  queuedFinal: boolean;
+  counts: Record<ReplyDispatchKind, number>;
 };
 
 // message_received hook
@@ -2900,6 +2939,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeDispatchEvent,
     ctx: PluginHookBeforeDispatchContext,
   ) => Promise<PluginHookBeforeDispatchResult | void> | PluginHookBeforeDispatchResult | void;
+  reply_dispatch: (
+    event: PluginHookReplyDispatchEvent,
+    ctx: PluginHookReplyDispatchContext,
+  ) => Promise<PluginHookReplyDispatchResult | void> | PluginHookReplyDispatchResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

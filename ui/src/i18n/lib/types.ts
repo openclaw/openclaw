@@ -11,6 +11,7 @@ export type Locale =
   | "ko"
   | "fr"
   | "tr"
+  | "uk"
   | "id"
   | "pl";
 

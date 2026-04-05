@@ -1,6 +1,9 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import { telegramSetupPlugin } from "./src/channel.setup.js";
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { telegramSetupPlugin } from "./src/channel.setup.js";
-
-export default defineSetupPluginEntry(telegramSetupPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "telegramSetupPlugin",
+  },
+});

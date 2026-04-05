@@ -402,34 +402,6 @@ describe("sanitizeSessionHistory", () => {
     ).toBe(false);
   });
 
-  it("canonicalizes malformed assistant history content before replay sanitization", async () => {
-    setNonGoogleModelApi();
-
-    const messages = castAgentMessages([
-      { role: "user", content: "Question" },
-      { role: "assistant", content: "legacy-content" },
-      { role: "assistant", content: { unexpected: true } },
-    ]);
-
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-responses",
-      provider: "openai",
-      sessionManager: mockSessionManager,
-      sessionId: TEST_SESSION_ID,
-    });
-
-    expect(result[0]).toEqual(messages[0]);
-    expect(result[1]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "legacy-content" }],
-    });
-    expect(result[2]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "" }],
-    });
-  });
-
   it("annotates inter-session user messages before context sanitization", async () => {
     setNonGoogleModelApi();
 

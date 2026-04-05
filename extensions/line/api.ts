@@ -40,5 +40,8 @@ export {
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "./runtime-api.js";
+export { linePlugin } from "./src/channel.js";
+export { lineSetupPlugin } from "./src/channel.setup.js";
+export { registerLineCardCommand } from "./src/card-command.js";
 export * from "./runtime-api.js";
 export * from "./setup-api.js";

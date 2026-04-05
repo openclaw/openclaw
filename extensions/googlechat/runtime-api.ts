@@ -60,3 +60,4 @@ export {
   readJsonWebhookBodyOrReject,
   type WebhookInFlightLimiter,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+export { setGoogleChatRuntime } from "./src/runtime.js";

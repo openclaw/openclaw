@@ -1,13 +1,16 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import { twitchPlugin } from "./src/plugin.js";
-import { setTwitchRuntime } from "./src/runtime.js";
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { monitorTwitchProvider } from "./src/monitor.js";
-
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "twitch",
   name: "Twitch",
-  description: "Twitch chat channel plugin",
-  plugin: twitchPlugin,
-  setRuntime: setTwitchRuntime,
+  description: "Twitch IRC chat channel plugin",
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "twitchPlugin",
+  },
+  runtime: {
+    specifier: "./api.js",
+    exportName: "setTwitchRuntime",
+  },
 });

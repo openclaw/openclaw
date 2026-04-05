@@ -178,6 +178,9 @@ function normalizeResolvedModel(params: {
   const normalizedInputModel = {
     ...params.model,
     input: resolveProviderModelInput({
+      provider: params.provider,
+      modelId: params.model.id,
+      modelName: params.model.name,
       input: params.model.input,
     }),
   } as Model<Api>;
@@ -293,7 +296,32 @@ function resolveConfiguredProviderConfig(
   return findNormalizedProviderValue(configuredProviders, provider);
 }
 
+function isLegacyFoundryVisionModelCandidate(params: {
+  provider?: string;
+  modelId?: string;
+  modelName?: string;
+}): boolean {
+  if (params.provider?.trim().toLowerCase() !== "microsoft-foundry") {
+    return false;
+  }
+  const normalizedCandidates = [params.modelId, params.modelName]
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  return normalizedCandidates.some(
+    (candidate) =>
+      candidate.startsWith("gpt-") ||
+      candidate.startsWith("o1") ||
+      candidate.startsWith("o3") ||
+      candidate.startsWith("o4") ||
+      candidate === "computer-use-preview",
+  );
+}
+
 function resolveProviderModelInput(params: {
+  provider?: string;
+  modelId?: string;
+  modelName?: string;
   input?: unknown;
   fallbackInput?: unknown;
 }): Array<"text" | "image"> {
@@ -301,6 +329,13 @@ function resolveProviderModelInput(params: {
   const normalizedInput = Array.isArray(resolvedInput)
     ? resolvedInput.filter((item): item is "text" | "image" => item === "text" || item === "image")
     : [];
+  if (
+    normalizedInput.length > 0 &&
+    !normalizedInput.includes("image") &&
+    isLegacyFoundryVisionModelCandidate(params)
+  ) {
+    return ["text", "image"];
+  }
   return normalizedInput.length > 0 ? normalizedInput : ["text"];
 }
 
@@ -344,6 +379,9 @@ function applyConfiguredProviderOverrides(params: {
     };
   }
   const normalizedInput = resolveProviderModelInput({
+    provider: params.provider,
+    modelId,
+    modelName: configuredModel?.name ?? discoveredModel.name,
     input: configuredModel?.input,
     fallbackInput: discoveredModel.input,
   });
@@ -424,6 +462,9 @@ export function buildInlineProviderModels(
         {
           ...model,
           input: resolveProviderModelInput({
+            provider: trimmed,
+            modelId: model.id,
+            modelName: model.name,
             input: model.input,
           }),
           provider: trimmed,
@@ -605,6 +646,9 @@ function resolveConfiguredFallbackModel(params: {
         baseUrl: requestConfig.baseUrl,
         reasoning: configuredModel?.reasoning ?? false,
         input: resolveProviderModelInput({
+          provider,
+          modelId,
+          modelName: configuredModel?.name ?? modelId,
           input: configuredModel?.input,
         }),
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
