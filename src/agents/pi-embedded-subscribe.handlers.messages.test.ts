@@ -4,6 +4,7 @@ import {
   buildAssistantStreamData,
   consumePendingToolMediaIntoReply,
   consumePendingToolMediaReply,
+  handleMessageEnd,
   handleMessageUpdate,
   hasAssistantVisibleReply,
   resolveSilentReplyFallbackText,
@@ -140,6 +141,119 @@ describe("consumePendingToolMediaReply", () => {
 });
 
 describe("handleMessageUpdate", () => {
+  it("suppresses commentary-phase partial delivery and text_end flush", async () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const flushBlockReplyBuffer = vi.fn();
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onAgentEvent,
+        onPartialReply,
+      },
+      state: {
+        deterministicApprovalPromptSent: false,
+        reasoningStreamOpen: false,
+        streamReasoning: false,
+        deltaBuffer: "",
+        blockBuffer: "",
+        partialBlockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        lastStreamedAssistantCleaned: undefined,
+        emittedAssistantUpdate: false,
+        shouldEmitPartialReplies: true,
+        blockReplyBreak: "text_end",
+        assistantMessageIndex: 0,
+      },
+      log: { debug: vi.fn() },
+      noteLastAssistant: vi.fn(),
+      stripBlockTags: (text: string) => text,
+      consumePartialReplyDirectives: vi.fn(() => null),
+      flushBlockReplyBuffer,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    handleMessageUpdate(ctx, {
+      type: "message_update",
+      message: { role: "assistant", phase: "commentary", content: [] },
+      assistantMessageEvent: { type: "text_delta", delta: "Need send." },
+    } as never);
+    handleMessageUpdate(ctx, {
+      type: "message_update",
+      message: { role: "assistant", phase: "commentary", content: [] },
+      assistantMessageEvent: { type: "text_end", content: "Need send." },
+    } as never);
+
+    await Promise.resolve();
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
+  });
+
+  it("suppresses commentary partials when phase exists only in textSignature metadata", async () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const flushBlockReplyBuffer = vi.fn();
+    const commentaryBlock = {
+      type: "text",
+      text: "Need send.",
+      textSignature: JSON.stringify({ v: 1, id: "msg_sig", phase: "commentary" }),
+    };
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onAgentEvent,
+        onPartialReply,
+      },
+      state: {
+        deterministicApprovalPromptSent: false,
+        reasoningStreamOpen: false,
+        streamReasoning: false,
+        deltaBuffer: "",
+        blockBuffer: "",
+        partialBlockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        lastStreamedAssistantCleaned: undefined,
+        emittedAssistantUpdate: false,
+        shouldEmitPartialReplies: true,
+        blockReplyBreak: "text_end",
+        assistantMessageIndex: 0,
+      },
+      log: { debug: vi.fn() },
+      noteLastAssistant: vi.fn(),
+      stripBlockTags: (text: string) => text,
+      consumePartialReplyDirectives: vi.fn(() => null),
+      flushBlockReplyBuffer,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    handleMessageUpdate(ctx, {
+      type: "message_update",
+      message: { role: "assistant", content: [commentaryBlock] },
+      assistantMessageEvent: { type: "text_delta", delta: "Need send." },
+    } as never);
+    handleMessageUpdate(ctx, {
+      type: "message_update",
+      message: { role: "assistant", content: [commentaryBlock] },
+      assistantMessageEvent: { type: "text_end", content: "Need send." },
+    } as never);
+
+    await Promise.resolve();
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
+    expect(ctx.state.deltaBuffer).toBe("");
+    expect(ctx.state.blockBuffer).toBe("");
+  });
+
   it("contains synchronous text_end flush failures", async () => {
     const debug = vi.fn();
     const ctx = {
@@ -181,5 +295,126 @@ describe("handleMessageUpdate", () => {
     await vi.waitFor(() => {
       expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
     });
+  });
+});
+
+describe("handleMessageEnd", () => {
+  it("suppresses commentary-phase replies from user-visible output", () => {
+    const onAgentEvent = vi.fn();
+    const emitBlockReply = vi.fn();
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onAgentEvent,
+        onBlockReply: vi.fn(),
+      },
+      state: {
+        assistantTexts: [],
+        assistantTextBaseline: 0,
+        emittedAssistantUpdate: false,
+        deterministicApprovalPromptSent: false,
+        reasoningStreamOpen: false,
+        includeReasoning: false,
+        streamReasoning: false,
+        blockReplyBreak: "message_end",
+        deltaBuffer: "Need send.",
+        blockBuffer: "Need send.",
+        blockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        lastStreamedAssistant: undefined,
+        lastStreamedAssistantCleaned: undefined,
+      },
+      noteLastAssistant: vi.fn(),
+      recordAssistantUsage: vi.fn(),
+      log: { debug: vi.fn(), warn: vi.fn() },
+      stripBlockTags: (text: string) => text,
+      finalizeAssistantTexts,
+      emitBlockReply,
+      consumeReplyDirectives: vi.fn(() => ({ text: "Need send." })),
+      emitReasoningStream: vi.fn(),
+      flushBlockReplyBuffer: vi.fn(),
+      blockChunker: null,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        phase: "commentary",
+        content: [{ type: "text", text: "Need send." }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(finalizeAssistantTexts).not.toHaveBeenCalled();
+  });
+
+  it("suppresses commentary message_end when phase exists only in textSignature metadata", () => {
+    const onAgentEvent = vi.fn();
+    const emitBlockReply = vi.fn();
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onAgentEvent,
+        onBlockReply: vi.fn(),
+      },
+      state: {
+        assistantTexts: [],
+        assistantTextBaseline: 0,
+        emittedAssistantUpdate: false,
+        deterministicApprovalPromptSent: false,
+        reasoningStreamOpen: false,
+        includeReasoning: false,
+        streamReasoning: false,
+        blockReplyBreak: "message_end",
+        deltaBuffer: "Need send.",
+        blockBuffer: "Need send.",
+        blockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        lastStreamedAssistant: undefined,
+        lastStreamedAssistantCleaned: undefined,
+      },
+      noteLastAssistant: vi.fn(),
+      recordAssistantUsage: vi.fn(),
+      log: { debug: vi.fn(), warn: vi.fn() },
+      stripBlockTags: (text: string) => text,
+      finalizeAssistantTexts,
+      emitBlockReply,
+      consumeReplyDirectives: vi.fn(() => ({ text: "Need send." })),
+      emitReasoningStream: vi.fn(),
+      flushBlockReplyBuffer: vi.fn(),
+      blockChunker: null,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Need send.",
+            textSignature: JSON.stringify({ v: 1, id: "msg_sig", phase: "commentary" }),
+          },
+        ],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(finalizeAssistantTexts).not.toHaveBeenCalled();
   });
 });
