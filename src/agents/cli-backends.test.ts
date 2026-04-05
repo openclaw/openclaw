@@ -165,4 +165,35 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.args).not.toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("bypassPermissions");
   });
+
+  it("injects bypassPermissions when custom args omit any permission flag", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              args: ["-p", "--output-format", "stream-json", "--verbose"],
+              resumeArgs: [
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--resume",
+                "{sessionId}",
+              ],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.args).toContain("--permission-mode");
+    expect(resolved?.config.args).toContain("bypassPermissions");
+    expect(resolved?.config.resumeArgs).toContain("--permission-mode");
+    expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
+  });
 });
