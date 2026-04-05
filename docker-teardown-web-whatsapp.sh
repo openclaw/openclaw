@@ -51,7 +51,7 @@ append_compose_file_if_present "$ROOT_DIR/docker-compose.extra.yml"
 append_compose_file_if_present "$ROOT_DIR/docker-compose.sandbox.yml"
 
 echo "Stopping OpenClaw Docker services for $HOST_ROOT"
-RUNNING=$(docker container ls --filter name=openclaw --quiet)
+RUNNING=$(docker compose "${COMPOSE_ARGS[@]}" ps --quiet)
 if [[ -n "$RUNNING" ]]; then
   docker container stop $RUNNING
 fi
