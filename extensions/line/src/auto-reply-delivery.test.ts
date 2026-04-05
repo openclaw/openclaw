@@ -279,6 +279,24 @@ describe("deliverLineAutoReply", () => {
       expect(pushMessagesLine).not.toHaveBeenCalled();
     });
 
+    it("parses STICKER directive in text payload and sends sticker", async () => {
+      const { deps, replyMessageLine, pushMessagesLine } = createDeps();
+
+      await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "ありがとう！\nSTICKER:1070:17878" },
+        lineData: {},
+        deps,
+      });
+
+      expect(replyMessageLine).toHaveBeenCalledWith(
+        "token",
+        [{ type: "sticker", packageId: "1070", stickerId: "17878" }],
+        { accountId: "acc" },
+      );
+      expect(pushMessagesLine).not.toHaveBeenCalled();
+    });
+
     it("sends sticker alone when no text", async () => {
       const { deps, replyMessageLine } = createDeps();
 

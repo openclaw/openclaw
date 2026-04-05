@@ -1,5 +1,6 @@
 import type { messagingApi } from "@line/bot-sdk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { parseReplyDirectives } from "../../../src/auto-reply/reply/reply-directives.js";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { FlexContainer } from "./flex-templates.js";
@@ -52,7 +53,13 @@ export async function deliverLineAutoReply(params: {
   textLimit: number;
   deps: LineAutoReplyDeps;
 }): Promise<{ replyTokenUsed: boolean }> {
-  const { payload, lineData, replyToken, accountId, to, textLimit, deps } = params;
+  const { lineData, replyToken, accountId, to, textLimit, deps } = params;
+  const parsedDirectives = parseReplyDirectives(params.payload.text ?? "");
+  const payload: ReplyPayload = {
+    ...params.payload,
+    text: parsedDirectives.text ?? params.payload.text,
+    sticker: params.payload.sticker ?? parsedDirectives.sticker,
+  };
   let replyTokenUsed = params.replyTokenUsed;
 
   const stickerSendErrorText = "[Sticker send error]";
