@@ -39,9 +39,15 @@ vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook,
 }));
 
-vi.mock("../plugins/config-state.js", () => ({
-  isTestDefaultMemorySlotDisabled: disableDefaultMemorySlot,
-}));
+vi.mock("../plugins/config-state.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/config-state.js")>(
+    "../plugins/config-state.js",
+  );
+  return {
+    ...actual,
+    isTestDefaultMemorySlotDisabled: disableDefaultMemorySlot,
+  };
+});
 
 vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: noPluginToolMeta,

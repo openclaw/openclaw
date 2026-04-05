@@ -55,9 +55,15 @@ vi.mock("../logger.js", () => ({
   logWarn: () => {},
 }));
 
-vi.mock("../plugins/config-state.js", () => ({
-  isTestDefaultMemorySlotDisabled: () => false,
-}));
+vi.mock("../plugins/config-state.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/config-state.js")>(
+    "../plugins/config-state.js",
+  );
+  return {
+    ...actual,
+    isTestDefaultMemorySlotDisabled: () => false,
+  };
+});
 
 vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: () => undefined,
