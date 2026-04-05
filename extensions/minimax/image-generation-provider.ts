@@ -49,11 +49,20 @@ function isMinimaxCnHost(value: string | undefined): boolean {
   }
 }
 
-function resolveMinimaxImageBaseUrl(): string {
+function resolveMinimaxImageBaseUrl(
+  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
+  providerId: string,
+): string {
   // MiniMax image generation uses dedicated endpoints that are separate from
-  // the text/chat API endpoints. Check MINIMAX_API_HOST to determine region.
+  // the text/chat API endpoints. First check MINIMAX_API_HOST env var,
+  // then fall back to the provider's configured baseUrl to determine region.
   const apiHost = process.env.MINIMAX_API_HOST;
   if (isMinimaxCnHost(apiHost)) {
+    return CN_MINIMAX_IMAGE_BASE_URL;
+  }
+  // CN onboarding stores region in provider config without requiring env var
+  const providerBaseUrl = cfg?.models?.providers?.[providerId]?.baseUrl;
+  if (isMinimaxCnHost(providerBaseUrl)) {
     return CN_MINIMAX_IMAGE_BASE_URL;
   }
   return DEFAULT_MINIMAX_IMAGE_BASE_URL;
@@ -100,7 +109,7 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         throw new Error("MiniMax API key missing");
       }
 
-      const baseUrl = resolveMinimaxImageBaseUrl();
+      const baseUrl = resolveMinimaxImageBaseUrl(req.cfg, providerId);
       const {
         baseUrl: resolvedBaseUrl,
         allowPrivateNetwork,
