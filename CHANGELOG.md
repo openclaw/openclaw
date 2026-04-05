@@ -121,7 +121,6 @@ Docs: https://docs.openclaw.ai
 - Telegram/reasoning: only create a Telegram reasoning preview lane when the session is explicitly `reasoning:stream`, so hidden `<think>` traces from streamed replies stop surfacing as chat previews on normal sessions. Thanks @vincentkoc.
 - Feishu/reasoning: only expose streamed reasoning previews when the session is explicitly `reasoning:stream`, so hidden reasoning traces do not surface on normal streaming sessions. Thanks @vincentkoc.
 - Providers/OpenAI: support GPT-5.4 assistant `phase` metadata across OpenAI-family Responses replay and the Gateway `/v1/responses` compatibility layer, including `commentary` tool preambles and `final_answer` replies.
-<<<<<<< HEAD
 - Models/Anthropic CLI auth: replace migrated `agents.defaults.models` allowlists when `openclaw models auth login --provider anthropic --method cli --set-default` switches to `claude-cli/*`, so stale `anthropic/*` entries do not linger beside the migrated Claude CLI defaults. Thanks @vincentkoc.
 - Plugins/auth-choice: apply provider-owned auth config patches without recursively preserving replaced default-model maps, so Anthropic Claude CLI and similar migrations can intentionally swap model allowlists during onboarding and setup instead of accumulating stale entries. Thanks @vincentkoc.
 - Anthropic CLI onboarding: rewrite migrated fallback model refs during non-interactive Claude CLI setup too, so onboarding and scripted setup no longer keep stale `anthropic/*` fallbacks after switching the primary model to `claude-cli/*`. Thanks @vincentkoc.
