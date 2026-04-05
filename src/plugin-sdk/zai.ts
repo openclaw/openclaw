@@ -1,26 +1,14 @@
-// Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/zai/api.js");
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+// Internal Z.AI config seam.
+// Keep load cheap for config/doctor/test code; do not route through the plugin facade.
 
-function loadFacadeModule(): FacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
-    dirName: "zai",
-    artifactBasename: "api.js",
-  });
-}
-export const applyZaiConfig: FacadeModule["applyZaiConfig"] = ((...args) =>
-  loadFacadeModule()["applyZaiConfig"](...args)) as FacadeModule["applyZaiConfig"];
-export const applyZaiProviderConfig: FacadeModule["applyZaiProviderConfig"] = ((...args) =>
-  loadFacadeModule()["applyZaiProviderConfig"](...args)) as FacadeModule["applyZaiProviderConfig"];
-export const ZAI_CN_BASE_URL: FacadeModule["ZAI_CN_BASE_URL"] =
-  loadFacadeModule()["ZAI_CN_BASE_URL"];
-export const ZAI_CODING_CN_BASE_URL: FacadeModule["ZAI_CODING_CN_BASE_URL"] =
-  loadFacadeModule()["ZAI_CODING_CN_BASE_URL"];
-export const ZAI_CODING_GLOBAL_BASE_URL: FacadeModule["ZAI_CODING_GLOBAL_BASE_URL"] =
-  loadFacadeModule()["ZAI_CODING_GLOBAL_BASE_URL"];
-export const ZAI_DEFAULT_MODEL_ID: FacadeModule["ZAI_DEFAULT_MODEL_ID"] =
-  loadFacadeModule()["ZAI_DEFAULT_MODEL_ID"];
-export const ZAI_DEFAULT_MODEL_REF: FacadeModule["ZAI_DEFAULT_MODEL_REF"] =
-  loadFacadeModule()["ZAI_DEFAULT_MODEL_REF"];
-export const ZAI_GLOBAL_BASE_URL: FacadeModule["ZAI_GLOBAL_BASE_URL"] =
-  loadFacadeModule()["ZAI_GLOBAL_BASE_URL"];
+export {
+  applyZaiConfig,
+  applyZaiProviderConfig,
+  ZAI_CN_BASE_URL,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_CODING_GLOBAL_BASE_URL,
+  ZAI_DEFAULT_COST,
+  ZAI_DEFAULT_MODEL_ID,
+  ZAI_DEFAULT_MODEL_REF,
+  ZAI_GLOBAL_BASE_URL,
+} from "../../extensions/zai/config-api.js";
