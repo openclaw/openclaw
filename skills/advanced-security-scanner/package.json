@@ -1,0 +1,36 @@
+{
+  "name": "advanced-security-scanner",
+  "version": "1.0.0",
+  "description": "Enterprise-grade security scanner with SAST, SCA, secret detection, and compliance checking",
+  "author": "Abdullah Tariq <abdullah.tariq.7654@gmail.com>",
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "sast",
+    "sca",
+    "vulnerability",
+    "compliance",
+    "owasp",
+    "cwe",
+    "secret-scanning",
+    "code-analysis"
+  ],
+  "engines": {
+    "openclaw": ">=2026.3.0"
+  },
+  "skill": {
+    "id": "advanced-security-scanner",
+    "name": "Advanced Security Scanner",
+    "description": "Comprehensive security analysis for modern applications",
+    "category": "security",
+    "triggers": [
+      "security scan",
+      "vulnerability check",
+      "find security issues",
+      "scan for secrets",
+      "owasp compliance",
+      "security audit",
+      "check dependencies"
+    ]
+  }
+}

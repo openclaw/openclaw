@@ -1,0 +1,23 @@
+{
+  "name": "ai-test-generator",
+  "version": "1.0.0",
+  "description": "AI-powered test generation for comprehensive code coverage",
+  "author": "Abdullah Tariq <abdullah.tariq.7654@gmail.com>",
+  "license": "MIT",
+  "keywords": [
+    "testing",
+    "test-generation",
+    "unit-tests",
+    "coverage",
+    "automation"
+  ],
+  "engines": {
+    "openclaw": ">=2026.3.0"
+  },
+  "skill": {
+    "id": "ai-test-generator",
+    "name": "AI Test Generator",
+    "description": "Intelligent test generation for comprehensive coverage",
+    "category": "development"
+  }
+}
