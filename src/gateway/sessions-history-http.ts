@@ -103,10 +103,15 @@ function paginateSessionMessages(
   const cursorSeq = resolveCursorSeq(cursor);
   const endExclusive =
     typeof cursorSeq === "number"
-      ? Math.max(0, Math.min(messages.length, cursorSeq - 1))
-      : messages.length;
-  const start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
-  const items = messages.slice(start, endExclusive);
+      ? messages.findIndex((message) => {
+          const seq = resolveMessageSeq(message);
+          return typeof seq === "number" && seq >= cursorSeq;
+        })
+      : -1;
+  const boundedEndExclusive = endExclusive >= 0 ? endExclusive : messages.length;
+  const start =
+    typeof limit === "number" && limit > 0 ? Math.max(0, boundedEndExclusive - limit) : 0;
+  const items = messages.slice(start, boundedEndExclusive);
   const firstSeq = resolveMessageSeq(items[0]);
   return {
     items,
@@ -200,10 +205,17 @@ export async function handleSessionHistoryHttpRequest(
   }
   const limit = resolveLimit(req);
   const cursor = resolveCursor(req);
+  const effectiveMaxChars =
+    typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number"
+      ? cfg.gateway.webchat.chatHistoryMaxChars
+      : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   const history = paginateSessionMessages(
-    entry?.sessionId
-      ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
-      : [],
+    sanitizeChatHistoryMessages(
+      entry?.sessionId
+        ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
+        : [],
+      effectiveMaxChars,
+    ),
     limit,
     cursor,
   );
@@ -261,16 +273,21 @@ export async function handleSessionHistoryHttpRequest(
             : readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile).length,
       });
       if (limit === undefined && cursor === undefined) {
+        const sanitized = sanitizeChatHistoryMessages([nextMessage], effectiveMaxChars);
+        if (sanitized.length === 0) {
+          return;
+        }
+        const sanitizedMessage = sanitized[0];
         sentHistory = {
-          items: [...sentHistory.items, nextMessage],
-          messages: [...sentHistory.items, nextMessage],
+          items: [...sentHistory.items, sanitizedMessage],
+          messages: [...sentHistory.items, sanitizedMessage],
           hasMore: false,
         };
         sseWrite(res, "message", {
           sessionKey: target.canonicalKey,
-          message: nextMessage,
+          message: sanitizedMessage,
           ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-          messageSeq: resolveMessageSeq(nextMessage),
+          messageSeq: resolveMessageSeq(sanitizedMessage),
         });
         return;
       }

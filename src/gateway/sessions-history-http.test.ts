@@ -329,6 +329,81 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("sanitizes unbounded SSE push updates before emitting them", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        headers: { Accept: "text/event-stream" },
+      });
+
+      expect(res.status).toBe(200);
+      const reader = res.body?.getReader();
+      expect(reader).toBeTruthy();
+      const streamState = { buffer: "" };
+      const historyEvent = await readSseEvent(reader!, streamState);
+      expect(historyEvent.event).toBe("history");
+      expect((historyEvent.data as { messages?: unknown[] }).messages ?? []).toHaveLength(0);
+
+      const hidden = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: "NO_REPLY",
+        storePath,
+      });
+      expect(hidden.ok).toBe(true);
+
+      const visible = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: JSON.stringify({
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "internal reasoning",
+              textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "Done.",
+              textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+            },
+          ],
+        }),
+        storePath,
+      });
+      expect(visible.ok).toBe(true);
+
+      const messageEvent = await readSseEvent(reader!, streamState);
+      expect(messageEvent.event).toBe("message");
+      expect(
+        (messageEvent.data as { message?: { content?: Array<{ text?: string }> } }).message?.content?.[0]
+          ?.text,
+      ).toBe("Done.");
+      expect((messageEvent.data as { messageSeq?: number }).messageSeq).toBe(2);
+      expect(
+        (
+          messageEvent.data as {
+            message?: { __openclaw?: { id?: string; seq?: number } };
+          }
+        ).message?.__openclaw,
+      ).toMatchObject({
+        id: visible.ok ? visible.messageId : undefined,
+        seq: 2,
+      });
+
+      await reader?.cancel();
+    });
+  });
+
   test("streams session history updates over SSE", async () => {
     const { storePath } = await seedSession({ text: "first message" });
 
