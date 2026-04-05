@@ -12,7 +12,13 @@ const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
   .optional();
 
-const directChannelRuntimeSchemas = getBundledChannelRuntimeMap();
+let _directChannelRuntimeSchemas: ReadonlyMap<string, z.ZodTypeAny> | undefined;
+function getDirectChannelRuntimeSchemas() {
+  if (!_directChannelRuntimeSchemas) {
+    _directChannelRuntimeSchemas = getBundledChannelRuntimeMap();
+  }
+  return _directChannelRuntimeSchemas;
+}
 
 function addLegacyChannelAcpBindingIssues(
   value: unknown,
@@ -55,7 +61,7 @@ function normalizeBundledChannelConfigs(
   }
 
   let next: ChannelsConfig | undefined;
-  for (const [channelId, runtimeSchema] of directChannelRuntimeSchemas) {
+  for (const [channelId, runtimeSchema] of getDirectChannelRuntimeSchemas()) {
     if (!Object.prototype.hasOwnProperty.call(value, channelId)) {
       continue;
     }
