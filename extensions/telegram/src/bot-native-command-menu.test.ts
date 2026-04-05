@@ -4,6 +4,7 @@ import {
   buildPluginTelegramMenuCommands,
   hashCommandList,
   syncTelegramMenuCommands,
+  TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET,
 } from "./bot-native-command-menu.js";
 
 type SyncMenuOptions = {
@@ -50,6 +51,47 @@ describe("bot-native-command-menu", () => {
       command: "cmd_99",
       description: "Command 99",
     });
+  });
+
+  it("shortens descriptions before dropping commands to fit Telegram payload budget", () => {
+    const allCommands = Array.from({ length: 92 }, (_, i) => ({
+      command: `cmd_${i}`,
+      description: "x".repeat(100),
+    }));
+
+    const result = buildCappedTelegramMenuCommands({ allCommands });
+
+    expect(result.commandsToRegister).toHaveLength(92);
+    expect(result.descriptionTrimmed).toBe(true);
+    expect(result.textBudgetDropCount).toBe(0);
+    const totalText = result.commandsToRegister.reduce(
+      (total, command) => total + command.command.length + command.description.length,
+      0,
+    );
+    expect(totalText).toBeLessThanOrEqual(TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET);
+    expect(result.commandsToRegister.every((command) => command.description.length <= 56)).toBe(
+      true,
+    );
+  });
+
+  it("drops tail commands only when minimal descriptions still cannot fit the payload budget", () => {
+    const allCommands = [
+      { command: "alpha_cmd", description: "First command" },
+      { command: "bravo_cmd", description: "Second command" },
+      { command: "charlie_cmd", description: "Third command" },
+    ];
+
+    const result = buildCappedTelegramMenuCommands({
+      allCommands,
+      maxTotalChars: 20,
+    });
+
+    expect(result.commandsToRegister).toEqual([
+      { command: "alpha_cmd", description: "F" },
+      { command: "bravo_cmd", description: "S" },
+    ]);
+    expect(result.descriptionTrimmed).toBe(true);
+    expect(result.textBudgetDropCount).toBe(1);
   });
 
   it("validates plugin command specs and reports conflicts", () => {
