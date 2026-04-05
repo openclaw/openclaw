@@ -2,6 +2,30 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+function getErrorCode(err: unknown): string | undefined {
+  return err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
+}
+
+async function replaceFileWithWindowsFallback(tempPath: string, filePath: string, mode: number) {
+  try {
+    await fs.rename(tempPath, filePath);
+    return;
+  } catch (err) {
+    const code = getErrorCode(err);
+    if (process.platform !== "win32" || (code !== "EPERM" && code !== "EEXIST")) {
+      throw err;
+    }
+  }
+
+  await fs.copyFile(tempPath, filePath);
+  try {
+    await fs.chmod(filePath, mode);
+  } catch {
+    // best-effort; ignore on platforms without chmod
+  }
+  await fs.rm(tempPath, { force: true }).catch(() => undefined);
+}
+
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
@@ -52,7 +76,7 @@ export async function writeTextAtomic(
     } catch {
       // best-effort; ignore on platforms without chmod
     }
-    await fs.rename(tmp, filePath);
+    await replaceFileWithWindowsFallback(tmp, filePath, mode);
     try {
       const dirHandle = await fs.open(parentDir, "r");
       try {
