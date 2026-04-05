@@ -47,6 +47,11 @@ export type VideoGenerationResult = {
   metadata?: Record<string, unknown>;
 };
 
+export type VideoGenerationIgnoredOverride = {
+  key: "size" | "aspectRatio" | "resolution" | "audio" | "watermark";
+  value: string | boolean;
+};
+
 export type VideoGenerationProviderCapabilities = {
   maxVideos?: number;
   maxInputImages?: number;

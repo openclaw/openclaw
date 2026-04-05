@@ -82,7 +82,7 @@ Use `action: "list"` to inspect available providers and models at runtime:
 | `watermark`       | boolean  | Toggle provider watermarking when supported                                            |
 | `filename`        | string   | Output filename hint                                                                   |
 
-Not all providers support all parameters. The tool validates provider capability limits before it submits the request. When a provider or model only supports a discrete set of video lengths, OpenClaw rounds `durationSeconds` to the nearest supported value and reports the normalized duration in the tool result.
+Not all providers support all parameters. Unsupported optional overrides are ignored on a best-effort basis and reported back in the tool result as a warning. Hard capability limits such as too many reference inputs still fail before submission. When a provider or model only supports a discrete set of video lengths, OpenClaw rounds `durationSeconds` to the nearest supported value and reports the normalized duration in the tool result.
 
 ## Async behavior
 
