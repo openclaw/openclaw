@@ -214,6 +214,53 @@ If you need stock Matrix notifications without custom push rules, use `streaming
 If you run your own Matrix infrastructure and want quiet previews to notify only when a block or
 final reply is done, set `streaming: "quiet"` and add a per-user push rule for finalized preview edits.
 
+This is usually a recipient-user setup, not a homeserver-global config change:
+
+1. Configure OpenClaw to use quiet previews:
+
+```json5
+{
+  channels: {
+    matrix: {
+      streaming: "quiet",
+    },
+  },
+}
+```
+
+2. Make sure the recipient account already receives normal Matrix push notifications. Quiet preview
+   rules only work if that user already has working pushers/devices.
+
+3. Get the recipient user's access token.
+   - Use the receiving user's token, not the bot's token.
+   - Reusing an existing client session token is usually easiest.
+   - If you need to mint a fresh token, you can log in through the standard Matrix Client-Server API:
+
+```bash
+curl -sS -X POST \
+  "https://matrix.example.org/_matrix/client/v3/login" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "type": "m.login.password",
+    "identifier": {
+      "type": "m.id.user",
+      "user": "@alice:example.org"
+    },
+    "password": "REDACTED"
+  }'
+```
+
+4. Verify the recipient account already has pushers:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
+  "https://matrix.example.org/_matrix/client/v3/pushers"
+```
+
+If this returns no active pushers/devices, fix normal Matrix notifications first before adding the
+OpenClaw rule below.
+
 OpenClaw marks finalized text-only preview edits with:
 
 ```json
@@ -222,10 +269,10 @@ OpenClaw marks finalized text-only preview edits with:
 }
 ```
 
-Create an override push rule for each recipient account which should receive these notifications:
+5. Create an override push rule for each recipient account which should receive these notifications:
 
 ```bash
-curl -X PUT \
+curl -sS -X PUT \
   "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview" \
   -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
@@ -252,28 +299,45 @@ curl -X PUT \
   }'
 ```
 
+Replace these values before you run the command:
+
+- `https://matrix.example.org`: your homeserver base URL
+- `$USER_ACCESS_TOKEN`: the receiving user's access token
+- `@bot:example.org`: your OpenClaw Matrix bot MXID
+
+6. Verify the rule exists:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
+  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview"
+```
+
+7. Test a streamed reply. In quiet mode, the room should show a quiet draft preview and the final
+   in-place edit should notify once the block or turn finishes.
+
 Notes:
 
 - Create the rule with the receiving user's access token, not the bot's.
 - New user-defined `override` rules are inserted ahead of default suppress rules, so no extra ordering parameter is needed.
 - This only affects text-only preview edits that OpenClaw can safely finalize in place. Media fallbacks and stale-preview fallbacks still use normal Matrix delivery.
+- If `GET /_matrix/client/v3/pushers` shows no pushers, the user does not yet have working Matrix push delivery for this account/device.
 
 #### Synapse
 
-For Synapse, this setup is usually a user-level push-rule change only:
+For Synapse, the setup above is usually enough by itself:
 
 - No special `homeserver.yaml` change is required for finalized OpenClaw preview notifications.
-- Use the recipient user's access token when creating the push rule.
-- If your Synapse deployment already sends normal Matrix push notifications, the rule above is usually sufficient by itself.
-- If you run Synapse workers, make sure your pushers are already healthy. Synapse's push delivery is handled by the main process or `synapse.app.pusher` / configured pusher workers.
+- If your Synapse deployment already sends normal Matrix push notifications, the user token + `pushrules` call above is the main setup step.
+- If you run Synapse behind a reverse proxy or workers, make sure `/_matrix/client/.../pushrules/` reaches Synapse correctly.
+- If you run Synapse workers, make sure pushers are healthy. Push delivery is handled by the main process or `synapse.app.pusher` / configured pusher workers.
 
 #### Tuwunel
 
-For Tuwunel, use the same push-rule API call shown above:
+For Tuwunel, use the same setup flow and push-rule API call shown above:
 
 - No Tuwunel-specific config is required for the finalized preview marker itself.
-- Use the recipient user's access token when creating the push rule.
-- If normal Matrix notifications already work for that user, the rule above is the main setup step.
+- If normal Matrix notifications already work for that user, the user token + `pushrules` call above is the main setup step.
 - If notifications seem to disappear while the user is active on another device, check whether `suppress_push_when_active` is enabled. Tuwunel added this option in Tuwunel 1.4.2 on September 12, 2025, and it can intentionally suppress pushes to other devices while one device is active.
 
 ## Encryption and verification
