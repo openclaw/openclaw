@@ -18,7 +18,11 @@ import {
   isAnthropicRateLimitError,
 } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
-import { isHighSignalLiveModelRef } from "../agents/live-model-filter.js";
+import {
+  getHighSignalLiveModelPriorityIndex,
+  isHighSignalLiveModelRef,
+  selectHighSignalLiveItems,
+} from "../agents/live-model-filter.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
@@ -223,49 +227,6 @@ async function withGatewayLiveModelTimeout<T>(operation: Promise<T>, context: st
     timeoutLabel: "model",
     context,
   });
-}
-
-function capByProviderSpread<T>(
-  items: T[],
-  maxItems: number,
-  providerOf: (item: T) => string,
-): T[] {
-  if (maxItems <= 0 || items.length <= maxItems) {
-    return items;
-  }
-  const providerOrder: string[] = [];
-  const grouped = new Map<string, T[]>();
-  for (const item of items) {
-    const provider = providerOf(item);
-    const bucket = grouped.get(provider);
-    if (bucket) {
-      bucket.push(item);
-      continue;
-    }
-    providerOrder.push(provider);
-    grouped.set(provider, [item]);
-  }
-
-  const selected: T[] = [];
-  while (selected.length < maxItems && grouped.size > 0) {
-    for (const provider of providerOrder) {
-      const bucket = grouped.get(provider);
-      if (!bucket || bucket.length === 0) {
-        continue;
-      }
-      const item = bucket.shift();
-      if (item) {
-        selected.push(item);
-      }
-      if (bucket.length === 0) {
-        grouped.delete(provider);
-      }
-      if (selected.length >= maxItems) {
-        break;
-      }
-    }
-  }
-  return selected;
 }
 
 function logProgress(message: string): void {
@@ -658,6 +619,20 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "openai/gpt-5.4", expected: false },
   ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
     expect(shouldSkipToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);
+  });
+});
+
+describe("getHighSignalLiveModelPriorityIndex", () => {
+  it("prefers curated Google replacements over big-pickle", () => {
+    expect(
+      getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
+    ).toBe(1);
+    expect(
+      getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-2.5-flash" }),
+    ).toBe(2);
+    expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
+      null,
+    );
   });
 });
 
@@ -1904,9 +1879,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           logProgress("[all-models] no API keys found; skipping");
           return;
         }
-        const selectedCandidates = capByProviderSpread(
+        const selectedCandidates = selectHighSignalLiveItems(
           candidates,
           maxModels > 0 ? maxModels : candidates.length,
+          (model) => ({ provider: model.provider, id: model.id }),
           (model) => model.provider,
         );
         logProgress(`[all-models] selection=${useExplicit ? "explicit" : "high-signal"}`);
