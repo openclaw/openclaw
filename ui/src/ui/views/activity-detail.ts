@@ -31,8 +31,25 @@ function renderField(label: string, value: string | number | null | undefined) {
   `;
 }
 
+function formatJsonPreview(value: unknown): string {
+  if (typeof value === "string") {
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2);
+    } catch {
+      return value;
+    }
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 function renderMetadataBlock(metadata: Record<string, unknown>) {
-  const entries = Object.entries(metadata).filter(([, v]) => v !== undefined && v !== null);
+  const entries = Object.entries(metadata).filter(
+    ([k, v]) => v !== undefined && v !== null && k !== "args" && k !== "result",
+  );
   if (entries.length === 0) {
     return nothing;
   }
@@ -75,6 +92,22 @@ export function renderActivityDetail(props: ActivityDetailProps) {
           ${renderField("Depth", node.depth)} ${renderField("Run ID", node.runId)}
         </div>
 
+        ${node.kind === "tool" && node.metadata.args
+          ? html`
+              <div class="activity-detail__section">
+                <div class="activity-detail__section-title muted">Input</div>
+                <pre class="activity-detail__json">${formatJsonPreview(node.metadata.args)}</pre>
+              </div>
+            `
+          : nothing}
+        ${node.kind === "tool" && node.metadata.result
+          ? html`
+              <div class="activity-detail__section">
+                <div class="activity-detail__section-title muted">Output</div>
+                <pre class="activity-detail__json">${formatJsonPreview(node.metadata.result)}</pre>
+              </div>
+            `
+          : nothing}
         ${node.error
           ? html`
               <div class="activity-detail__section activity-detail__section--error">

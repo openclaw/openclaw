@@ -223,4 +223,64 @@ describe("activity-tree", () => {
     expect(filtered.nodeById.has("new")).toBe(true);
     expect(filtered.nodeById.has("old")).toBe(false);
   });
+
+  it("nests tools under their parent run node", () => {
+    let tree = createActivityTree();
+    tree = applyActivityEvent(tree, makeEvent("r1", "run.start", { agentId: "main" }));
+    tree = applyActivityEvent(
+      tree,
+      makeEvent("r1", "tool.start", { toolName: "read", toolCallId: "t1" }),
+    );
+    tree = applyActivityEvent(
+      tree,
+      makeEvent("r1", "tool.start", { toolName: "exec", toolCallId: "t2" }),
+    );
+
+    const run = tree.nodeById.get("r1")!;
+    expect(run.children).toEqual(["r1:tool:t1", "r1:tool:t2"]);
+    expect(tree.rootNodes).toEqual(["r1"]);
+
+    const tool = tree.nodeById.get("r1:tool:t1")!;
+    expect(tool.parentId).toBe("r1");
+    expect(tool.depth).toBe(1);
+  });
+
+  it("nests thinking under parent run", () => {
+    let tree = createActivityTree();
+    tree = applyActivityEvent(tree, makeEvent("r1", "run.start", { agentId: "main" }));
+    tree = applyActivityEvent(tree, makeEvent("r1", "thinking.start", { agentId: "main" }));
+
+    const run = tree.nodeById.get("r1")!;
+    expect(run.children).toContain("r1:thinking");
+    expect(tree.rootNodes).toEqual(["r1"]);
+
+    const thinking = tree.nodeById.get("r1:thinking")!;
+    expect(thinking.parentId).toBe("r1");
+    expect(thinking.kind).toBe("thinking");
+  });
+
+  it("merges metadata from end events", () => {
+    let tree = createActivityTree();
+    tree = applyActivityEvent(tree, makeEvent("r1", "run.start", { agentId: "main" }));
+    tree = applyActivityEvent(
+      tree,
+      makeEvent("r1", "tool.start", {
+        toolName: "read",
+        toolCallId: "t1",
+        metadata: { args: '{"path":"foo.ts"}' },
+      }),
+    );
+    tree = applyActivityEvent(
+      tree,
+      makeEvent("r1", "tool.end", {
+        toolName: "read",
+        toolCallId: "t1",
+        metadata: { result: '"file contents"' },
+      }),
+    );
+
+    const tool = tree.nodeById.get("r1:tool:t1")!;
+    expect(tool.metadata.args).toBe('{"path":"foo.ts"}');
+    expect(tool.metadata.result).toBe('"file contents"');
+  });
 });

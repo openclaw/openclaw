@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { emitActivityEvent, type ActivityEventData } from "./activity-events.js";
+import {
+  emitActivityEvent,
+  summarizeForMetadata,
+  type ActivityEventData,
+} from "./activity-events.js";
 import { onAgentEvent, resetAgentEventsForTest, type AgentEventPayload } from "./agent-events.js";
 
 describe("emitActivityEvent", () => {
@@ -60,5 +64,27 @@ describe("emitActivityEvent", () => {
     }
     expect(captured).toHaveLength(kinds.length);
     expect(captured.map((e) => (e.data as ActivityEventData).kind)).toEqual(kinds);
+  });
+});
+
+describe("summarizeForMetadata", () => {
+  it("returns undefined for null/undefined", () => {
+    expect(summarizeForMetadata(null)).toBeUndefined();
+    expect(summarizeForMetadata(undefined)).toBeUndefined();
+  });
+
+  it("serializes objects to JSON", () => {
+    expect(summarizeForMetadata({ path: "foo.ts" })).toBe('{"path":"foo.ts"}');
+  });
+
+  it("passes through short strings", () => {
+    expect(summarizeForMetadata("hello")).toBe("hello");
+  });
+
+  it("truncates long values", () => {
+    const long = "x".repeat(3000);
+    const result = summarizeForMetadata(long, 100)!;
+    expect(result.length).toBe(101);
+    expect(result.endsWith("…")).toBe(true);
   });
 });

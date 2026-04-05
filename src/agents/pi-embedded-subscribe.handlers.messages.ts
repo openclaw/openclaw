@@ -2,6 +2,7 @@ import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { emitActivityEvent } from "../infra/activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
@@ -209,6 +210,13 @@ export function handleMessageUpdate(
 
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (evtType === "thinking_start" || evtType === "thinking_delta") {
+      if (!ctx.state.reasoningStreamOpen) {
+        emitActivityEvent(
+          ctx.params.runId,
+          { kind: "thinking.start", agentId: ctx.params.agentId },
+          ctx.params.sessionKey,
+        );
+      }
       ctx.state.reasoningStreamOpen = true;
     }
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
@@ -232,6 +240,11 @@ export function handleMessageUpdate(
       if (!ctx.state.reasoningStreamOpen) {
         ctx.state.reasoningStreamOpen = true;
       }
+      emitActivityEvent(
+        ctx.params.runId,
+        { kind: "thinking.end", agentId: ctx.params.agentId },
+        ctx.params.sessionKey,
+      );
       emitReasoningEnd(ctx);
     }
     return;

@@ -97,8 +97,22 @@ export function applyActivityEvent(tree: ActivityTree, event: IncomingEvent): Ac
       metadata: data.metadata ?? {},
     };
 
+    // Link tool, thinking, and subagent nodes to their parent run.
+    // For these kinds, event.runId is the parent run's ID.
+    const nodeKind = resolveKind(kind);
+    if (nodeKind !== "run") {
+      const parentRun = tree.nodeById.get(event.runId);
+      if (parentRun) {
+        node.parentId = event.runId;
+        node.depth = parentRun.depth + 1;
+        if (!parentRun.children.includes(nodeId)) {
+          parentRun.children.push(nodeId);
+        }
+      }
+    }
+
     tree.nodeById.set(nodeId, node);
-    if (!tree.rootNodes.includes(nodeId) && !findParent(tree, nodeId)) {
+    if (!node.parentId && !tree.rootNodes.includes(nodeId)) {
       tree.rootNodes.push(nodeId);
     }
     tree.totalNodes = tree.nodeById.size;
@@ -118,20 +132,14 @@ export function applyActivityEvent(tree: ActivityTree, event: IncomingEvent): Ac
       existing.durationMs = data.durationMs ?? event.ts - existing.startedAt;
       existing.isError = data.isError ?? kind.endsWith(".error");
       existing.error = data.error ?? null;
+      if (data.metadata) {
+        existing.metadata = { ...existing.metadata, ...data.metadata };
+      }
     }
     return tree;
   }
 
   return tree;
-}
-
-function findParent(tree: ActivityTree, nodeId: string): string | null {
-  for (const [id, node] of tree.nodeById) {
-    if (id !== nodeId && node.children.includes(nodeId)) {
-      return id;
-    }
-  }
-  return null;
 }
 
 export function pruneCompletedBranches(tree: ActivityTree, maxAgeMs: number = PRUNE_AGE_MS): void {

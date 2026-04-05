@@ -1,5 +1,5 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import { emitActivityEvent } from "../infra/activity-events.js";
+import { emitActivityEvent, summarizeForMetadata } from "../infra/activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   buildExecApprovalPendingReplyPayload,
@@ -408,6 +408,7 @@ export function handleToolExecutionStart(
         toolName,
         toolCallId,
         agentId: ctx.params.agentId,
+        metadata: { args: summarizeForMetadata(args) },
       },
       ctx.params.sessionKey,
     );
@@ -620,6 +621,7 @@ export async function handleToolExecutionEnd(
       durationMs: toolDurationMs,
       isError: isToolError,
       error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+      metadata: { result: summarizeForMetadata(sanitizedResult) },
     },
     ctx.params.sessionKey,
   );
