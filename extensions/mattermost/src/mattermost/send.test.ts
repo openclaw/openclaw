@@ -39,9 +39,15 @@ vi.mock("../../runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
-  resolveMarkdownTableMode: vi.fn(() => "off"),
-}));
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
+  return {
+    ...actual,
+    resolveMarkdownTableMode: vi.fn(() => "off"),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
   convertMarkdownTables: vi.fn((text: string) => text),

@@ -47,9 +47,15 @@ vi.mock("@line/bot-sdk", () => ({
   messagingApi: { MessagingApiClient: MessagingApiClientMock },
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
-  loadConfig: loadConfigMock,
-}));
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
+  return {
+    ...actual,
+    loadConfig: loadConfigMock,
+  };
+});
 
 vi.mock("./accounts.js", () => ({
   resolveLineAccount: resolveLineAccountMock,

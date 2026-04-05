@@ -23,8 +23,12 @@ export function resetPairingSecurityMocks(config: Record<string, unknown>) {
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
 }
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => {
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
   return {
+    ...actual,
     loadConfig: (...args: unknown[]) => loadConfigMock(...args),
     resolveDefaultGroupPolicy,
     resolveOpenProviderRuntimeGroupPolicy,

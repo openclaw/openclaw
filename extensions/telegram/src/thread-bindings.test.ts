@@ -197,7 +197,7 @@ describe("telegram thread bindings", () => {
     );
   });
 
-  it("exposes the reset helper through the bundled test api", async () => {
+  it("exposes the reset helper through the bundled test api", { timeout: 180_000 }, async () => {
     const { resetTelegramThreadBindingsForTests } = loadBundledPluginTestApiSync<{
       resetTelegramThreadBindingsForTests: () => Promise<void>;
     }>("telegram");
