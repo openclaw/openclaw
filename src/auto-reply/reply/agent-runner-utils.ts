@@ -1,7 +1,13 @@
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
-import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
+import type {
+  ChannelId,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.js";
+import {
+  normalizeAnyChannelId,
+  normalizeChannelId,
+} from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
@@ -10,7 +16,10 @@ import {
   resolveRunAuthProfile,
 } from "./agent-runner-auth-profile.js";
 export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
-import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import {
+  resolveOriginMessageProvider,
+  resolveOriginMessageTo,
+} from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
@@ -44,9 +53,12 @@ export function buildThreadingToolContext(params: {
       currentMessageId,
     };
   }
-  const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
+  const provider =
+    normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
   // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
-  const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
+  const threading = provider
+    ? getChannelPlugin(provider)?.threading
+    : undefined;
   if (!threading?.buildToolContext) {
     return {
       currentChannelId: originTo?.trim() || undefined,
@@ -131,13 +143,18 @@ export function buildEmbeddedRunBaseParams(params: {
   return {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
+    toolFsPolicy: params.run.toolFsPolicy,
     agentDir: params.run.agentDir,
     config: params.run.config,
     skillsSnapshot: params.run.skillsSnapshot,
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
-    enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider, params.model),
+    enforceFinalTag: resolveEnforceFinalTag(
+      params.run,
+      params.provider,
+      params.model,
+    ),
     silentExpected: params.run.silentExpected,
     provider: params.provider,
     model: params.model,
@@ -216,7 +233,8 @@ export function buildEmbeddedRunExecutionParams(params: {
   runId: string;
   allowTransientCooldownProbe?: boolean;
 }) {
-  const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts(params);
+  const { authProfile, embeddedContext, senderContext } =
+    buildEmbeddedRunContexts(params);
   const runBaseParams = buildEmbeddedRunBaseParams({
     run: params.run,
     provider: params.provider,

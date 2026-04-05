@@ -4,9 +4,20 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { OriginatingChannelType } from "../../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../directives.js";
 
-export type QueueMode = "steer" | "followup" | "collect" | "steer-backlog" | "interrupt" | "queue";
+export type QueueMode =
+  | "steer"
+  | "followup"
+  | "collect"
+  | "steer-backlog"
+  | "interrupt"
+  | "queue";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
@@ -59,6 +70,8 @@ export type FollowupRun = {
     senderIsOwner?: boolean;
     sessionFile: string;
     workspaceDir: string;
+    // Persisted spawned FS policy ceiling for follow-up runs.
+    toolFsPolicy?: SessionEntry["spawnedToolFsPolicy"];
     config: OpenClawConfig;
     skillsSnapshot?: SkillSnapshot;
     provider: string;
@@ -69,7 +82,10 @@ export type FollowupRun = {
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;
-    execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+    execOverrides?: Pick<
+      ExecToolDefaults,
+      "host" | "security" | "ask" | "node"
+    >;
     bashElevated?: {
       enabled: boolean;
       allowed: boolean;
