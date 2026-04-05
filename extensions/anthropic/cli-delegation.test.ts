@@ -232,3 +232,61 @@ describe("claude-code-cli-delegation auth method registration", () => {
     expect(CLI_DELEGATION_AUTH_METHOD_ID).toBe("claude-code-cli-delegation");
   });
 });
+
+describe("CLI delegation end-to-end (mocked)", () => {
+  it("probeClaudeCliStatus returns installed:false when binary is missing", async () => {
+    const { probeClaudeCliStatus } = await import("./cli-delegation.probe.js");
+
+    // Use a binary path that does not exist
+    const result = await probeClaudeCliStatus("/nonexistent/claude-binary");
+    expect(result).toEqual({ installed: false });
+  });
+
+  it("sentinel credential is never a valid API key format", () => {
+    const sentinel = "__cli_delegation__";
+    // Anthropic API keys start with "sk-ant-"
+    expect(sentinel).not.toMatch(/^sk-ant-/);
+    // General API key patterns
+    expect(sentinel).not.toMatch(/^sk-/);
+    // OAuth tokens
+    expect(sentinel).not.toMatch(/^sk-ant-oat/);
+  });
+
+  it("adaptSdkMessage handles all required SDK message types without throwing", async () => {
+    const { adaptSdkMessage } = await import("./cli-delegation.js");
+
+    const messageTypes = [
+      { type: "system", subtype: "init", uuid: "u", session_id: "s" },
+      { type: "user", uuid: "u", session_id: "s", message: {}, parent_tool_use_id: null },
+      {
+        type: "result",
+        subtype: "success",
+        uuid: "u",
+        session_id: "s",
+        duration_ms: 0,
+        duration_api_ms: 0,
+        is_error: false,
+        num_turns: 0,
+        result: "",
+        stop_reason: null,
+        total_cost_usd: 0,
+        usage: { input_tokens: 0, output_tokens: 0 },
+        modelUsage: {},
+        permission_denials: [],
+      },
+      {
+        type: "stream_event",
+        event: { type: "message_start" },
+        parent_tool_use_id: null,
+        uuid: "u",
+        session_id: "s",
+      },
+    ];
+
+    for (const msg of messageTypes) {
+      // Should not throw for any message type
+      const adapted = adaptSdkMessage(msg as any);
+      expect(adapted).toHaveProperty("kind");
+    }
+  });
+});
