@@ -85,7 +85,9 @@ describe("openrouter provider hooks", () => {
     );
 
     expect(baseStreamFn).toHaveBeenCalledOnce();
-    expect(baseStreamFn.mock.calls[0]?.[0]).toMatchObject({
+    const firstCall = baseStreamFn.mock.calls[0];
+    const firstModel = firstCall?.[0];
+    expect(firstModel).toMatchObject({
       compat: {
         openRouterRouting: {
           order: ["moonshot"],

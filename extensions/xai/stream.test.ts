@@ -10,7 +10,10 @@ import {
 type ToolPayload = {
   function?: Record<string, unknown>;
 };
-
+type XaiTestPayload = Record<string, unknown> & {
+  tools?: Array<{ type?: string; function?: Record<string, unknown> }>;
+  input?: unknown[];
+};
 function captureWrappedModelId(params: {
   modelId: string;
   fastMode: boolean;
@@ -63,10 +66,10 @@ describe("xai stream wrappers", () => {
 
   it("composes the xai provider stream chain from extra params", () => {
     let capturedModelId = "";
-    let capturedPayload: Record<string, unknown> | undefined;
+    let capturedPayload: XaiTestPayload | undefined;
     const baseStreamFn: StreamFn = (model, _context, options) => {
       capturedModelId = String(model.id);
-      const payload: Record<string, unknown> = {
+      const payload: XaiTestPayload = {
         reasoning: { effort: "high" },
         tools: [
           {
