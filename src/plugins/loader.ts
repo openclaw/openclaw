@@ -589,7 +589,6 @@ function createPluginRecord(params: {
     toolNames: [],
     hookNames: [],
     channelIds: [],
-    cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],
@@ -876,12 +875,16 @@ function compareDuplicateCandidateOrder(params: {
 }
 
 function warnWhenAllowlistIsOpen(params: {
+  emitWarning: boolean;
   logger: PluginLogger;
   pluginsEnabled: boolean;
   allow: string[];
   warningCacheKey: string;
   discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
 }) {
+  if (!params.emitWarning) {
+    return;
+  }
   if (!params.pluginsEnabled) {
     return;
   }
@@ -912,6 +915,7 @@ function warnAboutUntrackedLoadedPlugins(params: {
   registry: PluginRegistry;
   provenance: PluginProvenanceIndex;
   allowlist: string[];
+  emitWarning: boolean;
   logger: PluginLogger;
   env: NodeJS.ProcessEnv;
 }) {
@@ -941,7 +945,9 @@ function warnAboutUntrackedLoadedPlugins(params: {
       source: plugin.source,
       message,
     });
-    params.logger.warn(`[plugins] ${plugin.id}: ${message} (${plugin.source})`);
+    if (params.emitWarning) {
+      params.logger.warn(`[plugins] ${plugin.id}: ${message} (${plugin.source})`);
+    }
   }
 }
 
@@ -1110,6 +1116,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   });
   pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({
+    emitWarning: shouldActivate,
     logger,
     pluginsEnabled: normalized.enabled,
     allow: normalized.allow,
@@ -1608,6 +1615,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     registry,
     provenance,
     allowlist: normalized.allow,
+    emitWarning: shouldActivate,
     logger,
     env,
   });
@@ -1675,6 +1683,7 @@ export async function loadOpenClawPluginCliRegistry(
   });
   pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({
+    emitWarning: false,
     logger,
     pluginsEnabled: normalized.enabled,
     allow: normalized.allow,

@@ -92,6 +92,7 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "ko", fileName: "ko.ts", exportName: "ko", languageKey: "ko" },
   { locale: "fr", fileName: "fr.ts", exportName: "fr", languageKey: "fr" },
   { locale: "tr", fileName: "tr.ts", exportName: "tr", languageKey: "tr" },
+  { locale: "uk", fileName: "uk.ts", exportName: "uk", languageKey: "uk" },
   { locale: "id", fileName: "id.ts", exportName: "id", languageKey: "id" },
   { locale: "pl", fileName: "pl.ts", exportName: "pl", languageKey: "pl" },
 ];
@@ -178,6 +179,8 @@ function prettyLanguageLabel(locale: string): string {
       return "French";
     case "tr":
       return "Turkish";
+    case "uk":
+      return "Ukrainian";
     case "id":
       return "Indonesian";
     case "pl":

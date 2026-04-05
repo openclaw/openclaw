@@ -654,20 +654,20 @@ describe("plugin status reports", () => {
   it("treats a CLI-backend-only plugin as a plain capability", () => {
     setSinglePluginLoadResult(
       createPluginRecord({
-        id: "anthropic",
-        name: "Anthropic",
-        cliBackendIds: ["claude-cli"],
+        id: "openai",
+        name: "OpenAI",
+        cliBackendIds: ["codex-cli"],
       }),
     );
 
-    const inspect = expectInspectReport("anthropic");
+    const inspect = expectInspectReport("openai");
 
     expectInspectShape(inspect, {
       shape: "plain-capability",
       capabilityMode: "plain",
       capabilityKinds: ["cli-backend"],
     });
-    expect(inspect.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
+    expect(inspect.capabilities).toEqual([{ kind: "cli-backend", ids: ["codex-cli"] }]);
   });
 
   it("builds compatibility warnings for legacy compatibility paths", () => {

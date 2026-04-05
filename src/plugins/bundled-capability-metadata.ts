@@ -2,7 +2,6 @@ import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 
 export type BundledPluginContractSnapshot = {
   pluginId: string;
-  cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
@@ -37,7 +36,6 @@ const BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES = listBundledPluginMetadata({
 export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSnapshot[] =
   BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.map(({ manifest }) => ({
     pluginId: manifest.id,
-    cliBackendIds: uniqueStrings(manifest.cliBackends),
     providerIds: uniqueStrings(manifest.providers),
     speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
     realtimeTranscriptionProviderIds: uniqueStrings(
@@ -53,7 +51,6 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
   }))
     .filter(
       (entry) =>
-        entry.cliBackendIds.length > 0 ||
         entry.providerIds.length > 0 ||
         entry.speechProviderIds.length > 0 ||
         entry.realtimeTranscriptionProviderIds.length > 0 ||

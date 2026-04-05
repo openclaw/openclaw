@@ -112,15 +112,11 @@ provider you choose.
 Examples:
 
 ```bash
-openclaw models auth login --provider anthropic --method cli --set-default
 openclaw models auth login --provider openai-codex --set-default
 ```
 
 Notes:
 
-- `login --provider anthropic --method cli --set-default` reuses a local Claude
-  CLI login and rewrites the main Anthropic default-model path to a canonical
-  `claude-cli/claude-*` ref.
 - `setup-token` and `paste-token` remain generic token commands for providers
   that expose token auth methods.
 - `setup-token` requires an interactive TTY and runs the provider's token-auth
@@ -132,5 +128,5 @@ Notes:
   `--profile-id`.
 - `paste-token --expires-in <duration>` stores an absolute token expiry from a
   relative duration such as `365d` or `12h`.
-- Anthropic billing note: We believe Claude Code CLI fallback is likely allowed for local, user-managed automation based on Anthropic's public CLI docs. That said, Anthropic's third-party harness policy creates enough ambiguity around subscription-backed use in external products that we do not recommend it for production. Anthropic also notified OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription.
+- Anthropic billing note: for Anthropic in OpenClaw, the practical split is **API key** or **Claude subscription with Extra Usage**. Anthropic notified OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription. Our local repros also show the OpenClaw-identifying prompt string does not reproduce on the Anthropic SDK + API-key path.
 - Anthropic `setup-token` / `paste-token` are available again as a legacy/manual OpenClaw path. Use them with the expectation that Anthropic told OpenClaw users this path requires **Extra Usage**.

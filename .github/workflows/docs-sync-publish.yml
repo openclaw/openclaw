@@ -46,6 +46,7 @@ jobs:
       - name: Commit publish repo sync
         working-directory: publish
         run: |
+          set -euo pipefail
           if git diff --quiet -- docs .openclaw-sync; then
             echo "No publish-repo changes."
             exit 0
@@ -55,4 +56,15 @@ jobs:
           git config user.email "openclaw-docs-sync[bot]@users.noreply.github.com"
           git add docs .openclaw-sync
           git commit -m "chore(sync): mirror docs from $GITHUB_REPOSITORY@$GITHUB_SHA"
-          git push origin HEAD:main
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git rebase origin/main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "Push attempt ${attempt} failed; retrying."
+            sleep $((attempt * 2))
+          done
+
+          echo "Failed to push publish-repo sync after retries."
+          exit 1

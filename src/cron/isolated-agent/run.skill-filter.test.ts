@@ -47,8 +47,8 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   function mockCliFallbackInvocation() {
     runWithModelFallbackMock.mockImplementationOnce(
       async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
-        const result = await params.run("claude-cli", "claude-opus-4-6");
-        return { result, provider: "claude-cli", model: "claude-opus-4-6", attempts: [] };
+        const result = await params.run("codex-cli", "gpt-5.4");
+        return { result, provider: "codex-cli", model: "gpt-5.4", attempts: [] };
       },
     );
   }
@@ -276,7 +276,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
           systemSent: false,
           skillsSnapshot: undefined,
           // A stored CLI session ID that should NOT be reused on fresh runs.
-          cliSessionIds: { "claude-cli": "prev-cli-session-abc" },
+          cliSessionIds: { "codex-cli": "prev-cli-session-abc" },
         },
         systemSent: false,
         isNewSession: true,
@@ -307,7 +307,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
           updatedAt: 0,
           systemSent: false,
           skillsSnapshot: undefined,
-          cliSessionIds: { "claude-cli": "existing-cli-session-def" },
+          cliSessionIds: { "codex-cli": "existing-cli-session-def" },
         },
         systemSent: false,
         isNewSession: false,

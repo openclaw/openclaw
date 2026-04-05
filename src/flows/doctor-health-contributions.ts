@@ -9,6 +9,7 @@ import {
 } from "../agents/model-selection.js";
 import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { maybeRepairRemovedAnthropicClaudeCliState } from "../commands/doctor-auth-anthropic-claude-cli.js";
 import {
   maybeRemoveDeprecatedCliAuthProfiles,
   maybeRepairLegacyOAuthProfileIds,
@@ -17,7 +18,6 @@ import {
 import { noteBootstrapFileSize } from "../commands/doctor-bootstrap-size.js";
 import { noteChromeMcpBrowserReadiness } from "../commands/doctor-browser.js";
 import { maybeRepairBundledPluginRuntimeDeps } from "../commands/doctor-bundled-plugin-runtime-deps.js";
-import { noteClaudeCliHealth } from "../commands/doctor-claude-cli.js";
 import { doctorShellCompletion } from "../commands/doctor-completion.js";
 import { maybeRepairLegacyCronStore } from "../commands/doctor-cron.js";
 import { maybeRepairGatewayDaemon } from "../commands/doctor-gateway-daemon-flow.js";
@@ -142,6 +142,7 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  ctx.cfg = await maybeRepairRemovedAnthropicClaudeCliState(ctx.cfg, ctx.prompter);
   ctx.cfg = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
   ctx.cfg = await maybeRemoveDeprecatedCliAuthProfiles(ctx.cfg, ctx.prompter);
   await noteAuthProfileHealth({
@@ -212,10 +213,6 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     },
   };
   note("Gateway token configured.", "Gateway auth");
-}
-
-async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  noteClaudeCliHealth(ctx.cfg);
 }
 
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -501,11 +498,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:auth-profiles",
       label: "Auth profiles",
       run: runAuthProfileHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:claude-cli",
-      label: "Claude CLI",
-      run: runClaudeCliHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-auth",

@@ -26,7 +26,6 @@ export type BuiltInAuthChoice =
   | "huggingface-api-key"
   | "apiKey"
   | "gemini-api-key"
-  | "google-gemini-cli"
   | "zai-api-key"
   | "zai-coding-global"
   | "zai-coding-cn"

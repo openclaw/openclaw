@@ -123,6 +123,9 @@ Current bundled Qwen video-generation limits:
 - Up to **4** input videos
 - Up to **10 seconds** duration
 - Supports `size`, `aspectRatio`, `resolution`, `audio`, and `watermark`
+- Reference image/video mode currently requires **remote http(s) URLs**. Local
+  file paths are rejected up front because the DashScope video endpoint does not
+  accept uploaded local buffers for those references.
 
 See [Qwen / Model Studio](/providers/qwen_modelstudio) for endpoint-level detail
 and compatibility notes.

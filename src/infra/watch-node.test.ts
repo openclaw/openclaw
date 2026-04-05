@@ -147,6 +147,38 @@ describe("watch-node script", () => {
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
   });
 
+  it("restarts when the runner exits with a SIGTERM-derived code unexpectedly", async () => {
+    const childA = Object.assign(new EventEmitter(), {
+      kill: vi.fn(),
+    });
+    const childB = Object.assign(new EventEmitter(), {
+      kill: vi.fn(() => {}),
+    });
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const createWatcher = vi.fn(() => watcher);
+    const fakeProcess = createFakeProcess();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force"],
+      createWatcher,
+      process: fakeProcess,
+      spawn,
+    });
+
+    childA.emit("exit", 143, null);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+    expect(childB.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
   it("forces no-respawn for watch children even when supervisor hints are inherited", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
 

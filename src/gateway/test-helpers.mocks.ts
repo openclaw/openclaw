@@ -6,7 +6,6 @@ import path from "node:path";
 import { Mock, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
@@ -14,19 +13,13 @@ import type { HooksConfig } from "../config/types.hooks.js";
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createDefaultGatewayTestChannels } from "./test-helpers.channels.js";
+import { createDefaultGatewayTestSpeechProviders } from "./test-helpers.speech.js";
 
 function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
   return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
 }
-
-type StubChannelOptions = {
-  id: ChannelPlugin["id"];
-  label: string;
-  summary?: Record<string, unknown>;
-};
 
 type GetReplyFromConfigFn = (
   ctx: MsgContext,
@@ -39,273 +32,15 @@ type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid
 type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
 type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
 
-const createStubOutboundAdapter = (channelId: ChannelPlugin["id"]): ChannelOutboundAdapter => ({
-  deliveryMode: "direct",
-  sendText: async () => ({
-    channel: channelId,
-    messageId: `${channelId}-msg`,
-  }),
-  sendMedia: async () => ({
-    channel: channelId,
-    messageId: `${channelId}-msg`,
-  }),
-});
-
-const createStubChannelPlugin = (params: StubChannelOptions): ChannelPlugin => ({
-  id: params.id,
-  meta: {
-    id: params.id,
-    label: params.label,
-    selectionLabel: params.label,
-    docsPath: `/channels/${params.id}`,
-    blurb: "test stub.",
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [DEFAULT_ACCOUNT_ID],
-    resolveAccount: () => ({}),
-    isConfigured: async () => false,
-  },
-  status: {
-    buildChannelSummary: async () => ({
-      configured: false,
-      ...(params.summary ? params.summary : {}),
-    }),
-  },
-  outbound: createStubOutboundAdapter(params.id),
-  messaging: {
-    normalizeTarget: (raw) => raw,
-  },
-  gateway: {
-    logoutAccount: async () => ({
-      cleared: false,
-      envToken: false,
-      loggedOut: false,
-    }),
-  },
-});
-
-type StubSpeechProviderOptions = {
-  id: SpeechProviderPlugin["id"];
-  label: string;
-  aliases?: string[];
-  voices?: string[];
-  resolveTalkOverrides?: SpeechProviderPlugin["resolveTalkOverrides"];
-  synthesize?: SpeechProviderPlugin["synthesize"];
-};
-
-function trimString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-async function fetchStubSpeechAudio(
-  url: string,
-  init: RequestInit,
-  providerId: string,
-): Promise<Buffer> {
-  const withTimeout = async <T>(label: string, run: Promise<T>): Promise<T> =>
-    await Promise.race([
-      run,
-      new Promise<T>((_, reject) =>
-        setTimeout(() => reject(new Error(`${providerId} stub ${label} timed out`)), 5_000),
-      ),
-    ]);
-  const response = await withTimeout("fetch", globalThis.fetch(url, init));
-  const arrayBuffer = await withTimeout("read", response.arrayBuffer());
-  return Buffer.from(arrayBuffer);
-}
-
-const createStubSpeechProvider = (params: StubSpeechProviderOptions): SpeechProviderPlugin => ({
-  id: params.id,
-  label: params.label,
-  aliases: params.aliases,
-  voices: params.voices,
-  resolveTalkOverrides: params.resolveTalkOverrides,
-  isConfigured: () => true,
-  synthesize:
-    params.synthesize ??
-    (async () => ({
-      audioBuffer: Buffer.from(`${params.id}-audio`, "utf8"),
-      outputFormat: "mp3",
-      fileExtension: ".mp3",
-      voiceCompatible: true,
-    })),
-  listVoices: async () =>
-    (params.voices ?? []).map((voiceId) => ({
-      id: voiceId,
-      name: voiceId,
-    })),
-});
-
 const createStubPluginRegistry = (): PluginRegistry => ({
   plugins: [],
   tools: [],
   hooks: [],
   typedHooks: [],
-  channels: [
-    {
-      pluginId: "whatsapp",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "whatsapp", label: "WhatsApp" }),
-    },
-    {
-      pluginId: "telegram",
-      source: "test",
-      plugin: createStubChannelPlugin({
-        id: "telegram",
-        label: "Telegram",
-        summary: { tokenSource: "none", lastProbeAt: null },
-      }),
-    },
-    {
-      pluginId: "discord",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "discord", label: "Discord" }),
-    },
-    {
-      pluginId: "slack",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "slack", label: "Slack" }),
-    },
-    {
-      pluginId: "signal",
-      source: "test",
-      plugin: createStubChannelPlugin({
-        id: "signal",
-        label: "Signal",
-        summary: { lastProbeAt: null },
-      }),
-    },
-    {
-      pluginId: "imessage",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),
-    },
-    {
-      pluginId: "msteams",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "msteams", label: "Microsoft Teams" }),
-    },
-    {
-      pluginId: "matrix",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "matrix", label: "Matrix" }),
-    },
-    {
-      pluginId: "zalo",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "zalo", label: "Zalo" }),
-    },
-    {
-      pluginId: "zalouser",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "zalouser", label: "Zalo Personal" }),
-    },
-    {
-      pluginId: "bluebubbles",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "bluebubbles", label: "BlueBubbles" }),
-    },
-  ],
+  channels: createDefaultGatewayTestChannels(),
   channelSetups: [],
   providers: [],
-  speechProviders: [
-    {
-      pluginId: "openai",
-      source: "test",
-      provider: createStubSpeechProvider({
-        id: "openai",
-        label: "OpenAI",
-        voices: ["alloy", "nova"],
-        resolveTalkOverrides: ({ params }) => ({
-          ...(trimString(params.voiceId) == null ? {} : { voice: trimString(params.voiceId) }),
-          ...(trimString(params.modelId) == null ? {} : { model: trimString(params.modelId) }),
-          ...(asNumber(params.speed) == null ? {} : { speed: asNumber(params.speed) }),
-        }),
-        synthesize: async (req) => {
-          const config = req.providerConfig as Record<string, unknown>;
-          const overrides = (req.providerOverrides ?? {}) as Record<string, unknown>;
-          const body = JSON.stringify({
-            input: req.text,
-            model: trimString(overrides.model) ?? trimString(config.modelId) ?? "gpt-4o-mini-tts",
-            voice: trimString(overrides.voice) ?? trimString(config.voiceId) ?? "alloy",
-            ...(asNumber(overrides.speed) == null ? {} : { speed: asNumber(overrides.speed) }),
-          });
-          const audioBuffer = await fetchStubSpeechAudio(
-            "https://api.openai.com/v1/audio/speech",
-            {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body,
-            },
-            "openai",
-          );
-          return {
-            audioBuffer,
-            outputFormat: "mp3",
-            fileExtension: ".mp3",
-            voiceCompatible: false,
-          };
-        },
-      }),
-    },
-    {
-      pluginId: "elevenlabs",
-      source: "test",
-      provider: createStubSpeechProvider({
-        id: "elevenlabs",
-        label: "ElevenLabs",
-        voices: ["EXAVITQu4vr4xnSDxMaL", "voice-default"],
-        resolveTalkOverrides: ({ params }) => ({
-          ...(trimString(params.voiceId) == null ? {} : { voiceId: trimString(params.voiceId) }),
-          ...(trimString(params.modelId) == null ? {} : { modelId: trimString(params.modelId) }),
-          ...(trimString(params.outputFormat) == null
-            ? {}
-            : { outputFormat: trimString(params.outputFormat) }),
-          ...(asNumber(params.latencyTier) == null
-            ? {}
-            : { latencyTier: asNumber(params.latencyTier) }),
-        }),
-        synthesize: async (req) => {
-          const config = req.providerConfig as Record<string, unknown>;
-          const overrides = (req.providerOverrides ?? {}) as Record<string, unknown>;
-          const voiceId =
-            trimString(overrides.voiceId) ?? trimString(config.voiceId) ?? "voice-default";
-          const outputFormat = trimString(overrides.outputFormat) ?? "mp3";
-          const url = new URL(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`);
-          url.searchParams.set("output_format", outputFormat);
-          const audioBuffer = await fetchStubSpeechAudio(
-            url.href,
-            {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                text: req.text,
-                ...(asNumber(overrides.latencyTier) == null
-                  ? {}
-                  : { latency_optimization_level: asNumber(overrides.latencyTier) }),
-              }),
-            },
-            "elevenlabs",
-          );
-          return {
-            audioBuffer,
-            outputFormat,
-            fileExtension: outputFormat.startsWith("pcm") ? ".pcm" : ".mp3",
-            voiceCompatible: false,
-          };
-        },
-      }),
-    },
-  ],
+  speechProviders: createDefaultGatewayTestSpeechProviders(),
   realtimeTranscriptionProviders: [],
   realtimeVoiceProviders: [],
   mediaUnderstandingProviders: [],

@@ -42,9 +42,16 @@ export function applyImageGenerationModelConfigDefaults(
   );
 }
 
+export function applyVideoGenerationModelConfigDefaults(
+  cfg: OpenClawConfig | undefined,
+  videoGenerationModelConfig: ToolModelConfig,
+): OpenClawConfig | undefined {
+  return applyAgentDefaultModelConfig(cfg, "videoGenerationModel", videoGenerationModelConfig);
+}
+
 function applyAgentDefaultModelConfig(
   cfg: OpenClawConfig | undefined,
-  key: "imageModel" | "imageGenerationModel",
+  key: "imageModel" | "imageGenerationModel" | "videoGenerationModel",
   modelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
   if (!cfg) {

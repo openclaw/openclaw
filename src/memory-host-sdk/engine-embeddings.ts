@@ -2,6 +2,7 @@
 
 export {
   getMemoryEmbeddingProvider,
+  listRegisteredMemoryEmbeddingProviders,
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviderAdapters,
 } from "../plugins/memory-embedding-provider-runtime.js";

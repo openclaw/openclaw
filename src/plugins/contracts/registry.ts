@@ -57,7 +57,6 @@ type VideoGenerationProviderContractEntry = CapabilityContractEntry<VideoGenerat
 
 type PluginRegistrationContractEntry = {
   pluginId: string;
-  cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
@@ -604,7 +603,6 @@ export const videoGenerationProviderContractRegistry: VideoGenerationProviderCon
 function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEntry[] {
   return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => ({
     pluginId: entry.pluginId,
-    cliBackendIds: uniqueStrings(entry.cliBackendIds),
     providerIds: uniqueStrings(entry.providerIds),
     speechProviderIds: uniqueStrings(entry.speechProviderIds),
     realtimeTranscriptionProviderIds: uniqueStrings(entry.realtimeTranscriptionProviderIds),

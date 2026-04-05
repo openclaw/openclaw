@@ -8,7 +8,7 @@ import {
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   resolveMemoryCorePluginConfig,
-  resolveMemoryDreamingConfig,
+  resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
@@ -108,7 +108,7 @@ export function createMemorySearchTool(options: {
             status.backend === "qmd"
               ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
               : decorated;
-          const dreamingTimezone = resolveMemoryDreamingConfig({
+          const sleepTimezone = resolveMemoryDeepDreamingConfig({
             pluginConfig: resolveMemoryCorePluginConfig(cfg),
             cfg,
           }).timezone;
@@ -117,7 +117,7 @@ export function createMemorySearchTool(options: {
             query,
             rawResults,
             surfacedResults: results,
-            timezone: dreamingTimezone,
+            timezone: sleepTimezone,
           });
           const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
           return jsonResult({

@@ -34,7 +34,7 @@ describe("bundled channel entry shape guards", () => {
     expect(bundled.listBundledChannelPlugins()).toEqual([]);
     expect(bundled.listBundledChannelSetupPlugins()).toEqual([]);
   });
-  it("keeps channel entrypoints on the narrow channel-core SDK surface", () => {
+  it("keeps channel entrypoints on the dedicated entry-contract SDK surface", () => {
     const extensionRoot = path.resolve("extensions");
     const offenders: string[] = [];
 
@@ -43,18 +43,53 @@ describe("bundled channel entry shape guards", () => {
       if (!fs.statSync(extensionDir).isDirectory()) {
         continue;
       }
-      for (const relativePath of ["index.ts", "setup-entry.ts"]) {
+      for (const relativePath of ["index.ts", "channel-entry.ts", "setup-entry.ts"]) {
         const filePath = path.join(extensionDir, relativePath);
         if (!fs.existsSync(filePath)) {
           continue;
         }
         const source = fs.readFileSync(filePath, "utf8");
         const usesEntryHelpers =
-          source.includes("defineChannelPluginEntry") || source.includes("defineSetupPluginEntry");
+          source.includes("defineBundledChannelEntry") ||
+          source.includes("defineBundledChannelSetupEntry");
         if (!usesEntryHelpers) {
           continue;
         }
-        if (source.includes('from "openclaw/plugin-sdk/core"')) {
+        if (
+          !source.includes('from "openclaw/plugin-sdk/channel-entry-contract"') ||
+          source.includes('from "openclaw/plugin-sdk/core"') ||
+          source.includes('from "openclaw/plugin-sdk/channel-core"')
+        ) {
+          offenders.push(path.relative(process.cwd(), filePath));
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps bundled channel entrypoints free of static src imports", () => {
+    const extensionRoot = path.resolve("extensions");
+    const offenders: string[] = [];
+
+    for (const extensionId of fs.readdirSync(extensionRoot)) {
+      const extensionDir = path.join(extensionRoot, extensionId);
+      if (!fs.statSync(extensionDir).isDirectory()) {
+        continue;
+      }
+      for (const relativePath of ["index.ts", "channel-entry.ts", "setup-entry.ts"]) {
+        const filePath = path.join(extensionDir, relativePath);
+        if (!fs.existsSync(filePath)) {
+          continue;
+        }
+        const source = fs.readFileSync(filePath, "utf8");
+        const usesEntryHelpers =
+          source.includes("defineBundledChannelEntry") ||
+          source.includes("defineBundledChannelSetupEntry");
+        if (!usesEntryHelpers) {
+          continue;
+        }
+        if (/^(?:import|export)\s.+["']\.\/src\//mu.test(source)) {
           offenders.push(path.relative(process.cwd(), filePath));
         }
       }
@@ -199,11 +234,19 @@ describe("bundled channel entry shape guards", () => {
           }
           return {
             default: {
-              channelPlugin: {
-                id: "alpha",
-                meta: {},
-                capabilities: {},
-                config: {},
+              kind: "bundled-channel-entry",
+              id: "alpha",
+              name: "Alpha",
+              description: "Alpha",
+              configSchema: {},
+              register() {},
+              loadChannelPlugin() {
+                return {
+                  id: "alpha",
+                  meta: {},
+                  capabilities: {},
+                  config: {},
+                };
               },
             },
           };

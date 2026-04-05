@@ -6,7 +6,7 @@ const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg: OpenClawConfig, agentId: string) => `/workspace/${agentId}`),
 );
 const resolveMemorySearchConfig = vi.hoisted(() =>
-  vi.fn<(_cfg: OpenClawConfig, _agentId: string) => { enabled: boolean } | undefined>(() => ({
+  vi.fn<(_cfg: OpenClawConfig, _agentId: string) => { enabled: boolean } | null>(() => ({
     enabled: true,
   })),
 );
@@ -29,41 +29,49 @@ import {
 } from "./dreaming.js";
 
 describe("memory dreaming host helpers", () => {
-  it("prefers cron over legacy frequency and normalizes string settings", () => {
+  it("normalizes string settings from the dreaming config", () => {
     const resolved = resolveMemoryDreamingConfig({
       pluginConfig: {
         dreaming: {
-          mode: "deep",
-          cron: "0 */4 * * *",
-          frequency: "0 */12 * * *",
+          enabled: true,
           timezone: "Europe/London",
-          limit: "5",
-          minScore: "0.9",
-          minRecallCount: "4",
-          minUniqueQueries: "2",
-          recencyHalfLifeDays: "21",
-          maxAgeDays: "30",
-          verboseLogging: "true",
+          storage: {
+            mode: "both",
+            separateReports: true,
+          },
+          phases: {
+            deep: {
+              cron: "0 */4 * * *",
+              limit: "5",
+              minScore: "0.9",
+              minRecallCount: "4",
+              minUniqueQueries: "2",
+              recencyHalfLifeDays: "21",
+              maxAgeDays: "30",
+            },
+          },
         },
       },
     });
 
-    expect(resolved).toEqual({
-      mode: "deep",
-      enabled: true,
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.timezone).toBe("Europe/London");
+    expect(resolved.storage).toEqual({
+      mode: "both",
+      separateReports: true,
+    });
+    expect(resolved.phases.deep).toMatchObject({
       cron: "0 */4 * * *",
-      timezone: "Europe/London",
       limit: 5,
       minScore: 0.9,
       minRecallCount: 4,
       minUniqueQueries: 2,
       recencyHalfLifeDays: 21,
       maxAgeDays: 30,
-      verboseLogging: true,
     });
   });
 
-  it("falls back to cfg timezone and core defaults when mode is off", () => {
+  it("falls back to cfg timezone and deep defaults", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -73,26 +81,24 @@ describe("memory dreaming host helpers", () => {
     } as OpenClawConfig;
 
     const resolved = resolveMemoryDreamingConfig({
-      pluginConfig: {
-        dreaming: {
-          mode: "off",
-        },
-      },
+      pluginConfig: {},
       cfg,
     });
 
-    expect(resolved.enabled).toBe(false);
-    expect(resolved.cron).toBe("0 3 * * *");
+    expect(resolved.enabled).toBe(true);
     expect(resolved.timezone).toBe("America/Los_Angeles");
-    expect(resolved.limit).toBe(10);
-    expect(resolved.minScore).toBe(0.75);
-    expect(resolved.recencyHalfLifeDays).toBe(14);
-    expect(resolved.maxAgeDays).toBeUndefined();
+    expect(resolved.phases.deep).toMatchObject({
+      cron: "0 3 * * *",
+      limit: 10,
+      minScore: 0.8,
+      recencyHalfLifeDays: 14,
+      maxAgeDays: 30,
+    });
   });
 
   it("dedupes shared workspaces and skips agents without memory search", () => {
     resolveMemorySearchConfig.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
-      agentId === "beta" ? undefined : { enabled: true },
+      agentId === "beta" ? null : { enabled: true },
     );
     resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
       if (agentId === "alpha") {
@@ -146,7 +152,7 @@ describe("memory dreaming host helpers", () => {
             "memory-core": {
               config: {
                 dreaming: {
-                  mode: "core",
+                  enabled: true,
                 },
               },
             },
@@ -155,7 +161,7 @@ describe("memory dreaming host helpers", () => {
       } as OpenClawConfig),
     ).toEqual({
       dreaming: {
-        mode: "core",
+        enabled: true,
       },
     });
   });

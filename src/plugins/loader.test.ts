@@ -3682,6 +3682,43 @@ module.exports = {
     }
   });
 
+  it("suppresses trust warning logs for non-activating snapshot loads", () => {
+    useNoBundledPlugins();
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const globalDir = path.join(stateDir, "extensions", "rogue");
+      mkdirSafe(globalDir);
+      writePlugin({
+        id: "rogue",
+        body: simplePluginBody("rogue"),
+        dir: globalDir,
+        filename: "index.cjs",
+      });
+
+      const warnings: string[] = [];
+      const registry = loadOpenClawPlugins({
+        activate: false,
+        cache: false,
+        logger: createWarningLogger(warnings),
+        config: {
+          plugins: {
+            enabled: true,
+          },
+        },
+      });
+
+      expect(warnings).toEqual([]);
+      expect(
+        registry.diagnostics.some(
+          (diag) =>
+            diag.level === "warn" &&
+            diag.pluginId === "rogue" &&
+            diag.message.includes("loaded without install/load-path provenance"),
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("loads source TypeScript plugins that route through local runtime shims", () => {
     const plugin = writePlugin({
       id: "source-runtime-shim",

@@ -351,18 +351,6 @@ Use `commands` by itself only when you do not need lazy root CLI registration.
 That eager compatibility path remains supported, but it does not install
 descriptor-backed placeholders for parse-time lazy loading.
 
-### CLI backend registration
-
-`api.registerCliBackend(...)` lets a plugin own the default config for a local
-AI CLI backend such as `claude-cli` or `codex-cli`.
-
-- The backend `id` becomes the provider prefix in model refs like `claude-cli/opus`.
-- The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
-- User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
-  plugin default before running the CLI.
-- Use `normalizeConfig` when a backend needs compatibility rewrites after merge
-  (for example normalizing old flag shapes).
-
 ### Exclusive slots
 
 | Method                                     | What it registers                     |

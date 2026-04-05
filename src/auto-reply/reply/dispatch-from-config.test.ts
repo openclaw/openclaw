@@ -2,6 +2,13 @@ import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type {
+  AcpRuntime,
+  AcpRuntimeEnsureInput,
+  AcpRuntimeEvent,
+  AcpRuntimeHandle,
+  AcpRuntimeTurnInput,
+} from "../../plugin-sdk/acp-runtime.js";
+import type {
   PluginHookBeforeDispatchResult,
   PluginHookReplyDispatchResult,
   PluginTargetedInboundClaimOutcome,
@@ -101,7 +108,7 @@ const acpManagerRuntimeMocks = vi.hoisted(() => ({
 }));
 const agentEventMocks = vi.hoisted(() => ({
   emitAgentEvent: vi.fn(),
-  onAgentEvent: vi.fn(() => () => {}),
+  onAgentEvent: vi.fn<(listener: unknown) => () => void>(() => () => {}),
 }));
 const ttsMocks = vi.hoisted(() => {
   const state = {
@@ -345,30 +352,37 @@ function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
 }
 
-function createAcpRuntime(events: Array<Record<string, unknown>>) {
-  return {
-    ensureSession: vi.fn(
-      async (input: { sessionKey: string; mode: string; agent: string }) =>
-        ({
-          sessionKey: input.sessionKey,
-          backend: "acpx",
-          runtimeSessionName: `${input.sessionKey}:${input.mode}`,
-        }) as { sessionKey: string; backend: string; runtimeSessionName: string },
+type MockAcpRuntime = AcpRuntime & {
+  ensureSession: Mock<(input: AcpRuntimeEnsureInput) => Promise<AcpRuntimeHandle>>;
+  runTurn: Mock<(input: AcpRuntimeTurnInput) => AsyncIterable<AcpRuntimeEvent>>;
+  cancel: Mock<(input: { handle: AcpRuntimeHandle; reason?: string }) => Promise<void>>;
+  close: Mock<(input: { handle: AcpRuntimeHandle; reason: string }) => Promise<void>>;
+};
+
+function createAcpRuntime(events: AcpRuntimeEvent[]): MockAcpRuntime {
+  const runtime = {
+    ensureSession: vi.fn<(input: AcpRuntimeEnsureInput) => Promise<AcpRuntimeHandle>>(
+      async (input) => ({
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: `${input.sessionKey}:${input.mode}`,
+      }),
     ),
-    runTurn: vi.fn(async function* (_params: {
-      text?: string;
-      attachments?: unknown[];
-      mode?: string;
-      requestId?: string;
-      signal?: AbortSignal;
-    }) {
-      for (const event of events) {
-        yield event;
-      }
-    }),
-    cancel: vi.fn(async () => {}),
-    close: vi.fn(async () => {}),
-  };
+    runTurn: vi.fn<(input: AcpRuntimeTurnInput) => AsyncIterable<AcpRuntimeEvent>>(
+      async function* (_input) {
+        for (const event of events) {
+          yield event;
+        }
+      },
+    ),
+    cancel: vi.fn<(input: { handle: AcpRuntimeHandle; reason?: string }) => Promise<void>>(
+      async () => {},
+    ),
+    close: vi.fn<(input: { handle: AcpRuntimeHandle; reason: string }) => Promise<void>>(
+      async () => {},
+    ),
+  } satisfies AcpRuntime;
+  return runtime as MockAcpRuntime;
 }
 
 function createMockAcpSessionManager() {
@@ -443,13 +457,14 @@ function createMockAcpSessionManager() {
         }
         const handle = await runtimeBackend.runtime.ensureSession({
           sessionKey: params.sessionKey,
-          mode: entry?.acp?.mode || "persistent",
+          mode: (entry?.acp?.mode || "persistent") as AcpRuntimeEnsureInput["mode"],
           agent: entry?.acp?.agent || "codex",
         });
         const stream = runtimeBackend.runtime.runTurn({
-          text: params.text,
-          attachments: params.attachments,
-          mode: params.mode,
+          handle,
+          text: params.text ?? "",
+          attachments: params.attachments as AcpRuntimeTurnInput["attachments"],
+          mode: params.mode as AcpRuntimeTurnInput["mode"],
           requestId: params.requestId,
           signal: params.signal,
         });
@@ -550,11 +565,11 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.runBeforeDispatch.mockClear();
     hookMocks.runner.runBeforeDispatch.mockResolvedValue(undefined);
     hookMocks.runner.runReplyDispatch.mockClear();
-    hookMocks.runner.runReplyDispatch.mockImplementation((event: unknown, ctx: unknown) => {
+    hookMocks.runner.runReplyDispatch.mockImplementation(async (event: unknown, ctx: unknown) => {
       if (!shouldUseAcpReplyDispatchHook(event)) {
-        return Promise.resolve(undefined);
+        return undefined;
       }
-      return tryDispatchAcpReplyHook(event as never, ctx as never);
+      return (await tryDispatchAcpReplyHook(event as never, ctx as never)) ?? undefined;
     });
     hookMocks.registry.plugins = [];
     internalHookMocks.createInternalHookEvent.mockClear();

@@ -324,8 +324,7 @@ function buildDynamicModel(
         maxTokens: patch.maxTokens ?? DEFAULT_CONTEXT_WINDOW,
       });
     }
-    case "anthropic":
-    case "claude-cli": {
+    case "anthropic": {
       if (lower !== "claude-opus-4-6" && lower !== "claude-sonnet-4-6") {
         return undefined;
       }
@@ -364,14 +363,14 @@ function buildDynamicModel(
         modelId,
         {
           provider: "google-antigravity",
-          api: "google-gemini-cli",
+          api: "google-generative-ai",
           baseUrl: GOOGLE_GEMINI_CLI_BASE_URL,
           reasoning: true,
           input: ["text", "image"],
         },
         {
           provider: "google-antigravity",
-          api: "google-gemini-cli",
+          api: "google-generative-ai",
           baseUrl: GOOGLE_GEMINI_CLI_BASE_URL,
           reasoning: true,
           input: ["text", "image"],

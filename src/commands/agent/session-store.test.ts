@@ -137,7 +137,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       agents: {
         defaults: {
           cliBackends: {
-            "claude-cli": {},
+            "codex-cli": {},
           },
         },
       },
@@ -156,17 +156,17 @@ describe("updateSessionStoreAfterAgentRun", () => {
       sessionKey: first.sessionKey!,
       storePath: first.storePath,
       sessionStore: first.sessionStore!,
-      defaultProvider: "claude-cli",
-      defaultModel: "claude-sonnet-4-6",
+      defaultProvider: "codex-cli",
+      defaultModel: "gpt-5.4",
       result: {
         payloads: [],
         meta: {
           agentMeta: {
-            provider: "claude-cli",
-            model: "claude-sonnet-4-6",
-            sessionId: "claude-cli-session-1",
+            provider: "codex-cli",
+            model: "gpt-5.4",
+            sessionId: "codex-cli-session-1",
             cliSessionBinding: {
-              sessionId: "claude-cli-session-1",
+              sessionId: "codex-cli-session-1",
               authEpoch: "auth-epoch-1",
             },
           },
@@ -180,14 +180,14 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
 
     expect(second.sessionKey).toBe(first.sessionKey);
-    expect(second.sessionEntry?.cliSessionBindings?.["claude-cli"]).toEqual({
-      sessionId: "claude-cli-session-1",
+    expect(second.sessionEntry?.cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "codex-cli-session-1",
       authEpoch: "auth-epoch-1",
     });
 
     const persisted = loadSessionStore(storePath, { skipCache: true })[first.sessionKey!];
-    expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
-      sessionId: "claude-cli-session-1",
+    expect(persisted?.cliSessionBindings?.["codex-cli"]).toEqual({
+      sessionId: "codex-cli-session-1",
       authEpoch: "auth-epoch-1",
     });
   });

@@ -14,6 +14,7 @@ import {
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
 import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
+import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";
 import { migrateLegacyXSearchConfig } from "./legacy-x-search-migrate.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
@@ -34,9 +35,6 @@ const AGENT_HEARTBEAT_KEYS = new Set([
 ]);
 
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
-const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
-const LEGACY_TTS_PLUGIN_IDS = new Set(["voice-call"]);
-
 function sandboxScopeFromPerSession(perSession: boolean): "session" | "shared" {
   return perSession ? "session" : "shared";
 }
@@ -131,14 +129,6 @@ function mergeLegacyIntoDefaults(params: {
   params.raw[params.rootKey] = root;
 }
 
-function hasLegacyTtsProviderKeys(value: unknown): boolean {
-  const tts = getRecord(value);
-  if (!tts) {
-    return false;
-  }
-  return LEGACY_TTS_PROVIDER_KEYS.some((key) => Object.prototype.hasOwnProperty.call(tts, key));
-}
-
 function hasLegacySandboxPerSession(value: unknown): boolean {
   const sandbox = getRecord(value);
   return Boolean(sandbox && Object.prototype.hasOwnProperty.call(sandbox, "perSession"));
@@ -150,72 +140,6 @@ function hasLegacyAgentListSandboxPerSession(value: unknown): boolean {
   }
   return value.some((agent) => hasLegacySandboxPerSession(getRecord(agent)?.sandbox));
 }
-function hasLegacyPluginEntryTtsProviderKeys(value: unknown): boolean {
-  const entries = getRecord(value);
-  if (!entries) {
-    return false;
-  }
-  return Object.entries(entries).some(([pluginId, entryValue]) => {
-    if (isBlockedObjectKey(pluginId) || !LEGACY_TTS_PLUGIN_IDS.has(pluginId)) {
-      return false;
-    }
-    const entry = getRecord(entryValue);
-    const config = getRecord(entry?.config);
-    return hasLegacyTtsProviderKeys(config?.tts);
-  });
-}
-
-function getOrCreateTtsProviders(tts: Record<string, unknown>): Record<string, unknown> {
-  const providers = getRecord(tts.providers) ?? {};
-  tts.providers = providers;
-  return providers;
-}
-
-function mergeLegacyTtsProviderConfig(
-  tts: Record<string, unknown>,
-  legacyKey: string,
-  providerId: string,
-): boolean {
-  const legacyValue = getRecord(tts[legacyKey]);
-  if (!legacyValue) {
-    return false;
-  }
-  const providers = getOrCreateTtsProviders(tts);
-  const existing = getRecord(providers[providerId]) ?? {};
-  const merged = structuredClone(existing);
-  mergeMissing(merged, legacyValue);
-  providers[providerId] = merged;
-  delete tts[legacyKey];
-  return true;
-}
-
-function migrateLegacyTtsConfig(
-  tts: Record<string, unknown> | null | undefined,
-  pathLabel: string,
-  changes: string[],
-): void {
-  if (!tts) {
-    return;
-  }
-  const movedOpenAI = mergeLegacyTtsProviderConfig(tts, "openai", "openai");
-  const movedElevenLabs = mergeLegacyTtsProviderConfig(tts, "elevenlabs", "elevenlabs");
-  const movedMicrosoft = mergeLegacyTtsProviderConfig(tts, "microsoft", "microsoft");
-  const movedEdge = mergeLegacyTtsProviderConfig(tts, "edge", "microsoft");
-
-  if (movedOpenAI) {
-    changes.push(`Moved ${pathLabel}.openai → ${pathLabel}.providers.openai.`);
-  }
-  if (movedElevenLabs) {
-    changes.push(`Moved ${pathLabel}.elevenlabs → ${pathLabel}.providers.elevenlabs.`);
-  }
-  if (movedMicrosoft) {
-    changes.push(`Moved ${pathLabel}.microsoft → ${pathLabel}.providers.microsoft.`);
-  }
-  if (movedEdge) {
-    changes.push(`Moved ${pathLabel}.edge → ${pathLabel}.providers.microsoft.`);
-  }
-}
-
 const MEMORY_SEARCH_RULE: LegacyConfigRule = {
   path: ["memorySearch"],
   message:
@@ -241,21 +165,6 @@ const X_SEARCH_RULE: LegacyConfigRule = {
   message:
     'tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead. Run "openclaw doctor --fix".',
 };
-
-const LEGACY_TTS_RULES: LegacyConfigRule[] = [
-  {
-    path: ["messages", "tts"],
-    message:
-      'messages.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use messages.tts.providers.<provider>. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsProviderKeys(value),
-  },
-  {
-    path: ["plugins", "entries"],
-    message:
-      'plugins.entries.voice-call.config.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use plugins.entries.voice-call.config.tts.providers.<provider>. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyPluginEntryTtsProviderKeys(value),
-  },
-];
 
 const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
   {
@@ -447,33 +356,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
       changes.push(`Normalized gateway.bind "${escapeControlForLog(bindRaw)}" → "${mapped}".`);
     },
   }),
-  defineLegacyConfigMigration({
-    id: "tts.providers-generic-shape",
-    describe: "Move legacy bundled TTS config keys into messages.tts.providers",
-    legacyRules: LEGACY_TTS_RULES,
-    apply: (raw, changes) => {
-      const messages = getRecord(raw.messages);
-      migrateLegacyTtsConfig(getRecord(messages?.tts), "messages.tts", changes);
-
-      const plugins = getRecord(raw.plugins);
-      const pluginEntries = getRecord(plugins?.entries);
-      if (!pluginEntries) {
-        return;
-      }
-      for (const [pluginId, entryValue] of Object.entries(pluginEntries)) {
-        if (isBlockedObjectKey(pluginId) || !LEGACY_TTS_PLUGIN_IDS.has(pluginId)) {
-          continue;
-        }
-        const entry = getRecord(entryValue);
-        const config = getRecord(entry?.config);
-        migrateLegacyTtsConfig(
-          getRecord(config?.tts),
-          `plugins.entries.${pluginId}.config.tts`,
-          changes,
-        );
-      }
-    },
-  }),
+  ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS,
   defineLegacyConfigMigration({
     id: "heartbeat->agents.defaults.heartbeat",
     describe: "Move top-level heartbeat to agents.defaults.heartbeat/channels.defaults.heartbeat",

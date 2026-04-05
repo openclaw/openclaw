@@ -31,6 +31,7 @@ import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
+import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
@@ -159,6 +160,13 @@ export function createOpenClawTools(
     sandbox,
     fsPolicy: options?.fsPolicy,
   });
+  const videoGenerateTool = createVideoGenerateTool({
+    config: options?.config,
+    agentDir: options?.agentDir,
+    workspaceDir,
+    sandbox,
+    fsPolicy: options?.fsPolicy,
+  });
   const pdfTool = options?.agentDir?.trim()
     ? createPdfTool({
         config: options?.config,
@@ -216,6 +224,7 @@ export function createOpenClawTools(
       config: options?.config,
     }),
     ...(imageGenerateTool ? [imageGenerateTool] : []),
+    ...(videoGenerateTool ? [videoGenerateTool] : []),
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
