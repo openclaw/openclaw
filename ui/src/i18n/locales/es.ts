@@ -127,6 +127,10 @@ export const es: TranslationMap = {
     de: "Deutsch (Alemán)",
     es: "Español",
   },
+  connectCommand: {
+    copyTitle: "Copiar comando",
+    copyAriaLabel: "Copiar comando: {command}",
+  },
   cron: {
     summary: {
       enabled: "Habilitado",

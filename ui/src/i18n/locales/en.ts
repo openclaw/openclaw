@@ -155,6 +155,10 @@ export const en: TranslationMap = {
       noResults: "No results",
     },
   },
+  connectCommand: {
+    copyTitle: "Copy command",
+    copyAriaLabel: "Copy command: {command}",
+  },
   usage: {
     page: {
       subtitle: "See where tokens go, when sessions spike, and what drives cost.",
