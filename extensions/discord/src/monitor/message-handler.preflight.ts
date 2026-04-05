@@ -785,7 +785,8 @@ export async function preflightDiscordMessage(
   const { hasTypedText, transcript: preflightTranscript } =
     await resolveDiscordPreflightAudioMentionContext({
       message,
-      isDirectMessage,
+      chatType: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
+      sessionKey: baseSessionKey,
       shouldRequireMention,
       mentionRegexes,
       cfg: params.cfg,

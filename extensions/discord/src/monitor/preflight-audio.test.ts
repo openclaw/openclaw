@@ -25,7 +25,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: { attachments: [createAudioAttachment()], content: "" },
-      isDirectMessage: true,
+      chatType: "direct",
       shouldRequireMention: false,
       mentionRegexes: [],
       cfg: baseCfg,
@@ -37,12 +37,47 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     expect(result.hasTypedText).toBe(false);
   });
 
+  it("passes chat scope metadata into DM preflight transcription", async () => {
+    transcribeFirstAudioMock.mockResolvedValueOnce("hello from a voice note");
+
+    await resolveDiscordPreflightAudioMentionContext({
+      message: { attachments: [createAudioAttachment()], content: "" },
+      chatType: "direct",
+      sessionKey: "agent:main:discord:user:42",
+      shouldRequireMention: false,
+      mentionRegexes: [],
+      cfg: {
+        tools: {
+          media: {
+            audio: {
+              scope: {
+                default: "deny",
+                rules: [{ action: "allow", match: { channel: "discord", chatType: "direct" } }],
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          ChatType: "direct",
+          SessionKey: "agent:main:discord:user:42",
+          Surface: "discord",
+          Provider: "discord",
+        }),
+      }),
+    );
+  });
+
   it("transcribes guild voice notes when mention is required and regexes are present", async () => {
     transcribeFirstAudioMock.mockResolvedValueOnce("guild voice");
 
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: { attachments: [createAudioAttachment()], content: "" },
-      isDirectMessage: false,
+      chatType: "channel",
       shouldRequireMention: true,
       mentionRegexes: [/bot/i],
       cfg: baseCfg,
@@ -55,7 +90,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
   it("skips transcription in guild when mention is not required", async () => {
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: { attachments: [createAudioAttachment()], content: "" },
-      isDirectMessage: false,
+      chatType: "channel",
       shouldRequireMention: false,
       mentionRegexes: [],
       cfg: baseCfg,
@@ -69,7 +104,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
   it("skips transcription in guild when mention regexes are empty", async () => {
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: { attachments: [createAudioAttachment()], content: "" },
-      isDirectMessage: false,
+      chatType: "channel",
       shouldRequireMention: true,
       mentionRegexes: [],
       cfg: baseCfg,
@@ -82,7 +117,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
   it("skips transcription when user typed text alongside audio", async () => {
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: { attachments: [createAudioAttachment()], content: "I also typed something" },
-      isDirectMessage: true,
+      chatType: "direct",
       shouldRequireMention: false,
       mentionRegexes: [],
       cfg: baseCfg,
@@ -99,7 +134,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
         attachments: [{ content_type: "image/png", url: "https://example.com/img.png" }],
         content: "",
       },
-      isDirectMessage: true,
+      chatType: "direct",
       shouldRequireMention: false,
       mentionRegexes: [],
       cfg: baseCfg,
@@ -119,7 +154,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: { attachments: [createAudioAttachment()], content: "" },
-      isDirectMessage: true,
+      chatType: "direct",
       shouldRequireMention: false,
       mentionRegexes: [],
       cfg: baseCfg,
@@ -134,7 +169,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: { attachments: [createAudioAttachment()], content: "" },
-      isDirectMessage: true,
+      chatType: "direct",
       shouldRequireMention: false,
       mentionRegexes: [],
       cfg: baseCfg,
