@@ -41,7 +41,7 @@ internal class TalkSpeakClient(
     if (!response.ok) {
       val error = response.error
       val message = error?.message ?: "talk.speak request failed"
-      return if (isFallbackEligible(error?.details?.reason)) {
+      return if (isFallbackEligible(error)) {
         TalkSpeakResult.FallbackToLocal(message)
       } else {
         TalkSpeakResult.Failure(message)
@@ -74,7 +74,9 @@ internal class TalkSpeakClient(
     )
   }
 
-  private fun isFallbackEligible(reason: String?): Boolean {
+  private fun isFallbackEligible(error: GatewaySession.ErrorShape?): Boolean {
+    val reason = error?.details?.reason
+    if (reason == null) return true
     return reason == "talk_unconfigured" ||
       reason == "talk_provider_unsupported" ||
       reason == "method_unavailable"
