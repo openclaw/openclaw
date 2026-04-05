@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { normalizeClaudeBackendConfig } from "../../extensions/anthropic/test-api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { resolveCliBackendConfig } from "./cli-backends.js";
+import { normalizeClaudeBackendConfig, resolveCliBackendConfig } from "./cli-backends.js";
 
 function createBackendEntry(params: {
   pluginId: string;

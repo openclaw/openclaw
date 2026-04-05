@@ -14,6 +14,8 @@ export type ResolvedCliBackend = {
   pluginId?: string;
 };
 
+export { normalizeClaudeBackendConfig };
+
 type FallbackCliBackendPolicy = {
   bundleMcp: boolean;
   normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
