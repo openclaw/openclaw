@@ -396,6 +396,8 @@ importers:
 
   extensions/fireworks: {}
 
+  extensions/gateway-restart: {}
+
   extensions/github-copilot: {}
 
   extensions/google:

@@ -13,15 +13,19 @@ export function createRuntimeFollowup(): PluginRuntimeCore["followup"] {
         const { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } =
           await import("../../auto-reply/reply/queue/drain.js");
 
+        const { getExistingFollowupQueue } = await import("../../auto-reply/reply/queue/state.js");
+
         const followupRun = await buildFollowupRunForSession(params);
         if (!followupRun) {
           return false;
         }
 
+        // Preserve an existing queue's mode instead of forcing "followup".
+        const existingMode = getExistingFollowupQueue(params.sessionKey)?.mode;
         const enqueued = enqueueFollowupRun(
           params.sessionKey,
           followupRun,
-          { mode: "followup" },
+          { mode: existingMode ?? "followup" },
           "none",
           undefined,
           false,
@@ -45,7 +49,6 @@ export function createRuntimeFollowup(): PluginRuntimeCore["followup"] {
         kickFollowupDrainIfIdle(params.sessionKey);
 
         // Check if drain started from existing callback.
-        const { getExistingFollowupQueue } = await import("../../auto-reply/reply/queue/state.js");
         const queue = getExistingFollowupQueue(params.sessionKey);
         if (!queue?.draining) {
           // Cold session — no existing callback found. Register the fresh noop runner.
