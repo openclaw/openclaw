@@ -1,7 +1,7 @@
 import {
   CLAUDE_CLI_BACKEND_ID,
   normalizeClaudeBackendConfig,
-} from "../../extensions/anthropic/api.js";
+} from "../../extensions/anthropic/cli-backend-api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
@@ -28,6 +28,10 @@ const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = 
     normalizeConfig: normalizeClaudeBackendConfig,
   },
 };
+
+function resolveFallbackCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
+  return FALLBACK_CLI_BACKEND_POLICIES[provider];
+}
 
 function normalizeBackendKey(key: string): string {
   return normalizeProviderId(key);
@@ -108,7 +112,7 @@ export function resolveCliBackendConfig(
   cfg?: OpenClawConfig,
 ): ResolvedCliBackend | null {
   const normalized = normalizeBackendKey(provider);
-  const fallbackPolicy = FALLBACK_CLI_BACKEND_POLICIES[normalized];
+  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   const override = pickBackendConfig(configured, normalized);
   const registered = resolveRegisteredBackend(normalized);
@@ -140,6 +144,6 @@ export function resolveCliBackendConfig(
   return {
     id: normalized,
     config: { ...config, command },
-    bundleMcp: fallbackPolicy?.bundleMcp,
+    bundleMcp: fallbackPolicy?.bundleMcp === true,
   };
 }
