@@ -329,16 +329,6 @@ export function convertMessagesToInputItems(
       if (Array.isArray(content)) {
         const textParts: string[] = [];
         let currentTextPhase: OpenAIResponsesAssistantPhase | undefined;
-        const hasExplicitBlockPhase = content.some((block) => {
-          if (!block || typeof block !== "object") {
-            return false;
-          }
-          const record = block as { type?: unknown; textSignature?: unknown };
-          return (
-            record.type === "text" &&
-            Boolean(parseAssistantTextSignature(record.textSignature)?.phase)
-          );
-        });
 
         const pushAssistantText = (phase?: OpenAIResponsesAssistantPhase) => {
           if (textParts.length === 0) {
@@ -526,6 +516,9 @@ export function buildAssistantMessageFromResponse(
           try {
             return JSON.parse(item.arguments) as Record<string, unknown>;
           } catch {
+            // Preserve the raw string when OpenAI returns malformed JSON so replay
+            // can round-trip the original tool call payload instead of silently
+            // substituting an empty object.
             return item.arguments;
           }
         })(),

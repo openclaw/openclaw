@@ -705,7 +705,7 @@ describe("convertMessagesToInputItems", () => {
     ]);
   });
 
-  it("splits legacy unphased text from later phased text during replay", () => {
+  it("inherits message-level phase for untagged blocks, merging with phased text", () => {
     const msg = {
       role: "assistant" as const,
       phase: "final_answer" as const,
@@ -1964,7 +1964,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     ]);
   });
 
-  it("buffers text deltas until item mapping is available", async () => {
+  it("flushes text deltas immediately when item mapping arrives without a phase", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-late-map");
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
@@ -1998,7 +1998,6 @@ describe("createOpenAIWebSocketStreamFn", () => {
         type: "message",
         id: "item_late",
         role: "assistant",
-        phase: "commentary",
         content: [],
       },
     });
@@ -2022,7 +2021,6 @@ describe("createOpenAIWebSocketStreamFn", () => {
             type: "message",
             id: "item_late",
             role: "assistant",
-            phase: "commentary",
             content: [{ type: "output_text", text: "Working..." }],
           },
         ],
@@ -2035,21 +2033,21 @@ describe("createOpenAIWebSocketStreamFn", () => {
     const deltas = events.filter((event) => event.type === "text_delta");
     expect(deltas).toHaveLength(2);
     expect(deltas[0]).toMatchObject({ delta: "Working" });
-    expect(deltas[0]?.partial?.phase).toBe("commentary");
+    expect(deltas[0]?.partial?.phase).toBeUndefined();
     expect(deltas[0]?.partial?.content).toEqual([
       {
         type: "text",
         text: "Working",
-        textSignature: JSON.stringify({ v: 1, id: "item_late", phase: "commentary" }),
+        textSignature: JSON.stringify({ v: 1, id: "item_late" }),
       },
     ]);
     expect(deltas[1]).toMatchObject({ delta: "..." });
-    expect(deltas[1]?.partial?.phase).toBe("commentary");
+    expect(deltas[1]?.partial?.phase).toBeUndefined();
     expect(deltas[1]?.partial?.content).toEqual([
       {
         type: "text",
         text: "Working...",
-        textSignature: JSON.stringify({ v: 1, id: "item_late", phase: "commentary" }),
+        textSignature: JSON.stringify({ v: 1, id: "item_late" }),
       },
     ]);
   });
