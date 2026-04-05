@@ -137,6 +137,7 @@ Docs: https://docs.openclaw.ai
 - Heartbeat: skip wake delivery when the target session lane is already busy so the pending event is retried instead of getting drained too early. (#40526) Thanks @lucky7323.
 - Plugin SDK/context engines: export the missing context-engine result and subagent lifecycle types from `openclaw/plugin-sdk` so context engine plugins can type `ContextEngine` implementations without local workarounds. (#61251) Thanks @DaevMithran.
 - Agents/errors: surface an explicit disk-full message when local session or transcript writes fail with `ENOSPC`/`disk full`, so those runs stop degrading into opaque `NO_REPLY`-style failures. Thanks @vincentkoc.
+  <<<<<<< HEAD
 - Google Gemini CLI models: add forward-compat support for stable `gemini-2.5-*` model ids by letting the bundled CLI provider clone them from Google templates, so `gemini-2.5-flash-lite` and related configured models stop showing up as missing. (#35274) Thanks @mySebbe.
 - Telegram/reasoning: only create a Telegram reasoning preview lane when the session is explicitly `reasoning:stream`, so hidden `<think>` traces from streamed replies stop surfacing as chat previews on normal sessions. Thanks @vincentkoc.
 - Feishu/reasoning: only expose streamed reasoning previews when the session is explicitly `reasoning:stream`, so hidden reasoning traces do not surface on normal streaming sessions. Thanks @vincentkoc.
@@ -149,6 +150,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Claude CLI/security: clear inherited Claude Code config-root and plugin-root env overrides like `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_PLUGIN_*`, so OpenClaw-launched Claude CLI runs cannot be silently pointed at an alternate Claude config/plugin tree with different hooks, plugins, or auth context. Thanks @vincentkoc.
 - Agents/Claude CLI/security: force host-managed Claude CLI backdoor runs to `--setting-sources user`, even under custom backend arg overrides, so repo-local `.claude` project/local settings, hooks, and plugin discovery do not silently execute inside non-interactive OpenClaw sessions. Thanks @vincentkoc.
 - Agents/Claude CLI/images: reuse stable hydrated image file paths and preserve shared media extensions like HEIC when passing image refs to local CLI runs, so Claude CLI image prompts stop thrashing KV cache prefixes and oddball image formats do not fall back to `.bin`. Thanks @vincentkoc.
+- Google Gemini CLI auth: detect personal OAuth mode from local Gemini settings and skip Code Assist project discovery for those logins, so personal Google accounts stop failing with `loadCodeAssist 400 Bad Request`. (#49226) Thanks @bobworrall.
 
 ## 2026.4.2
 

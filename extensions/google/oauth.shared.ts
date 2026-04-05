@@ -31,7 +31,7 @@ export type GeminiCliOAuthCredentials = {
   refresh: string;
   expires: number;
   email?: string;
-  projectId: string;
+  projectId?: string;
 };
 
 export type GeminiCliOAuthContext = {

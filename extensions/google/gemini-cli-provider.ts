@@ -83,8 +83,14 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
               refresh: result.refresh,
               expires: result.expires,
               email: result.email,
-              credentialExtra: { projectId: result.projectId },
-              notes: ["If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID."],
+              ...(result.projectId ? { credentialExtra: { projectId: result.projectId } } : {}),
+              ...(result.projectId
+                ? {
+                    notes: [
+                      "If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID.",
+                    ],
+                  }
+                : {}),
             });
           } catch (err) {
             spin.stop("Gemini CLI OAuth failed");
