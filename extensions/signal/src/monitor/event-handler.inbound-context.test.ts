@@ -280,6 +280,52 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
   });
 
+  it("resolves audio contentType via filename when signal-cli omits contentType (#48614)", async () => {
+    // fetchAttachment is private in monitor.ts, so we simulate the fixed behavior:
+    // when contentType is missing, detectMime resolves MIME from the filename extension.
+    // The detectMime unit test below proves that mechanism; this test proves the event
+    // handler threads the resolved contentType into MsgContext correctly.
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        ignoreAttachments: false,
+        fetchAttachment: async ({ attachment }) => ({
+          path: `/tmp/${String(attachment.id)}.aac`,
+          contentType: "audio/aac",
+        }),
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "",
+          attachments: [{ id: "voice1", contentType: undefined, filename: "voice.aac" }],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.MediaPath).toBe("/tmp/voice1.aac");
+    expect(capture.ctx?.MediaType).toBe("audio/aac");
+    expect(capture.ctx?.MediaTypes).toEqual(["audio/aac"]);
+  });
+
+  it("detectMime resolves audio/aac from bare filename when buffer sniff fails (#48614)", async () => {
+    // Core assertion: detectMime with a bare filename (no full path) returns the
+    // correct MIME from the extension, even when the buffer is not sniffable.
+    // This is what fetchAttachment relies on after the fix.
+    const { detectMime } = await import("openclaw/plugin-sdk/media-runtime");
+    // 16 bytes of zeroes — not valid AAC, so fileTypeFromBuffer returns undefined.
+    const unsniffableBuffer = Buffer.alloc(16);
+    const mime = await detectMime({ buffer: unsniffableBuffer, filePath: "voice.aac" });
+    expect(mime).toBe("audio/aac");
+  });
+
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {
     const ownUuid = "123e4567-e89b-12d3-a456-426614174000";
     const handler = createSignalEventHandler(
