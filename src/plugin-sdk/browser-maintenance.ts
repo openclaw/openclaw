@@ -2,19 +2,17 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
-type BrowserRuntimeModule = PluginSdkFacadeTypeMap["browser-runtime"]["module"];
+type BrowserRuntimeModule = typeof import("../../extensions/browser/browser-runtime-api.js");
 
 function createTrashCollisionSuffix(): string {
   return randomBytes(6).toString("hex");
 }
 
 export const closeTrackedBrowserTabsForSessions: BrowserRuntimeModule["closeTrackedBrowserTabsForSessions"] =
-  (async (...args) => {
-    const [params] = args;
+  async (params) => {
     if (!Array.isArray(params?.sessionKeys) || params.sessionKeys.length === 0) {
       return 0;
     }
@@ -29,11 +27,10 @@ export const closeTrackedBrowserTabsForSessions: BrowserRuntimeModule["closeTrac
     if (typeof closeTrackedTabs !== "function") {
       return 0;
     }
-    return await closeTrackedTabs(...args);
-  }) as BrowserRuntimeModule["closeTrackedBrowserTabsForSessions"];
+    return await closeTrackedTabs(params);
+  };
 
-export const movePathToTrash: BrowserRuntimeModule["movePathToTrash"] = (async (...args) => {
-  const [targetPath] = args;
+export const movePathToTrash: BrowserRuntimeModule["movePathToTrash"] = async (targetPath) => {
   try {
     const result = await runCommandWithTimeout(["trash", targetPath], { timeoutMs: 10_000 });
     if (result.code !== 0) {
@@ -60,4 +57,4 @@ export const movePathToTrash: BrowserRuntimeModule["movePathToTrash"] = (async (
     await fs.rename(targetPath, destination);
     return destination;
   }
-}) as BrowserRuntimeModule["movePathToTrash"];
+};

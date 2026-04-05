@@ -199,10 +199,6 @@
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-runtime.js"
     },
-    "./plugin-sdk/media-understanding-runtime": {
-      "types": "./dist/plugin-sdk/media-understanding-runtime.d.ts",
-      "default": "./dist/plugin-sdk/media-understanding-runtime.js"
-    },
     "./plugin-sdk/conversation-runtime": {
       "types": "./dist/plugin-sdk/conversation-runtime.d.ts",
       "default": "./dist/plugin-sdk/conversation-runtime.js"
@@ -219,10 +215,6 @@
       "types": "./dist/plugin-sdk/thread-bindings-runtime.d.ts",
       "default": "./dist/plugin-sdk/thread-bindings-runtime.js"
     },
-    "./plugin-sdk/together": {
-      "types": "./dist/plugin-sdk/together.d.ts",
-      "default": "./dist/plugin-sdk/together.js"
-    },
     "./plugin-sdk/text-runtime": {
       "types": "./dist/plugin-sdk/text-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-runtime.js"
@@ -234,10 +226,6 @@
     "./plugin-sdk/agent-runtime": {
       "types": "./dist/plugin-sdk/agent-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-runtime.js"
-    },
-    "./plugin-sdk/speech-runtime": {
-      "types": "./dist/plugin-sdk/speech-runtime.d.ts",
-      "default": "./dist/plugin-sdk/speech-runtime.js"
     },
     "./plugin-sdk/speech-core": {
       "types": "./dist/plugin-sdk/speech-core.d.ts",
@@ -270,10 +258,6 @@
     "./plugin-sdk/cli-backend": {
       "types": "./dist/plugin-sdk/cli-backend.d.ts",
       "default": "./dist/plugin-sdk/cli-backend.js"
-    },
-    "./plugin-sdk/telegram-command-config": {
-      "types": "./dist/plugin-sdk/telegram-command-config.d.ts",
-      "default": "./dist/plugin-sdk/telegram-command-config.js"
     },
     "./plugin-sdk/hook-runtime": {
       "types": "./dist/plugin-sdk/hook-runtime.d.ts",
@@ -335,10 +319,6 @@
       "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
       "default": "./dist/plugin-sdk/agent-config-primitives.js"
     },
-    "./plugin-sdk/amazon-bedrock": {
-      "types": "./dist/plugin-sdk/amazon-bedrock.d.ts",
-      "default": "./dist/plugin-sdk/amazon-bedrock.js"
-    },
     "./plugin-sdk/allow-from": {
       "types": "./dist/plugin-sdk/allow-from.d.ts",
       "default": "./dist/plugin-sdk/allow-from.js"
@@ -346,10 +326,6 @@
     "./plugin-sdk/allowlist-config-edit": {
       "types": "./dist/plugin-sdk/allowlist-config-edit.d.ts",
       "default": "./dist/plugin-sdk/allowlist-config-edit.js"
-    },
-    "./plugin-sdk/anthropic-vertex": {
-      "types": "./dist/plugin-sdk/anthropic-vertex.d.ts",
-      "default": "./dist/plugin-sdk/anthropic-vertex.js"
     },
     "./plugin-sdk/bluebubbles": {
       "types": "./dist/plugin-sdk/bluebubbles.d.ts",
@@ -362,10 +338,6 @@
     "./plugin-sdk/browser": {
       "types": "./dist/plugin-sdk/browser.d.ts",
       "default": "./dist/plugin-sdk/browser.js"
-    },
-    "./plugin-sdk/browser-runtime": {
-      "types": "./dist/plugin-sdk/browser-runtime.d.ts",
-      "default": "./dist/plugin-sdk/browser-runtime.js"
     },
     "./plugin-sdk/browser-config-support": {
       "types": "./dist/plugin-sdk/browser-config-support.d.ts",
@@ -382,18 +354,6 @@
     "./plugin-sdk/dangerous-name-runtime": {
       "types": "./dist/plugin-sdk/dangerous-name-runtime.d.ts",
       "default": "./dist/plugin-sdk/dangerous-name-runtime.js"
-    },
-    "./plugin-sdk/cloudflare-ai-gateway": {
-      "types": "./dist/plugin-sdk/cloudflare-ai-gateway.d.ts",
-      "default": "./dist/plugin-sdk/cloudflare-ai-gateway.js"
-    },
-    "./plugin-sdk/byteplus": {
-      "types": "./dist/plugin-sdk/byteplus.d.ts",
-      "default": "./dist/plugin-sdk/byteplus.js"
-    },
-    "./plugin-sdk/chutes": {
-      "types": "./dist/plugin-sdk/chutes.d.ts",
-      "default": "./dist/plugin-sdk/chutes.js"
     },
     "./plugin-sdk/command-auth": {
       "types": "./dist/plugin-sdk/command-auth.d.ts",
@@ -422,10 +382,6 @@
     "./plugin-sdk/direct-dm": {
       "types": "./dist/plugin-sdk/direct-dm.d.ts",
       "default": "./dist/plugin-sdk/direct-dm.js"
-    },
-    "./plugin-sdk/deepseek": {
-      "types": "./dist/plugin-sdk/deepseek.d.ts",
-      "default": "./dist/plugin-sdk/deepseek.js"
     },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
@@ -535,17 +491,9 @@
       "types": "./dist/plugin-sdk/group-access.d.ts",
       "default": "./dist/plugin-sdk/group-access.js"
     },
-    "./plugin-sdk/google": {
-      "types": "./dist/plugin-sdk/google.d.ts",
-      "default": "./dist/plugin-sdk/google.js"
-    },
     "./plugin-sdk/global-singleton": {
       "types": "./dist/plugin-sdk/global-singleton.d.ts",
       "default": "./dist/plugin-sdk/global-singleton.js"
-    },
-    "./plugin-sdk/huggingface": {
-      "types": "./dist/plugin-sdk/huggingface.d.ts",
-      "default": "./dist/plugin-sdk/huggingface.js"
     },
     "./plugin-sdk/directory-runtime": {
       "types": "./dist/plugin-sdk/directory-runtime.d.ts",
@@ -578,14 +526,6 @@
     "./plugin-sdk/irc-surface": {
       "types": "./dist/plugin-sdk/irc-surface.d.ts",
       "default": "./dist/plugin-sdk/irc-surface.js"
-    },
-    "./plugin-sdk/kimi-coding": {
-      "types": "./dist/plugin-sdk/kimi-coding.d.ts",
-      "default": "./dist/plugin-sdk/kimi-coding.js"
-    },
-    "./plugin-sdk/kilocode": {
-      "types": "./dist/plugin-sdk/kilocode.d.ts",
-      "default": "./dist/plugin-sdk/kilocode.js"
     },
     "./plugin-sdk/reply-history": {
       "types": "./dist/plugin-sdk/reply-history.d.ts",
@@ -731,34 +671,6 @@
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
       "default": "./dist/plugin-sdk/memory-lancedb.js"
     },
-    "./plugin-sdk/minimax": {
-      "types": "./dist/plugin-sdk/minimax.d.ts",
-      "default": "./dist/plugin-sdk/minimax.js"
-    },
-    "./plugin-sdk/qwen": {
-      "types": "./dist/plugin-sdk/qwen.d.ts",
-      "default": "./dist/plugin-sdk/qwen.js"
-    },
-    "./plugin-sdk/qwen-definitions": {
-      "types": "./dist/plugin-sdk/qwen-definitions.d.ts",
-      "default": "./dist/plugin-sdk/qwen-definitions.js"
-    },
-    "./plugin-sdk/modelstudio": {
-      "types": "./dist/plugin-sdk/modelstudio.d.ts",
-      "default": "./dist/plugin-sdk/modelstudio.js"
-    },
-    "./plugin-sdk/modelstudio-definitions": {
-      "types": "./dist/plugin-sdk/modelstudio-definitions.d.ts",
-      "default": "./dist/plugin-sdk/modelstudio-definitions.js"
-    },
-    "./plugin-sdk/moonshot": {
-      "types": "./dist/plugin-sdk/moonshot.d.ts",
-      "default": "./dist/plugin-sdk/moonshot.js"
-    },
-    "./plugin-sdk/mistral": {
-      "types": "./dist/plugin-sdk/mistral.d.ts",
-      "default": "./dist/plugin-sdk/mistral.js"
-    },
     "./plugin-sdk/msteams": {
       "types": "./dist/plugin-sdk/msteams.d.ts",
       "default": "./dist/plugin-sdk/msteams.js"
@@ -779,29 +691,9 @@
       "types": "./dist/plugin-sdk/nextcloud-talk.d.ts",
       "default": "./dist/plugin-sdk/nextcloud-talk.js"
     },
-    "./plugin-sdk/nvidia": {
-      "types": "./dist/plugin-sdk/nvidia.d.ts",
-      "default": "./dist/plugin-sdk/nvidia.js"
-    },
     "./plugin-sdk/nostr": {
       "types": "./dist/plugin-sdk/nostr.d.ts",
       "default": "./dist/plugin-sdk/nostr.js"
-    },
-    "./plugin-sdk/openai": {
-      "types": "./dist/plugin-sdk/openai.d.ts",
-      "default": "./dist/plugin-sdk/openai.js"
-    },
-    "./plugin-sdk/opencode": {
-      "types": "./dist/plugin-sdk/opencode.d.ts",
-      "default": "./dist/plugin-sdk/opencode.js"
-    },
-    "./plugin-sdk/opencode-go": {
-      "types": "./dist/plugin-sdk/opencode-go.d.ts",
-      "default": "./dist/plugin-sdk/opencode-go.js"
-    },
-    "./plugin-sdk/qianfan": {
-      "types": "./dist/plugin-sdk/qianfan.d.ts",
-      "default": "./dist/plugin-sdk/qianfan.js"
     },
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
@@ -846,10 +738,6 @@
     "./plugin-sdk/provider-model-shared": {
       "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-model-shared.js"
-    },
-    "./plugin-sdk/provider-moonshot": {
-      "types": "./dist/plugin-sdk/provider-moonshot.d.ts",
-      "default": "./dist/plugin-sdk/provider-moonshot.js"
     },
     "./plugin-sdk/provider-onboard": {
       "types": "./dist/plugin-sdk/provider-onboard.d.ts",
@@ -907,10 +795,6 @@
       "types": "./dist/plugin-sdk/speech.d.ts",
       "default": "./dist/plugin-sdk/speech.js"
     },
-    "./plugin-sdk/sglang": {
-      "types": "./dist/plugin-sdk/sglang.d.ts",
-      "default": "./dist/plugin-sdk/sglang.js"
-    },
     "./plugin-sdk/session-store-runtime": {
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
@@ -923,13 +807,13 @@
       "types": "./dist/plugin-sdk/state-paths.d.ts",
       "default": "./dist/plugin-sdk/state-paths.js"
     },
-    "./plugin-sdk/synthetic": {
-      "types": "./dist/plugin-sdk/synthetic.d.ts",
-      "default": "./dist/plugin-sdk/synthetic.js"
-    },
     "./plugin-sdk/target-resolver-runtime": {
       "types": "./dist/plugin-sdk/target-resolver-runtime.d.ts",
       "default": "./dist/plugin-sdk/target-resolver-runtime.js"
+    },
+    "./plugin-sdk/telegram-command-config": {
+      "types": "./dist/plugin-sdk/telegram-command-config.d.ts",
+      "default": "./dist/plugin-sdk/telegram-command-config.js"
     },
     "./plugin-sdk/thread-ownership": {
       "types": "./dist/plugin-sdk/thread-ownership.d.ts",
@@ -946,18 +830,6 @@
     "./plugin-sdk/twitch": {
       "types": "./dist/plugin-sdk/twitch.d.ts",
       "default": "./dist/plugin-sdk/twitch.js"
-    },
-    "./plugin-sdk/venice": {
-      "types": "./dist/plugin-sdk/venice.d.ts",
-      "default": "./dist/plugin-sdk/venice.js"
-    },
-    "./plugin-sdk/vllm": {
-      "types": "./dist/plugin-sdk/vllm.d.ts",
-      "default": "./dist/plugin-sdk/vllm.js"
-    },
-    "./plugin-sdk/xai": {
-      "types": "./dist/plugin-sdk/xai.d.ts",
-      "default": "./dist/plugin-sdk/xai.js"
     },
     "./plugin-sdk/webhook-ingress": {
       "types": "./dist/plugin-sdk/webhook-ingress.d.ts",
@@ -982,10 +854,6 @@
     "./plugin-sdk/voice-call": {
       "types": "./dist/plugin-sdk/voice-call.d.ts",
       "default": "./dist/plugin-sdk/voice-call.js"
-    },
-    "./plugin-sdk/volcengine": {
-      "types": "./dist/plugin-sdk/volcengine.d.ts",
-      "default": "./dist/plugin-sdk/volcengine.js"
     },
     "./plugin-sdk/zalo": {
       "types": "./dist/plugin-sdk/zalo.d.ts",

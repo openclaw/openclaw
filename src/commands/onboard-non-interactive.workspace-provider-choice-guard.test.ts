@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENAI_DEFAULT_MODEL } from "../../extensions/openai/api.js";
 import { resetFileLockStateForTest } from "../infra/file-lock.js";
-import { OPENAI_DEFAULT_MODEL } from "../plugin-sdk/openai.js";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";

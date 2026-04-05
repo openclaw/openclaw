@@ -5,10 +5,6 @@ import { telegramMessagingForTest } from "../../infra/outbound/targets.test-help
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
-const whatsappAccountMocks = vi.hoisted(() => ({
-  resolveWhatsAppAccount: vi.fn<() => { allowFrom: string[] }>(() => ({ allowFrom: [] })),
-}));
-
 vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
 }));
@@ -35,10 +31,6 @@ vi.mock("../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStoreSync: vi.fn(() => []),
 }));
 
-vi.mock("../../plugin-sdk/whatsapp-surface.js", () => ({
-  resolveWhatsAppAccount: whatsappAccountMocks.resolveWhatsAppAccount,
-}));
-
 vi.mock("../../infra/outbound/targets.runtime.js", () => ({
   resolveOutboundTarget: vi.fn(),
 }));
@@ -50,7 +42,6 @@ const mockedModuleIds = [
   "../../infra/outbound/targets.runtime.js",
   "../../infra/outbound/target-resolver.js",
   "../../pairing/pairing-store.js",
-  "../../plugin-sdk/whatsapp-surface.js",
 ];
 
 import { loadSessionStore } from "../../config/sessions/store-load.js";

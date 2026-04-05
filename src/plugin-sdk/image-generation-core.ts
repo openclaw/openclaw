@@ -25,7 +25,7 @@ export {
 } from "../image-generation/provider-registry.js";
 export { parseImageGenerationModelRef } from "../image-generation/model-ref.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
-export { normalizeGoogleModelId } from "./google.js";
+export { normalizeGooglePreviewModelId as normalizeGoogleModelId } from "./provider-model-shared.js";
 export { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 export { OPENAI_DEFAULT_IMAGE_MODEL } from "../plugins/provider-model-defaults.js";
 

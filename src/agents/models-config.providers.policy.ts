@@ -1,8 +1,8 @@
-import { resolveBedrockConfigApiKey } from "../plugin-sdk/amazon-bedrock.js";
+import { resolveBedrockConfigApiKey } from "../../extensions/amazon-bedrock/api.js";
 import {
   normalizeGoogleProviderConfig,
   shouldNormalizeGoogleProviderConfig,
-} from "../plugin-sdk/google.js";
+} from "../../extensions/google/api.js";
 import {
   applyProviderNativeStreamingUsageCompatWithPlugin,
   normalizeProviderConfigWithPlugin,

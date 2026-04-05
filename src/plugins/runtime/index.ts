@@ -7,6 +7,10 @@ import {
   createLazyRuntimeModule,
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
+import {
+  generateVideo as generateRuntimeVideo,
+  listRuntimeVideoGenerationProviders,
+} from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
@@ -20,9 +24,9 @@ import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { PluginRuntime } from "./types.js";
 
-const loadTtsRuntime = createLazyRuntimeModule(() => import("./runtime-tts.runtime.js"));
+const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
-  () => import("./runtime-media-understanding.runtime.js"),
+  () => import("../../media-understanding/runtime.js"),
 );
 const loadModelAuthRuntime = createLazyRuntimeModule(
   () => import("./runtime-model-auth.runtime.js"),
@@ -58,12 +62,6 @@ type RuntimeImageGenerationModule = Pick<
 >;
 let cachedRuntimeImageGenerationModule: RuntimeImageGenerationModule | null = null;
 
-type RuntimeVideoGenerationModule = Pick<
-  typeof import("../../plugin-sdk/video-generation-runtime.js"),
-  "generateVideo" | "listRuntimeVideoGenerationProviders"
->;
-let cachedRuntimeVideoGenerationModule: RuntimeVideoGenerationModule | null = null;
-
 function loadRuntimeImageGenerationModule(): RuntimeImageGenerationModule {
   cachedRuntimeImageGenerationModule ??=
     loadBundledPluginPublicSurfaceModuleSync<RuntimeImageGenerationModule>({
@@ -81,20 +79,10 @@ function createRuntimeImageGeneration(): PluginRuntime["imageGeneration"] {
   };
 }
 
-function loadRuntimeVideoGenerationModule(): RuntimeVideoGenerationModule {
-  cachedRuntimeVideoGenerationModule ??=
-    loadBundledPluginPublicSurfaceModuleSync<RuntimeVideoGenerationModule>({
-      dirName: "video-generation-core",
-      artifactBasename: "runtime-api.js",
-    });
-  return cachedRuntimeVideoGenerationModule;
-}
-
 function createRuntimeVideoGeneration(): PluginRuntime["videoGeneration"] {
   return {
-    generate: (params) => loadRuntimeVideoGenerationModule().generateVideo(params),
-    listProviders: (params) =>
-      loadRuntimeVideoGenerationModule().listRuntimeVideoGenerationProviders(params),
+    generate: (params) => generateRuntimeVideo(params),
+    listProviders: (params) => listRuntimeVideoGenerationProviders(params),
   };
 }
 

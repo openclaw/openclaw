@@ -6,7 +6,7 @@ const hoisted = vi.hoisted(() => ({
   runMediaUnderstandingFile: vi.fn(),
 }));
 
-vi.mock("../plugin-sdk/media-understanding-runtime.js", () => ({
+vi.mock("../../extensions/media-understanding-core/runtime-api.js", () => ({
   describeImageFile: hoisted.describeImageFile,
   describeImageFileWithModel: vi.fn(),
   describeVideoFile: vi.fn(),
@@ -27,7 +27,7 @@ describe("media-understanding runtime facade", () => {
     hoisted.runMediaUnderstandingFile.mockReset();
   });
 
-  it("delegates describeImageFile to the plugin-sdk runtime", async () => {
+  it("delegates describeImageFile to the shared media-understanding runtime", async () => {
     const params = {
       filePath: "/tmp/sample.jpg",
       mime: "image/jpeg",
@@ -60,7 +60,7 @@ describe("media-understanding runtime facade", () => {
     expect(hoisted.describeImageFile).toHaveBeenCalledWith(params);
   });
 
-  it("delegates runMediaUnderstandingFile to the plugin-sdk runtime", async () => {
+  it("delegates runMediaUnderstandingFile to the shared media-understanding runtime", async () => {
     const params = {
       capability: "image" as const,
       filePath: "/tmp/sample.jpg",

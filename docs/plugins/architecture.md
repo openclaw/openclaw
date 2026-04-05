@@ -1175,11 +1175,9 @@ authoring plugins:
   OpenClaw is not yet serving a runtime snapshot.
 - Generic shared primitives remain the preferred public SDK contract. A small
   reserved compatibility set of bundled channel-branded helper seams still
-  exists, including `plugin-sdk/whatsapp-surface` for narrow WhatsApp
-  auth/account, directory-config, group-policy, outbound-target, and web-media
-  helper exports. Treat those as bundled-maintenance/compatibility seams, not
-  new third-party import targets; new cross-channel contracts should still land
-  on generic `plugin-sdk/*` subpaths or the plugin-local `api.js` /
+  exists. Treat those as bundled-maintenance/compatibility seams, not new
+  third-party import targets; new cross-channel contracts should still land on
+  generic `plugin-sdk/*` subpaths or the plugin-local `api.js` /
   `runtime-api.js` barrels.
 
 Compatibility note:

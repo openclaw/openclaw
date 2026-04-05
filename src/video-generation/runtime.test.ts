@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { VideoGenerationProvider } from "../video-generation/types.js";
 import {
   generateVideo,
   listRuntimeVideoGenerationProviders,
   type GenerateVideoRuntimeResult,
-} from "../plugin-sdk/video-generation-runtime.js";
-import type { VideoGenerationProvider } from "../video-generation/types.js";
+} from "./runtime.js";
 
 const mocks = vi.hoisted(() => ({
   generateVideo: vi.fn<typeof generateVideo>(),
   listRuntimeVideoGenerationProviders: vi.fn<typeof listRuntimeVideoGenerationProviders>(),
 }));
 
-vi.mock("../plugin-sdk/video-generation-runtime.js", () => ({
+vi.mock("../../extensions/video-generation-core/runtime-api.js", () => ({
   generateVideo: mocks.generateVideo,
   listRuntimeVideoGenerationProviders: mocks.listRuntimeVideoGenerationProviders,
 }));
@@ -23,7 +23,7 @@ describe("video-generation runtime facade", () => {
     mocks.listRuntimeVideoGenerationProviders.mockReset();
   });
 
-  it("delegates video generation to the plugin-sdk runtime", async () => {
+  it("delegates video generation to the shared video-generation runtime", async () => {
     const result: GenerateVideoRuntimeResult = {
       videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4", fileName: "sample.mp4" }],
       provider: "video-plugin",
@@ -48,7 +48,7 @@ describe("video-generation runtime facade", () => {
     expect(mocks.generateVideo).toHaveBeenCalledWith(params);
   });
 
-  it("delegates provider listing to the plugin-sdk runtime", () => {
+  it("delegates provider listing to the shared video-generation runtime", () => {
     const providers: VideoGenerationProvider[] = [
       {
         id: "video-plugin",
