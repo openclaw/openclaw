@@ -61,7 +61,6 @@ function buildWebSearchSnapshotCacheKey(params: {
     onlyPluginIds: [...new Set(params.onlyPluginIds ?? [])].toSorted((left, right) =>
       left.localeCompare(right),
     ),
-    config: params.config ?? null,
     env: buildPluginSnapshotCacheEnvKey(params.env),
   });
 }

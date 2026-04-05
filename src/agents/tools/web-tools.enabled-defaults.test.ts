@@ -2,6 +2,7 @@ import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { clearSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { __testing as webSearchTesting } from "./web-search.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
@@ -152,8 +153,14 @@ function createProviderSuccessPayload(
   };
 }
 
+beforeEach(() => {
+  setActivePluginRegistry(createEmptyPluginRegistry());
+  clearSecretsRuntimeSnapshot();
+});
+
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
+  clearSecretsRuntimeSnapshot();
 });
 
 describe("web tools defaults", () => {
