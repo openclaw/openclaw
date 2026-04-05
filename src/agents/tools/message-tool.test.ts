@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createOpenClawCodingTools } from "../pi-tools.js";
 import { createMessageTool } from "./message-tool.js";
 
 const mocks = vi.hoisted(() => ({
@@ -20,6 +22,8 @@ vi.mock("../../infra/outbound/message-action-runner.js", async () => {
   };
 });
 
+vi.mock("../../plugins/hook-runner-global.js");
+
 function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
   mocks.runMessageAction.mockClear();
   mocks.runMessageAction.mockResolvedValue({
@@ -31,6 +35,25 @@ function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
     payload: {},
     dryRun: true,
   } satisfies MessageActionRunResult);
+}
+
+const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
+
+function installMockHookRunner(params?: {
+  hasHooksReturn?: boolean;
+  runBeforeToolCallImpl?: (...args: unknown[]) => unknown;
+}) {
+  const hookRunner = {
+    hasHooks:
+      params?.hasHooksReturn === undefined
+        ? vi.fn()
+        : vi.fn(() => params.hasHooksReturn as boolean),
+    runBeforeToolCall: params?.runBeforeToolCallImpl
+      ? vi.fn(params.runBeforeToolCallImpl)
+      : vi.fn(),
+  };
+  mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+  return hookRunner;
 }
 
 function getToolProperties(tool: ReturnType<typeof createMessageTool>) {
@@ -102,6 +125,10 @@ async function executeSend(params: {
 }
 
 describe("message tool agent routing", () => {
+  beforeEach(() => {
+    installMockHookRunner();
+  });
+
   it("derives agentId from the session key", async () => {
     mockSendResult();
 
@@ -498,5 +525,62 @@ describe("message tool sandbox passthrough", () => {
     });
 
     expect(call?.requesterSenderId).toBe("1234567890");
+  });
+});
+
+describe("message tool before_tool_call integration", () => {
+  beforeEach(() => {
+    mockSendResult({ to: "slack:C-adjusted" });
+  });
+
+  it("passes hook-adjusted params to runMessageAction before send", async () => {
+    const hookRunner = installMockHookRunner({
+      hasHooksReturn: true,
+      runBeforeToolCallImpl: async () => ({
+        params: {
+          channel: "slack",
+          target: "C-adjusted",
+          message: "rewritten by hook",
+        },
+      }),
+    });
+
+    const tool = createOpenClawCodingTools({ config: {} as never }).find(
+      (entry) => entry.name === "message",
+    );
+    if (!tool) {
+      throw new Error("missing message tool");
+    }
+
+    await tool.execute("tool-message-hook", {
+      action: "send",
+      channel: "slack",
+      target: "C-original",
+      message: "original",
+    });
+
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
+      {
+        toolName: "message",
+        params: {
+          action: "send",
+          channel: "slack",
+          target: "C-original",
+          message: "original",
+        },
+        toolCallId: "tool-message-hook",
+      },
+      {
+        toolName: "message",
+        toolCallId: "tool-message-hook",
+      },
+    );
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.params).toMatchObject({
+      action: "send",
+      channel: "slack",
+      target: "C-adjusted",
+      message: "rewritten by hook",
+    });
   });
 });

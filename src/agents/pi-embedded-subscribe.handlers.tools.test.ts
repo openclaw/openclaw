@@ -5,6 +5,7 @@ import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./pi-embedded-subscribe.handlers.tools.js";
+import { __testing as beforeToolCallTesting } from "./pi-tools.before-tool-call.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
@@ -332,6 +333,52 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
 });
 
 describe("messaging tool media URL tracking", () => {
+  it("commits adjusted message tool params after before_tool_call rewrites send args", async () => {
+    const { ctx } = createTestContext();
+    const adjustedKey = beforeToolCallTesting.buildAdjustedParamsKey({
+      runId: "run-test",
+      toolCallId: "tool-adjusted-message",
+    });
+    beforeToolCallTesting.adjustedParamsByToolCallId.set(adjustedKey, {
+      action: "send",
+      channel: "slack",
+      target: "C-adjusted",
+      message: "rewritten text",
+      media: "file:///adjusted.jpg",
+    });
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-adjusted-message",
+      args: {
+        action: "send",
+        channel: "slack",
+        target: "C-original",
+        message: "original text",
+        media: "file:///original.jpg",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-adjusted-message",
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["rewritten text"]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "slack",
+        to: "slack:C-adjusted",
+      },
+    ]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["file:///adjusted.jpg"]);
+  });
+
   it("tracks media arg from messaging tool as pending", async () => {
     const { ctx } = createTestContext();
 

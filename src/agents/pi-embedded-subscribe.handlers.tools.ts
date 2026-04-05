@@ -469,27 +469,6 @@ export async function handleToolExecutionEnd(
     }
   }
 
-  // Commit messaging tool text on success, discard on error.
-  const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
-  const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
-  if (pendingText) {
-    ctx.state.pendingMessagingTexts.delete(toolCallId);
-    if (!isToolError) {
-      ctx.state.messagingToolSentTexts.push(pendingText);
-      ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(pendingText));
-      ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
-      ctx.trimMessagingToolSent();
-    }
-  }
-  if (pendingTarget) {
-    ctx.state.pendingMessagingTargets.delete(toolCallId);
-    if (!isToolError) {
-      ctx.state.messagingToolSentTargets.push(pendingTarget);
-      ctx.trimMessagingToolSent();
-    }
-  }
-  const pendingMediaUrls = ctx.state.pendingMessagingMediaUrls.get(toolCallId) ?? [];
-  ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
   const startArgs =
     startData?.args && typeof startData.args === "object"
       ? (startData.args as Record<string, unknown>)
@@ -499,12 +478,34 @@ export async function handleToolExecutionEnd(
     adjustedArgs && typeof adjustedArgs === "object"
       ? (adjustedArgs as Record<string, unknown>)
       : startArgs;
+  const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
+  const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
+  ctx.state.pendingMessagingTexts.delete(toolCallId);
+  ctx.state.pendingMessagingTargets.delete(toolCallId);
+  ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
+
   const isMessagingSend =
-    pendingMediaUrls.length > 0 ||
-    (isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs));
+    isMessagingTool(toolName) && isMessagingToolSendAction(toolName, afterToolCallArgs);
+  const committedText =
+    (typeof afterToolCallArgs.content === "string" ? afterToolCallArgs.content : undefined) ??
+    (typeof afterToolCallArgs.message === "string" ? afterToolCallArgs.message : undefined) ??
+    pendingText;
+  const committedTarget = isMessagingSend
+    ? extractMessagingToolSend(toolName, afterToolCallArgs) ?? pendingTarget
+    : undefined;
   if (!isToolError && isMessagingSend) {
+    if (committedText) {
+      ctx.state.messagingToolSentTexts.push(committedText);
+      ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(committedText));
+      ctx.log.debug(`Committed messaging text: tool=${toolName} len=${committedText.length}`);
+      ctx.trimMessagingToolSent();
+    }
+    if (committedTarget) {
+      ctx.state.messagingToolSentTargets.push(committedTarget);
+      ctx.trimMessagingToolSent();
+    }
     const committedMediaUrls = [
-      ...pendingMediaUrls,
+      ...collectMessagingMediaUrlsFromRecord(afterToolCallArgs),
       ...collectMessagingMediaUrlsFromToolResult(result),
     ];
     if (committedMediaUrls.length > 0) {
