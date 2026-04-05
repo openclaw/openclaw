@@ -4,6 +4,14 @@ import * as mediaStore from "../../media/store.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
 
+const taskExecutorMocks = vi.hoisted(() => ({
+  createRunningTaskRun: vi.fn(),
+  completeTaskRunByRunId: vi.fn(),
+  failTaskRunByRunId: vi.fn(),
+}));
+
+vi.mock("../../tasks/task-executor.js", () => taskExecutorMocks);
+
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
@@ -12,6 +20,9 @@ describe("createVideoGenerateTool", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
+    taskExecutorMocks.createRunningTaskRun.mockReset();
+    taskExecutorMocks.completeTaskRunByRunId.mockReset();
+    taskExecutorMocks.failTaskRunByRunId.mockReset();
   });
 
   afterEach(() => {
@@ -39,6 +50,19 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("generates videos, saves them, and emits MEDIA paths", async () => {
+    taskExecutorMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-123",
+      runtime: "cli",
+      requesterSessionKey: "agent:main:discord:direct:123",
+      ownerKey: "agent:main:discord:direct:123",
+      scopeKind: "session",
+      task: "friendly lobster surfing",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: Date.now(),
+    });
+    taskExecutorMocks.completeTaskRunByRunId.mockReturnValue(undefined);
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "qwen",
       model: "wan2.6-t2v",
@@ -67,6 +91,11 @@ describe("createVideoGenerateTool", () => {
           },
         },
       }),
+      agentSessionKey: "agent:main:discord:direct:123",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:1",
+      },
     });
     expect(tool).not.toBeNull();
     if (!tool) {
@@ -82,12 +111,71 @@ describe("createVideoGenerateTool", () => {
       provider: "qwen",
       model: "wan2.6-t2v",
       count: 1,
+      task: {
+        taskId: "task-123",
+      },
       media: {
         mediaUrls: ["/tmp/generated-lobster.mp4"],
       },
       paths: ["/tmp/generated-lobster.mp4"],
       metadata: { taskId: "task-1" },
     });
+    expect(taskExecutorMocks.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: "cli",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        label: "Video generation",
+        task: "friendly lobster surfing",
+      }),
+    );
+    expect(taskExecutorMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.stringMatching(/^tool:video_generate:/),
+      }),
+    );
+  });
+
+  it("marks the task failed when provider generation throws", async () => {
+    taskExecutorMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-fail",
+      runtime: "cli",
+      requesterSessionKey: "agent:main:discord:direct:123",
+      ownerKey: "agent:main:discord:direct:123",
+      scopeKind: "session",
+      task: "broken lobster",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: Date.now(),
+    });
+    taskExecutorMocks.failTaskRunByRunId.mockReturnValue(undefined);
+    vi.spyOn(videoGenerationRuntime, "generateVideo").mockRejectedValue(new Error("queue boom"));
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+          },
+        },
+      }),
+      agentSessionKey: "agent:main:discord:direct:123",
+    });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await expect(tool.execute("call-2", { prompt: "broken lobster" })).rejects.toThrow(
+      "queue boom",
+    );
+    expect(taskExecutorMocks.failTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.stringMatching(/^tool:video_generate:/),
+        error: "queue boom",
+      }),
+    );
   });
 
   it("shows duration normalization details from runtime metadata", async () => {

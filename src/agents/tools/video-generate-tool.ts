@@ -1,11 +1,19 @@
+import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import {
+  completeTaskRunByRunId,
+  createRunningTaskRun,
+  failTaskRunByRunId,
+} from "../../tasks/task-executor.js";
 import { resolveUserPath } from "../../utils.js";
+import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { resolveVideoGenerationSupportedDurations } from "../../video-generation/duration-support.js";
 import { parseVideoGenerationModelRef } from "../../video-generation/model-ref.js";
 import {
@@ -45,6 +53,7 @@ import {
   type ToolFsPolicy,
 } from "./tool-runtime.helpers.js";
 
+const log = createSubsystemLogger("agents/tools/video-generate");
 const MAX_INPUT_IMAGES = 5;
 const MAX_INPUT_VIDEOS = 4;
 const SUPPORTED_ASPECT_RATIOS = new Set([
@@ -398,6 +407,94 @@ type VideoGenerateSandboxConfig = {
   bridge: SandboxFsBridge;
 };
 
+type VideoGenerationTaskHandle = {
+  taskId: string;
+  runId: string;
+};
+
+function createVideoGenerationTaskRun(params: {
+  sessionKey?: string;
+  requesterOrigin?: DeliveryContext;
+  prompt: string;
+  providerId?: string;
+}): VideoGenerationTaskHandle | null {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return null;
+  }
+  const runId = `tool:video_generate:${crypto.randomUUID()}`;
+  try {
+    const task = createRunningTaskRun({
+      runtime: "cli",
+      sourceId: params.providerId ? `video_generate:${params.providerId}` : "video_generate",
+      requesterSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      scopeKind: "session",
+      requesterOrigin: params.requesterOrigin,
+      childSessionKey: sessionKey,
+      runId,
+      label: "Video generation",
+      task: params.prompt,
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      startedAt: Date.now(),
+      lastEventAt: Date.now(),
+      progressSummary: "Generating video",
+    });
+    return {
+      taskId: task.taskId,
+      runId,
+    };
+  } catch (error) {
+    log.warn("Failed to create video generation task ledger record", {
+      sessionKey,
+      providerId: params.providerId,
+      error,
+    });
+    return null;
+  }
+}
+
+function completeVideoGenerationTaskRun(params: {
+  handle: VideoGenerationTaskHandle | null;
+  provider: string;
+  model: string;
+  count: number;
+  paths: string[];
+}) {
+  if (!params.handle) {
+    return;
+  }
+  const endedAt = Date.now();
+  const target = params.count === 1 ? params.paths[0] : `${params.count} files`;
+  completeTaskRunByRunId({
+    runId: params.handle.runId,
+    runtime: "cli",
+    endedAt,
+    lastEventAt: endedAt,
+    terminalSummary: `Generated ${params.count} video${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
+  });
+}
+
+function failVideoGenerationTaskRun(params: {
+  handle: VideoGenerationTaskHandle | null;
+  error: unknown;
+}) {
+  if (!params.handle) {
+    return;
+  }
+  const endedAt = Date.now();
+  const errorText = params.error instanceof Error ? params.error.message : String(params.error);
+  failTaskRunByRunId({
+    runId: params.handle.runId,
+    runtime: "cli",
+    endedAt,
+    lastEventAt: endedAt,
+    error: errorText,
+    terminalSummary: errorText,
+  });
+}
+
 async function loadReferenceAssets(params: {
   inputs: string[];
   expectedKind: "image" | "video";
@@ -516,6 +613,8 @@ async function loadReferenceAssets(params: {
 export function createVideoGenerateTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  agentSessionKey?: string;
+  requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
   sandbox?: VideoGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
@@ -668,118 +767,147 @@ export function createVideoGenerateTool(options?: {
         audio,
         watermark,
       });
-
-      const result = await generateVideo({
-        cfg: effectiveCfg,
+      const taskHandle = createVideoGenerationTaskRun({
+        sessionKey: options?.agentSessionKey,
+        requesterOrigin: options?.requesterOrigin,
         prompt,
-        agentDir: options?.agentDir,
-        modelOverride: model,
-        size,
-        aspectRatio,
-        resolution,
-        durationSeconds,
-        audio,
-        watermark,
-        inputImages: loadedReferenceImages.map((entry) => entry.sourceAsset),
-        inputVideos: loadedReferenceVideos.map((entry) => entry.sourceAsset),
+        providerId: selectedProvider?.id,
       });
-      const savedVideos = await Promise.all(
-        result.videos.map((video) =>
-          saveMediaBuffer(
-            video.buffer,
-            video.mimeType,
-            "tool-video-generation",
-            undefined,
-            filename || video.fileName,
-          ),
-        ),
-      );
-      const requestedDurationSeconds =
-        typeof result.metadata?.requestedDurationSeconds === "number" &&
-        Number.isFinite(result.metadata.requestedDurationSeconds)
-          ? result.metadata.requestedDurationSeconds
-          : durationSeconds;
-      const normalizedDurationSeconds =
-        typeof result.metadata?.normalizedDurationSeconds === "number" &&
-        Number.isFinite(result.metadata.normalizedDurationSeconds)
-          ? result.metadata.normalizedDurationSeconds
-          : requestedDurationSeconds;
-      const supportedDurationSeconds = Array.isArray(result.metadata?.supportedDurationSeconds)
-        ? result.metadata.supportedDurationSeconds.filter(
-            (entry): entry is number => typeof entry === "number" && Number.isFinite(entry),
-          )
-        : undefined;
-      const lines = [
-        `Generated ${savedVideos.length} video${savedVideos.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
-        typeof requestedDurationSeconds === "number" &&
-        typeof normalizedDurationSeconds === "number" &&
-        requestedDurationSeconds !== normalizedDurationSeconds
-          ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${normalizedDurationSeconds}s.`
-          : null,
-        ...savedVideos.map((video) => `MEDIA:${video.path}`),
-      ].filter((entry): entry is string => Boolean(entry));
 
-      return {
-        content: [{ type: "text", text: lines.join("\n") }],
-        details: {
+      try {
+        const result = await generateVideo({
+          cfg: effectiveCfg,
+          prompt,
+          agentDir: options?.agentDir,
+          modelOverride: model,
+          size,
+          aspectRatio,
+          resolution,
+          durationSeconds,
+          audio,
+          watermark,
+          inputImages: loadedReferenceImages.map((entry) => entry.sourceAsset),
+          inputVideos: loadedReferenceVideos.map((entry) => entry.sourceAsset),
+        });
+        const savedVideos = await Promise.all(
+          result.videos.map((video) =>
+            saveMediaBuffer(
+              video.buffer,
+              video.mimeType,
+              "tool-video-generation",
+              undefined,
+              filename || video.fileName,
+            ),
+          ),
+        );
+        completeVideoGenerationTaskRun({
+          handle: taskHandle,
           provider: result.provider,
           model: result.model,
           count: savedVideos.length,
-          media: {
-            mediaUrls: savedVideos.map((video) => video.path),
-          },
           paths: savedVideos.map((video) => video.path),
-          ...(loadedReferenceImages.length === 1
-            ? {
-                image: loadedReferenceImages[0]?.resolvedInput,
-                ...(loadedReferenceImages[0]?.rewrittenFrom
-                  ? { rewrittenFrom: loadedReferenceImages[0].rewrittenFrom }
-                  : {}),
-              }
-            : loadedReferenceImages.length > 1
-              ? {
-                  images: loadedReferenceImages.map((entry) => ({
-                    image: entry.resolvedInput,
-                    ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
-                  })),
-                }
-              : {}),
-          ...(loadedReferenceVideos.length === 1
-            ? {
-                video: loadedReferenceVideos[0]?.resolvedInput,
-                ...(loadedReferenceVideos[0]?.rewrittenFrom
-                  ? { videoRewrittenFrom: loadedReferenceVideos[0].rewrittenFrom }
-                  : {}),
-              }
-            : loadedReferenceVideos.length > 1
-              ? {
-                  videos: loadedReferenceVideos.map((entry) => ({
-                    video: entry.resolvedInput,
-                    ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
-                  })),
-                }
-              : {}),
-          ...(size ? { size } : {}),
-          ...(aspectRatio ? { aspectRatio } : {}),
-          ...(resolution ? { resolution } : {}),
-          ...(typeof normalizedDurationSeconds === "number"
-            ? { durationSeconds: normalizedDurationSeconds }
-            : {}),
-          ...(typeof requestedDurationSeconds === "number" &&
+        });
+        const requestedDurationSeconds =
+          typeof result.metadata?.requestedDurationSeconds === "number" &&
+          Number.isFinite(result.metadata.requestedDurationSeconds)
+            ? result.metadata.requestedDurationSeconds
+            : durationSeconds;
+        const normalizedDurationSeconds =
+          typeof result.metadata?.normalizedDurationSeconds === "number" &&
+          Number.isFinite(result.metadata.normalizedDurationSeconds)
+            ? result.metadata.normalizedDurationSeconds
+            : requestedDurationSeconds;
+        const supportedDurationSeconds = Array.isArray(result.metadata?.supportedDurationSeconds)
+          ? result.metadata.supportedDurationSeconds.filter(
+              (entry): entry is number => typeof entry === "number" && Number.isFinite(entry),
+            )
+          : undefined;
+        const lines = [
+          `Generated ${savedVideos.length} video${savedVideos.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+          typeof requestedDurationSeconds === "number" &&
           typeof normalizedDurationSeconds === "number" &&
           requestedDurationSeconds !== normalizedDurationSeconds
-            ? { requestedDurationSeconds }
-            : {}),
-          ...(supportedDurationSeconds && supportedDurationSeconds.length > 0
-            ? { supportedDurationSeconds }
-            : {}),
-          ...(typeof audio === "boolean" ? { audio } : {}),
-          ...(typeof watermark === "boolean" ? { watermark } : {}),
-          ...(filename ? { filename } : {}),
-          attempts: result.attempts,
-          metadata: result.metadata,
-        },
-      };
+            ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${normalizedDurationSeconds}s.`
+            : null,
+          ...savedVideos.map((video) => `MEDIA:${video.path}`),
+        ].filter((entry): entry is string => Boolean(entry));
+
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          details: {
+            provider: result.provider,
+            model: result.model,
+            count: savedVideos.length,
+            media: {
+              mediaUrls: savedVideos.map((video) => video.path),
+            },
+            paths: savedVideos.map((video) => video.path),
+            ...(taskHandle
+                ? {
+                  task: {
+                    taskId: taskHandle.taskId,
+                    runId: taskHandle.runId,
+                  },
+                }
+              : {}),
+            ...(loadedReferenceImages.length === 1
+              ? {
+                  image: loadedReferenceImages[0]?.resolvedInput,
+                  ...(loadedReferenceImages[0]?.rewrittenFrom
+                    ? { rewrittenFrom: loadedReferenceImages[0].rewrittenFrom }
+                    : {}),
+                }
+              : loadedReferenceImages.length > 1
+                ? {
+                    images: loadedReferenceImages.map((entry) => ({
+                      image: entry.resolvedInput,
+                      ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
+                    })),
+                  }
+                : {}),
+            ...(loadedReferenceVideos.length === 1
+              ? {
+                  video: loadedReferenceVideos[0]?.resolvedInput,
+                  ...(loadedReferenceVideos[0]?.rewrittenFrom
+                    ? { videoRewrittenFrom: loadedReferenceVideos[0].rewrittenFrom }
+                    : {}),
+                }
+              : loadedReferenceVideos.length > 1
+                ? {
+                    videos: loadedReferenceVideos.map((entry) => ({
+                      video: entry.resolvedInput,
+                      ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
+                    })),
+                  }
+                : {}),
+            ...(size ? { size } : {}),
+            ...(aspectRatio ? { aspectRatio } : {}),
+            ...(resolution ? { resolution } : {}),
+            ...(typeof normalizedDurationSeconds === "number"
+              ? { durationSeconds: normalizedDurationSeconds }
+              : {}),
+            ...(typeof requestedDurationSeconds === "number" &&
+            typeof normalizedDurationSeconds === "number" &&
+            requestedDurationSeconds !== normalizedDurationSeconds
+              ? { requestedDurationSeconds }
+              : {}),
+            ...(supportedDurationSeconds && supportedDurationSeconds.length > 0
+              ? { supportedDurationSeconds }
+              : {}),
+            ...(typeof audio === "boolean" ? { audio } : {}),
+            ...(typeof watermark === "boolean" ? { watermark } : {}),
+            ...(filename ? { filename } : {}),
+            attempts: result.attempts,
+            metadata: result.metadata,
+          },
+        };
+      } catch (error) {
+        failVideoGenerationTaskRun({
+          handle: taskHandle,
+          error,
+        });
+        throw error;
+      }
     },
   };
 }
