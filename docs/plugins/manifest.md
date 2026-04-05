@@ -335,16 +335,17 @@ Some pre-runtime plugin metadata intentionally lives in `package.json` under the
 
 Important examples:
 
-| Field                                                             | What it means                                                                          |
-| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `openclaw.extensions`                                             | Declares native plugin entrypoints.                                                    |
-| `openclaw.setupEntry`                                             | Lightweight setup-only entrypoint used during onboarding and deferred channel startup. |
-| `openclaw.channel`                                                | Cheap channel catalog metadata like labels, docs paths, aliases, and selection copy.   |
-| `openclaw.install.npmSpec` / `openclaw.install.localPath`         | Install/update hints for bundled and externally published plugins.                     |
-| `openclaw.install.defaultChoice`                                  | Preferred install path when multiple install sources are available.                    |
-| `openclaw.install.minHostVersion`                                 | Minimum supported OpenClaw host version, using a semver floor like `>=2026.3.22`.      |
-| `openclaw.install.allowInvalidConfigRecovery`                     | Allows a narrow bundled-plugin reinstall recovery path when config is invalid.         |
-| `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen` | Lets setup-only channel surfaces load before the full channel plugin during startup.   |
+| Field                                                             | What it means                                                                                                                          |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `openclaw.extensions`                                             | Declares native plugin entrypoints.                                                                                                    |
+| `openclaw.setupEntry`                                             | Lightweight setup-only entrypoint used during onboarding and deferred channel startup.                                                 |
+| `openclaw.channel`                                                | Cheap channel catalog metadata like labels, docs paths, aliases, and selection copy.                                                   |
+| `openclaw.channel.persistedAuthState`                             | Lightweight persisted-auth checker metadata that can answer "is anything already signed in?" without loading the full channel runtime. |
+| `openclaw.install.npmSpec` / `openclaw.install.localPath`         | Install/update hints for bundled and externally published plugins.                                                                     |
+| `openclaw.install.defaultChoice`                                  | Preferred install path when multiple install sources are available.                                                                    |
+| `openclaw.install.minHostVersion`                                 | Minimum supported OpenClaw host version, using a semver floor like `>=2026.3.22`.                                                      |
+| `openclaw.install.allowInvalidConfigRecovery`                     | Allows a narrow bundled-plugin reinstall recovery path when config is invalid.                                                         |
+| `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen` | Lets setup-only channel surfaces load before the full channel plugin during startup.                                                   |
 
 `openclaw.install.minHostVersion` is enforced during install and manifest
 registry loading. Invalid values are rejected; newer-but-valid values skip the
@@ -356,6 +357,28 @@ flows to recover from specific stale bundled-plugin upgrade failures, such as a
 missing bundled plugin path or a stale `channels.<id>` entry for that same
 bundled plugin. Unrelated config errors still block install and send operators
 to `openclaw doctor --fix`.
+
+`openclaw.channel.persistedAuthState` is package metadata for a tiny checker
+module:
+
+```json
+{
+  "openclaw": {
+    "channel": {
+      "id": "whatsapp",
+      "persistedAuthState": {
+        "specifier": "./auth-presence",
+        "exportName": "hasAnyWhatsAppAuth"
+      }
+    }
+  }
+}
+```
+
+Use it when setup, doctor, or configured-state flows need a cheap yes/no auth
+probe before the full channel plugin loads. The target export should be a small
+function that reads persisted state only; do not route it through the full
+channel runtime barrel.
 
 ## JSON Schema requirements
 
