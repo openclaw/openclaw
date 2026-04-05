@@ -244,12 +244,20 @@ export function resolveCommandAuthorization(params: {
     accountId: ctx.AccountId,
     allowFrom: Array.isArray(allowFromRaw) ? allowFromRaw : [],
   });
+  // Resolve owner allowlist: prefer commands.ownerAllowFrom, fall back to
+  // tools.elevated.allowFrom for the current provider so that agents whose
+  // "Elevated Access" is configured on the dashboard automatically recognise
+  // their owners without requiring a separate commands.ownerAllowFrom entry.
+  const elevatedFallback =
+    !cfg.commands?.ownerAllowFrom && providerId
+      ? cfg.tools?.elevated?.allowFrom?.[providerId]
+      : undefined;
   const configOwnerAllowFromList = resolveOwnerAllowFromList({
     dock,
     cfg,
     accountId: ctx.AccountId,
     providerId,
-    allowFrom: cfg.commands?.ownerAllowFrom,
+    allowFrom: cfg.commands?.ownerAllowFrom ?? elevatedFallback,
   });
   const contextOwnerAllowFromList = resolveOwnerAllowFromList({
     dock,
