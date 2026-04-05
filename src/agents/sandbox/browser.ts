@@ -10,7 +10,8 @@ import {
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
   resolveProfile,
   type ResolvedBrowserConfig,
-} from "../../plugin-sdk/browser-profiles.js";
+  type ResolvedBrowserProfile,
+} from "../../plugin-sdk/browser-config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
@@ -345,7 +346,7 @@ export async function ensureSandboxBrowser(params: {
     }
 
     const onEnsureAttachTarget = params.cfg.browser.autoStart
-      ? async (_profile, signal) => {
+      ? async (_profile: ResolvedBrowserProfile, signal?: AbortSignal) => {
           const currentState = await dockerContainerState(containerName);
           if (currentState.exists && !currentState.running) {
             await execDocker(["start", containerName]);

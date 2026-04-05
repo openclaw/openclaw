@@ -34,9 +34,7 @@ export type ClawState = {
 };
 
 function isClawEnabled(state: Pick<ClawState, "configForm" | "configSnapshot">): boolean {
-  const config =
-    state.configForm ??
-    ((state.configSnapshot?.config as Record<string, unknown> | null | undefined) ?? null);
+  const config = state.configForm ?? state.configSnapshot?.config ?? null;
   const claw = config?.claw;
   return Boolean(claw && typeof claw === "object" && (claw as { enabled?: unknown }).enabled === true);
 }
