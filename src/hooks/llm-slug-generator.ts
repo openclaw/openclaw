@@ -62,7 +62,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       prompt,
       provider,
       model,
-      timeoutMs: params.cfg?.agents?.defaults?.slugTimeoutMs ?? DEFAULT_SLUG_TIMEOUT_MS,
+      timeoutMs: params.cfg.agents?.defaults?.slugTimeoutMs ?? DEFAULT_SLUG_TIMEOUT_MS,
       runId: `slug-gen-${Date.now()}`,
     });
 
