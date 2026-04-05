@@ -216,19 +216,7 @@ export async function runEmbeddedPiAgent(
         sessionKey: normalizedSessionKey,
       });
       await ensureOpenClawModelsJson(params.config, agentDir);
-      let resolvedSessionKey = normalizedSessionKey;
-      if (!resolvedSessionKey && params.config && params.sessionId?.trim()) {
-        try {
-          resolvedSessionKey = resolveSessionKeyForRequest({
-            cfg: params.config,
-            sessionId: params.sessionId,
-          }).sessionKey;
-        } catch (error) {
-          log.warn(
-            `[session-key-backfill] failed run=${params.runId} session=${redactRunIdentifier(params.sessionId)} agent=${workspaceResolution.agentId} error=${describeUnknownError(error)}`,
-          );
-        }
-      }
+      const resolvedSessionKey = normalizedSessionKey;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
