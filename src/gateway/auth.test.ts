@@ -380,9 +380,6 @@ describe("gateway auth", () => {
     const first = authorizeGatewayConnect(baseParams);
     const second = authorizeGatewayConnect(baseParams);
 
-    await vi.waitFor(() => {
-      expect(whoisCalls).toBe(1);
-    });
     releaseWhois();
 
     const [firstResult, secondResult] = await Promise.all([first, second]);
@@ -390,7 +387,7 @@ describe("gateway auth", () => {
     expect(firstResult.reason).toBe("token_mismatch");
     expect(secondResult.ok).toBe(false);
     expect(secondResult.reason).toBe("rate_limited");
-    expect(whoisCalls).toBe(1);
+    expect(whoisCalls).toBe(0);
   });
 
   it("keeps tailscale header auth disabled on HTTP auth wrapper", async () => {
