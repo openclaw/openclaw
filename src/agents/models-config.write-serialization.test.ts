@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
@@ -27,15 +28,30 @@ describe("models-config write serialization", () => {
       let inFlightWrites = 0;
       let maxInFlightWrites = 0;
       const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-        inFlightWrites += 1;
-        if (inFlightWrites > maxInFlightWrites) {
-          maxInFlightWrites = inFlightWrites;
+        const targetArg = args[0];
+        const targetPath =
+          typeof targetArg === "string"
+            ? targetArg
+            : targetArg instanceof URL
+              ? targetArg.pathname
+              : undefined;
+        const isModelsTempWrite =
+          typeof targetPath === "string" &&
+          path.basename(targetPath).startsWith("models.json.") &&
+          targetPath.endsWith(".tmp");
+        if (isModelsTempWrite) {
+          inFlightWrites += 1;
+          if (inFlightWrites > maxInFlightWrites) {
+            maxInFlightWrites = inFlightWrites;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
         }
-        await new Promise((resolve) => setTimeout(resolve, 10));
         try {
           return await originalWriteFile(...args);
         } finally {
-          inFlightWrites -= 1;
+          if (isModelsTempWrite) {
+            inFlightWrites -= 1;
+          }
         }
       });
 
