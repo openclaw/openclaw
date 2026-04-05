@@ -39,6 +39,7 @@ import {
   prependBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
 import {
+  FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
@@ -377,6 +378,10 @@ export async function runEmbeddedAttempt(
       contextInjectionMode === "continuation-skip" &&
       params.bootstrapContextRunKind !== "heartbeat" &&
       (await hasCompletedBootstrapTurn(params.sessionFile));
+    const shouldRecordCompletedBootstrapTurn =
+      !isContinuationTurn &&
+      params.bootstrapContextMode !== "lightweight" &&
+      params.bootstrapContextRunKind !== "heartbeat";
     const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = isContinuationTurn
       ? {
           bootstrapFiles: [],
@@ -1923,6 +1928,25 @@ export async function runEmbeddedAttempt(
             sessionManager,
             warn: (message) => log.warn(message),
           });
+        }
+
+        if (
+          shouldRecordCompletedBootstrapTurn &&
+          !promptError &&
+          !aborted &&
+          !yieldAborted &&
+          !timedOutDuringCompaction &&
+          !compactionOccurredThisAttempt
+        ) {
+          try {
+            sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+              timestamp: Date.now(),
+              runId: params.runId,
+              sessionId: params.sessionId,
+            });
+          } catch (entryErr) {
+            log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
+          }
         }
 
         cacheTrace?.recordStage("session:after", {

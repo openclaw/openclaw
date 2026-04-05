@@ -20,6 +20,7 @@ export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 
 const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
 const CONTINUATION_SCAN_MAX_RECORDS = 500;
+export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
 
 export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
   return config?.agents?.defaults?.contextInjection ?? "always";
@@ -67,12 +68,22 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
         } catch {
           continue;
         }
-        const record = entry as { type?: string; message?: { role?: string } } | null | undefined;
+        const record = entry as
+          | {
+              type?: string;
+              customType?: string;
+              message?: { role?: string };
+            }
+          | null
+          | undefined;
         if (record?.type === "compaction") {
           compactedAfterLatestAssistant = true;
           continue;
         }
-        if (record?.type === "message" && record.message?.role === "assistant") {
+        if (
+          record?.type === "custom" &&
+          record.customType === FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE
+        ) {
           return !compactedAfterLatestAssistant;
         }
       }

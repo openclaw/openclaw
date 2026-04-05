@@ -74,4 +74,41 @@ describe("runEmbeddedAttempt context injection", () => {
       }),
     );
   });
+
+  it("records full bootstrap completion after a successful non-heartbeat turn", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey: "agent:main",
+      tempPaths,
+    });
+
+    expect(hoisted.sessionManager.appendCustomEntry).toHaveBeenCalledWith(
+      "openclaw:bootstrap-context:full",
+      expect.objectContaining({
+        runId: "run-context-engine-forwarding",
+        sessionId: "embedded-session",
+      }),
+    );
+  });
+
+  it("does not record full bootstrap completion for heartbeat runs", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      attemptOverrides: {
+        bootstrapContextMode: "lightweight",
+        bootstrapContextRunKind: "heartbeat",
+      },
+      sessionKey: "agent:main:heartbeat:test",
+      tempPaths,
+    });
+
+    expect(hoisted.sessionManager.appendCustomEntry).not.toHaveBeenCalledWith(
+      "openclaw:bootstrap-context:full",
+      expect.anything(),
+    );
+  });
 });

@@ -8,6 +8,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
+  FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
@@ -173,14 +174,31 @@ describe("hasCompletedBootstrapTurn", () => {
     expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
   });
 
-  it("returns true after a completed assistant turn", async () => {
-    const sessionFile = path.join(tmpDir, "assistant.jsonl");
+  it("returns false for assistant turns without a recorded full bootstrap marker", async () => {
+    const sessionFile = path.join(tmpDir, "assistant-no-marker.jsonl");
     await fs.writeFile(
       sessionFile,
       [
         JSON.stringify({ type: "session", id: "s1" }),
         JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
         JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  });
+
+  it("returns true when a full bootstrap completion marker exists", async () => {
+    const sessionFile = path.join(tmpDir, "full-bootstrap.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 1 },
+        }),
       ].join("\n") + "\n",
       "utf8",
     );
@@ -192,7 +210,11 @@ describe("hasCompletedBootstrapTurn", () => {
     await fs.writeFile(
       sessionFile,
       [
-        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 1 },
+        }),
         JSON.stringify({ type: "compaction", summary: "trimmed" }),
       ].join("\n") + "\n",
       "utf8",
@@ -200,15 +222,24 @@ describe("hasCompletedBootstrapTurn", () => {
     expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
   });
 
-  it("returns true when a later assistant turn happens after compaction", async () => {
+  it("returns true when a later full bootstrap marker happens after compaction", async () => {
     const sessionFile = path.join(tmpDir, "assistant-after-compaction.jsonl");
     await fs.writeFile(
       sessionFile,
       [
-        JSON.stringify({ type: "message", message: { role: "assistant", content: "older" } }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 1 },
+        }),
         JSON.stringify({ type: "compaction", summary: "trimmed" }),
         JSON.stringify({ type: "message", message: { role: "user", content: "new ask" } }),
         JSON.stringify({ type: "message", message: { role: "assistant", content: "new reply" } }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 2 },
+        }),
       ].join("\n") + "\n",
       "utf8",
     );
@@ -221,21 +252,29 @@ describe("hasCompletedBootstrapTurn", () => {
       sessionFile,
       [
         "{broken",
-        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 1 },
+        }),
       ].join("\n") + "\n",
       "utf8",
     );
     expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
   });
 
-  it("finds a recent assistant turn even when the scan starts mid-file", async () => {
+  it("finds a recent full bootstrap marker even when the scan starts mid-file", async () => {
     const sessionFile = path.join(tmpDir, "large-prefix.jsonl");
     const hugePrefix = "x".repeat(300 * 1024);
     await fs.writeFile(
       sessionFile,
       [
         JSON.stringify({ type: "message", message: { role: "user", content: hugePrefix } }),
-        JSON.stringify({ type: "message", message: { role: "assistant", content: "tail reply" } }),
+        JSON.stringify({
+          type: "custom",
+          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+          data: { timestamp: 1 },
+        }),
       ].join("\n") + "\n",
       "utf8",
     );
@@ -247,7 +286,7 @@ describe("hasCompletedBootstrapTurn", () => {
     const linkFile = path.join(tmpDir, "link.jsonl");
     await fs.writeFile(
       realFile,
-      `${JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } })}\n`,
+      `${JSON.stringify({ type: "custom", customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, data: { timestamp: 1 } })}\n`,
       "utf8",
     );
     await fs.symlink(realFile, linkFile);
