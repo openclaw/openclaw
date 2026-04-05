@@ -79,11 +79,11 @@ describe("memory-core /dreaming command", () => {
 
     expect(result.text).toContain("Usage: /dreaming status");
     expect(result.text).toContain("Dreaming status:");
-    expect(result.text).toContain("- light: sorts recent memory traces into dreams.md.");
+    expect(result.text).toContain("- light: sorts recent memory traces into DREAMS.md.");
     expect(result.text).toContain(
       "- deep: promotes durable memories into MEMORY.md and handles recovery when memory is thin.",
     );
-    expect(result.text).toContain("- rem: writes reflection and pattern notes into dreams.md.");
+    expect(result.text).toContain("- rem: writes reflection and pattern notes into DREAMS.md.");
   });
 
   it("persists global enablement under plugins.entries.memory-core.config.dreaming.enabled", async () => {
