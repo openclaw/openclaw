@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-const readClaudeCliCredentialsCached = vi.hoisted(() => vi.fn());
+const { readClaudeCliCredentialsForSetup, readClaudeCliCredentialsForSetupNonInteractive } =
+  vi.hoisted(() => ({
+    readClaudeCliCredentialsForSetup: vi.fn(),
+    readClaudeCliCredentialsForSetupNonInteractive: vi.fn(),
+  }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importActual) => {
-  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-auth")>();
+vi.mock("./cli-auth-seam.js", async (importActual) => {
+  const actual = await importActual<typeof import("./cli-auth-seam.js")>();
   return {
     ...actual,
-    readClaudeCliCredentialsCached,
+    readClaudeCliCredentialsForSetup,
+    readClaudeCliCredentialsForSetupNonInteractive,
   };
 });
 
@@ -14,9 +19,20 @@ const { buildAnthropicCliMigrationResult, hasClaudeCliAuth } = await import("./c
 
 describe("anthropic cli migration", () => {
   it("detects local Claude CLI auth", () => {
-    readClaudeCliCredentialsCached.mockReturnValue({ type: "oauth" });
+    readClaudeCliCredentialsForSetup.mockReturnValue({ type: "oauth" });
 
     expect(hasClaudeCliAuth()).toBe(true);
+  });
+
+  it("uses the non-interactive Claude auth probe without keychain prompts", () => {
+    readClaudeCliCredentialsForSetup.mockReset();
+    readClaudeCliCredentialsForSetupNonInteractive.mockReset();
+    readClaudeCliCredentialsForSetup.mockReturnValue(null);
+    readClaudeCliCredentialsForSetupNonInteractive.mockReturnValue({ type: "oauth" });
+
+    expect(hasClaudeCliAuth({ allowKeychainPrompt: false })).toBe(true);
+    expect(readClaudeCliCredentialsForSetup).not.toHaveBeenCalled();
+    expect(readClaudeCliCredentialsForSetupNonInteractive).toHaveBeenCalledTimes(1);
   });
 
   it("rewrites anthropic defaults to claude-cli defaults", () => {
