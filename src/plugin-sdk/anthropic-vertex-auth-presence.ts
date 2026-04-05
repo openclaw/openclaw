@@ -35,15 +35,22 @@ function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.e
 
 function resolveAnthropicVertexAdcCredentialsPathCandidate(
   env: NodeJS.ProcessEnv = process.env,
-): string {
-  return (
-    normalizeOptionalPathInput(env.GOOGLE_APPLICATION_CREDENTIALS) ??
-    resolveAnthropicVertexDefaultAdcPath(env)
-  );
+): string | undefined {
+  const explicit = normalizeOptionalPathInput(env.GOOGLE_APPLICATION_CREDENTIALS);
+  if (explicit) {
+    return explicit;
+  }
+  if (env !== process.env) {
+    return undefined;
+  }
+  return resolveAnthropicVertexDefaultAdcPath(env);
 }
 
 function canReadAnthropicVertexAdc(env: NodeJS.ProcessEnv = process.env): boolean {
   const credentialsPath = resolveAnthropicVertexAdcCredentialsPathCandidate(env);
+  if (!credentialsPath) {
+    return false;
+  }
   try {
     readFileSync(credentialsPath, "utf8");
     return true;
