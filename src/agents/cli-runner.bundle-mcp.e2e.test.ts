@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   writeBundleProbeMcpServer,
@@ -28,7 +30,7 @@ const E2E_TIMEOUT_MS = 40_000;
 
 describe("runCliAgent bundle MCP e2e", () => {
   it(
-    "routes enabled bundle MCP config into the claude-cli backend and executes the tool",
+    "routes enabled bundle MCP config into a registered CLI backend and executes the tool",
     { timeout: E2E_TIMEOUT_MS },
     async () => {
       const { runCliAgent } = await import("./cli-runner.js");
@@ -42,6 +44,27 @@ describe("runCliAgent bundle MCP e2e", () => {
       const serverScriptPath = path.join(tempHome, "mcp", "bundle-probe.mjs");
       const fakeClaudePath = path.join(binDir, "fake-claude.mjs");
       const pluginRoot = path.join(tempHome, ".openclaw", "extensions", "bundle-probe");
+      const registry = createEmptyPluginRegistry();
+      registry.cliBackends = [
+        {
+          pluginId: "bundle-cli-test",
+          source: "test",
+          backend: {
+            id: "bundle-cli",
+            bundleMcp: true,
+            config: {
+              command: "node",
+              args: [fakeClaudePath],
+              output: "jsonl",
+              input: "arg",
+              sessionArg: "--session-id",
+              sessionIdFields: ["session_id"],
+              clearEnv: [],
+            },
+          },
+        },
+      ];
+      setActivePluginRegistry(registry);
       await fs.mkdir(workspaceDir, { recursive: true });
       await writeBundleProbeMcpServer(serverScriptPath);
       await writeFakeClaudeCli(fakeClaudePath);
@@ -51,13 +74,6 @@ describe("runCliAgent bundle MCP e2e", () => {
         agents: {
           defaults: {
             workspace: workspaceDir,
-            cliBackends: {
-              "claude-cli": {
-                command: "node",
-                args: [fakeClaudePath],
-                clearEnv: [],
-              },
-            },
           },
         },
         plugins: {
@@ -74,7 +90,7 @@ describe("runCliAgent bundle MCP e2e", () => {
           workspaceDir,
           config,
           prompt: "Use your configured MCP tools and report the bundle probe text.",
-          provider: "claude-cli",
+          provider: "bundle-cli",
           model: "test-bundle",
           timeoutMs: 10_000,
           runId: "bundle-mcp-e2e",

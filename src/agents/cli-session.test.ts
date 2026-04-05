@@ -10,25 +10,24 @@ import {
 } from "./cli-session.js";
 
 describe("cli-session helpers", () => {
-  it("persists binding metadata alongside legacy session ids", () => {
+  it("persists binding metadata alongside provider session ids", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
     };
 
-    setCliSessionBinding(entry, "claude-cli", {
+    setCliSessionBinding(entry, "codex-cli", {
       sessionId: "cli-session-1",
-      authProfileId: "anthropic:work",
+      authProfileId: "openai-codex:work",
       authEpoch: "auth-epoch",
       extraSystemPromptHash: "prompt-hash",
       mcpConfigHash: "mcp-hash",
     });
 
-    expect(entry.cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
-    expect(entry.claudeCliSessionId).toBe("cli-session-1");
-    expect(getCliSessionBinding(entry, "claude-cli")).toEqual({
+    expect(entry.cliSessionIds?.["codex-cli"]).toBe("cli-session-1");
+    expect(getCliSessionBinding(entry, "codex-cli")).toEqual({
       sessionId: "cli-session-1",
-      authProfileId: "anthropic:work",
+      authProfileId: "openai-codex:work",
       authEpoch: "auth-epoch",
       extraSystemPromptHash: "prompt-hash",
       mcpConfigHash: "mcp-hash",
@@ -39,11 +38,10 @@ describe("cli-session helpers", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
-      cliSessionIds: { "claude-cli": "legacy-session" },
-      claudeCliSessionId: "legacy-session",
+      cliSessionIds: { "codex-cli": "legacy-session" },
     };
 
-    expect(resolveCliSessionReuse({ binding: getCliSessionBinding(entry, "claude-cli") })).toEqual({
+    expect(resolveCliSessionReuse({ binding: getCliSessionBinding(entry, "codex-cli") })).toEqual({
       sessionId: "legacy-session",
     });
   });
@@ -52,15 +50,14 @@ describe("cli-session helpers", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
-      cliSessionIds: { "claude-cli": "legacy-session" },
-      claudeCliSessionId: "legacy-session",
+      cliSessionIds: { "codex-cli": "legacy-session" },
     };
-    const binding = getCliSessionBinding(entry, "claude-cli");
+    const binding = getCliSessionBinding(entry, "codex-cli");
 
     expect(
       resolveCliSessionReuse({
         binding,
-        authProfileId: "anthropic:work",
+        authProfileId: "openai-codex:work",
       }),
     ).toEqual({ invalidatedReason: "auth-profile" });
     expect(
@@ -80,7 +77,7 @@ describe("cli-session helpers", () => {
   it("invalidates reuse when stored auth profile or prompt shape changes", () => {
     const binding = {
       sessionId: "cli-session-1",
-      authProfileId: "anthropic:work",
+      authProfileId: "openai-codex:work",
       authEpoch: "auth-epoch-a",
       extraSystemPromptHash: "prompt-a",
       mcpConfigHash: "mcp-a",
@@ -89,7 +86,7 @@ describe("cli-session helpers", () => {
     expect(
       resolveCliSessionReuse({
         binding,
-        authProfileId: "anthropic:personal",
+        authProfileId: "openai-codex:personal",
         authEpoch: "auth-epoch-a",
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
@@ -98,7 +95,7 @@ describe("cli-session helpers", () => {
     expect(
       resolveCliSessionReuse({
         binding,
-        authProfileId: "anthropic:work",
+        authProfileId: "openai-codex:work",
         authEpoch: "auth-epoch-b",
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
@@ -107,7 +104,7 @@ describe("cli-session helpers", () => {
     expect(
       resolveCliSessionReuse({
         binding,
-        authProfileId: "anthropic:work",
+        authProfileId: "openai-codex:work",
         authEpoch: "auth-epoch-a",
         extraSystemPromptHash: "prompt-b",
         mcpConfigHash: "mcp-a",
@@ -116,7 +113,7 @@ describe("cli-session helpers", () => {
     expect(
       resolveCliSessionReuse({
         binding,
-        authProfileId: "anthropic:work",
+        authProfileId: "openai-codex:work",
         authEpoch: "auth-epoch-a",
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-b",
@@ -149,17 +146,16 @@ describe("cli-session helpers", () => {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
     };
-    setCliSessionBinding(entry, "claude-cli", { sessionId: "claude-session" });
+    setCliSessionBinding(entry, "codex-cli", { sessionId: "codex-session" });
     setCliSessionBinding(entry, "codex-cli", { sessionId: "codex-session" });
 
     clearCliSession(entry, "codex-cli");
     expect(getCliSessionBinding(entry, "codex-cli")).toBeUndefined();
-    expect(getCliSessionBinding(entry, "claude-cli")?.sessionId).toBe("claude-session");
+    expect(entry.cliSessionIds?.["codex-cli"]).toBeUndefined();
 
     clearAllCliSessions(entry);
     expect(entry.cliSessionBindings).toBeUndefined();
     expect(entry.cliSessionIds).toBeUndefined();
-    expect(entry.claudeCliSessionId).toBeUndefined();
   });
 
   it("hashes trimmed extra system prompts consistently", () => {

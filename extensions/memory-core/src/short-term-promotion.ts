@@ -755,6 +755,23 @@ export async function rankShortTermPromotionCandidates(
   return sorted.slice(0, limit);
 }
 
+export async function readShortTermRecallEntries(params: {
+  workspaceDir: string;
+  nowMs?: number;
+}): Promise<ShortTermRecallEntry[]> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir) {
+    return [];
+  }
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const store = await readStore(workspaceDir, nowIso);
+  return Object.values(store.entries).filter(
+    (entry): entry is ShortTermRecallEntry =>
+      Boolean(entry) && entry.source === "memory" && isShortTermMemoryPath(entry.path),
+  );
+}
+
 function resolveShortTermSourcePathCandidates(
   workspaceDir: string,
   candidatePath: string,

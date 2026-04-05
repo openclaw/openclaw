@@ -21,21 +21,10 @@ const CLI_IMAGE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_P
 const CLI_RESUME = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
-const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-6";
+const DEFAULT_MODEL = "codex-cli/gpt-5.4";
 const BOOTSTRAP_LIVE_MODEL = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
-const describeClaudeBootstrapLive =
-  LIVE && CLI_LIVE && BOOTSTRAP_LIVE_MODEL.startsWith("claude-cli/") ? describe : describe.skip;
-const DEFAULT_CLAUDE_ARGS = [
-  "-p",
-  "--output-format",
-  "stream-json",
-  "--include-partial-messages",
-  "--verbose",
-  "--setting-sources",
-  "user",
-  "--permission-mode",
-  "bypassPermissions",
-];
+const describeBootstrapLive =
+  LIVE && CLI_LIVE && BOOTSTRAP_LIVE_MODEL.startsWith("codex-cli/") ? describe : describe.skip;
 const DEFAULT_CODEX_ARGS = [
   "exec",
   "--json",
@@ -45,28 +34,6 @@ const DEFAULT_CODEX_ARGS = [
   "read-only",
   "--skip-git-repo-check",
 ];
-const DEFAULT_CLEAR_ENV = [
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_API_KEY_OLD",
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANTHROPIC_BASE_URL",
-  "ANTHROPIC_UNIX_SOCKET",
-  "CLAUDE_CONFIG_DIR",
-  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
-  "CLAUDE_CODE_ENTRYPOINT",
-  "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-  "CLAUDE_CODE_OAUTH_SCOPES",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
-  "CLAUDE_CODE_PLUGIN_CACHE_DIR",
-  "CLAUDE_CODE_PLUGIN_SEED_DIR",
-  "CLAUDE_CODE_REMOTE",
-  "CLAUDE_CODE_USE_COWORK_PLUGINS",
-  "CLAUDE_CODE_USE_BEDROCK",
-  "CLAUDE_CODE_USE_FOUNDRY",
-  "CLAUDE_CODE_USE_VERTEX",
-];
-
 function randomImageProbeCode(len = 6): string {
   // Chosen to avoid common OCR confusions in our 5x7 bitmap font.
   // Notably: 0↔8, B↔8, 6↔9, 3↔B, D↔0.
@@ -134,17 +101,6 @@ function parseImageMode(raw?: string): "list" | "repeat" | undefined {
     return trimmed;
   }
   throw new Error("OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE must be 'list' or 'repeat'.");
-}
-
-function withMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
-  const next = [...args];
-  if (!next.includes("--strict-mcp-config")) {
-    next.push("--strict-mcp-config");
-  }
-  if (!next.includes("--mcp-config")) {
-    next.push("--mcp-config", mcpConfigPath);
-  }
-  return next;
 }
 
 async function getFreeGatewayPort(): Promise<number> {
@@ -292,7 +248,7 @@ describeLive("gateway live (cli backend)", () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
     const rawModel = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
-    const parsed = parseModelRef(rawModel, "claude-cli");
+    const parsed = parseModelRef(rawModel, "codex-cli");
     if (!parsed) {
       throw new Error(
         `OPENCLAW_LIVE_CLI_BACKEND_MODEL must resolve to a CLI backend model. Got: ${rawModel}`,
@@ -302,11 +258,7 @@ describeLive("gateway live (cli backend)", () => {
     const modelKey = `${providerId}/${parsed.model}`;
 
     const providerDefaults =
-      providerId === "claude-cli"
-        ? { command: "claude", args: DEFAULT_CLAUDE_ARGS }
-        : providerId === "codex-cli"
-          ? { command: "codex", args: DEFAULT_CODEX_ARGS }
-          : null;
+      providerId === "codex-cli" ? { command: "codex", args: DEFAULT_CODEX_ARGS } : null;
 
     const cliCommand = process.env.OPENCLAW_LIVE_CLI_BACKEND_COMMAND ?? providerDefaults?.command;
     if (!cliCommand) {
@@ -326,7 +278,7 @@ describeLive("gateway live (cli backend)", () => {
       parseJsonStringArray(
         "OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV",
         process.env.OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV,
-      ) ?? (providerId === "claude-cli" ? DEFAULT_CLEAR_ENV : []);
+      ) ?? [];
     const filteredCliClearEnv = cliClearEnv.filter((name) => !preservedEnv.has(name));
     const preservedCliEnv = Object.fromEntries(
       [...preservedEnv]
@@ -343,13 +295,7 @@ describeLive("gateway live (cli backend)", () => {
     }
 
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cli-"));
-    const disableMcpConfig = process.env.OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
-    let cliArgs = baseCliArgs;
-    if (providerId === "claude-cli" && disableMcpConfig) {
-      const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
-      await fs.writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
-      cliArgs = withMcpConfigOverrides(baseCliArgs, mcpConfigPath);
-    }
+    const cliArgs = baseCliArgs;
 
     const cfg = loadConfig();
     const existingBackends = cfg.agents?.defaults?.cliBackends ?? {};
@@ -543,8 +489,8 @@ describeLive("gateway live (cli backend)", () => {
   }, 60_000);
 });
 
-describeClaudeBootstrapLive("gateway live (claude-cli bootstrap context)", () => {
-  it("injects AGENTS, SOUL, IDENTITY, and USER files into the first Claude CLI turn", async () => {
+describeBootstrapLive("gateway live (cli backend bootstrap context)", () => {
+  it("injects AGENTS, SOUL, IDENTITY, and USER files into the first CLI turn", async () => {
     const result = await runGatewayCliBootstrapLiveProbe();
     expect(result.ok).toBe(true);
     expect(result.text).toBe(result.expectedText);

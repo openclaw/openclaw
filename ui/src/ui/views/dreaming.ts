@@ -1,20 +1,28 @@
 import { html, nothing } from "lit";
-import type { DreamingMode } from "../controllers/dreaming.ts";
+import type { DreamingPhaseId } from "../controllers/dreaming.ts";
 
-export type DreamsProps = {
+export type DreamingProps = {
   active: boolean;
   shortTermCount: number;
   longTermCount: number;
   promotedCount: number;
   dreamingOf: string | null;
   nextCycle: string | null;
-  mode: DreamingMode;
+  timezone: string | null;
+  phases: Array<{
+    id: DreamingPhaseId;
+    label: string;
+    detail: string;
+    enabled: boolean;
+    nextCycle: string | null;
+    managedCronPresent: boolean;
+  }>;
   statusLoading: boolean;
   statusError: string | null;
   modeSaving: boolean;
-  managedCronPresent: boolean;
   onRefresh: () => void;
-  onModeChange: (mode: DreamingMode) => void;
+  onToggleEnabled: (enabled: boolean) => void;
+  onTogglePhase: (phase: DreamingPhaseId, enabled: boolean) => void;
 };
 
 const DREAM_PHRASES = [
@@ -50,7 +58,6 @@ function currentDreamPhrase(): string {
   return DREAM_PHRASES[_dreamIndex];
 }
 
-// Stars with deterministic positions so they don't shuffle on re-render
 const STARS: {
   top: number;
   left: number;
@@ -72,9 +79,6 @@ const STARS: {
   { top: 88, left: 18, size: 2, delay: 2.3, hue: "neutral" },
 ];
 
-// The real vector lobster with sleeping modifications:
-// - eyes are closed (horizontal lines instead of open circles)
-// - antennae droop slightly
 const sleepingLobster = html`
   <svg viewBox="0 0 120 120" fill="none">
     <defs>
@@ -83,22 +87,17 @@ const sleepingLobster = html`
         <stop offset="100%" stop-color="#991b1b" />
       </linearGradient>
     </defs>
-    <!-- Body -->
     <path
       d="M60 10C30 10 15 35 15 55C15 75 30 95 45 100L45 110L55 110L55 100C55 100 60 102 65 100L65 110L75 110L75 100C90 95 105 75 105 55C105 35 90 10 60 10Z"
       fill="url(#dream-lob-g)"
     />
-    <!-- Left Claw -->
     <path d="M20 45C5 40 0 50 5 60C10 70 20 65 25 55C28 48 25 45 20 45Z" fill="url(#dream-lob-g)" />
-    <!-- Right Claw -->
     <path
       d="M100 45C115 40 120 50 115 60C110 70 100 65 95 55C92 48 95 45 100 45Z"
       fill="url(#dream-lob-g)"
     />
-    <!-- Antennae (drooping for sleep) -->
     <path d="M45 15Q38 8 35 14" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
     <path d="M75 15Q82 8 85 14" stroke="#ff4d4d" stroke-width="3" stroke-linecap="round" />
-    <!-- Closed eyes — curved lines -->
     <path
       d="M39 36Q45 32 51 36"
       stroke="#050810"
@@ -116,13 +115,12 @@ const sleepingLobster = html`
   </svg>
 `;
 
-export function renderDreams(props: DreamsProps) {
+export function renderDreaming(props: DreamingProps) {
   const idle = !props.active;
   const dreamText = props.dreamingOf ?? currentDreamPhrase();
 
   return html`
     <section class="dreams ${idle ? "dreams--idle" : ""}">
-      <!-- Stars -->
       ${STARS.map(
         (s) => html`
           <div
@@ -139,10 +137,8 @@ export function renderDreams(props: DreamsProps) {
         `,
       )}
 
-      <!-- Moon -->
       <div class="dreams__moon"></div>
 
-      <!-- Dream thought bubble -->
       ${props.active
         ? html`
             <div class="dreams__bubble">
@@ -159,32 +155,26 @@ export function renderDreams(props: DreamsProps) {
           `
         : nothing}
 
-      <!-- Ambient glow -->
       <div class="dreams__glow"></div>
-
-      <!-- Sleeping lobster -->
       <div class="dreams__lobster">${sleepingLobster}</div>
-
-      <!-- Floating Z's -->
       <span class="dreams__z">z</span>
       <span class="dreams__z">z</span>
       <span class="dreams__z">Z</span>
 
-      <!-- Status line -->
       <div class="dreams__status">
         <span class="dreams__status-label"
-          >${props.active ? "Memory Dreaming Active" : "Dreaming Idle"}</span
+          >${props.active ? "Dreaming Active" : "Dreaming Idle"}</span
         >
         <div class="dreams__status-detail">
           <div class="dreams__status-dot"></div>
           <span>
             ${props.promotedCount} promoted
-            ${props.nextCycle ? html`· next cycle ${props.nextCycle}` : nothing}
+            ${props.nextCycle ? html`· next phase ${props.nextCycle}` : nothing}
+            ${props.timezone ? html`· ${props.timezone}` : nothing}
           </span>
         </div>
       </div>
 
-      <!-- Stats bar -->
       <div class="dreams__stats">
         <div class="dreams__stat">
           <span class="dreams__stat-value" style="color: var(--text-strong);"
@@ -204,8 +194,64 @@ export function renderDreams(props: DreamsProps) {
           <span class="dreams__stat-value" style="color: var(--accent-2);"
             >${props.promotedCount}</span
           >
-          <span class="dreams__stat-label">Promoted Tonight</span>
+          <span class="dreams__stat-label">Promoted Today</span>
         </div>
+      </div>
+
+      <div class="dreams__controls">
+        <div class="dreams__controls-head">
+          <div>
+            <div class="dreams__controls-title">Dreaming Phases</div>
+            <div class="dreams__controls-subtitle">
+              Light sleep sorts, deep sleep keeps, REM reflects.
+            </div>
+          </div>
+          <div class="dreams__controls-actions">
+            <button
+              class="btn btn--subtle btn--sm"
+              ?disabled=${props.modeSaving}
+              @click=${props.onRefresh}
+            >
+              ${props.statusLoading ? "Refreshing…" : "Refresh"}
+            </button>
+            <button
+              class="btn btn--sm ${props.active ? "btn--subtle" : ""}"
+              ?disabled=${props.modeSaving}
+              @click=${() => props.onToggleEnabled(!props.active)}
+            >
+              ${props.active ? "Disable Dreaming" : "Enable Dreaming"}
+            </button>
+          </div>
+        </div>
+        <div class="dreams__phase-grid">
+          ${props.phases.map(
+            (phase) => html`
+              <article class="dreams__phase ${phase.enabled ? "dreams__phase--active" : ""}">
+                <div class="dreams__phase-top">
+                  <div>
+                    <div class="dreams__phase-label">${phase.label}</div>
+                    <div class="dreams__phase-detail">${phase.detail}</div>
+                  </div>
+                  <button
+                    class="btn btn--subtle btn--sm"
+                    ?disabled=${props.modeSaving || !props.active}
+                    @click=${() => props.onTogglePhase(phase.id, !phase.enabled)}
+                  >
+                    ${phase.enabled ? "Pause" : "Enable"}
+                  </button>
+                </div>
+                <div class="dreams__phase-meta">
+                  <span>${phase.enabled ? "scheduled" : "off"}</span>
+                  <span>${phase.nextCycle ? `next ${phase.nextCycle}` : "no next run"}</span>
+                  <span>${phase.managedCronPresent ? "managed cron" : "cron missing"}</span>
+                </div>
+              </article>
+            `,
+          )}
+        </div>
+        ${props.statusError
+          ? html`<div class="dreams__controls-error">${props.statusError}</div>`
+          : nothing}
       </div>
     </section>
   `;

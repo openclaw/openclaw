@@ -10,7 +10,9 @@ const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg: OpenClawConfig, _agentId: string) => "/tmp/openclaw"),
 );
 const resolveMemorySearchConfig = vi.hoisted(() =>
-  vi.fn((_cfg: OpenClawConfig, _agentId: string) => ({ enabled: true })),
+  vi.fn<(_cfg: OpenClawConfig, _agentId: string) => { enabled: boolean } | null>(() => ({
+    enabled: true,
+  })),
 );
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 
@@ -104,12 +106,15 @@ describe("doctor.memory.status", () => {
         provider: "gemini",
         embedding: { ok: true },
         dreaming: expect.objectContaining({
-          mode: "off",
-          enabled: false,
+          enabled: true,
           shortTermCount: 0,
           promotedTotal: 0,
           promotedToday: 0,
-          managedCronPresent: false,
+          phases: expect.objectContaining({
+            deep: expect.objectContaining({
+              managedCronPresent: false,
+            }),
+          }),
         }),
       }),
       undefined,
@@ -236,10 +241,13 @@ describe("doctor.memory.status", () => {
           "memory-core": {
             config: {
               dreaming: {
-                mode: "rem",
-                cron: "0 */4 * * *",
-                recencyHalfLifeDays: 21,
-                maxAgeDays: 30,
+                phases: {
+                  deep: {
+                    cron: "0 */4 * * *",
+                    recencyHalfLifeDays: 21,
+                    maxAgeDays: 30,
+                  },
+                },
               },
             },
           },
@@ -285,17 +293,20 @@ describe("doctor.memory.status", () => {
           provider: "gemini",
           embedding: { ok: true },
           dreaming: expect.objectContaining({
-            mode: "rem",
             enabled: true,
-            frequency: "0 */4 * * *",
             timezone: "America/Los_Angeles",
-            recencyHalfLifeDays: 21,
-            maxAgeDays: 30,
             shortTermCount: 1,
             promotedTotal: 3,
             promotedToday: 2,
-            managedCronPresent: true,
-            nextRunAtMs: now + 60_000,
+            phases: expect.objectContaining({
+              deep: expect.objectContaining({
+                cron: "0 */4 * * *",
+                recencyHalfLifeDays: 21,
+                maxAgeDays: 30,
+                managedCronPresent: true,
+                nextRunAtMs: now + 60_000,
+              }),
+            }),
           }),
         }),
         undefined,
@@ -336,9 +347,7 @@ describe("doctor.memory.status", () => {
         entries: {
           "memory-core": {
             config: {
-              dreaming: {
-                mode: "core",
-              },
+              dreaming: {},
             },
           },
         },
@@ -363,8 +372,12 @@ describe("doctor.memory.status", () => {
           dreaming: expect.objectContaining({
             shortTermCount: 0,
             promotedTotal: 1,
-            managedCronPresent: false,
             storePath,
+            phases: expect.objectContaining({
+              deep: expect.objectContaining({
+                managedCronPresent: false,
+              }),
+            }),
           }),
         }),
         undefined,
@@ -416,9 +429,7 @@ describe("doctor.memory.status", () => {
         entries: {
           "memory-core": {
             config: {
-              dreaming: {
-                mode: "core",
-              },
+              dreaming: {},
             },
           },
         },

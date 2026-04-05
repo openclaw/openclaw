@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveApiKeyForProvider } from "./model-auth.js";
 import { installModelsConfigTestHooks } from "./models-config.e2e-harness.js";
@@ -15,6 +16,18 @@ const MINIMAX_BASE_URL = "https://api.minimax.io/anthropic";
 const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
 
 installModelsConfigTestHooks();
+
+function createTestModel(id: string): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 4096,
+  };
+}
 
 function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const rawHost = env.MINIMAX_API_HOST?.trim();
@@ -40,7 +53,7 @@ function buildMinimaxPortalCatalog(params: {
   explicitApiKey?: string;
   explicitBaseUrl?: string;
   hasProfiles?: boolean;
-}) {
+}): ModelProviderConfig | null {
   const apiKey =
     params.envApiKey ??
     params.explicitApiKey ??
@@ -53,7 +66,7 @@ function buildMinimaxPortalCatalog(params: {
     api: "anthropic-messages",
     authHeader: true,
     apiKey,
-    models: [{ id: "MiniMax-M2.7" }],
+    models: [createTestModel("MiniMax-M2.7")],
   };
 }
 
@@ -64,7 +77,7 @@ describe("NVIDIA provider", () => {
       provider: {
         baseUrl: NVIDIA_BASE_URL,
         api: "openai-completions",
-        models: [{ id: "nvidia/test-model" }],
+        models: [createTestModel("nvidia/test-model")],
       },
       env: { NVIDIA_API_KEY: "test-key" } as NodeJS.ProcessEnv,
       profileApiKey: undefined,
@@ -96,7 +109,7 @@ describe("MiniMax implicit provider (#15275)", () => {
         baseUrl: MINIMAX_BASE_URL,
         api: "anthropic-messages",
         authHeader: true,
-        models: [{ id: "MiniMax-M2.7" }],
+        models: [createTestModel("MiniMax-M2.7")],
       },
       env: { MINIMAX_API_KEY: "test-key" } as NodeJS.ProcessEnv,
       profileApiKey: undefined,

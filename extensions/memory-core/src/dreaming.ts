@@ -1,18 +1,16 @@
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
 import {
-  DEFAULT_MEMORY_DREAMING_CRON_EXPR,
-  DEFAULT_MEMORY_DREAMING_LIMIT,
-  DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
-  DEFAULT_MEMORY_DREAMING_MIN_SCORE,
-  DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
-  DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
-  DEFAULT_MEMORY_DREAMING_MODE,
-  DEFAULT_MEMORY_DREAMING_PRESET,
-  MEMORY_DREAMING_PRESET_DEFAULTS,
+  DEFAULT_MEMORY_DEEP_DREAMING_CRON_EXPR as DEFAULT_MEMORY_DREAMING_CRON_EXPR,
+  DEFAULT_MEMORY_DEEP_DREAMING_LIMIT as DEFAULT_MEMORY_DREAMING_LIMIT,
+  DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT as DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
+  DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE as DEFAULT_MEMORY_DREAMING_MIN_SCORE,
+  DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES as DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
+  DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS as DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
   resolveMemoryCorePluginConfig,
-  resolveMemoryDreamingConfig,
+  resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { writeDeepDreamingReport } from "./dreaming-markdown.js";
 import {
   applyShortTermPromotions,
   repairShortTermPromotionArtifacts,
@@ -81,9 +79,13 @@ export type ShortTermPromotionDreamingConfig = {
   minScore: number;
   minRecallCount: number;
   minUniqueQueries: number;
-  recencyHalfLifeDays: number;
+  recencyHalfLifeDays?: number;
   maxAgeDays?: number;
   verboseLogging: boolean;
+  storage?: {
+    mode: "inline" | "separate" | "both";
+    separateReports: boolean;
+  };
 };
 
 type ReconcileResult =
@@ -133,7 +135,9 @@ function formatRepairSummary(repair: {
 }
 
 function resolveManagedCronDescription(config: ShortTermPromotionDreamingConfig): string {
-  return `${MANAGED_DREAMING_CRON_TAG} Promote weighted short-term recalls into MEMORY.md (limit=${config.limit}, minScore=${config.minScore.toFixed(3)}, minRecallCount=${config.minRecallCount}, minUniqueQueries=${config.minUniqueQueries}, recencyHalfLifeDays=${config.recencyHalfLifeDays}, maxAgeDays=${config.maxAgeDays ?? "none"}).`;
+  const recencyHalfLifeDays =
+    config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
+  return `${MANAGED_DREAMING_CRON_TAG} Promote weighted short-term recalls into MEMORY.md (limit=${config.limit}, minScore=${config.minScore.toFixed(3)}, minRecallCount=${config.minRecallCount}, minUniqueQueries=${config.minUniqueQueries}, recencyHalfLifeDays=${recencyHalfLifeDays}, maxAgeDays=${config.maxAgeDays ?? "none"}).`;
 }
 
 function buildManagedDreamingCronJob(
@@ -263,7 +267,7 @@ export function resolveShortTermPromotionDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
 }): ShortTermPromotionDreamingConfig {
-  const resolved = resolveMemoryDreamingConfig(params);
+  const resolved = resolveMemoryDeepDreamingConfig(params);
   return {
     enabled: resolved.enabled,
     cron: resolved.cron,
@@ -275,6 +279,7 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     recencyHalfLifeDays: resolved.recencyHalfLifeDays,
     ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
     verboseLogging: resolved.verboseLogging,
+    storage: resolved.storage,
   };
 }
 
@@ -364,6 +369,8 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
     return { handled: true, reason: "memory-core: short-term dreaming disabled" };
   }
 
+  const recencyHalfLifeDays =
+    params.config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
   const workspaceCandidates = params.cfg
     ? resolveMemoryDreamingWorkspaces(params.cfg).map((entry) => entry.workspaceDir)
     : [];
@@ -392,7 +399,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
 
   if (params.config.verboseLogging) {
     params.logger.info(
-      `memory-core: dreaming verbose enabled (cron=${params.config.cron}, limit=${params.config.limit}, minScore=${params.config.minScore.toFixed(3)}, minRecallCount=${params.config.minRecallCount}, minUniqueQueries=${params.config.minUniqueQueries}, recencyHalfLifeDays=${params.config.recencyHalfLifeDays}, maxAgeDays=${params.config.maxAgeDays ?? "none"}, workspaces=${workspaces.length}).`,
+      `memory-core: dreaming verbose enabled (cron=${params.config.cron}, limit=${params.config.limit}, minScore=${params.config.minScore.toFixed(3)}, minRecallCount=${params.config.minRecallCount}, minUniqueQueries=${params.config.minUniqueQueries}, recencyHalfLifeDays=${recencyHalfLifeDays}, maxAgeDays=${params.config.maxAgeDays ?? "none"}, workspaces=${workspaces.length}).`,
     );
   }
 
@@ -401,11 +408,13 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   let failedWorkspaces = 0;
   for (const workspaceDir of workspaces) {
     try {
+      const reportLines: string[] = [];
       const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
       if (repair.changed) {
         params.logger.info(
           `memory-core: normalized recall artifacts before dreaming (${formatRepairSummary(repair)}) [workspace=${workspaceDir}].`,
         );
+        reportLines.push(`- Repaired recall artifacts: ${formatRepairSummary(repair)}.`);
       }
       const candidates = await rankShortTermPromotionCandidates({
         workspaceDir,
@@ -413,10 +422,11 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         minScore: params.config.minScore,
         minRecallCount: params.config.minRecallCount,
         minUniqueQueries: params.config.minUniqueQueries,
-        recencyHalfLifeDays: params.config.recencyHalfLifeDays,
+        recencyHalfLifeDays,
         maxAgeDays: params.config.maxAgeDays,
       });
       totalCandidates += candidates.length;
+      reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable promotion.`);
       if (params.config.verboseLogging) {
         const candidateSummary =
           candidates.length > 0
@@ -442,6 +452,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         timezone: params.config.timezone,
       });
       totalApplied += applied.applied;
+      reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
       if (params.config.verboseLogging) {
         const appliedSummary =
           applied.appliedCandidates.length > 0
@@ -456,6 +467,12 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           `memory-core: dreaming applied details [workspace=${workspaceDir}] ${appliedSummary}`,
         );
       }
+      await writeDeepDreamingReport({
+        workspaceDir,
+        bodyLines: reportLines,
+        timezone: params.config.timezone,
+        storage: params.config.storage ?? { mode: "inline", separateReports: false },
+      });
     } catch (err) {
       failedWorkspaces += 1;
       params.logger.error(
@@ -529,14 +546,11 @@ export const __testing = {
     MANAGED_DREAMING_CRON_NAME,
     MANAGED_DREAMING_CRON_TAG,
     DREAMING_SYSTEM_EVENT_TEXT,
-    DEFAULT_DREAMING_MODE: DEFAULT_MEMORY_DREAMING_MODE,
-    DEFAULT_DREAMING_PRESET: DEFAULT_MEMORY_DREAMING_PRESET,
     DEFAULT_DREAMING_CRON_EXPR: DEFAULT_MEMORY_DREAMING_CRON_EXPR,
     DEFAULT_DREAMING_LIMIT: DEFAULT_MEMORY_DREAMING_LIMIT,
     DEFAULT_DREAMING_MIN_SCORE: DEFAULT_MEMORY_DREAMING_MIN_SCORE,
     DEFAULT_DREAMING_MIN_RECALL_COUNT: DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
     DEFAULT_DREAMING_MIN_UNIQUE_QUERIES: DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
     DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS: DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
-    DREAMING_PRESET_DEFAULTS: MEMORY_DREAMING_PRESET_DEFAULTS,
   },
 };

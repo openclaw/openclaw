@@ -78,13 +78,6 @@ vi.mock("../plugins/provider-runtime.js", () => ({
       }
       return undefined;
     }
-    if (params.provider === "claude-cli") {
-      return {
-        apiKey: "claude-cli-access-token",
-        source: "Claude CLI native auth",
-        mode: "oauth" as const,
-      };
-    }
     if (params.provider !== "ollama") {
       return undefined;
     }
@@ -491,28 +484,6 @@ describe("resolveApiKeyForProvider", () => {
         }),
       ),
     ).rejects.toThrow('No API key found for provider "xai"');
-  });
-
-  it("reuses native Claude CLI auth for the claude-cli provider", async () => {
-    const resolved = await resolveApiKeyForProvider({
-      provider: "claude-cli",
-      cfg: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "claude-cli/claude-sonnet-4-6",
-            },
-          },
-        },
-      },
-      store: { version: 1, profiles: {} },
-    });
-
-    expect(resolved).toEqual({
-      apiKey: "claude-cli-access-token",
-      source: "Claude CLI native auth",
-      mode: "oauth",
-    });
   });
 
   it("prefers explicit api-key provider config over ambient auth profiles", async () => {

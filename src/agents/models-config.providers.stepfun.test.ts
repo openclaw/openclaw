@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import { upsertAuthProfile } from "./auth-profiles.js";
 import { installModelsConfigTestHooks } from "./models-config.e2e-harness.js";
 
@@ -17,13 +18,25 @@ installModelsConfigTestHooks();
 type StepFunRegion = "cn" | "intl";
 type StepFunSurface = "standard" | "plan";
 
+function createStepFunModel(id: string): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 4096,
+  };
+}
+
 function buildStepFunCatalog(params: {
   surface: StepFunSurface;
   apiKey?: string;
   explicitBaseUrl?: string;
   profileId?: string;
   env?: NodeJS.ProcessEnv;
-}) {
+}): ModelProviderConfig | null {
   if (!params.apiKey) {
     return null;
   }
@@ -38,8 +51,8 @@ function buildStepFunCatalog(params: {
     apiKey: "STEPFUN_API_KEY",
     models:
       params.surface === "plan"
-        ? EXPECTED_PLAN_MODELS.map((id) => ({ id }))
-        : EXPECTED_STANDARD_MODELS.map((id) => ({ id })),
+        ? EXPECTED_PLAN_MODELS.map(createStepFunModel)
+        : EXPECTED_STANDARD_MODELS.map(createStepFunModel),
   };
 }
 
@@ -98,6 +111,9 @@ describe("StepFun provider catalog", () => {
       apiKey: env.STEPFUN_API_KEY,
       env,
     });
+    if (!standardProvider || !planProvider) {
+      throw new Error("expected StepFun providers");
+    }
 
     expect(standardProvider).toMatchObject({
       baseUrl: "https://api.stepfun.ai/v1",

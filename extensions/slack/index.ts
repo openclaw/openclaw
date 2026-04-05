@@ -1,16 +1,29 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import { slackPlugin } from "./src/channel.js";
-import { registerSlackPluginHttpRoutes } from "./src/http/plugin-routes.js";
-import { setSlackRuntime } from "./src/runtime.js";
+import {
+  defineBundledChannelEntry,
+  loadBundledEntryExportSync,
+} from "openclaw/plugin-sdk/channel-entry-contract";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { slackPlugin } from "./src/channel.js";
-export { setSlackRuntime } from "./src/runtime.js";
+function registerSlackPluginHttpRoutes(api: OpenClawPluginApi): void {
+  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
+    specifier: "./runtime-api.js",
+    exportName: "registerSlackPluginHttpRoutes",
+  });
+  register(api);
+}
 
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "slack",
   name: "Slack",
   description: "Slack channel plugin",
-  plugin: slackPlugin,
-  setRuntime: setSlackRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "slackPlugin",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setSlackRuntime",
+  },
   registerFull: registerSlackPluginHttpRoutes,
 });

@@ -150,6 +150,7 @@ describe("anthropic-vertex implicit provider", () => {
         "anthropic-vertex": {
           baseUrl: "https://europe-west4-aiplatform.googleapis.com",
           headers: { "x-test-header": "1" },
+          models: [],
         },
       },
     });

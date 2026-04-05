@@ -20,9 +20,17 @@ describe("updateSessionStoreAfterAgentRun", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("persists claude-cli session bindings without explicit cliBackends config", async () => {
-    const cfg = {} as OpenClawConfig;
-    const sessionKey = "agent:main:explicit:test-claude-cli";
+  it("persists cli session bindings when the provider is configured as a CLI backend", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "codex-cli": { command: "codex" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:explicit:test-codex-cli";
     const sessionId = "test-openclaw-session";
     const sessionStore: Record<string, SessionEntry> = {
       [sessionKey]: {
@@ -37,8 +45,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
         durationMs: 1,
         agentMeta: {
           sessionId: "cli-session-123",
-          provider: "claude-cli",
-          model: "claude-sonnet-4-6",
+          provider: "codex-cli",
+          model: "gpt-5.4",
           cliSessionBinding: {
             sessionId: "cli-session-123",
           },
@@ -52,22 +60,20 @@ describe("updateSessionStoreAfterAgentRun", () => {
       sessionKey,
       storePath,
       sessionStore,
-      defaultProvider: "claude-cli",
-      defaultModel: "claude-sonnet-4-6",
+      defaultProvider: "codex-cli",
+      defaultModel: "gpt-5.4",
       result,
     });
 
-    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["codex-cli"]).toEqual({
       sessionId: "cli-session-123",
     });
-    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["codex-cli"]).toBe("cli-session-123");
 
     const persisted = loadSessionStore(storePath);
-    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
+    expect(persisted[sessionKey]?.cliSessionBindings?.["codex-cli"]).toEqual({
       sessionId: "cli-session-123",
     });
-    expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
+    expect(persisted[sessionKey]?.cliSessionIds?.["codex-cli"]).toBe("cli-session-123");
   });
 });

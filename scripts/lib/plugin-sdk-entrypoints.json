@@ -104,6 +104,7 @@
   "channel-actions",
   "channel-plugin-common",
   "channel-core",
+  "channel-entry-contract",
   "channel-contract",
   "channel-feedback",
   "channel-inbound",

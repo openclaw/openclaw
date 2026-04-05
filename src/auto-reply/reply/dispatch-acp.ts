@@ -106,6 +106,9 @@ async function resolveAcpAttachments(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
 ): Promise<AcpTurnAttachment[]> {
+  if (!hasInboundMediaForAcp(ctx)) {
+    return [];
+  }
   const {
     MediaAttachmentCache,
     isMediaUnderstandingSkipError,

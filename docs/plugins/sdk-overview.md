@@ -354,9 +354,9 @@ descriptor-backed placeholders for parse-time lazy loading.
 ### CLI backend registration
 
 `api.registerCliBackend(...)` lets a plugin own the default config for a local
-AI CLI backend such as `claude-cli` or `codex-cli`.
+AI CLI backend such as `codex-cli`.
 
-- The backend `id` becomes the provider prefix in model refs like `claude-cli/opus`.
+- The backend `id` becomes the provider prefix in model refs like `codex-cli/gpt-5`.
 - The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
 - User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
   plugin default before running the CLI.

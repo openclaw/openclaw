@@ -6,10 +6,11 @@ import {
   type MemoryEmbeddingProviderAdapter,
 } from "./memory-embedding-providers.js";
 
+export { listRegisteredMemoryEmbeddingProviders };
+
 export function listRegisteredMemoryEmbeddingProviderAdapters(): MemoryEmbeddingProviderAdapter[] {
   return listRegisteredMemoryEmbeddingProviders().map((entry) => entry.adapter);
 }
-
 export function listMemoryEmbeddingProviders(
   cfg?: OpenClawConfig,
 ): MemoryEmbeddingProviderAdapter[] {

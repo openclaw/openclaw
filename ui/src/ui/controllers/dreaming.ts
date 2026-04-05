@@ -1,24 +1,51 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ConfigSnapshot } from "../types.ts";
 
-export type DreamingMode = "off" | "core" | "rem" | "deep";
+export type DreamingPhaseId = "light" | "deep" | "rem";
 
-export type DreamingStatus = {
-  mode: DreamingMode;
+type DreamingPhaseStatusBase = {
   enabled: boolean;
-  frequency: string;
-  timezone?: string;
+  cron: string;
+  managedCronPresent: boolean;
+  nextRunAtMs?: number;
+};
+
+type LightDreamingStatus = DreamingPhaseStatusBase & {
+  lookbackDays: number;
+  limit: number;
+};
+
+type DeepDreamingStatus = DreamingPhaseStatusBase & {
   limit: number;
   minScore: number;
   minRecallCount: number;
   minUniqueQueries: number;
+  recencyHalfLifeDays: number;
+  maxAgeDays?: number;
+};
+
+type RemDreamingStatus = DreamingPhaseStatusBase & {
+  lookbackDays: number;
+  limit: number;
+  minPatternStrength: number;
+};
+
+export type DreamingStatus = {
+  enabled: boolean;
+  timezone?: string;
+  verboseLogging: boolean;
+  storageMode: "inline" | "separate" | "both";
+  separateReports: boolean;
   shortTermCount: number;
   promotedTotal: number;
   promotedToday: number;
-  managedCronPresent: boolean;
-  nextRunAtMs?: number;
   storePath?: string;
   storeError?: string;
+  phases: {
+    light: LightDreamingStatus;
+    deep: DeepDreamingStatus;
+    rem: RemDreamingStatus;
+  };
 };
 
 type DoctorMemoryStatusPayload = {
@@ -52,17 +79,8 @@ function normalizeTrimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeDreamingMode(value: unknown): DreamingMode {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
-  if (
-    normalized === "off" ||
-    normalized === "core" ||
-    normalized === "rem" ||
-    normalized === "deep"
-  ) {
-    return normalized;
-  }
-  return "off";
+function normalizeBoolean(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 function normalizeFiniteInt(value: unknown, fallback = 0): number {
@@ -79,47 +97,82 @@ function normalizeFiniteScore(value: unknown, fallback = 0): number {
   return Math.max(0, Math.min(1, value));
 }
 
+function normalizeStorageMode(value: unknown): DreamingStatus["storageMode"] {
+  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  if (normalized === "inline" || normalized === "separate" || normalized === "both") {
+    return normalized;
+  }
+  return "inline";
+}
+
+function normalizeNextRun(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizePhaseStatusBase(record: Record<string, unknown> | null): DreamingPhaseStatusBase {
+  return {
+    enabled: normalizeBoolean(record?.enabled, false),
+    cron: normalizeTrimmedString(record?.cron) ?? "",
+    managedCronPresent: normalizeBoolean(record?.managedCronPresent, false),
+    ...(normalizeNextRun(record?.nextRunAtMs) !== undefined
+      ? { nextRunAtMs: normalizeNextRun(record?.nextRunAtMs) }
+      : {}),
+  };
+}
+
 function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
   const record = asRecord(raw);
   if (!record) {
     return null;
   }
-  const mode = normalizeDreamingMode(record.mode);
-  const enabled = typeof record.enabled === "boolean" ? record.enabled : mode !== "off";
-  const frequency = normalizeTrimmedString(record.frequency) ?? "";
+  const phasesRecord = asRecord(record.phases);
+  const lightRecord = asRecord(phasesRecord?.light);
+  const deepRecord = asRecord(phasesRecord?.deep);
+  const remRecord = asRecord(phasesRecord?.rem);
   const timezone = normalizeTrimmedString(record.timezone);
-  const nextRunRaw = record.nextRunAtMs;
-  const nextRunAtMs =
-    typeof nextRunRaw === "number" && Number.isFinite(nextRunRaw) ? nextRunRaw : undefined;
+  const storePath = normalizeTrimmedString(record.storePath);
+  const storeError = normalizeTrimmedString(record.storeError);
 
   return {
-    mode,
-    enabled,
-    frequency,
+    enabled: normalizeBoolean(record.enabled, false),
     ...(timezone ? { timezone } : {}),
-    limit: normalizeFiniteInt(record.limit, 0),
-    minScore: normalizeFiniteScore(record.minScore, 0),
-    minRecallCount: normalizeFiniteInt(record.minRecallCount, 0),
-    minUniqueQueries: normalizeFiniteInt(record.minUniqueQueries, 0),
+    verboseLogging: normalizeBoolean(record.verboseLogging, false),
+    storageMode: normalizeStorageMode(record.storageMode),
+    separateReports: normalizeBoolean(record.separateReports, false),
     shortTermCount: normalizeFiniteInt(record.shortTermCount, 0),
     promotedTotal: normalizeFiniteInt(record.promotedTotal, 0),
     promotedToday: normalizeFiniteInt(record.promotedToday, 0),
-    managedCronPresent: record.managedCronPresent === true,
-    ...(nextRunAtMs !== undefined ? { nextRunAtMs } : {}),
-    ...(normalizeTrimmedString(record.storePath)
-      ? { storePath: normalizeTrimmedString(record.storePath) }
-      : {}),
-    ...(normalizeTrimmedString(record.storeError)
-      ? { storeError: normalizeTrimmedString(record.storeError) }
-      : {}),
+    ...(storePath ? { storePath } : {}),
+    ...(storeError ? { storeError } : {}),
+    phases: {
+      light: {
+        ...normalizePhaseStatusBase(lightRecord),
+        lookbackDays: normalizeFiniteInt(lightRecord?.lookbackDays, 0),
+        limit: normalizeFiniteInt(lightRecord?.limit, 0),
+      },
+      deep: {
+        ...normalizePhaseStatusBase(deepRecord),
+        limit: normalizeFiniteInt(deepRecord?.limit, 0),
+        minScore: normalizeFiniteScore(deepRecord?.minScore, 0),
+        minRecallCount: normalizeFiniteInt(deepRecord?.minRecallCount, 0),
+        minUniqueQueries: normalizeFiniteInt(deepRecord?.minUniqueQueries, 0),
+        recencyHalfLifeDays: normalizeFiniteInt(deepRecord?.recencyHalfLifeDays, 0),
+        ...(typeof deepRecord?.maxAgeDays === "number" && Number.isFinite(deepRecord.maxAgeDays)
+          ? { maxAgeDays: normalizeFiniteInt(deepRecord.maxAgeDays, 0) }
+          : {}),
+      },
+      rem: {
+        ...normalizePhaseStatusBase(remRecord),
+        lookbackDays: normalizeFiniteInt(remRecord?.lookbackDays, 0),
+        limit: normalizeFiniteInt(remRecord?.limit, 0),
+        minPatternStrength: normalizeFiniteScore(remRecord?.minPatternStrength, 0),
+      },
+    },
   };
 }
 
 export async function loadDreamingStatus(state: DreamingState): Promise<void> {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  if (state.dreamingStatusLoading) {
+  if (!state.client || !state.connected || state.dreamingStatusLoading) {
     return;
   }
   state.dreamingStatusLoading = true;
@@ -137,9 +190,9 @@ export async function loadDreamingStatus(state: DreamingState): Promise<void> {
   }
 }
 
-export async function updateDreamingMode(
+async function writeDreamingPatch(
   state: DreamingState,
-  mode: DreamingMode,
+  patch: Record<string, unknown>,
 ): Promise<boolean> {
   if (!state.client || !state.connected) {
     return false;
@@ -158,29 +211,10 @@ export async function updateDreamingMode(
   try {
     await state.client.request("config.patch", {
       baseHash,
-      raw: JSON.stringify({
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  mode,
-                },
-              },
-            },
-          },
-        },
-      }),
+      raw: JSON.stringify(patch),
       sessionKey: state.applySessionKey,
-      note: "Dreaming mode updated from Dreams tab.",
+      note: "Dreaming settings updated from the Dreaming tab.",
     });
-    if (state.dreamingStatus) {
-      state.dreamingStatus = {
-        ...state.dreamingStatus,
-        mode,
-        enabled: mode !== "off",
-      };
-    }
     return true;
   } catch (err) {
     const message = String(err);
@@ -190,4 +224,67 @@ export async function updateDreamingMode(
   } finally {
     state.dreamingModeSaving = false;
   }
+}
+
+export async function updateDreamingEnabled(
+  state: DreamingState,
+  enabled: boolean,
+): Promise<boolean> {
+  const ok = await writeDreamingPatch(state, {
+    plugins: {
+      entries: {
+        "memory-core": {
+          config: {
+            dreaming: {
+              enabled,
+            },
+          },
+        },
+      },
+    },
+  });
+  if (ok && state.dreamingStatus) {
+    state.dreamingStatus = {
+      ...state.dreamingStatus,
+      enabled,
+    };
+  }
+  return ok;
+}
+
+export async function updateDreamingPhaseEnabled(
+  state: DreamingState,
+  phase: DreamingPhaseId,
+  enabled: boolean,
+): Promise<boolean> {
+  const ok = await writeDreamingPatch(state, {
+    plugins: {
+      entries: {
+        "memory-core": {
+          config: {
+            dreaming: {
+              phases: {
+                [phase]: {
+                  enabled,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (ok && state.dreamingStatus) {
+    state.dreamingStatus = {
+      ...state.dreamingStatus,
+      phases: {
+        ...state.dreamingStatus.phases,
+        [phase]: {
+          ...state.dreamingStatus.phases[phase],
+          enabled,
+        },
+      },
+    };
+  }
+  return ok;
 }

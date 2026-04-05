@@ -9,27 +9,15 @@ import { extractPayloadText } from "../src/gateway/test-helpers.agent-results.js
 import { getFreePortBlockWithPermissionFallback } from "../src/test-utils/ports.js";
 import { GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 
-const DEFAULT_CLAUDE_ARGS = [
-  "-p",
-  "--output-format",
-  "stream-json",
-  "--include-partial-messages",
-  "--verbose",
-  "--permission-mode",
-  "bypassPermissions",
+const DEFAULT_CODEX_ARGS = [
+  "exec",
+  "--json",
+  "--color",
+  "never",
+  "--sandbox",
+  "read-only",
+  "--skip-git-repo-check",
 ];
-const DEFAULT_CLEAR_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"];
-
-function withMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
-  const next = [...args];
-  if (!next.includes("--strict-mcp-config")) {
-    next.push("--strict-mcp-config");
-  }
-  if (!next.includes("--mcp-config")) {
-    next.push("--mcp-config", mcpConfigPath);
-  }
-  return next;
-}
 
 async function connectClient(params: { url: string; token: string }) {
   return await new Promise<GatewayClient>((resolve, reject) => {
@@ -100,16 +88,11 @@ async function main() {
 
   const cfg = loadConfig();
   const existingBackends = cfg.agents?.defaults?.cliBackends ?? {};
-  const claudeBackend = existingBackends["claude-cli"] ?? {};
+  const codexBackend = existingBackends["codex-cli"] ?? {};
   const cliCommand =
-    process.env.OPENCLAW_LIVE_CLI_BACKEND_COMMAND ?? claudeBackend.command ?? "claude";
-  let cliArgs = claudeBackend.args ?? DEFAULT_CLAUDE_ARGS;
-  const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
-  await fs.writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
-  cliArgs = withMcpConfigOverrides(cliArgs, mcpConfigPath);
-  const cliClearEnv = (claudeBackend.clearEnv ?? DEFAULT_CLEAR_ENV).filter(
-    (name) => !preservedEnv.has(name),
-  );
+    process.env.OPENCLAW_LIVE_CLI_BACKEND_COMMAND ?? codexBackend.command ?? "codex";
+  const cliArgs = codexBackend.args ?? DEFAULT_CODEX_ARGS;
+  const cliClearEnv = (codexBackend.clearEnv ?? []).filter((name) => !preservedEnv.has(name));
   const preservedCliEnv = Object.fromEntries(
     [...preservedEnv]
       .map((name) => [name, process.env[name]])
@@ -122,12 +105,12 @@ async function main() {
       defaults: {
         ...cfg.agents?.defaults,
         workspace: workspaceRootDir,
-        model: { primary: "claude-cli/claude-sonnet-4-6" },
-        models: { "claude-cli/claude-sonnet-4-6": {} },
+        model: { primary: "codex-cli/gpt-5.4" },
+        models: { "codex-cli/gpt-5.4": {} },
         cliBackends: {
           ...existingBackends,
-          "claude-cli": {
-            ...claudeBackend,
+          "codex-cli": {
+            ...codexBackend,
             command: cliCommand,
             args: cliArgs,
             clearEnv: cliClearEnv.length > 0 ? cliClearEnv : undefined,

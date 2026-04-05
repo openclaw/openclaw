@@ -8,7 +8,7 @@ describe("talk.voiceAliases", () => {
       await writeOpenClawConfig(home, {
         talk: {
           voiceAliases: {
-            Clawd: "EXAVITQu4vr4xnSDxMaL",
+            Clawd: "VoiceAlias1234567890",
             Roger: "CwhRBWXzGAHq8TQ4Fs17",
           },
         },
@@ -19,7 +19,7 @@ describe("talk.voiceAliases", () => {
       expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "talk")).toBe(true);
       expect(snap.sourceConfig.talk?.providers?.elevenlabs?.voiceAliases).toEqual({
-        Clawd: "EXAVITQu4vr4xnSDxMaL",
+        Clawd: "VoiceAlias1234567890",
         Roger: "CwhRBWXzGAHq8TQ4Fs17",
       });
     });

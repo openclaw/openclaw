@@ -75,7 +75,7 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 
 The Control UI can localize itself on first load based on your browser locale, and you can override it later from the language picker in the Access card.
 
-- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`
+- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `tr`, `uk`, `id`, `pl`
 - Non-English translations are lazy-loaded in the browser.
 - The selected locale is saved in browser storage and reused on future visits.
 - Missing translation keys fall back to English.

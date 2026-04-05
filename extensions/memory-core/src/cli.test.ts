@@ -367,7 +367,7 @@ describe("memory cli", () => {
       await runMemoryCli(["status"]);
 
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Recall store: 1 entries"));
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: off"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: 0 3 * * *"));
       expect(close).toHaveBeenCalled();
     });
   });

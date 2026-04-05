@@ -11,7 +11,6 @@ import type { CliBackendConfig } from "../../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { extensionForMime } from "../../media/mime.js";
-import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
@@ -41,16 +40,6 @@ export function resolveCliRunQueueKey(params: {
   if (params.serialize === false) {
     return `${params.backendId}:${params.runId}`;
   }
-  if (isClaudeCliProvider(params.backendId)) {
-    const sessionId = params.cliSessionId?.trim();
-    if (sessionId) {
-      return `${params.backendId}:session:${sessionId}`;
-    }
-    const workspaceDir = params.workspaceDir.trim();
-    if (workspaceDir) {
-      return `${params.backendId}:workspace:${workspaceDir}`;
-    }
-  }
   return params.backendId;
 }
 
@@ -66,6 +55,7 @@ export function buildSystemPrompt(params: {
   contextFiles?: EmbeddedContextFile[];
   modelDisplay: string;
   agentId?: string;
+  backendId?: string;
 }) {
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
@@ -89,7 +79,7 @@ export function buildSystemPrompt(params: {
   });
   const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
   const ownerDisplay = resolveOwnerDisplaySetting(params.config);
-  return buildAgentSystemPrompt({
+  const prompt = buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
@@ -110,6 +100,7 @@ export function buildSystemPrompt(params: {
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
   });
+  return prompt;
 }
 
 export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {

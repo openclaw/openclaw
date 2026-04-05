@@ -1,6 +1,7 @@
 // Private runtime barrel for the bundled Zalo extension.
 // Keep this barrel thin and aligned with the local extension surface.
 
+export { zaloPlugin } from "./src/channel.js";
 export * from "./api.js";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 export type { OpenClawConfig, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
@@ -92,3 +93,4 @@ export type {
   RegisterWebhookPluginRouteOptions,
   RegisterWebhookTargetOptions,
 } from "openclaw/plugin-sdk/webhook-ingress";
+export { setZaloRuntime } from "./src/runtime.js";

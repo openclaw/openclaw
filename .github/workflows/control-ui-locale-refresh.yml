@@ -27,7 +27,24 @@ concurrency:
 jobs:
   refresh:
     if: github.repository == 'openclaw/openclaw'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        locale:
+          - zh-CN
+          - zh-TW
+          - pt-BR
+          - de
+          - es
+          - ja-JP
+          - ko
+          - fr
+          - tr
+          - id
+          - pl
     runs-on: ubuntu-latest
+    name: Refresh ${{ matrix.locale }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -58,20 +75,33 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCLAW_CONTROL_UI_I18N_MODEL: gpt-5.4
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
-        run: pnpm ui:i18n:sync
+        run: node --import tsx scripts/control-ui-i18n.ts sync --locale "${{ matrix.locale }}" --write
 
       - name: Commit and push locale updates
         env:
+          LOCALE: ${{ matrix.locale }}
           TARGET_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          if git diff --quiet; then
-            echo "No control UI locale changes."
+          if git diff --quiet -- ui/src/i18n; then
+            echo "No control UI locale changes for ${LOCALE}."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add ui/src/i18n package.json scripts/control-ui-i18n.ts
-          git commit -m "chore(ui): refresh control UI locale files"
-          git push origin HEAD:"${TARGET_BRANCH}"
+          git add -A ui/src/i18n
+          FAST_COMMIT=1 git commit -m "chore(ui): refresh ${LOCALE} control ui locale"
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin "${TARGET_BRANCH}"
+            git rebase "origin/${TARGET_BRANCH}"
+            if git push origin HEAD:"${TARGET_BRANCH}"; then
+              exit 0
+            fi
+            echo "Push attempt ${attempt} for ${LOCALE} failed; retrying."
+            sleep $((attempt * 2))
+          done
+
+          echo "Failed to push ${LOCALE} locale update after retries."
+          exit 1

@@ -66,33 +66,40 @@ function createCommandContext(args?: string): PluginCommandContext {
 }
 
 describe("memory-core /dreaming command", () => {
-  it("registers with an options-aware description", () => {
+  it("registers with a phase-oriented description", () => {
     const { command } = createHarness();
     expect(command.name).toBe("dreaming");
     expect(command.acceptsArgs).toBe(true);
-    expect(command.description).toContain("off|core|rem|deep");
+    expect(command.description).toContain("dreaming phases");
   });
 
-  it("shows mode explanations when invoked without args", async () => {
+  it("shows phase explanations when invoked without args", async () => {
     const { command } = createHarness();
     const result = await command.handler(createCommandContext());
 
-    expect(result.text).toContain("Usage: /dreaming off|core|rem|deep");
+    expect(result.text).toContain("Usage: /dreaming status");
     expect(result.text).toContain("Dreaming status:");
-    expect(result.text).toContain("- off: disable automatic short-term to long-term promotion.");
-    expect(result.text).toContain("- core: cadence=0 3 * * *;");
-    expect(result.text).toContain("- rem: cadence=0 */6 * * *;");
-    expect(result.text).toContain("- deep: cadence=0 */12 * * *;");
+    expect(result.text).toContain("- light: sorts recent memory traces into the daily note.");
+    expect(result.text).toContain(
+      "- deep: promotes durable memories into MEMORY.md and handles recovery when memory is thin.",
+    );
+    expect(result.text).toContain(
+      "- rem: writes reflection and pattern notes into the daily note.",
+    );
   });
 
-  it("persists mode changes under plugins.entries.memory-core.config.dreaming.mode", async () => {
+  it("persists global enablement under plugins.entries.memory-core.config.dreaming.enabled", async () => {
     const { command, runtime, getRuntimeConfig } = createHarness({
       plugins: {
         entries: {
           "memory-core": {
             config: {
               dreaming: {
-                minScore: 0.9,
+                phases: {
+                  deep: {
+                    minScore: 0.9,
+                  },
+                },
               },
             },
           },
@@ -100,15 +107,34 @@ describe("memory-core /dreaming command", () => {
       },
     });
 
-    const result = await command.handler(createCommandContext("rem"));
+    const result = await command.handler(createCommandContext("off"));
 
     expect(runtime.config.writeConfigFile).toHaveBeenCalledTimes(1);
     expect(resolveStoredDreaming(getRuntimeConfig())).toMatchObject({
-      mode: "rem",
-      minScore: 0.9,
+      enabled: false,
+      phases: {
+        deep: {
+          minScore: 0.9,
+        },
+      },
     });
-    expect(result.text).toContain("Dreaming mode set to rem.");
-    expect(result.text).toContain("minScore=0.9");
+    expect(result.text).toContain("Dreaming disabled.");
+  });
+
+  it("persists phase changes under plugins.entries.memory-core.config.dreaming.phases", async () => {
+    const { command, runtime, getRuntimeConfig } = createHarness();
+
+    const result = await command.handler(createCommandContext("disable rem"));
+
+    expect(runtime.config.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(resolveStoredDreaming(getRuntimeConfig())).toMatchObject({
+      phases: {
+        rem: {
+          enabled: false,
+        },
+      },
+    });
+    expect(result.text).toContain("REM phase disabled.");
   });
 
   it("returns status without mutating config", async () => {
@@ -118,10 +144,17 @@ describe("memory-core /dreaming command", () => {
           "memory-core": {
             config: {
               dreaming: {
-                mode: "deep",
                 timezone: "America/Los_Angeles",
-                recencyHalfLifeDays: 21,
-                maxAgeDays: 45,
+                storage: {
+                  mode: "both",
+                  separateReports: true,
+                },
+                phases: {
+                  deep: {
+                    recencyHalfLifeDays: 21,
+                    maxAgeDays: 45,
+                  },
+                },
               },
             },
           },
@@ -132,10 +165,10 @@ describe("memory-core /dreaming command", () => {
     const result = await command.handler(createCommandContext("status"));
 
     expect(result.text).toContain("Dreaming status:");
-    expect(result.text).toContain("- mode: deep");
-    expect(result.text).toContain("- cadence: 0 */12 * * * (America/Los_Angeles)");
-    expect(result.text).toContain("- aging: recencyHalfLifeDays=21, maxAgeDays=45");
-    expect(result.text).toContain("- verboseLogging: off");
+    expect(result.text).toContain("- enabled: on (America/Los_Angeles)");
+    expect(result.text).toContain("- storage: both + reports");
+    expect(result.text).toContain("recencyHalfLifeDays=21");
+    expect(result.text).toContain("maxAgeDays=45");
     expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
   });
 
@@ -143,7 +176,7 @@ describe("memory-core /dreaming command", () => {
     const { command, runtime } = createHarness();
     const result = await command.handler(createCommandContext("unknown-mode"));
 
-    expect(result.text).toContain("Usage: /dreaming off|core|rem|deep");
+    expect(result.text).toContain("Usage: /dreaming status");
     expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
   });
 });

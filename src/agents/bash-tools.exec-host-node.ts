@@ -14,10 +14,8 @@ import {
   describeInterpreterInlineEval,
   detectInterpreterInlineEvalArgv,
 } from "../infra/exec-inline-eval.js";
-import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
-import { logInfo } from "../logger.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -193,13 +191,6 @@ export async function executeNodeHostCommand(
       // Fall back to requiring approval if node approvals cannot be fetched.
     }
   }
-  const obfuscation = detectCommandObfuscation(params.command);
-  if (obfuscation.detected) {
-    logInfo(
-      `exec: obfuscation detected (node=${nodeQuery ?? "default"}): ${obfuscation.reasons.join(", ")}`,
-    );
-    params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
-  }
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -207,9 +198,7 @@ export async function executeNodeHostCommand(
       analysisOk,
       allowlistSatisfied,
       durableApprovalSatisfied,
-    }) ||
-    inlineEvalHit !== null ||
-    obfuscation.detected;
+    }) || inlineEvalHit !== null;
   const invokeTimeoutMs = Math.max(
     10_000,
     (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) * 1000 +
@@ -294,7 +283,6 @@ export async function executeNodeHostCommand(
       const { approvedByAsk, deniedReason } = execHostShared.createExecApprovalDecisionState({
         decision: preResolvedDecision,
         askFallback,
-        obfuscationDetected: obfuscation.detected,
       });
       if (deniedReason || !approvedByAsk) {
         throw new Error(
@@ -341,7 +329,6 @@ export async function executeNodeHostCommand(
         } = execHostShared.createExecApprovalDecisionState({
           decision,
           askFallback,
-          obfuscationDetected: obfuscation.detected,
         });
         let approvedByAsk = initialApprovedByAsk;
         let approvalDecision: "allow-once" | "allow-always" | null = null;

@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
-import { renderDreams, type DreamsProps } from "./dreams.ts";
+import { describe, expect, it, vi } from "vitest";
+import { renderDreaming, type DreamingProps } from "./dreaming.ts";
 
-function buildProps(overrides?: Partial<DreamsProps>): DreamsProps {
+function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   return {
     active: true,
     shortTermCount: 47,
@@ -12,24 +12,50 @@ function buildProps(overrides?: Partial<DreamsProps>): DreamsProps {
     promotedCount: 12,
     dreamingOf: null,
     nextCycle: "4:00 AM",
-    mode: "core",
+    timezone: "America/Los_Angeles",
+    phases: [
+      {
+        id: "light",
+        label: "Light",
+        detail: "sort and stage the day",
+        enabled: true,
+        nextCycle: "1:00 AM",
+        managedCronPresent: true,
+      },
+      {
+        id: "deep",
+        label: "Deep",
+        detail: "promote durable memory",
+        enabled: true,
+        nextCycle: "3:00 AM",
+        managedCronPresent: true,
+      },
+      {
+        id: "rem",
+        label: "REM",
+        detail: "surface themes and reflections",
+        enabled: false,
+        nextCycle: null,
+        managedCronPresent: false,
+      },
+    ],
     statusLoading: false,
     statusError: null,
     modeSaving: false,
-    managedCronPresent: true,
     onRefresh: () => {},
-    onModeChange: () => {},
+    onToggleEnabled: () => {},
+    onTogglePhase: () => {},
     ...overrides,
   };
 }
 
-function renderInto(props: DreamsProps): HTMLDivElement {
+function renderInto(props: DreamingProps): HTMLDivElement {
   const container = document.createElement("div");
-  render(renderDreams(props), container);
+  render(renderDreaming(props), container);
   return container;
 }
 
-describe("dreams view", () => {
+describe("dreaming view", () => {
   it("renders the sleeping lobster SVG", () => {
     const container = renderInto(buildProps());
     const svg = container.querySelector(".dreams__lobster svg");
@@ -78,18 +104,10 @@ describe("dreams view", () => {
     expect(text?.textContent).toBe("reindexing old chats…");
   });
 
-  it("cycles through phrases when dreamingOf is null", () => {
-    const container = renderInto(buildProps({ dreamingOf: null }));
-    const text = container.querySelector(".dreams__bubble-text");
-    // Should be one of the built-in phrases, not empty
-    expect(text?.textContent?.length).toBeGreaterThan(5);
-    expect(text?.textContent).toContain("…");
-  });
-
   it("shows active status label when active", () => {
     const container = renderInto(buildProps({ active: true }));
     const label = container.querySelector(".dreams__status-label");
-    expect(label?.textContent).toBe("Memory Dreaming Active");
+    expect(label?.textContent).toBe("Dreaming Active");
   });
 
   it("shows idle status label when inactive", () => {
@@ -109,19 +127,25 @@ describe("dreams view", () => {
     expect(detail?.textContent).toContain("4:00 AM");
   });
 
-  it("omits next cycle when null", () => {
-    const container = renderInto(buildProps({ nextCycle: null }));
-    const detail = container.querySelector(".dreams__status-detail span");
-    expect(detail?.textContent).not.toContain("next cycle");
+  it("renders phase controls", () => {
+    const container = renderInto(buildProps());
+    expect(container.querySelector(".dreams__controls")).not.toBeNull();
+    expect(container.querySelectorAll(".dreams__phase").length).toBe(3);
   });
 
-  it("does not render setup controls in the dreams canvas", () => {
-    const container = renderInto(buildProps({ mode: "rem" }));
-    expect(container.querySelector(".dreams__controls")).toBeNull();
-  });
-
-  it("does not render canvas setup errors", () => {
+  it("renders control error when present", () => {
     const container = renderInto(buildProps({ statusError: "patch failed" }));
-    expect(container.querySelector(".dreams__controls-error")).toBeNull();
+    expect(container.querySelector(".dreams__controls-error")?.textContent).toContain(
+      "patch failed",
+    );
+  });
+
+  it("wires phase toggle callbacks", () => {
+    const onTogglePhase = vi.fn();
+    const container = renderInto(buildProps({ onTogglePhase }));
+
+    container.querySelector<HTMLButtonElement>(".dreams__phase .btn")?.click();
+
+    expect(onTogglePhase).toHaveBeenCalled();
   });
 });

@@ -1,25 +1,27 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import { discordPlugin } from "./src/channel.js";
-import { setDiscordRuntime } from "./src/runtime.js";
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { discordPlugin } from "./src/channel.js";
-export { setDiscordRuntime } from "./src/runtime.js";
-
-type DiscordSubagentHooksModule = typeof import("./src/subagent-hooks.js");
+type DiscordSubagentHooksModule = typeof import("./api.js");
 
 let discordSubagentHooksPromise: Promise<DiscordSubagentHooksModule> | null = null;
 
 function loadDiscordSubagentHooksModule() {
-  discordSubagentHooksPromise ??= import("./src/subagent-hooks.js");
+  discordSubagentHooksPromise ??= import("./api.js");
   return discordSubagentHooksPromise;
 }
 
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "discord",
   name: "Discord",
   description: "Discord channel plugin",
-  plugin: discordPlugin,
-  setRuntime: setDiscordRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "discordPlugin",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setDiscordRuntime",
+  },
   registerFull(api) {
     api.on("subagent_spawning", async (event) => {
       const { handleDiscordSubagentSpawning } = await loadDiscordSubagentHooksModule();

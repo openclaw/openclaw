@@ -1,5 +1,4 @@
 import type { CliBackendConfig } from "../config/types.js";
-import { isClaudeCliProvider } from "../plugin-sdk/anthropic-cli.js";
 import { isRecord } from "../utils.js";
 
 type CliUsage = {
@@ -225,63 +224,6 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
   return { text, sessionId, usage };
 }
 
-function parseClaudeCliJsonlResult(params: {
-  providerId: string;
-  parsed: Record<string, unknown>;
-  sessionId?: string;
-  usage?: CliUsage;
-}): CliOutput | null {
-  if (!isClaudeCliProvider(params.providerId)) {
-    return null;
-  }
-  if (
-    typeof params.parsed.type === "string" &&
-    params.parsed.type === "result" &&
-    typeof params.parsed.result === "string"
-  ) {
-    const resultText = params.parsed.result.trim();
-    if (resultText) {
-      return { text: resultText, sessionId: params.sessionId, usage: params.usage };
-    }
-    // Claude may finish with an empty result after tool-only work. Keep the
-    // resolved session handle and usage instead of dropping them.
-    return { text: "", sessionId: params.sessionId, usage: params.usage };
-  }
-  return null;
-}
-
-function parseClaudeCliStreamingDelta(params: {
-  providerId: string;
-  parsed: Record<string, unknown>;
-  textSoFar: string;
-  sessionId?: string;
-  usage?: CliUsage;
-}): CliStreamingDelta | null {
-  if (!isClaudeCliProvider(params.providerId)) {
-    return null;
-  }
-  if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
-    return null;
-  }
-  const event = params.parsed.event;
-  if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
-    return null;
-  }
-  const delta = event.delta;
-  if (delta.type !== "text_delta" || typeof delta.text !== "string") {
-    return null;
-  }
-  if (!delta.text) {
-    return null;
-  }
-  return {
-    text: `${params.textSoFar}${delta.text}`,
-    delta: delta.text,
-    sessionId: params.sessionId,
-    usage: params.usage,
-  };
-}
-
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -301,18 +243,27 @@ export function createCliJsonlStreamingParser(params: {
       usage = toCliUsage(parsed.usage) ?? usage;
     }
 
-    const delta = parseClaudeCliStreamingDelta({
-      providerId: params.providerId,
-      parsed,
-      textSoFar: assistantText,
+    const nextText =
+      collectCliText(parsed.message) ||
+      collectCliText(parsed.content) ||
+      collectCliText(parsed.result) ||
+      collectCliText(parsed.response);
+    if (!nextText) {
+      return;
+    }
+    const deltaText = nextText.startsWith(assistantText)
+      ? nextText.slice(assistantText.length)
+      : nextText;
+    if (!deltaText) {
+      return;
+    }
+    assistantText = nextText;
+    params.onAssistantDelta({
+      text: assistantText,
+      delta: deltaText,
       sessionId,
       usage,
     });
-    if (!delta) {
-      return;
-    }
-    assistantText = delta.text;
-    params.onAssistantDelta(delta);
   };
 
   const flushLines = (flushPartial: boolean) => {
@@ -360,7 +311,7 @@ export function createCliJsonlStreamingParser(params: {
 export function parseCliJsonl(
   raw: string,
   backend: CliBackendConfig,
-  providerId: string,
+  _providerId: string,
 ): CliOutput | null {
   const lines = raw
     .split(/\r?\n/g)
@@ -382,22 +333,21 @@ export function parseCliJsonl(
       }
       usage = readCliUsage(parsed) ?? usage;
 
-      const claudeResult = parseClaudeCliJsonlResult({
-        providerId,
-        parsed,
-        sessionId,
-        usage,
-      });
-      if (claudeResult) {
-        return claudeResult;
-      }
-
       const item = isRecord(parsed.item) ? parsed.item : null;
       if (item && typeof item.text === "string") {
         const type = typeof item.type === "string" ? item.type.toLowerCase() : "";
         if (!type || type.includes("message")) {
           texts.push(item.text);
+          continue;
         }
+      }
+      const nextText =
+        collectCliText(parsed.message) ||
+        collectCliText(parsed.content) ||
+        collectCliText(parsed.result) ||
+        collectCliText(parsed.response);
+      if (nextText) {
+        texts.push(nextText);
       }
     }
   }

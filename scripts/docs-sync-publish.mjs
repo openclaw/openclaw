@@ -81,6 +81,13 @@ const GENERATED_LOCALES = [
     navMode: "clone-en",
   },
   {
+    language: "uk",
+    dir: "uk",
+    navFile: "uk-navigation.json",
+    tmFile: "uk.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
     language: "id",
     dir: "id",
     navFile: "id-navigation.json",

@@ -162,7 +162,6 @@ describe("memory_search recall tracking", () => {
             "memory-core": {
               config: {
                 dreaming: {
-                  mode: "core",
                   timezone: "Europe/London",
                 },
               },

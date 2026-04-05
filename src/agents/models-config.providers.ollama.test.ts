@@ -95,12 +95,12 @@ describe("Ollama provider", () => {
     if (!provider) {
       return undefined;
     }
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       VITEST: "1",
       NODE_ENV: "test",
       ...params.env,
-    } satisfies NodeJS.ProcessEnv;
+    };
     const result = await runProviderCatalog({
       provider,
       config: params.config ?? {},
