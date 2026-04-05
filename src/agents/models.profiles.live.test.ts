@@ -150,6 +150,18 @@ function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not(?:[\s_-]+)?found/i.test(msg)) {
     return true;
   }
+  if (/does not exist or you do not have access/i.test(msg)) {
+    return true;
+  }
+  if (/deprecated/i.test(msg) && /upgrade to/i.test(msg)) {
+    return true;
+  }
+  if (/stealth model/i.test(msg) && /find it here/i.test(msg)) {
+    return true;
+  }
+  if (/is not a valid model id/i.test(msg)) {
+    return true;
+  }
   return false;
 }
 
@@ -188,7 +200,11 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
     msg.includes("no allowed providers are available") ||
     msg.includes("provider unavailable") ||
     msg.includes("upstream provider unavailable") ||
-    msg.includes("upstream error from google")
+    msg.includes("upstream error from google") ||
+    msg.includes("temporarily rate-limited upstream") ||
+    msg.includes("unable to access non-serverless model") ||
+    msg.includes("create and start a new dedicated endpoint") ||
+    msg.includes("no available capacity was found for the model")
   );
 }
 
@@ -199,6 +215,21 @@ function isOllamaUnavailableErrorMessage(raw: string): boolean {
     (msg.includes("127.0.0.1:11434") && msg.includes("econnrefused")) ||
     (msg.includes("localhost:11434") && msg.includes("econnrefused"))
   );
+}
+
+function isAudioOnlyModelErrorMessage(raw: string): boolean {
+  return /requires that either input content or output modality contain audio/i.test(raw);
+}
+
+function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
+  return (
+    /does not support parameter reasoningeffort/i.test(raw) ||
+    /unsupported value:\s*'low'.*reasoning\.effort.*supported values are:\s*'medium'/i.test(raw)
+  );
+}
+
+function isUnsupportedThinkingToggleErrorMessage(raw: string): boolean {
+  return /does not support parameter [`"]?enable_thinking[`"]?/i.test(raw);
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -260,6 +291,18 @@ function resolveTestReasoning(
     return undefined;
   }
   const id = model.id.toLowerCase();
+  if (id.includes("deep-research")) {
+    return "medium";
+  }
+  if (id === "gpt-5.4-pro") {
+    return "medium";
+  }
+  if (model.provider === "openrouter" && id.startsWith("qwq")) {
+    return undefined;
+  }
+  if (model.provider === "xai" && id.startsWith("grok-4")) {
+    return undefined;
+  }
   if (model.provider === "openai" || model.provider === "openai-codex") {
     if (id.includes("pro")) {
       return "high";
@@ -773,6 +816,21 @@ describeLive("live models (profile keys)", () => {
             if (allowNotFoundSkip && isProviderUnavailableErrorMessage(message)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (provider unavailable)`);
+              break;
+            }
+            if (allowNotFoundSkip && isAudioOnlyModelErrorMessage(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (audio-only model)`);
+              break;
+            }
+            if (allowNotFoundSkip && isUnsupportedReasoningEffortErrorMessage(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (reasoning unsupported)`);
+              break;
+            }
+            if (allowNotFoundSkip && isUnsupportedThinkingToggleErrorMessage(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (thinking toggle unsupported)`);
               break;
             }
             if (
