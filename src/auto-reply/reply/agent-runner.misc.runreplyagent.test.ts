@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __testing as embeddedRunsTesting } from "../../agents/pi-embedded-runner/runs.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
@@ -12,7 +14,9 @@ import {
   registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
+import { __testing as abortTesting, tryFastAbortFromMessage } from "./abort.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import { buildTestCtx } from "./test-ctx.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
@@ -32,6 +36,22 @@ const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const compactState = vi.hoisted(() => ({
+  compactEmbeddedPiSessionMock: vi.fn(),
+  actualCompactEmbeddedPiSession: undefined as
+    | typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession
+    | undefined,
+}));
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -49,8 +69,11 @@ vi.mock("../../agents/pi-embedded.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/pi-embedded.js")>(
     "../../agents/pi-embedded.js",
   );
+  compactState.actualCompactEmbeddedPiSession = actual.compactEmbeddedPiSession;
   return {
     ...actual,
+    compactEmbeddedPiSession: (params: unknown) =>
+      compactState.compactEmbeddedPiSessionMock(params),
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
   };
@@ -110,10 +133,19 @@ beforeEach(() => {
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  compactState.compactEmbeddedPiSessionMock.mockReset();
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
   resetSystemEventsForTest();
+  embeddedRunsTesting.resetActiveEmbeddedRuns();
+  abortTesting.resetDepsForTests();
+  compactState.compactEmbeddedPiSessionMock.mockImplementation((params: unknown) => {
+    if (!compactState.actualCompactEmbeddedPiSession) {
+      throw new Error("compactEmbeddedPiSession actual implementation unavailable");
+    }
+    return compactState.actualCompactEmbeddedPiSession(params as never);
+  });
 
   // Default: no provider switch; execute the chosen provider+model.
   runWithModelFallbackMock.mockImplementation(
@@ -129,6 +161,8 @@ afterEach(() => {
   vi.useRealTimers();
   resetSystemEventsForTest();
   clearMemoryPluginState();
+  abortTesting.resetDepsForTests();
+  embeddedRunsTesting.resetActiveEmbeddedRuns();
 });
 
 describe("runReplyAgent onAgentRunStart", () => {
@@ -519,6 +553,142 @@ describe("runReplyAgent auto-compaction token update", () => {
     } as unknown as FollowupRun;
     return { typing, sessionCtx, resolvedQueue, followupRun };
   }
+
+  it("lets /stop abort a run that is still in preflight compaction", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-stop-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionFile = "session-relative.jsonl";
+    const workspaceDir = tmp;
+    const transcriptPath = path.join(tmp, sessionFile);
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        message: {
+          role: "user",
+          content: "x".repeat(320_000),
+          timestamp: Date.now(),
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sessionFile,
+      totalTokens: 10,
+      totalTokensFresh: false,
+      compactionCount: 1,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    const compactionDeferred = createDeferred<{
+      ok: true;
+      compacted: true;
+      result: {
+        summary: string;
+        firstKeptEntryId: string;
+        tokensBefore: number;
+        tokensAfter: number;
+      };
+    }>();
+
+    compactState.compactEmbeddedPiSessionMock.mockImplementationOnce(
+      async () => await compactionDeferred.promise,
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+    });
+
+    abortTesting.setDepsForTests({
+      getAcpSessionManager: (() =>
+        ({
+          resolveSession: () => ({ kind: "none" }),
+          cancelSession: async () => {},
+        }) as never) as never,
+      getLatestSubagentRunByChildSessionKey: () => null,
+      listSubagentRunsForController: () => [],
+      markSubagentRunTerminated: () => 0,
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      config: cfg,
+      sessionFile,
+      workspaceDir,
+    });
+
+    const runPromise = runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(compactState.compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
+      });
+
+      const abortResult = await tryFastAbortFromMessage({
+        ctx: buildTestCtx({
+          Body: "/stop",
+          RawBody: "/stop",
+          CommandBody: "/stop",
+          CommandSource: "text",
+          CommandAuthorized: true,
+          ChatType: "direct",
+          Provider: "whatsapp",
+          Surface: "whatsapp",
+          From: "whatsapp:+15550001111",
+          To: "whatsapp:+15550002222",
+          SessionKey: sessionKey,
+        }),
+        cfg,
+      });
+
+      expect(abortResult).toMatchObject({
+        handled: true,
+        aborted: true,
+      });
+    } finally {
+      compactionDeferred.resolve({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "compacted",
+          firstKeptEntryId: "first-kept",
+          tokensBefore: 90_000,
+          tokensAfter: 8_000,
+        },
+      });
+      await runPromise;
+    }
+  });
 
   it("updates totalTokens after auto-compaction using lastCallUsage", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-tokens-"));
