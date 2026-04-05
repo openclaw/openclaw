@@ -96,6 +96,36 @@ Model note: while many providers/models are supported, for the best experience a
 - Models config + CLI: [Models](https://docs.openclaw.ai/concepts/models)
 - Auth profile rotation (OAuth vs API keys) + fallbacks: [Model failover](https://docs.openclaw.ai/concepts/model-failover)
 
+## Free model providers
+
+### Gemini AI Cloud by Rocket-Hosting
+
+[Gemini AI Cloud](https://github.com/Rocket-Hosting/gemini-ai-cloud) is a lightweight, OpenAI-compatible API proxy for Google's Gemini AI models, offering free access to a variety of models for testing and evaluation.
+
+**Available models** (append `:search` to any model ID for automatic web search grounding):
+
+- `gemini-3-pro-preview`
+- `gemini-3.1-pro-preview` (replaces deprecated `gemini-3.0-pro:preview`)
+- `gemini-3-flash-preview`
+- `gemini-3.1-flash-lite-preview`
+- `gemini-2.5-pro`
+- `gemini-2.5-flash`
+- `gemini-2.5-flash-lite`
+- `gemini-robotics-er-1.5-preview`
+- `gemma-4-26b-a4b-it`
+- `gemma-4-31b-it`
+- `gemma-3-1b-it`, `gemma-3-4b-it`, `gemma-3-12b-it`, `gemma-3-27b-it`
+
+**Features:**
+
+- Full OpenAI API compatibility (endpoints served directly, no `/v1` prefix)
+- Vision/image processing support
+- Complete tool/function calling
+- Automatic Google Search grounding (via `:search` model suffix)
+- Time-based access control using simple access keys
+
+**Free testing:** use the access key `hahav` for immediate evaluation. Note that the free key is evaluation-only and may expire or be revoked at any time without notice. For guaranteed availability, dedicated access keys are available at $1/day — see their [Discord](https://github.com/Rocket-Hosting/gemini-ai-cloud) for details.
+
 ## Install (recommended)
 
 Runtime: **Node 24 (recommended) or Node 22.16+**.
