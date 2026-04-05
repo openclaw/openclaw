@@ -196,7 +196,10 @@ describe("e2e: delegation recording", () => {
     expect(traces[0].data.delegation_list).toHaveLength(2);
     expect(traces[0].data.delegation_list[0].agent_type).toBe("claude-code");
     expect(traces[0].data.delegation_list[1].agent_type).toBe("codex");
-    expect(traces[0].data.delegation_list[1].child_trace_id).toBe("child-002");
+    // After fix: child_trace_id uses stable UUID instead of session key
+    expect(traces[0].data.delegation_list[1].child_trace_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
   });
 });
 
