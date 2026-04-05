@@ -62,6 +62,26 @@ describe("acp runtime registry", () => {
     expect(() => requireAcpRuntimeBackend()).toThrowError(/ACP runtime backend is not configured/i);
   });
 
+  it("resolves the first healthy backend when requireAcpRuntimeBackend has no explicit id", () => {
+    const unhealthyRuntime = createRuntimeStub();
+    const healthyRuntime = createRuntimeStub();
+
+    registerAcpRuntimeBackend({
+      id: "unhealthy",
+      runtime: unhealthyRuntime,
+      healthy: () => false,
+    });
+    registerAcpRuntimeBackend({
+      id: "healthy",
+      runtime: healthyRuntime,
+      healthy: () => true,
+    });
+
+    const backend = requireAcpRuntimeBackend();
+    expect(backend.id).toBe("healthy");
+    expect(backend.runtime).toBe(healthyRuntime);
+  });
+
   it("throws a typed unavailable error when the requested backend is unhealthy", () => {
     registerAcpRuntimeBackend({
       id: "acpx",

@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   AcpRuntimeEvent,
   AcpRuntimeHandle,
@@ -35,6 +36,7 @@ import {
 } from "./lifecycle.js";
 import { connectAndLoadSession } from "./reconnect.js";
 import { SessionRepository, SESSION_RECORD_SCHEMA } from "./repository.js";
+import { shouldReuseExistingRecord } from "./reuse-policy.js";
 
 type ActiveSessionController = {
   hasActivePrompt: () => boolean;
@@ -209,16 +211,23 @@ export class SessionRuntimeManager {
     cwd?: string;
     resumeSessionId?: string;
   }): Promise<SessionRecord> {
+    const cwd = path.resolve(input.cwd?.trim() || this.config.cwd);
+    const agentCommand = resolveAgentCommand(input.agent, this.config.agents);
     const existing = await this.repository.load(input.sessionKey);
-    if (existing) {
+    if (
+      existing &&
+      shouldReuseExistingRecord(existing, {
+        cwd,
+        agentCommand,
+        resumeSessionId: input.resumeSessionId,
+      })
+    ) {
       existing.closed = false;
       existing.closedAt = undefined;
       await this.repository.save(existing);
       return existing;
     }
 
-    const cwd = input.cwd?.trim() || this.config.cwd;
-    const agentCommand = resolveAgentCommand(input.agent, this.config.agents);
     const client = new AcpClient({
       agentCommand,
       cwd,
