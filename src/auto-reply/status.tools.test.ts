@@ -71,6 +71,52 @@ describe("tools product copy", () => {
     expect(text).not.toContain("unavailable right now");
   });
 
+  it("produces deterministic ordering regardless of input order", () => {
+    const base = {
+      agentId: "main",
+      profile: "coding",
+      groups: [
+        {
+          id: "core" as const,
+          label: "Built-in tools",
+          source: "core" as const,
+        },
+      ],
+    };
+
+    const toolsA = [
+      {
+        id: "web_search",
+        label: "Web Search",
+        description: "Search the web",
+        rawDescription: "Search the web",
+        source: "core" as const,
+      },
+      {
+        id: "exec",
+        label: "Exec",
+        description: "Run shell commands",
+        rawDescription: "Run shell commands",
+        source: "core" as const,
+      },
+    ];
+
+    const toolsB = [...toolsA].toReversed();
+
+    const textA = buildToolsMessage({
+      ...base,
+      groups: [{ ...base.groups[0], tools: toolsA }],
+    });
+
+    const textB = buildToolsMessage({
+      ...base,
+      groups: [{ ...base.groups[0], tools: toolsB }],
+    });
+
+    expect(textA).toEqual(textB);
+    expect(textA).toContain("exec, web_search");
+  });
+
   it("keeps detailed descriptions in verbose mode", () => {
     const text = buildToolsMessage(
       {

@@ -891,8 +891,15 @@ type ToolsMessageItem = {
   channelId?: string;
 };
 
+function comparePromptStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function sortToolsMessageItems(items: ToolsMessageItem[]): ToolsMessageItem[] {
-  return [...items].toSorted((a, b) => a.name.localeCompare(b.name, "en"));
+  return [...items].toSorted((a, b) => {
+    const byId = comparePromptStrings(a.id, b.id);
+    return byId !== 0 ? byId : comparePromptStrings(a.name, b.name);
+  });
 }
 
 function formatCompactToolEntry(tool: ToolsMessageItem): string {
