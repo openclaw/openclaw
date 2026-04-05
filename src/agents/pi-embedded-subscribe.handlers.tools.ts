@@ -515,7 +515,7 @@ export async function handleToolExecutionEnd(
   }
 
   // Track committed reminders only when cron.add completed successfully.
-  if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
+  if (!isToolError && toolName === "cron" && isCronAddAction(afterToolCallArgs)) {
     ctx.state.successfulCronAdds += 1;
   }
 

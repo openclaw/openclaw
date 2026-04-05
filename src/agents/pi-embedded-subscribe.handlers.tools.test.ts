@@ -150,6 +150,45 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     expect(ctx.state.successfulCronAdds).toBe(1);
   });
 
+  it("increments successfulCronAdds when before_tool_call rewrites cron args to add", async () => {
+    const { ctx } = createTestContext();
+    const adjustedKey = beforeToolCallTesting.buildAdjustedParamsKey({
+      runId: "run-test",
+      toolCallId: "tool-cron-adjusted",
+    });
+    beforeToolCallTesting.adjustedParamsByToolCallId.set(adjustedKey, {
+      action: "add",
+      job: { name: "adjusted reminder" },
+    });
+
+    try {
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName: "cron",
+          toolCallId: "tool-cron-adjusted",
+          args: { action: "list" },
+        } as never,
+      );
+
+      await handleToolExecutionEnd(
+        ctx as never,
+        {
+          type: "tool_execution_end",
+          toolName: "cron",
+          toolCallId: "tool-cron-adjusted",
+          isError: false,
+          result: { details: { status: "ok" } },
+        } as never,
+      );
+    } finally {
+      beforeToolCallTesting.adjustedParamsByToolCallId.delete(adjustedKey);
+    }
+
+    expect(ctx.state.successfulCronAdds).toBe(1);
+  });
+
   it("does not increment successfulCronAdds when cron add fails", async () => {
     const { ctx } = createTestContext();
     await handleToolExecutionStart(
@@ -347,26 +386,30 @@ describe("messaging tool media URL tracking", () => {
       media: "file:///adjusted.jpg",
     });
 
-    await handleToolExecutionStart(ctx, {
-      type: "tool_execution_start",
-      toolName: "message",
-      toolCallId: "tool-adjusted-message",
-      args: {
-        action: "send",
-        channel: "slack",
-        target: "C-original",
-        message: "original text",
-        media: "file:///original.jpg",
-      },
-    });
+    try {
+      await handleToolExecutionStart(ctx, {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId: "tool-adjusted-message",
+        args: {
+          action: "send",
+          channel: "slack",
+          target: "C-original",
+          message: "original text",
+          media: "file:///original.jpg",
+        },
+      });
 
-    await handleToolExecutionEnd(ctx, {
-      type: "tool_execution_end",
-      toolName: "message",
-      toolCallId: "tool-adjusted-message",
-      isError: false,
-      result: { ok: true },
-    });
+      await handleToolExecutionEnd(ctx, {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId: "tool-adjusted-message",
+        isError: false,
+        result: { ok: true },
+      });
+    } finally {
+      beforeToolCallTesting.adjustedParamsByToolCallId.delete(adjustedKey);
+    }
 
     expect(ctx.state.messagingToolSentTexts).toEqual(["rewritten text"]);
     expect(ctx.state.messagingToolSentTargets).toEqual([
