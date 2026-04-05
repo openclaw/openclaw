@@ -12,12 +12,27 @@ function relativeSymlinkTarget(sourcePath, targetPath) {
   return relativeTarget || ".";
 }
 
+function isWindowsSymlinkError(error) {
+  return process.platform === "win32" && (error?.code === "EPERM" || error?.code === "ENOSYS");
+}
+
+function copyFileForSymlink(targetValue, targetPath) {
+  const resolvedSource = path.resolve(path.dirname(targetPath), targetValue);
+  fs.copyFileSync(resolvedSource, targetPath);
+}
+
 function ensureSymlink(targetValue, targetPath, type) {
   try {
     fs.symlinkSync(targetValue, targetPath, type);
     return;
   } catch (error) {
-    if (error?.code !== "EEXIST") {
+    if (error?.code === "EEXIST") {
+      // Fall through to check existing symlink below.
+    } else if (isWindowsSymlinkError(error) && !type) {
+      // File symlinks require Developer Mode on Windows; fall back to copy.
+      copyFileForSymlink(targetValue, targetPath);
+      return;
+    } else {
       throw error;
     }
   }
@@ -31,7 +46,15 @@ function ensureSymlink(targetValue, targetPath, type) {
   }
 
   removePathIfExists(targetPath);
-  fs.symlinkSync(targetValue, targetPath, type);
+  try {
+    fs.symlinkSync(targetValue, targetPath, type);
+  } catch (error) {
+    if (isWindowsSymlinkError(error) && !type) {
+      copyFileForSymlink(targetValue, targetPath);
+    } else {
+      throw error;
+    }
+  }
 }
 
 function symlinkPath(sourcePath, targetPath, type) {
