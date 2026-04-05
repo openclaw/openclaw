@@ -4,9 +4,15 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 
+const GEMINI_2_5_PRO_PREFIX = "gemini-2.5-pro";
+const GEMINI_2_5_FLASH_LITE_PREFIX = "gemini-2.5-flash-lite";
+const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
+const GEMINI_2_5_PRO_TEMPLATE_IDS = ["gemini-2.5-pro"] as const;
+const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
+const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
@@ -42,7 +48,7 @@ function cloneFirstGoogleTemplateModel(params: {
   return undefined;
 }
 
-export function resolveGoogle31ForwardCompatModel(params: {
+export function resolveGoogleGeminiForwardCompatModel(params: {
   providerId: string;
   templateProviderId?: string;
   ctx: ProviderResolveDynamicModelContext;
@@ -51,7 +57,13 @@ export function resolveGoogle31ForwardCompatModel(params: {
   const lower = trimmed.toLowerCase();
 
   let templateIds: readonly string[];
-  if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
+  if (lower.startsWith(GEMINI_2_5_PRO_PREFIX)) {
+    templateIds = GEMINI_2_5_PRO_TEMPLATE_IDS;
+  } else if (lower.startsWith(GEMINI_2_5_FLASH_LITE_PREFIX)) {
+    templateIds = GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS;
+  } else if (lower.startsWith(GEMINI_2_5_FLASH_PREFIX)) {
+    templateIds = GEMINI_2_5_FLASH_TEMPLATE_IDS;
+  } else if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
     templateIds = GEMINI_3_1_PRO_TEMPLATE_IDS;
   } else if (lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX)) {
     templateIds = GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS;
@@ -72,5 +84,6 @@ export function resolveGoogle31ForwardCompatModel(params: {
 }
 
 export function isModernGoogleModel(modelId: string): boolean {
-  return modelId.trim().toLowerCase().startsWith("gemini-3");
+  const lower = modelId.trim().toLowerCase();
+  return lower.startsWith("gemini-2.5") || lower.startsWith("gemini-3");
 }

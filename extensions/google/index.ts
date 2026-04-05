@@ -20,12 +20,12 @@ import {
 } from "./api.js";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { formatGoogleOauthApiKey } from "./oauth-token-shared.js";
-import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
+import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_GEMINI_CLI_PROVIDER_LABEL = "Gemini CLI OAuth";
-const GOOGLE_GEMINI_CLI_DEFAULT_MODEL = "google-gemini-cli/gemini-3.1-pro-preview";
+const GOOGLE_GEMINI_CLI_DEFAULT_MODEL = "google-gemini-cli/gemini-2.5-pro";
 const GOOGLE_GEMINI_CLI_ENV_VARS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
@@ -138,7 +138,11 @@ function createLazyGoogleGeminiCliProvider(): ProviderPlugin {
     },
     normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
     resolveDynamicModel: (ctx) =>
-      resolveGoogle31ForwardCompatModel({ providerId: GOOGLE_GEMINI_CLI_PROVIDER_ID, ctx }),
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: GOOGLE_GEMINI_CLI_PROVIDER_ID,
+        templateProviderId: "google",
+        ctx,
+      }),
     ...GOOGLE_GEMINI_PROVIDER_HOOKS_WITH_TOOL_COMPAT,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
@@ -248,7 +252,7 @@ export default definePluginEntry({
         normalizeGoogleProviderConfig(provider, providerConfig),
       normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
       resolveDynamicModel: (ctx) =>
-        resolveGoogle31ForwardCompatModel({
+        resolveGoogleGeminiForwardCompatModel({
           providerId: ctx.provider,
           templateProviderId: GOOGLE_GEMINI_CLI_PROVIDER_ID,
           ctx,

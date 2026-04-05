@@ -104,7 +104,11 @@ beforeEach(() => {
         modelArg: "--model",
         sessionMode: "existing",
         sessionIdFields: ["session_id", "sessionId"],
-        modelAliases: { pro: "gemini-3.1-pro-preview" },
+        modelAliases: {
+          pro: "gemini-2.5-pro",
+          flash: "gemini-2.5-flash",
+          "flash-lite": "gemini-2.5-flash-lite",
+        },
       },
     }),
   ];
@@ -378,7 +382,11 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved?.config.modelArg).toBe("--model");
     expect(resolved?.config.sessionMode).toBe("existing");
     expect(resolved?.config.sessionIdFields).toEqual(["session_id", "sessionId"]);
-    expect(resolved?.config.modelAliases?.pro).toBe("gemini-3.1-pro-preview");
+    expect(resolved?.config.modelAliases).toEqual({
+      pro: "gemini-2.5-pro",
+      flash: "gemini-2.5-flash",
+      "flash-lite": "gemini-2.5-flash-lite",
+    });
   });
 });
 

@@ -4,7 +4,7 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
-import { resolveGoogle31ForwardCompatModel } from "./provider-models.js";
+import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 
 function createTemplateModel(
   provider: string,
@@ -50,9 +50,28 @@ function createContext(params: {
   };
 }
 
-describe("resolveGoogle31ForwardCompatModel", () => {
+describe("resolveGoogleGeminiForwardCompatModel", () => {
+  it("resolves stable gemini 2.5 flash-lite from direct google templates for Gemini CLI", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google-gemini-cli",
+      templateProviderId: "google",
+      ctx: createContext({
+        provider: "google-gemini-cli",
+        modelId: "gemini-2.5-flash-lite",
+        models: [createTemplateModel("google", "gemini-2.5-flash-lite")],
+      }),
+    });
+
+    expect(model).toMatchObject({
+      provider: "google-gemini-cli",
+      id: "gemini-2.5-flash-lite",
+      api: "google-generative-ai",
+      reasoning: true,
+    });
+  });
+
   it("resolves gemini 3.1 pro for google aliases via an alternate template provider", () => {
-    const model = resolveGoogle31ForwardCompatModel({
+    const model = resolveGoogleGeminiForwardCompatModel({
       providerId: "google-vertex",
       templateProviderId: "google-gemini-cli",
       ctx: createContext({
@@ -71,7 +90,7 @@ describe("resolveGoogle31ForwardCompatModel", () => {
   });
 
   it("resolves gemini 3.1 flash from direct google templates", () => {
-    const model = resolveGoogle31ForwardCompatModel({
+    const model = resolveGoogleGeminiForwardCompatModel({
       providerId: "google",
       templateProviderId: "google-gemini-cli",
       ctx: createContext({
@@ -90,7 +109,7 @@ describe("resolveGoogle31ForwardCompatModel", () => {
   });
 
   it("prefers the flash-lite template before the broader flash prefix", () => {
-    const model = resolveGoogle31ForwardCompatModel({
+    const model = resolveGoogleGeminiForwardCompatModel({
       providerId: "google-vertex",
       templateProviderId: "google-gemini-cli",
       ctx: createContext({
@@ -113,5 +132,11 @@ describe("resolveGoogle31ForwardCompatModel", () => {
       contextWindow: 1_048_576,
       reasoning: true,
     });
+  });
+
+  it("treats gemini 2.5 ids as modern google models", () => {
+    expect(isModernGoogleModel("gemini-2.5-pro")).toBe(true);
+    expect(isModernGoogleModel("gemini-2.5-flash-lite")).toBe(true);
+    expect(isModernGoogleModel("gemini-1.5-pro")).toBe(false);
   });
 });
