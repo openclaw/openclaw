@@ -254,12 +254,14 @@ export async function monitorWebInbox(options: {
     if (
       !group &&
       Boolean(msg.key?.fromMe) &&
-      !options.selfChatMode &&
-      self.e164 &&
-      from === self.e164
+      !options.selfChatMode
     ) {
-      logVerbose(`Dropping fromMe self-DM ${id ?? "?"} — selfChatMode not enabled`);
-      return null;
+      if (!self.e164) {
+        logVerbose(`Cannot apply self-DM loop guard for ${id ?? "?"}: self.e164 not resolved`);
+      } else if (from === self.e164) {
+        logVerbose(`Dropping fromMe self-DM ${id ?? "?"} — selfChatMode not enabled`);
+        return null;
+      }
     }
     const senderE164 = group
       ? participantJid

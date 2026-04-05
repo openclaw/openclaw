@@ -2,7 +2,6 @@ import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   type InboxOnMessage,
-  getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
   settleInboundWork,
