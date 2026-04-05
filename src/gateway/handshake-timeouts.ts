@@ -33,7 +33,10 @@ export function resolveConnectChallengeTimeoutMs(timeoutMs?: number | null): num
   return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 }
 
-export function getPreauthHandshakeTimeoutMsFromEnv(env: NodeJS.ProcessEnv = process.env, configuredMs?: unknown): number {
+export function getPreauthHandshakeTimeoutMsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  configuredMs?: unknown,
+): number {
   const configuredTimeout =
     env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || (env.VITEST && env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
   if (configuredTimeout) {
@@ -42,5 +45,7 @@ export function getPreauthHandshakeTimeoutMsFromEnv(env: NodeJS.ProcessEnv = pro
       return parsed;
     }
   }
-  return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
+  return resolveConnectChallengeTimeoutMs(
+    typeof configuredMs === "number" && Number.isFinite(configuredMs) ? configuredMs : undefined,
+  );
 }
