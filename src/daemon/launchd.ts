@@ -325,7 +325,12 @@ export async function repairLaunchAgentBootstrap(args: {
   await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
-    return { ok: false, detail: (boot.stderr || boot.stdout).trim() || undefined };
+    const detail = (boot.stderr || boot.stdout).trim();
+    const normalized = detail.toLowerCase();
+    const alreadyLoaded = boot.code === 130 || normalized.includes("already exists in domain");
+    if (!alreadyLoaded) {
+      return { ok: false, detail: detail || undefined };
+    }
   }
   const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (kick.code !== 0) {
