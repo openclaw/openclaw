@@ -115,6 +115,8 @@ export async function runMemoryFlushIfNeeded(params: {
         return runEmbeddedPiAgent({
           ...embeddedContext,
           ...senderContext,
+          senderIsOwner: params.followupRun.run.senderIsOwner,
+          senderIsAdmin: params.followupRun.run.senderIsAdmin,
           ...runBaseParams,
           prompt: resolveMemoryFlushPromptForRun({
             prompt: memoryFlushSettings.prompt,

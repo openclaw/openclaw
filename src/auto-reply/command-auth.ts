@@ -330,22 +330,6 @@ export function resolveCommandAuthorization(params: {
   // Owners are always admins; explicit admin list adds non-owner admins
   const senderIsAdmin = senderIsOwner || Boolean(matchedAdmin);
 
-  // Debug trace for owner/admin resolution (temporary)
-  if (providerId === "telegram") {
-    console.log(
-      "[command-auth] owner resolution:",
-      JSON.stringify({
-        providerId,
-        elevatedFallback: elevatedFallback ?? null,
-        configOwnerAllowFromList,
-        ownerList,
-        senderCandidates,
-        matchedSender: matchedSender ?? null,
-        senderIsOwner,
-        senderIsAdmin,
-      }),
-    );
-  }
   const ownerAllowlistConfigured = ownerAllowAll || explicitOwners.length > 0;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
