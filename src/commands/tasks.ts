@@ -19,9 +19,15 @@ import {
 } from "../tasks/task-flow-registry.maintenance.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
+  formatLifecycleBackingSummary,
+  formatLifecycleStatusReasonSummary,
+  resolveTaskLifecycleStatusReason,
+  type LifecycleStatusReason as TaskLifecycleStatusReason,
+} from "../tasks/task-lifecycle-status.js";
+import {
   listTaskAuditFindings,
   summarizeTaskAuditFindings,
-  type LifecycleStatusReason,
+  type LifecycleStatusReason as TaskAuditLifecycleReason,
   type TaskAuditCode,
   type TaskAuditSeverity,
 } from "../tasks/task-registry.audit.js";
@@ -149,7 +155,7 @@ type TaskSystemAuditFinding = {
   ageMs?: number;
   status?: string;
   token?: string;
-  lifecycleReason?: LifecycleStatusReason;
+  lifecycleReason?: TaskAuditLifecycleReason | TaskLifecycleStatusReason;
   task?: TaskRecord;
   flow?: TaskFlowRecord;
 };
@@ -287,7 +293,10 @@ export async function tasksListCommand(
           count: tasks.length,
           runtime: runtimeFilter ?? null,
           status: statusFilter ?? null,
-          tasks,
+          tasks: tasks.map((task) => ({
+            ...task,
+            statusReason: resolveTaskLifecycleStatusReason(task),
+          })),
         },
         null,
         2,
@@ -325,8 +334,21 @@ export async function tasksShowCommand(
     return;
   }
 
+  const statusReason = resolveTaskLifecycleStatusReason(task);
+  const reasonSummary = formatLifecycleStatusReasonSummary(statusReason);
+  const backingSummary = formatLifecycleBackingSummary(statusReason);
+
   if (opts.json) {
-    runtime.log(JSON.stringify(task, null, 2));
+    runtime.log(
+      JSON.stringify(
+        {
+          ...task,
+          statusReason,
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
 
@@ -346,6 +368,8 @@ export async function tasksShowCommand(
     `runId: ${task.runId ?? "n/a"}`,
     `label: ${task.label ?? "n/a"}`,
     `task: ${task.task}`,
+    ...(reasonSummary ? [`reason: ${reasonSummary}`] : []),
+    ...(backingSummary ? [`links: ${backingSummary}`] : []),
     `createdAt: ${new Date(task.createdAt).toISOString()}`,
     `startedAt: ${task.startedAt ? new Date(task.startedAt).toISOString() : "n/a"}`,
     `endedAt: ${task.endedAt ? new Date(task.endedAt).toISOString() : "n/a"}`,

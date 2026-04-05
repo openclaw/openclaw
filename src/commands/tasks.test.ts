@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
-import { createRunningTaskRun } from "../tasks/task-executor.js";
+import { completeTaskRunByRunId, createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   createManagedTaskFlow,
   resetTaskFlowRegistryForTests,
@@ -10,7 +10,12 @@ import {
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { tasksAuditCommand, tasksMaintenanceCommand } from "./tasks.js";
+import {
+  tasksAuditCommand,
+  tasksListCommand,
+  tasksMaintenanceCommand,
+  tasksShowCommand,
+} from "./tasks.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
@@ -129,6 +134,127 @@ describe("tasks commands", () => {
           summary: expect.any(String),
           backing: expect.arrayContaining([
             expect.objectContaining({ kind: "session", relation: "owner_session" }),
+          ]),
+        },
+      });
+    });
+  });
+
+  it("adds lifecycle reasons to tasks list JSON output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/tasks-command",
+        goal: "Inspect lifecycle bridge",
+        status: "running",
+      });
+      createRunningTaskRun({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-running-1",
+        task: "Inspect lifecycle bridge",
+        progressSummary: "Collecting task status evidence",
+        childSessionKey: "agent:main:child-1",
+        parentFlowId: flow.flowId,
+      });
+
+      const runtime = createRuntime();
+      await tasksListCommand({ json: true }, runtime);
+
+      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+        tasks: Array<{
+          runId?: string;
+          statusReason?: {
+            code: string;
+            summary: string;
+            backing?: Array<{ kind: string; relation: string; id: string }>;
+          };
+        }>;
+      };
+
+      expect(payload.tasks).toHaveLength(1);
+      expect(payload.tasks[0]).toMatchObject({
+        runId: "task-running-1",
+        statusReason: {
+          code: "running",
+          summary: "Collecting task status evidence",
+          backing: expect.arrayContaining([
+            { kind: "flow", relation: "parent_flow", id: flow.flowId },
+            { kind: "session", relation: "child_session", id: "agent:main:child-1" },
+          ]),
+        },
+      });
+    });
+  });
+
+  it("shows lifecycle reason and links in task detail output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/tasks-command",
+        goal: "Resume gated command",
+        status: "running",
+      });
+      const task = createRunningTaskRun({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-blocked-1",
+        task: "Resume gated command",
+        childSessionKey: "agent:main:child-2",
+        parentFlowId: flow.flowId,
+      });
+      completeTaskRunByRunId({
+        runId: "task-blocked-1",
+        endedAt: Date.now(),
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session approval required.",
+      });
+
+      const runtime = createRuntime();
+      await tasksShowCommand({ lookup: task.taskId }, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n");
+
+      expect(output).toContain("reason: Writable session approval required.");
+      expect(output).toContain("links: linked flow · child session");
+    });
+  });
+
+  it("adds lifecycle reason to tasks show JSON output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createRunningTaskRun({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-show-json-1",
+        task: "Inspect lost child session",
+        childSessionKey: "agent:main:child-3",
+      });
+
+      const runtime = createRuntime();
+      await tasksShowCommand({ json: true, lookup: task.taskId }, runtime);
+
+      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+        taskId: string;
+        statusReason?: {
+          code: string;
+          summary: string;
+          backing?: Array<{ kind: string; relation: string; id: string }>;
+        };
+      };
+
+      expect(payload).toMatchObject({
+        taskId: task.taskId,
+        statusReason: {
+          code: "running",
+          summary: "Task is running.",
+          backing: expect.arrayContaining([
+            { kind: "session", relation: "child_session", id: "agent:main:child-3" },
           ]),
         },
       });
