@@ -93,6 +93,36 @@ function assertExplicitProxySupportsPinnedDns(
   }
 }
 
+function createPolicyDispatcherWithoutPinnedDns(
+  dispatcherPolicy?: PinnedDispatcherPolicy,
+): Dispatcher | null {
+  if (!dispatcherPolicy) {
+    return null;
+  }
+  const { Agent, EnvHttpProxyAgent, ProxyAgent } = loadUndiciRuntimeDeps();
+
+  if (dispatcherPolicy.mode === "direct") {
+    return new Agent({
+      ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
+    });
+  }
+
+  if (dispatcherPolicy.mode === "env-proxy") {
+    return new EnvHttpProxyAgent({
+      ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
+      ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
+    });
+  }
+
+  const proxyUrl = dispatcherPolicy.proxyUrl.trim();
+  return dispatcherPolicy.proxyTls
+    ? new ProxyAgent({
+        uri: proxyUrl,
+        requestTls: { ...dispatcherPolicy.proxyTls },
+      })
+    : new ProxyAgent(proxyUrl);
+}
+
 async function assertExplicitProxyAllowed(
   dispatcherPolicy: PinnedDispatcherPolicy | undefined,
   lookupFn: LookupFn | undefined,
@@ -238,6 +268,8 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (canUseTrustedEnvProxy) {
         const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
         dispatcher = new EnvHttpProxyAgent();
+      } else if (params.pinDns === false) {
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
       } else if (params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
       }

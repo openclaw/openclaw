@@ -6,6 +6,21 @@ import {
 } from "./fetch-guard.js";
 import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
 
+const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
+  agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
+    this.options = options;
+  }),
+  envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
+    this: { options: unknown },
+    options: unknown,
+  ) {
+    this.options = options;
+  }),
+  proxyAgentCtor: vi.fn(function MockProxyAgent(this: { options: unknown }, options: unknown) {
+    this.options = options;
+  }),
+}));
+
 function redirectResponse(location: string): Response {
   return new Response(null, {
     status: 302,
@@ -108,6 +123,9 @@ describe("fetchWithSsrFGuard hardening", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    agentCtor.mockClear();
+    envHttpProxyAgentCtor.mockClear();
+    proxyAgentCtor.mockClear();
     Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   });
 
@@ -249,6 +267,45 @@ describe("fetchWithSsrFGuard hardening", () => {
     } finally {
       (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
     }
+  });
+
+  it("keeps explicit proxy transport policy when DNS pinning is disabled", async () => {
+    const lookupFn = createPublicLookup();
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      pinDns: false,
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.example:7890",
+        proxyTls: {
+          servername: "public.example",
+        },
+      },
+    });
+
+    expect(proxyAgentCtor).toHaveBeenCalledWith({
+      uri: "http://proxy.example:7890",
+      requestTls: {
+        servername: "public.example",
+      },
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://public.example/resource",
+      expect.objectContaining({
+        dispatcher: expect.any(Object),
+      }),
+    );
+    await result.release();
   });
 
   it("blocks redirect chains that hop to private hosts", async () => {
