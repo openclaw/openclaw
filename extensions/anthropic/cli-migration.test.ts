@@ -170,13 +170,14 @@ describe("anthropic cli migration", () => {
   });
 
   it("registered cli auth returns the same migration result as the builder", async () => {
-    readClaudeCliCredentialsForSetup.mockReturnValue({
+    const credential = {
       type: "oauth",
       provider: "anthropic",
       access: "access-token",
       refresh: "refresh-token",
       expires: Date.now() + 60_000,
-    });
+    } as const;
+    readClaudeCliCredentialsForSetup.mockReturnValue(credential);
     const method = await resolveAnthropicCliAuthMethod();
     const config = {
       agents: {
@@ -195,8 +196,58 @@ describe("anthropic cli migration", () => {
     };
 
     await expect(method.run(createProviderAuthContext(config))).resolves.toEqual(
-      buildAnthropicCliMigrationResult(config),
+      buildAnthropicCliMigrationResult(config, credential),
     );
+  });
+
+  it("stores a claude-cli oauth profile when Claude CLI credentials are available", () => {
+    const result = buildAnthropicCliMigrationResult(
+      {},
+      {
+        type: "oauth",
+        provider: "anthropic",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: 123,
+      },
+    );
+
+    expect(result.profiles).toEqual([
+      {
+        profileId: "anthropic:claude-cli",
+        credential: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: 123,
+        },
+      },
+    ]);
+  });
+
+  it("stores a claude-cli token profile when Claude CLI only exposes a bearer token", () => {
+    const result = buildAnthropicCliMigrationResult(
+      {},
+      {
+        type: "token",
+        provider: "anthropic",
+        token: "bearer-token",
+        expires: 123,
+      },
+    );
+
+    expect(result.profiles).toEqual([
+      {
+        profileId: "anthropic:claude-cli",
+        credential: {
+          type: "token",
+          provider: "claude-cli",
+          token: "bearer-token",
+          expires: 123,
+        },
+      },
+    ]);
   });
 
   it("registered non-interactive cli auth rewrites anthropic fallbacks before setting the claude-cli default", async () => {

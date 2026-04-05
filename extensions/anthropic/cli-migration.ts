@@ -1,12 +1,18 @@
-import type { OpenClawConfig, ProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
+import {
+  CLAUDE_CLI_PROFILE_ID,
+  type OpenClawConfig,
+  type ProviderAuthResult,
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   readClaudeCliCredentialsForSetup,
   readClaudeCliCredentialsForSetupNonInteractive,
 } from "./cli-auth-seam.js";
+import { CLAUDE_CLI_BACKEND_ID } from "./cli-shared.js";
 
-const DEFAULT_CLAUDE_CLI_MODEL = "claude-cli/claude-sonnet-4-6";
+const DEFAULT_CLAUDE_CLI_MODEL = `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-6`;
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
 type AgentDefaultsModels = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
+type ClaudeCliCredential = NonNullable<ReturnType<typeof readClaudeCliCredentialsForSetup>>;
 
 function toClaudeCliModelRef(raw: string): string | null {
   const trimmed = raw.trim();
@@ -104,7 +110,43 @@ export function hasClaudeCliAuth(options?: { allowKeychainPrompt?: boolean }): b
   );
 }
 
-export function buildAnthropicCliMigrationResult(config: OpenClawConfig): ProviderAuthResult {
+function buildClaudeCliAuthProfiles(
+  credential?: ClaudeCliCredential | null,
+): ProviderAuthResult["profiles"] {
+  if (!credential) {
+    return [];
+  }
+  if (credential.type === "oauth") {
+    return [
+      {
+        profileId: CLAUDE_CLI_PROFILE_ID,
+        credential: {
+          type: "oauth",
+          provider: CLAUDE_CLI_BACKEND_ID,
+          access: credential.access,
+          refresh: credential.refresh,
+          expires: credential.expires,
+        },
+      },
+    ];
+  }
+  return [
+    {
+      profileId: CLAUDE_CLI_PROFILE_ID,
+      credential: {
+        type: "token",
+        provider: CLAUDE_CLI_BACKEND_ID,
+        token: credential.token,
+        expires: credential.expires,
+      },
+    },
+  ];
+}
+
+export function buildAnthropicCliMigrationResult(
+  config: OpenClawConfig,
+  credential?: ClaudeCliCredential | null,
+): ProviderAuthResult {
   const defaults = config.agents?.defaults;
   const rewrittenModel = rewriteModelSelection(defaults?.model);
   const rewrittenModels = rewriteModelEntryMap(defaults?.models);
@@ -114,7 +156,7 @@ export function buildAnthropicCliMigrationResult(config: OpenClawConfig): Provid
   const defaultModel = rewrittenModel.primary ?? DEFAULT_CLAUDE_CLI_MODEL;
 
   return {
-    profiles: [],
+    profiles: buildClaudeCliAuthProfiles(credential),
     configPatch: {
       agents: {
         defaults: {

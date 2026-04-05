@@ -164,6 +164,17 @@ describe("anthropic provider replay hooks", () => {
       config: {},
     } as never);
 
-    expect(result?.profiles).toEqual([]);
+    expect(result?.profiles).toEqual([
+      {
+        profileId: "anthropic:claude-cli",
+        credential: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "setup-access-token",
+          refresh: "refresh-token",
+          expires: 123,
+        },
+      },
+    ]);
   });
 });
