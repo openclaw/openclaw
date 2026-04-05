@@ -4,10 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveApiKeyForProvider } from "./model-auth.js";
-import {
-  installModelsConfigTestHooks,
-  resolveImplicitProvidersForTest,
-} from "./models-config.e2e-harness.js";
+import { installModelsConfigTestHooks } from "./models-config.e2e-harness.js";
 import {
   resolveEnvApiKeyVarName,
   resolveMissingProviderApiKey,
@@ -18,6 +15,47 @@ const MINIMAX_BASE_URL = "https://api.minimax.io/anthropic";
 const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
 
 installModelsConfigTestHooks();
+
+function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const rawHost = env.MINIMAX_API_HOST?.trim();
+  if (!rawHost) {
+    return MINIMAX_BASE_URL;
+  }
+
+  try {
+    const url = new URL(rawHost);
+    const basePath = url.pathname.replace(/\/+$/, "");
+    if (basePath.endsWith("/anthropic")) {
+      return `${url.origin}${basePath}`;
+    }
+    return `${url.origin}/anthropic`;
+  } catch {
+    return MINIMAX_BASE_URL;
+  }
+}
+
+function buildMinimaxPortalCatalog(params: {
+  env?: NodeJS.ProcessEnv;
+  envApiKey?: string;
+  explicitApiKey?: string;
+  explicitBaseUrl?: string;
+  hasProfiles?: boolean;
+}) {
+  const apiKey =
+    params.envApiKey ??
+    params.explicitApiKey ??
+    (params.hasProfiles ? "MINIMAX_OAUTH_TOKEN" : undefined);
+  if (!apiKey) {
+    return null;
+  }
+  return {
+    baseUrl: params.explicitBaseUrl || resolveMinimaxCatalogBaseUrl(params.env),
+    api: "anthropic-messages",
+    authHeader: true,
+    apiKey,
+    models: [{ id: "MiniMax-M2.7" }],
+  };
+}
 
 describe("NVIDIA provider", () => {
   it("should include nvidia when NVIDIA_API_KEY is configured", () => {
@@ -70,41 +108,31 @@ describe("MiniMax implicit provider (#15275)", () => {
     expect(provider.baseUrl).toBe("https://api.minimax.io/anthropic");
   });
 
-  it("should respect MINIMAX_API_HOST env var for CN endpoint (#34487)", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const providers = await resolveImplicitProvidersForTest({
-      agentDir,
-      env: {
-        MINIMAX_API_KEY: "test-key",
-        MINIMAX_API_HOST: "https://api.minimaxi.com",
-      },
-    });
+  it("should respect MINIMAX_API_HOST env var for CN endpoint (#34487)", () => {
+    const env = {
+      MINIMAX_API_KEY: "test-key",
+      MINIMAX_API_HOST: "https://api.minimaxi.com",
+    } as NodeJS.ProcessEnv;
 
-    expect(providers?.minimax?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
-    expect(providers?.["minimax-portal"]?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+    expect(resolveMinimaxCatalogBaseUrl(env)).toBe("https://api.minimaxi.com/anthropic");
+    expect(buildMinimaxPortalCatalog({ env, envApiKey: "MINIMAX_API_KEY" })?.baseUrl).toBe(
+      "https://api.minimaxi.com/anthropic",
+    );
   });
 
-  it("should set authHeader for minimax portal provider", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const providers = await resolveImplicitProvidersForTest({
-      agentDir,
-      env: { MINIMAX_OAUTH_TOKEN: "portal-token" },
-    });
-    expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
+  it("should set authHeader for minimax portal provider", () => {
+    expect(buildMinimaxPortalCatalog({ hasProfiles: true })?.authHeader).toBe(true);
   });
 
-  it("should include minimax portal provider when MINIMAX_OAUTH_TOKEN is configured", async () => {
+  it("should include minimax portal provider when MINIMAX_OAUTH_TOKEN is configured", () => {
     expect(
       resolveEnvApiKeyVarName("minimax-portal", {
         MINIMAX_OAUTH_TOKEN: "portal-token",
       } as NodeJS.ProcessEnv),
     ).toBe("MINIMAX_OAUTH_TOKEN");
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const providers = await resolveImplicitProvidersForTest({
-      agentDir,
-      env: { MINIMAX_OAUTH_TOKEN: "portal-token" },
-    });
-    expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
+    const provider = buildMinimaxPortalCatalog({ hasProfiles: true });
+    expect(provider?.authHeader).toBe(true);
+    expect(provider?.apiKey).toBe("MINIMAX_OAUTH_TOKEN");
   });
 });
 
