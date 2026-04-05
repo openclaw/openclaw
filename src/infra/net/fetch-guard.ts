@@ -227,19 +227,25 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
     let dispatcher: Dispatcher | null = null;
     try {
-      assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
-      await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
-      const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-        lookupFn: params.lookupFn,
-        policy: params.policy,
-      });
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
       if (canUseTrustedEnvProxy) {
+        // When using a trusted env proxy, skip local DNS resolution and SSRF
+        // pinning — the proxy server handles DNS. This avoids "fetch failed"
+        // on networks where external hostnames are only resolvable through
+        // the proxy (e.g. corporate firewalls, restricted networks).
         const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
         dispatcher = new EnvHttpProxyAgent();
-      } else if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
+      } else {
+        assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
+        await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
+        const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
+        if (params.pinDns !== false) {
+          dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
+        }
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {

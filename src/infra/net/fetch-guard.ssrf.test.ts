@@ -595,4 +595,47 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectEnvProxy: true,
     });
   });
+
+  it("succeeds in trusted env proxy mode even when local DNS resolution fails", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const failingLookup: LookupFn = vi.fn(async () => {
+      throw new Error("getaddrinfo ENOTFOUND api.search.brave.com");
+    }) as unknown as LookupFn;
+
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expect(getDispatcherClassName(requestInit.dispatcher)).toBe("EnvHttpProxyAgent");
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.search.brave.com/res/v1/web/search?q=test",
+      fetchImpl,
+      lookupFn: failingLookup,
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+    });
+
+    expect(failingLookup).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.response.status).toBe(200);
+    await result.release();
+  });
+
+  it("still fails on DNS resolution in strict mode when local DNS is broken", async () => {
+    const failingLookup: LookupFn = vi.fn(async () => {
+      throw new Error("getaddrinfo ENOTFOUND api.search.brave.com");
+    }) as unknown as LookupFn;
+
+    const fetchImpl = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.search.brave.com/res/v1/web/search?q=test",
+        fetchImpl,
+        lookupFn: failingLookup,
+        mode: GUARDED_FETCH_MODE.STRICT,
+      }),
+    ).rejects.toThrow(/ENOTFOUND/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
