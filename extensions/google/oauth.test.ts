@@ -64,11 +64,27 @@ describe("resolveGeminiCliSelectedAuthType", () => {
     setOAuthSettingsFsForTest();
   });
 
-  it("prefers GOOGLE_GENAI_USE_GCA personal auth mode over settings detection", () => {
+  it("uses GOOGLE_GENAI_USE_GCA as an oauth-personal fallback when settings are absent", () => {
     process.env.GOOGLE_GENAI_USE_GCA = "true";
     mockSettingsExistsSync.mockReturnValue(false);
 
     expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+  });
+
+  it("prefers settings auth selection over the GOOGLE_GENAI_USE_GCA fallback", () => {
+    process.env.GOOGLE_GENAI_USE_GCA = "true";
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-code-assist",
+          },
+        },
+      }),
+    );
+
+    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-code-assist");
   });
 
   it("reads the nested security auth selection from ~/.gemini/settings.json", () => {

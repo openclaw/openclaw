@@ -53,23 +53,25 @@ export function setOAuthSettingsFsForTest(overrides?: Partial<OAuthSettingsFs>):
 }
 
 export function resolveGeminiCliSelectedAuthType(): string | undefined {
+  const settings = readSettingsFile();
+  if (settings) {
+    const security = isRecord(settings.security) ? settings.security : undefined;
+    const auth = isRecord(security?.auth) ? security.auth : undefined;
+    const selectedAuthType =
+      readString(auth?.selectedType) ??
+      readString(auth?.enforcedType) ??
+      readString(settings.selectedAuthType) ??
+      readString(settings.enforcedAuthType);
+    if (selectedAuthType) {
+      return selectedAuthType;
+    }
+  }
+
   if (process.env.GOOGLE_GENAI_USE_GCA === "true") {
     return "oauth-personal";
   }
 
-  const settings = readSettingsFile();
-  if (!settings) {
-    return undefined;
-  }
-
-  const security = isRecord(settings.security) ? settings.security : undefined;
-  const auth = isRecord(security?.auth) ? security.auth : undefined;
-  return (
-    readString(auth?.selectedType) ??
-    readString(auth?.enforcedType) ??
-    readString(settings.selectedAuthType) ??
-    readString(settings.enforcedAuthType)
-  );
+  return undefined;
 }
 
 export function isGeminiCliPersonalOAuth(): boolean {
