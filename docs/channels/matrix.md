@@ -258,6 +258,24 @@ Notes:
 - New user-defined `override` rules are inserted ahead of default suppress rules, so no extra ordering parameter is needed.
 - This only affects text-only preview edits that OpenClaw can safely finalize in place. Media fallbacks and stale-preview fallbacks still use normal Matrix delivery.
 
+#### Synapse
+
+For Synapse, this setup is usually a user-level push-rule change only:
+
+- No special `homeserver.yaml` change is required for finalized OpenClaw preview notifications.
+- Use the recipient user's access token when creating the push rule.
+- If your Synapse deployment already sends normal Matrix push notifications, the rule above is usually sufficient by itself.
+- If you run Synapse workers, make sure your pushers are already healthy. Synapse's push delivery is handled by the main process or `synapse.app.pusher` / configured pusher workers.
+
+#### Tuwunel
+
+For Tuwunel, use the same push-rule API call shown above:
+
+- No Tuwunel-specific config is required for the finalized preview marker itself.
+- Use the recipient user's access token when creating the push rule.
+- If normal Matrix notifications already work for that user, the rule above is the main setup step.
+- If notifications seem to disappear while the user is active on another device, check whether `suppress_push_when_active` is enabled. Tuwunel added this option in Tuwunel 1.4.2 on September 12, 2025, and it can intentionally suppress pushes to other devices while one device is active.
+
 ## Encryption and verification
 
 In encrypted (E2EE) rooms, outbound image events use `thumbnail_file` so image previews are encrypted alongside the full attachment. Unencrypted rooms still use plain `thumbnail_url`. No configuration is needed — the plugin detects E2EE state automatically.
