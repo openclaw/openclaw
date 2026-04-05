@@ -3,7 +3,7 @@ import {
   getRecord,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
-} from "./legacy.shared.js";
+} from "../../../config/legacy.shared.js";
 
 type StreamingMode = "off" | "partial" | "block" | "progress";
 type DiscordPreviewStreamMode = "off" | "partial" | "block";

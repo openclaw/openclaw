@@ -12,7 +12,12 @@ import { resetModelsJsonReadyCacheForTest } from "./models-config.js";
 import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 
 export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-models-" });
+  // Models-config tests do not exercise session persistence; skip draining
+  // unrelated session lock state during temp-home teardown.
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-models-",
+    skipSessionCleanup: true,
+  });
 }
 
 export function installModelsConfigTestHooks(opts?: { restoreFetch?: boolean }) {

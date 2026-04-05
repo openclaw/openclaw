@@ -5,16 +5,15 @@ export {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-  parseBrowserHttpUrl,
-  redactCdpUrl,
   resolveBrowserConfig,
-  resolveBrowserControlAuth,
   resolveProfile,
-  type BrowserControlAuth,
   type ResolvedBrowserConfig,
   type ResolvedBrowserProfile,
-} from "openclaw/plugin-sdk/browser-config";
-export { parseBrowserHttpUrl as parseHttpUrl } from "openclaw/plugin-sdk/browser-config";
+} from "openclaw/plugin-sdk/browser-profiles";
+export { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
+export type { BrowserControlAuth } from "openclaw/plugin-sdk/browser-control-auth";
+export { resolveBrowserControlAuth } from "openclaw/plugin-sdk/browser-control-auth";
+export { parseBrowserHttpUrl as parseHttpUrl } from "openclaw/plugin-sdk/browser-cdp";
 
 export function shouldStartLocalBrowserServer(_resolved: unknown) {
   return true;

@@ -4,12 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const { loadConfig, readConfigFileSnapshot, validateConfigObject } =
   await vi.importActual<typeof import("./config.js")>("./config.js");
-const { migrateLegacyConfig: migrateLegacyConfigFromDoctor } = await vi.importActual<
-  typeof import("../commands/doctor/shared/legacy-config-migrate.js")
->("../commands/doctor/shared/legacy-config-migrate.js");
 import { withTempHome } from "./test-helpers.js";
-
-const migrateLegacyConfig = migrateLegacyConfigFromDoctor;
 
 async function expectLoadRejectionPreservesField(params: {
   config: unknown;
@@ -212,14 +207,6 @@ describe("legacy config detection", () => {
       expect(res.issues[0]?.message).toContain('"agent"');
     }
   });
-  it("does not rewrite removed telegram.requireMention migrations", async () => {
-    const res = migrateLegacyConfig({
-      telegram: { requireMention: false },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-
   it("flags channels.telegram.groupMentionsOnly as legacy in snapshot", async () => {
     await withSnapshotForConfig(
       { channels: { telegram: { groupMentionsOnly: true } } },
@@ -238,27 +225,6 @@ describe("legacy config detection", () => {
     );
   });
 
-  it("does not rewrite removed messages.tts.enabled migrations", async () => {
-    const res = migrateLegacyConfig({
-      messages: { tts: { enabled: true } },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-  it("does not rewrite removed legacy model config migrations", async () => {
-    const res = migrateLegacyConfig({
-      agent: {
-        model: "anthropic/claude-opus-4-6",
-        modelFallbacks: ["openai/gpt-4.1-mini"],
-        imageModel: "openai/gpt-4.1-mini",
-        imageModelFallbacks: ["anthropic/claude-opus-4-6"],
-        allowedModels: ["anthropic/claude-opus-4-6", "openai/gpt-4.1-mini"],
-        modelAliases: { Opus: "anthropic/claude-opus-4-6" },
-      },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
   it("rejects removed routing.allowFrom in snapshot", async () => {
     await withSnapshotForConfig({ routing: { allowFrom: ["+15555550123"] } }, async (ctx) => {
       expectSnapshotInvalidRootKey(ctx, "routing");

@@ -17,7 +17,9 @@ OpenAI explicitly supports subscription OAuth usage in external tools/workflows 
 OpenClaw can add a small OpenAI-specific prompt overlay for both `openai/*` and
 `openai-codex/*` runs. By default, the overlay keeps the assistant warm,
 collaborative, concise, direct, and a little more emotionally expressive
-without replacing the base OpenClaw system prompt.
+without replacing the base OpenClaw system prompt. The friendly overlay also
+permits the occasional emoji when it fits naturally, while keeping overall
+output concise.
 
 Config key:
 

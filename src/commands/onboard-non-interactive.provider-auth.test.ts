@@ -2,13 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "../../extensions/minimax/api.js";
-import { OPENAI_DEFAULT_MODEL } from "../../extensions/openai/api.js";
-import {
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_CODING_GLOBAL_BASE_URL,
-  ZAI_GLOBAL_BASE_URL,
-} from "../plugin-sdk/zai.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -23,6 +16,13 @@ type OnboardEnv = {
 };
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+const MINIMAX_API_BASE_URL = "https://api.minimax.chat/v1";
+const MINIMAX_CN_API_BASE_URL = "https://api.minimax.chat/v1";
+const OPENAI_DEFAULT_MODEL = "openai/gpt-5.4";
+const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
+const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
+const ZAI_GLOBAL_BASE_URL = "https://api.z.ai/api/paas/v4";
+
 const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
 
 vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async () => {
@@ -35,7 +35,6 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     { providerApiKeyAuthRuntime },
     { configureOpenAICompatibleSelfHostedProviderNonInteractive },
     { detectZaiEndpoint },
-    { OPENAI_DEFAULT_MODEL },
   ] = await Promise.all([
     import("../agents/agent-scope.js"),
     import("../agents/workspace.js"),
@@ -45,7 +44,6 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     import("../plugins/provider-api-key-auth.runtime.js"),
     import("../plugins/provider-self-hosted-setup.js"),
     import("./zai-endpoint-detect.js"),
-    import("../../extensions/openai/api.js"),
   ]);
 
   const ZAI_FALLBACKS = {

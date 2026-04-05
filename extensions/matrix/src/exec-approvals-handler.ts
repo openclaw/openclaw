@@ -127,7 +127,9 @@ function buildPendingApprovalContent(params: {
   const text = payload.text ?? "";
   return {
     approvalId: params.request.id,
-    text: hint ? `${text}\n\n${hint}` : text,
+    // Reactions are anchored to the first Matrix event for a chunked send, so keep
+    // the reaction hint at the start of the message where that anchor always lives.
+    text: hint ? (text ? `${hint}\n\n${text}` : hint) : text,
     allowedDecisions,
   };
 }

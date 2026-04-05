@@ -347,6 +347,10 @@
       "types": "./dist/plugin-sdk/bluebubbles-policy.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles-policy.js"
     },
+    "./plugin-sdk/browser-cdp": {
+      "types": "./dist/plugin-sdk/browser-cdp.d.ts",
+      "default": "./dist/plugin-sdk/browser-cdp.js"
+    },
     "./plugin-sdk/browser-config": {
       "types": "./dist/plugin-sdk/browser-config.d.ts",
       "default": "./dist/plugin-sdk/browser-config.js"
@@ -354,6 +358,14 @@
     "./plugin-sdk/browser-config-support": {
       "types": "./dist/plugin-sdk/browser-config-support.d.ts",
       "default": "./dist/plugin-sdk/browser-config-support.js"
+    },
+    "./plugin-sdk/browser-control-auth": {
+      "types": "./dist/plugin-sdk/browser-control-auth.d.ts",
+      "default": "./dist/plugin-sdk/browser-control-auth.js"
+    },
+    "./plugin-sdk/browser-profiles": {
+      "types": "./dist/plugin-sdk/browser-profiles.d.ts",
+      "default": "./dist/plugin-sdk/browser-profiles.js"
     },
     "./plugin-sdk/browser-support": {
       "types": "./dist/plugin-sdk/browser-support.d.ts",
@@ -759,10 +771,6 @@
       "types": "./dist/plugin-sdk/provider-onboard.d.ts",
       "default": "./dist/plugin-sdk/provider-onboard.js"
     },
-    "./plugin-sdk/provider-stream": {
-      "types": "./dist/plugin-sdk/provider-stream.d.ts",
-      "default": "./dist/plugin-sdk/provider-stream.js"
-    },
     "./plugin-sdk/provider-stream-family": {
       "types": "./dist/plugin-sdk/provider-stream-family.d.ts",
       "default": "./dist/plugin-sdk/provider-stream-family.js"
@@ -770,6 +778,10 @@
     "./plugin-sdk/provider-stream-shared": {
       "types": "./dist/plugin-sdk/provider-stream-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-stream-shared.js"
+    },
+    "./plugin-sdk/provider-stream": {
+      "types": "./dist/plugin-sdk/provider-stream.d.ts",
+      "default": "./dist/plugin-sdk/provider-stream.js"
     },
     "./plugin-sdk/provider-tools": {
       "types": "./dist/plugin-sdk/provider-tools.d.ts",

@@ -286,6 +286,9 @@ describe("openai plugin", () => {
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       "Have emotional range when it fits the moment.",
     );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
+    );
     expect(codexProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
       stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
       sectionOverrides: {
@@ -313,6 +316,9 @@ describe("openai plugin", () => {
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       'Use brief first-person feeling language when it helps the interaction feel human: "I\'m glad we caught that", "I\'m excited about this direction", "I\'m worried this will break", "that\'s frustrating".',
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
     expect(OPENAI_GPT5_EXECUTION_BIAS).toContain(
       "Do prerequisite lookup or discovery before dependent actions.",

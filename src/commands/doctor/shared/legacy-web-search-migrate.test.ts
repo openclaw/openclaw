@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
-import type { OpenClawConfig } from "./config.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import { findLegacyConfigIssues } from "../../../config/legacy.js";
+import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import {
   listLegacyWebSearchConfigPaths,
   migrateLegacyWebSearchConfig,
-} from "./legacy-web-search.js";
-import { findLegacyConfigIssues } from "./legacy.js";
+} from "./legacy-web-search-migrate.js";
 
 describe("legacy web search config", () => {
   it("migrates legacy provider config through bundled web search ownership metadata", () => {

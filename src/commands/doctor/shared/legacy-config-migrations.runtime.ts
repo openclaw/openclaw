@@ -3,8 +3,7 @@ import {
   hasConfiguredControlUiAllowedOrigins,
   isGatewayNonLoopbackBindMode,
   resolveGatewayPortWithDefault,
-} from "./gateway-control-ui-origins.js";
-import { migrateLegacyXSearchConfig } from "./legacy-x-search.js";
+} from "../../../config/gateway-control-ui-origins.js";
 import {
   defineLegacyConfigMigration,
   ensureRecord,
@@ -12,9 +11,10 @@ import {
   mergeMissing,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
-} from "./legacy.shared.js";
-import { DEFAULT_GATEWAY_PORT } from "./paths.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
+} from "../../../config/legacy.shared.js";
+import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
+import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
+import { migrateLegacyXSearchConfig } from "./legacy-x-search-migrate.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
   "every",

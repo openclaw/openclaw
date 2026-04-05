@@ -520,4 +520,37 @@ describe("MatrixExecApprovalHandler", () => {
       expect.anything(),
     );
   });
+
+  it("keeps the reaction hint at the start of long approval prompts", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok",
+          execApprovals: {
+            enabled: true,
+            approvers: ["@owner:example.org"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested({
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        command: `printf '%s' "${"x".repeat(8_000)}"`,
+      },
+    });
+
+    const sentText = sendMessage.mock.calls[0]?.[1];
+    expect(typeof sentText).toBe("string");
+    expect(sentText).toContain("Pending command:");
+    expect(sentText).toMatch(
+      /^React here: ✅ Allow once, ♾️ Allow always, ❌ Deny\n\nApproval required\./,
+    );
+  });
 });

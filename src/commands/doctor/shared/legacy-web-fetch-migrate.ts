@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "./config.js";
-import { mergeMissing } from "./legacy.shared.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import { mergeMissing } from "../../../config/legacy.shared.js";
 
 type JsonRecord = Record<string, unknown>;
 const DANGEROUS_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);

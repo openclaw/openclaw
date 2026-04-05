@@ -1,12 +1,12 @@
 import {
-  listLegacyWebSearchConfigPaths,
-  migrateLegacyWebSearchConfig,
-} from "./legacy-web-search.js";
-import {
   defineLegacyConfigMigration,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
-} from "./legacy.shared.js";
+} from "../../../config/legacy.shared.js";
+import {
+  listLegacyWebSearchConfigPaths,
+  migrateLegacyWebSearchConfig,
+} from "./legacy-web-search-migrate.js";
 
 const LEGACY_WEB_SEARCH_RULES: LegacyConfigRule[] = [
   {
