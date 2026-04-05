@@ -22,6 +22,7 @@ vi.mock("./cli-auth-seam.js", async (importActual) => {
 const { buildAnthropicCliMigrationResult, hasClaudeCliAuth } = await import("./cli-migration.js");
 const { registerSingleProviderPlugin } =
   await import("../../test/helpers/plugins/plugin-registration.js");
+const { createTestWizardPrompter } = await import("../../test/helpers/plugins/setup-wizard.js");
 const { default: anthropicPlugin } = await import("./index.js");
 
 async function resolveAnthropicCliAuthMethod() {
@@ -42,12 +43,7 @@ function createProviderAuthContext(
     env: {},
     agentDir: "/tmp/openclaw/agents/main",
     workspaceDir: "/tmp/openclaw/workspace",
-    prompter: {
-      confirm: vi.fn(),
-      note: vi.fn(),
-      select: vi.fn(),
-      text: vi.fn(),
-    },
+    prompter: createTestWizardPrompter(),
     runtime: {
       log: vi.fn(),
       error: vi.fn(),
