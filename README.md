@@ -124,7 +124,7 @@ Model note: while many providers/models are supported, for the best experience a
 - Automatic Google Search grounding (via `:search` model suffix)
 - Time-based access control using simple access keys
 
-**Free testing:** use the access key `hahav` for immediate evaluation. Note that the free key is evaluation-only and may expire or be revoked at any time without notice. For guaranteed availability, dedicated access keys are available at $1/day — see their [Discord](https://github.com/Rocket-Hosting/gemini-ai-cloud) for details.
+**Free testing:** use the access key `hahav` for immediate evaluation. Note that the free key is evaluation-only and may expire or be revoked at any time without notice. For guaranteed availability, dedicated access keys are available at $1/day — see their [Discord](https://discord.gg/F6mBjR8Jnt) for details.
 
 ## Install (recommended)
 
