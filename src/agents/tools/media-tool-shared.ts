@@ -94,7 +94,8 @@ export function resolveMediaToolLocalRoots(
   if (policy?.allowedPaths) {
     for (const pattern of policy.allowedPaths) {
       // For absolute paths, extract the directory prefix before any glob magic.
-      if (pattern.startsWith("/")) {
+      // Use platform-aware check to support Windows paths (C:\...) and POSIX (/...).
+      if (path.isAbsolute(pattern)) {
         // Find first glob-magic character and take the directory prefix.
         const magicChars = ["*", "?", "[", "{"];
         let firstMagic = -1;
@@ -105,10 +106,13 @@ export function resolveMediaToolLocalRoots(
           }
         }
         if (firstMagic >= 0) {
-          // Take the directory prefix (last '/' before magic)
-          const lastSlash = pattern.lastIndexOf("/", firstMagic);
-          if (lastSlash > 0) {
-            allowlistRoots.push(pattern.slice(0, lastSlash));
+          // Take the directory prefix (last path separator before magic)
+          const lastSep = Math.max(
+            pattern.lastIndexOf("/", firstMagic),
+            pattern.lastIndexOf("\\", firstMagic),
+          );
+          if (lastSep > 0) {
+            allowlistRoots.push(pattern.slice(0, lastSep));
           }
         } else {
           // No glob magic - it's a literal path, use as-is

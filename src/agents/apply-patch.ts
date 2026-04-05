@@ -356,11 +356,11 @@ async function resolvePatchPath(
     }
 
     // Enforce per-tool filesystem policy (PathGuard) for sandbox patch targets.
-    // Prefer hostPath when available; otherwise fall back to containerPath.
-    if (options.fsPolicy) {
-      const policyRoot = resolved.hostPath ? options.cwd : options.sandbox.root;
-      const targetPath = resolved.hostPath ?? resolved.containerPath;
-      await checkPathGuardStrict(targetPath, options.fsPolicy, policyRoot);
+    // Only enforce when we have a hostPath — policy rules are defined in host namespace.
+    // When only containerPath is available (SSH/remote bridges), the sandbox itself
+    // handles isolation and we cannot reliably match host-relative deny patterns.
+    if (options.fsPolicy && resolved.hostPath) {
+      await checkPathGuardStrict(resolved.hostPath, options.fsPolicy, options.cwd);
     }
 
     return {
