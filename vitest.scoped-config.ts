@@ -31,7 +31,7 @@ function relativizeScopedPatterns(values: string[], dir?: string): string[] {
 export function resolveVitestIsolation(
   _env: Record<string, string | undefined> = process.env,
 ): boolean {
-  return false;
+  return true;
 }
 
 export function createScopedVitestConfig(
@@ -46,7 +46,7 @@ export function createScopedVitestConfig(
     includeOpenClawRuntimeSetup?: boolean;
     isolate?: boolean;
     name?: string;
-    pool?: "threads";
+    pool?: "forks" | "threads";
     passWithNoTests?: boolean;
     setupFiles?: string[];
     useNonIsolatedRunner?: boolean;
