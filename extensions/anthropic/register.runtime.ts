@@ -26,7 +26,11 @@ import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
-import { CLAUDE_CLI_BACKEND_ID } from "./cli-shared.js";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
+  CLAUDE_CLI_DEFAULT_MODEL_REF,
+} from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfig,
@@ -404,10 +408,8 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
           groupLabel: "Anthropic",
           groupHint: "Claude CLI + API key",
           modelAllowlist: {
-            allowedKeys: [...anthropicOauthAllowlist].map((model) =>
-              model.replace(/^anthropic\//, "claude-cli/"),
-            ),
-            initialSelections: ["claude-cli/claude-sonnet-4-6"],
+            allowedKeys: [...CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS],
+            initialSelections: [CLAUDE_CLI_DEFAULT_MODEL_REF],
             message: "Claude CLI models",
           },
         },

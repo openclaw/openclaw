@@ -99,6 +99,41 @@ describe("anthropic provider replay hooks", () => {
     ).toBe("short");
   });
 
+  it("backfills Claude CLI allowlist defaults through plugin hooks for older configs", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const next = provider.applyConfigDefaults?.({
+      provider: "anthropic",
+      env: {},
+      config: {
+        auth: {
+          profiles: {
+            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "claude-cli/claude-sonnet-4-6" },
+            models: {
+              "claude-cli/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(next?.agents?.defaults?.heartbeat).toMatchObject({
+      every: "1h",
+    });
+    expect(next?.agents?.defaults?.models).toMatchObject({
+      "claude-cli/claude-sonnet-4-6": {},
+      "claude-cli/claude-opus-4-6": {},
+      "claude-cli/claude-opus-4-5": {},
+      "claude-cli/claude-sonnet-4-5": {},
+      "claude-cli/claude-haiku-4-5": {},
+    });
+  });
+
   it("resolves claude-cli synthetic oauth auth", async () => {
     readClaudeCliCredentialsForRuntimeMock.mockReset();
     readClaudeCliCredentialsForRuntimeMock.mockReturnValue({
