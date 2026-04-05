@@ -46,6 +46,34 @@ apps/macos/.build
 apps/ios/build
 **/*.trace
 
+# CI/CD and repo metadata – not needed for Docker builds
+.github/
+LICENSE
+CONTRIBUTING.md
+SECURITY.md
+VISION.md
+AGENTS.md
+CLAUDE.md
+docs.acp.md
+appcast.xml
+
+# test files – not needed in production image
+**/*.test.ts
+**/*.test.js
+**/*.spec.ts
+**/*.spec.js
+vitest*.config*
+**/__mocks__
+**/__fixtures__
+**/__snapshots__
+
+# e2e and smoke-test Docker scaffolds
+scripts/e2e/
+scripts/docker/cleanup-smoke/
+scripts/docker/install-sh-e2e/
+scripts/docker/install-sh-nonroot/
+scripts/docker/install-sh-smoke/
+
 # large app trees not needed for CLI build
 apps/
 assets/
