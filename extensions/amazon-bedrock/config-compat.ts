@@ -1,12 +1,45 @@
-import { ensureRecord, getRecord, mergeMissing } from "../../src/config/legacy.shared.js";
-
 type JsonRecord = Record<string, unknown>;
 
 const LEGACY_PATH = "models.bedrockDiscovery";
 const TARGET_PATH = "plugins.entries.amazon-bedrock.config.discovery";
+const BLOCKED_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBlockedObjectKey(key: string): boolean {
+  return BLOCKED_OBJECT_KEYS.has(key);
+}
+
+function getRecord(value: unknown): JsonRecord | null {
+  return isRecord(value) ? value : null;
+}
+
+function ensureRecord(root: JsonRecord, key: string): JsonRecord {
+  const existing = root[key];
+  if (isRecord(existing)) {
+    return existing;
+  }
+  const next: JsonRecord = {};
+  root[key] = next;
+  return next;
+}
+
+function mergeMissing(target: JsonRecord, source: JsonRecord): void {
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined || isBlockedObjectKey(key)) {
+      continue;
+    }
+    const existing = target[key];
+    if (existing === undefined) {
+      target[key] = value;
+      continue;
+    }
+    if (isRecord(existing) && isRecord(value)) {
+      mergeMissing(existing, value);
+    }
+  }
 }
 
 function cloneRecord<T extends JsonRecord>(value: T | undefined): T {
