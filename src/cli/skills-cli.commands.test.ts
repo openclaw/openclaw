@@ -2,52 +2,38 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSkillsCli } from "./skills-cli.js";
 
+const SKILL_STATUS_FIXTURE = {
+  workspaceDir: "/tmp/workspace",
+  managedSkillsDir: "/tmp/workspace/skills",
+  skills: [
+    {
+      name: "calendar",
+      description: "Calendar helpers",
+      source: "bundled",
+      bundled: false,
+      filePath: "/tmp/workspace/skills/calendar/SKILL.md",
+      baseDir: "/tmp/workspace/skills/calendar",
+      skillKey: "calendar",
+      emoji: "📅",
+      homepage: "https://example.com/calendar",
+      always: false,
+      disabled: false,
+      blockedByAllowlist: false,
+      eligible: true,
+      primaryEnv: "CALENDAR_API_KEY",
+      requirements: { bins: [], anyBins: [], env: ["CALENDAR_API_KEY"], config: [], os: [] },
+      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+      configChecks: [],
+      install: [],
+    },
+  ],
+};
+
 const mocks = vi.hoisted(() => {
   const runtimeLogs: string[] = [];
   const runtimeStdout: string[] = [];
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const skillStatusReportFixture = {
-    workspaceDir: "/tmp/workspace",
-    managedSkillsDir: "/tmp/workspace/skills",
-    skills: [
-      {
-        name: "calendar",
-        description: "Calendar helpers",
-        source: "bundled",
-        bundled: false,
-        filePath: "/tmp/workspace/skills/calendar/SKILL.md",
-        baseDir: "/tmp/workspace/skills/calendar",
-        skillKey: "calendar",
-        emoji: "📅",
-        homepage: "https://example.com/calendar",
-        always: false,
-        disabled: false,
-        blockedByAllowlist: false,
-        eligible: true,
-        primaryEnv: "CALENDAR_API_KEY",
-        requirements: {
-          bins: [],
-          anyBins: [],
-          env: ["CALENDAR_API_KEY"],
-          config: [],
-          os: [],
-        },
-        missing: {
-          bins: [],
-          anyBins: [],
-          env: [],
-          config: [],
-          os: [],
-        },
-        configChecks: [],
-        install: [],
-      },
-    ],
-  };
-  const defaultRuntime = {
-    log: vi.fn((...args: unknown[]) => {
-      runtimeLogs.push(stringifyArgs(args));
     }),
     error: vi.fn((...args: unknown[]) => {
       runtimeErrors.push(stringifyArgs(args));
@@ -62,11 +48,7 @@ const mocks = vi.hoisted(() => {
       throw new Error(`__exit__:${code}`);
     }),
   };
-  const buildWorkspaceSkillStatusMock = vi.fn((workspaceDir: string, options?: unknown) => {
-    void workspaceDir;
-    void options;
-    return skillStatusReportFixture;
-  });
+  const buildWorkspaceSkillStatusMock = vi.fn();
   return {
     loadConfigMock: vi.fn(() => ({})),
     resolveDefaultAgentIdMock: vi.fn(() => "main"),
@@ -76,7 +58,6 @@ const mocks = vi.hoisted(() => {
     updateSkillsFromClawHubMock: vi.fn(),
     readTrackedClawHubSkillSlugsMock: vi.fn(),
     buildWorkspaceSkillStatusMock,
-    skillStatusReportFixture,
     defaultRuntime,
     runtimeLogs,
     runtimeStdout,
@@ -93,7 +74,6 @@ const {
   updateSkillsFromClawHubMock,
   readTrackedClawHubSkillSlugsMock,
   buildWorkspaceSkillStatusMock,
-  skillStatusReportFixture,
   defaultRuntime,
   runtimeLogs,
   runtimeStdout,
@@ -159,7 +139,7 @@ describe("skills cli commands", () => {
     });
     updateSkillsFromClawHubMock.mockResolvedValue([]);
     readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
-    buildWorkspaceSkillStatusMock.mockReturnValue(skillStatusReportFixture);
+    buildWorkspaceSkillStatusMock.mockReturnValue(SKILL_STATUS_FIXTURE);
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.writeStdout.mockClear();
