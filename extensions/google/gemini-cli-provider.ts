@@ -114,7 +114,6 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
     resolveDynamicModel: (ctx) =>
       resolveGoogleGeminiForwardCompatModel({
         providerId: PROVIDER_ID,
-        templateProviderId: "google",
         ctx,
       }),
     ...GOOGLE_GEMINI_CLI_PROVIDER_HOOKS,
