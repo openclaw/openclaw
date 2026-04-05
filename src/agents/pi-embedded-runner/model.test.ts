@@ -592,6 +592,145 @@ describe("resolveModel", () => {
     expect(result.model?.reasoning).toBe(true);
   });
 
+  it("propagates image input capability from matching configured fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [
+              {
+                ...makeModel("model-a"),
+                input: ["text"],
+              },
+              {
+                ...makeModel("model-b"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "model-b", "/tmp/agent", cfg);
+
+    expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
+  it("keeps unknown fallback models text-only instead of borrowing image input from another configured model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            models: [
+              {
+                ...makeModel("model-a"),
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("custom", "typoed-model", "/tmp/agent", cfg);
+
+    expect(result.model?.id).toBe("typoed-model");
+    expect(result.model?.input).toEqual(["text"]);
+  });
+
+  it("repairs stale text-only Foundry fallback rows for GPT-family models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            baseUrl: "https://example.services.ai.azure.com/openai/v1",
+            api: "azure-openai-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.4"),
+                name: "gpt-5.4",
+                api: "azure-openai-responses",
+                input: ["text"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("microsoft-foundry", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
+  it("repairs stale text-only Foundry discovered rows for GPT-family models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            baseUrl: "https://example.services.ai.azure.com/openai/v1",
+            api: "azure-openai-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.4"),
+                name: "gpt-5.4",
+                api: "azure-openai-responses",
+                input: ["text"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    mockDiscoveredModel(discoverModels, {
+      provider: "microsoft-foundry",
+      modelId: "gpt-5.4",
+      templateModel: {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "microsoft-foundry",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+        api: "azure-openai-responses",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384,
+      },
+    });
+
+    const result = resolveModelForTest("microsoft-foundry", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
+  it("repairs stale text-only Foundry discovered rows without config overrides", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "microsoft-foundry",
+      modelId: "gpt-5.4",
+      templateModel: {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "microsoft-foundry",
+        baseUrl: "https://example.services.ai.azure.com/openai/v1",
+        api: "azure-openai-responses",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384,
+      },
+    });
+
+    const result = resolveModelForTest("microsoft-foundry", "gpt-5.4", "/tmp/agent");
+
+    expect(result.model?.input).toEqual(["text", "image"]);
+  });
+
   it("matches prefixed OpenRouter native ids in configured fallback models", () => {
     const cfg = {
       models: {

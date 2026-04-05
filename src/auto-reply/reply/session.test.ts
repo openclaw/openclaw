@@ -1573,7 +1573,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("preserves selected auth profile overrides across /new and /reset", async () => {
+  it("preserves selected auth profile overrides but clears stale cli session bindings across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-model-auth-");
     const sessionKey = "agent:main:telegram:dm:user-model-auth";
     const existingSessionId = "existing-session-model-auth";
@@ -1641,9 +1641,14 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         authProfileOverrideSource: overrides.authProfileOverrideSource,
         authProfileOverrideCompactionCount: overrides.authProfileOverrideCompactionCount,
       });
-      expect(result.sessionEntry.cliSessionIds).toEqual(overrides.cliSessionIds);
-      expect(result.sessionEntry.cliSessionBindings).toEqual(overrides.cliSessionBindings);
-      expect(result.sessionEntry.claudeCliSessionId).toBe(overrides.claudeCliSessionId);
+      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
+      expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
+      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].cliSessionIds).toBeUndefined();
+      expect(stored[sessionKey].cliSessionBindings).toBeUndefined();
+      expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
     }
   });
 

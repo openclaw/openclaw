@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -338,6 +338,56 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.SAFE_OVERRIDE).toBe("from-override");
   });
 
+  it("clears claude-cli provider-routing and auth env while keeping host-managed hardening", async () => {
+    const runCliAgent = await setupCliRunnerTestModule();
+    vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example.com/v1");
+    vi.stubEnv("CLAUDE_CODE_USE_BEDROCK", "1");
+    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "env-auth-token");
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "env-oauth-token");
+    vi.stubEnv("CLAUDE_CODE_REMOTE", "1");
+    vi.stubEnv("ANTHROPIC_UNIX_SOCKET", "/tmp/anthropic.sock");
+    mockSuccessfulCliRun();
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {
+                command: "claude",
+                env: {
+                  SAFE_KEEP: "ok",
+                  ANTHROPIC_BASE_URL: "https://override.example.com/v1",
+                  CLAUDE_CODE_OAUTH_TOKEN: "override-oauth-token",
+                },
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      timeoutMs: 1_000,
+      runId: "run-claude-env-hardened",
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      env?: Record<string, string | undefined>;
+    };
+    expect(input.env?.SAFE_KEEP).toBe("ok");
+    expect(input.env?.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+    expect(input.env?.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(input.env?.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+    expect(input.env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(input.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(input.env?.CLAUDE_CODE_REMOTE).toBeUndefined();
+    expect(input.env?.ANTHROPIC_UNIX_SOCKET).toBeUndefined();
+  });
+
   it("prepends bootstrap warnings to the CLI prompt body", async () => {
     const runCliAgent = await setupCliRunnerTestModule();
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -513,7 +563,7 @@ describe("runCliAgent spawn path", () => {
     const argv = input.argv ?? [];
     const imageArgIndex = argv.indexOf("--image");
     expect(imageArgIndex).toBeGreaterThanOrEqual(0);
-    expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images-");
+    expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images");
     expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
   });
 
@@ -559,7 +609,7 @@ describe("runCliAgent spawn path", () => {
     const promptCarrier = [input.input ?? "", ...argv].join("\n");
     const appendedPath = promptCarrier
       .split("\n")
-      .find((value) => value.includes("openclaw-cli-images-"));
+      .find((value) => value.includes("openclaw-cli-images"));
     expect(appendedPath).toBeDefined();
     expect(appendedPath).not.toBe(sourceImage);
     expect(promptCarrier).toContain(appendedPath ?? "");

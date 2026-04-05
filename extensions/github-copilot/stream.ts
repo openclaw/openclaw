@@ -6,7 +6,7 @@ import {
   buildCopilotDynamicHeaders,
   hasCopilotVisionInput,
   streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 
 type StreamContext = Parameters<StreamFn>[1];
 

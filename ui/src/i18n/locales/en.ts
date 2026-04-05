@@ -399,6 +399,12 @@ export const en: TranslationMap = {
     ptBR: "Português (Brazilian Portuguese)",
     de: "Deutsch (German)",
     es: "Español (Spanish)",
+    jaJP: "日本語 (Japanese)",
+    ko: "한국어 (Korean)",
+    fr: "Français (French)",
+    tr: "Türkçe (Turkish)",
+    id: "Bahasa Indonesia (Indonesian)",
+    pl: "Polski (Polish)",
   },
   cron: {
     summary: {

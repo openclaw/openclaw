@@ -3,7 +3,7 @@ import {
   type ChannelDoctorConfigMutation,
 } from "openclaw/plugin-sdk/channel-contract";
 import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime";
+import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime-doctor";
 import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 

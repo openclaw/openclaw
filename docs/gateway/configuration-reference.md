@@ -2212,6 +2212,26 @@ Notes:
 - File permissions are `0700` for directories and `0600` for files.
 - Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
 
+### `tools.experimental`
+
+Experimental built-in tool flags. Default off unless a runtime-specific auto-enable rule applies.
+
+```json5
+{
+  tools: {
+    experimental: {
+      planTool: true, // enable experimental update_plan
+    },
+  },
+}
+```
+
+Notes:
+
+- `planTool`: enables the structured `update_plan` tool for non-trivial multi-step work tracking.
+- Default: `false` for non-OpenAI providers. OpenAI and OpenAI Codex runs auto-enable it.
+- When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
+
 ### `agents.defaults.subagents`
 
 ```json5
@@ -3274,6 +3294,7 @@ Notes:
 
     cacheTrace: {
       enabled: false,
+      filePath: "~/.openclaw/logs/cache-trace.jsonl",
       includeMessages: true,
       includePrompt: true,
       includeSystem: true,
@@ -3294,6 +3315,7 @@ Notes:
 - `otel.sampleRate`: trace sampling rate `0`–`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
 - `cacheTrace.enabled`: log cache trace snapshots for embedded runs (default: `false`).
+- `cacheTrace.filePath`: output path for cache trace JSONL (default: `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl`).
 - `cacheTrace.includeMessages` / `includePrompt` / `includeSystem`: control what is included in cache trace output (all default: `true`).
 
 ---
@@ -3367,7 +3389,9 @@ Notes:
 - `stream.hiddenBoundarySeparator`: separator before visible text after hidden tool events (default: `"paragraph"`).
 - `stream.maxOutputChars`: maximum assistant output characters projected per ACP turn.
 - `stream.maxSessionUpdateChars`: maximum characters for projected ACP status/update lines.
+- `stream.tagVisibility`: record of tag names to boolean visibility overrides for streamed events.
 - `runtime.ttlMinutes`: idle TTL in minutes for ACP session workers before eligible cleanup.
+- `runtime.installCommand`: optional install command to run when bootstrapping an ACP runtime environment.
 
 ---
 

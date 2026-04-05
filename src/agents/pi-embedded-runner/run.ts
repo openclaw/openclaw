@@ -5,6 +5,7 @@ import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
+import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -80,7 +81,12 @@ import {
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
-import { resolveIncompleteTurnPayloadText } from "./run/incomplete-turn.js";
+import {
+  resolveAckExecutionFastPathInstruction,
+  resolveIncompleteTurnPayloadText,
+  extractPlanningOnlyPlanDetails,
+  resolvePlanningOnlyRetryInstruction,
+} from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
@@ -303,7 +309,14 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
+      let planningOnlyRetryAttempts = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
+      let planningOnlyRetryInstruction: string | null = null;
+      const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
+        provider,
+        modelId,
+        prompt: params.prompt,
+      });
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
@@ -474,8 +487,18 @@ export async function runEmbeddedPiAgent(
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
-          const prompt =
+          const basePrompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+          const promptAdditions = [
+            ackExecutionFastPathInstruction,
+            planningOnlyRetryInstruction,
+          ].filter(
+            (value): value is string => typeof value === "string" && value.trim().length > 0,
+          );
+          const prompt =
+            promptAdditions.length > 0
+              ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
+              : basePrompt;
           let resolvedStreamApiKey: string | undefined;
           if (!runtimeAuthState && apiKeyInfo) {
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
@@ -1337,6 +1360,51 @@ export async function runEmbeddedPiAgent(
             timedOut,
             attempt,
           });
+          const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
+            provider,
+            modelId,
+            aborted,
+            timedOut,
+            attempt,
+          });
+          if (
+            !incompleteTurnText &&
+            nextPlanningOnlyRetryInstruction &&
+            planningOnlyRetryAttempts < 1
+          ) {
+            const planningOnlyText = attempt.assistantTexts.join("\n\n").trim();
+            const planDetails = extractPlanningOnlyPlanDetails(planningOnlyText);
+            if (planDetails) {
+              emitAgentPlanEvent({
+                runId: params.runId,
+                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                data: {
+                  phase: "update",
+                  title: "Assistant proposed a plan",
+                  explanation: planDetails.explanation,
+                  steps: planDetails.steps,
+                  source: "planning_only_retry",
+                },
+              });
+              void params.onAgentEvent?.({
+                stream: "plan",
+                data: {
+                  phase: "update",
+                  title: "Assistant proposed a plan",
+                  explanation: planDetails.explanation,
+                  steps: planDetails.steps,
+                  source: "planning_only_retry",
+                },
+              });
+            }
+            planningOnlyRetryAttempts += 1;
+            planningOnlyRetryInstruction = nextPlanningOnlyRetryInstruction;
+            log.warn(
+              `planning-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} — retrying once with act-now steer`,
+            );
+            continue;
+          }
           if (incompleteTurnText) {
             const incompleteStopReason = attempt.lastAssistant?.stopReason;
             log.warn(
