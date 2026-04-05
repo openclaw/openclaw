@@ -793,6 +793,10 @@ class NodeRuntime(
     externalAudioCaptureActive.value = false
   }
 
+  fun setHttpAccessEnabled(value: Boolean) {
+    prefs.setHttpAccessEnabled(value)
+  }
+
   fun refreshGatewayConnection() {
     val endpoint =
       connectedEndpoint ?: run {
