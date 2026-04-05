@@ -819,6 +819,20 @@ export function buildContextMetadataBadges(
   return badges;
 }
 
+export function buildContextTrackedBadges(
+  contextWeight: UsageSessionEntry["contextWeight"],
+): string[] {
+  if (!contextWeight?.tracked) {
+    return [];
+  }
+  const badges = [`tracked:${formatTokens(contextWeight.tracked.estimatedTokens)} tok`];
+  const top = contextWeight.tracked.largestContributors[0];
+  if (top) {
+    badges.push(`top:${top.name} ${top.sharePercent.toFixed(1)}%`);
+  }
+  return badges;
+}
+
 function renderContextPanel(
   contextWeight: UsageSessionEntry["contextWeight"],
   usage: UsageSessionEntry["usage"],
@@ -851,6 +865,7 @@ function renderContextPanel(
   }
 
   const contextBadges = buildContextMetadataBadges(contextWeight);
+  const trackedBadges = buildContextTrackedBadges(contextWeight);
   const skillsList = contextWeight.skills.entries.toSorted((a, b) => b.blockChars - a.blockChars);
   const toolsList = contextWeight.tools.entries.toSorted(
     (a, b) => b.summaryChars + b.schemaChars - (a.summaryChars + a.schemaChars),
@@ -881,9 +896,10 @@ function renderContextPanel(
           : nothing}
       </div>
       <p class="context-weight-desc">${contextPct || t("usage.details.baseContextPerMessage")}</p>
-      ${contextBadges.length > 0
+      ${contextBadges.length > 0 || trackedBadges.length > 0
         ? html`<div class="usage-badges">
             ${contextBadges.map((badge) => html`<span class="usage-badge">${badge}</span>`)}
+            ${trackedBadges.map((badge) => html`<span class="usage-badge">${badge}</span>`)}
           </div>`
         : nothing}
       <div class="context-stacked-bar">

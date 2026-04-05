@@ -4,6 +4,7 @@ import {
   CHART_BAR_WIDTH_RATIO,
   CHART_MAX_BAR_WIDTH,
   buildContextMetadataBadges,
+  buildContextTrackedBadges,
 } from "./usage-render-details.ts";
 import type { TimeSeriesPoint, UsageSessionEntry } from "./usageTypes.ts";
 
@@ -145,6 +146,41 @@ describe("buildContextMetadataBadges", () => {
     } as UsageSessionEntry["contextWeight"]);
 
     expect(badges).toEqual(["source:estimate"]);
+  });
+});
+
+describe("buildContextTrackedBadges", () => {
+  it("includes tracked prompt estimate and largest contributor", () => {
+    const badges = buildContextTrackedBadges({
+      tracked: {
+        chars: 1020,
+        estimatedTokens: 255,
+        largestContributors: [
+          { name: "Project Context", chars: 500, estimatedTokens: 125, sharePercent: 49 },
+        ],
+      },
+      systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
+      injectedWorkspaceFiles: [],
+      skills: { promptChars: 0, entries: [] },
+      tools: { listChars: 0, schemaChars: 0, entries: [] },
+      source: "run",
+      generatedAt: 1,
+    } as UsageSessionEntry["contextWeight"]);
+
+    expect(badges).toEqual(["tracked:255 tok", "top:Project Context 49.0%"]);
+  });
+
+  it("returns empty when tracked metrics are absent", () => {
+    expect(
+      buildContextTrackedBadges({
+        source: "estimate",
+        generatedAt: 1,
+        systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 0, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      } as UsageSessionEntry["contextWeight"]),
+    ).toEqual([]);
   });
 });
 
