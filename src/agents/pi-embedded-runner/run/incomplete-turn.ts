@@ -38,6 +38,11 @@ const PLANNING_ONLY_COMPLETION_RE =
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
 
+export type PlanningOnlyPlanDetails = {
+  explanation: string;
+  steps: string[];
+};
+
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
@@ -86,6 +91,36 @@ function shouldApplyPlanningOnlyRetryGuard(params: {
     return false;
   }
   return /^gpt-5(?:[.-]|$)/i.test(params.modelId ?? "");
+}
+
+function extractPlanningOnlySteps(text: string): string[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const bulletLines = lines
+    .map((line) => line.replace(/^[-*•]\s+|^\d+[.)]\s+/u, "").trim())
+    .filter(Boolean);
+  if (bulletLines.length >= 2) {
+    return bulletLines.slice(0, 4);
+  }
+  return text
+    .split(/(?<=[.!?])\s+/u)
+    .map((step) => step.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+}
+
+export function extractPlanningOnlyPlanDetails(text: string): PlanningOnlyPlanDetails | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const steps = extractPlanningOnlySteps(trimmed);
+  return {
+    explanation: trimmed,
+    steps,
+  };
 }
 
 export function resolvePlanningOnlyRetryInstruction(params: {

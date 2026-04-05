@@ -5,6 +5,7 @@ import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
+import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -82,6 +83,7 @@ import {
 } from "./run/helpers.js";
 import {
   resolveIncompleteTurnPayloadText,
+  extractPlanningOnlyPlanDetails,
   resolvePlanningOnlyRetryInstruction,
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
@@ -1357,6 +1359,31 @@ export async function runEmbeddedPiAgent(
             nextPlanningOnlyRetryInstruction &&
             planningOnlyRetryAttempts < 1
           ) {
+            const planningOnlyText = attempt.assistantTexts.join("\n\n").trim();
+            const planDetails = extractPlanningOnlyPlanDetails(planningOnlyText);
+            if (planDetails) {
+              emitAgentPlanEvent({
+                runId: params.runId,
+                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                data: {
+                  phase: "update",
+                  title: "Assistant proposed a plan",
+                  explanation: planDetails.explanation,
+                  steps: planDetails.steps,
+                  source: "planning_only_retry",
+                },
+              });
+              void params.onAgentEvent?.({
+                stream: "plan",
+                data: {
+                  phase: "update",
+                  title: "Assistant proposed a plan",
+                  explanation: planDetails.explanation,
+                  steps: planDetails.steps,
+                  source: "planning_only_retry",
+                },
+              });
+            }
             planningOnlyRetryAttempts += 1;
             planningOnlyRetryInstruction = nextPlanningOnlyRetryInstruction;
             log.warn(

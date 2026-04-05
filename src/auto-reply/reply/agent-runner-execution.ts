@@ -726,6 +726,95 @@ export async function runAgentTurnWithFallback(params: {
                       name: typeof evt.data.name === "string" ? evt.data.name : undefined,
                       phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
                       status: typeof evt.data.status === "string" ? evt.data.status : undefined,
+                      summary: typeof evt.data.summary === "string" ? evt.data.summary : undefined,
+                      progressText:
+                        typeof evt.data.progressText === "string"
+                          ? evt.data.progressText
+                          : undefined,
+                      approvalId:
+                        typeof evt.data.approvalId === "string" ? evt.data.approvalId : undefined,
+                      approvalSlug:
+                        typeof evt.data.approvalSlug === "string"
+                          ? evt.data.approvalSlug
+                          : undefined,
+                    });
+                  }
+                  if (evt.stream === "plan") {
+                    await params.opts?.onPlanUpdate?.({
+                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
+                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
+                      explanation:
+                        typeof evt.data.explanation === "string" ? evt.data.explanation : undefined,
+                      steps: Array.isArray(evt.data.steps)
+                        ? evt.data.steps.filter((step): step is string => typeof step === "string")
+                        : undefined,
+                      source: typeof evt.data.source === "string" ? evt.data.source : undefined,
+                    });
+                  }
+                  if (evt.stream === "approval") {
+                    await params.opts?.onApprovalEvent?.({
+                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
+                      kind: typeof evt.data.kind === "string" ? evt.data.kind : undefined,
+                      status: typeof evt.data.status === "string" ? evt.data.status : undefined,
+                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
+                      itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined,
+                      toolCallId:
+                        typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
+                      approvalId:
+                        typeof evt.data.approvalId === "string" ? evt.data.approvalId : undefined,
+                      approvalSlug:
+                        typeof evt.data.approvalSlug === "string"
+                          ? evt.data.approvalSlug
+                          : undefined,
+                      command: typeof evt.data.command === "string" ? evt.data.command : undefined,
+                      host: typeof evt.data.host === "string" ? evt.data.host : undefined,
+                      reason: typeof evt.data.reason === "string" ? evt.data.reason : undefined,
+                      message: typeof evt.data.message === "string" ? evt.data.message : undefined,
+                    });
+                  }
+                  if (evt.stream === "command_output") {
+                    await params.opts?.onCommandOutput?.({
+                      itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined,
+                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
+                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
+                      toolCallId:
+                        typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
+                      name: typeof evt.data.name === "string" ? evt.data.name : undefined,
+                      output: typeof evt.data.output === "string" ? evt.data.output : undefined,
+                      status: typeof evt.data.status === "string" ? evt.data.status : undefined,
+                      exitCode:
+                        typeof evt.data.exitCode === "number" || evt.data.exitCode === null
+                          ? evt.data.exitCode
+                          : undefined,
+                      durationMs:
+                        typeof evt.data.durationMs === "number" ? evt.data.durationMs : undefined,
+                      cwd: typeof evt.data.cwd === "string" ? evt.data.cwd : undefined,
+                    });
+                  }
+                  if (evt.stream === "patch") {
+                    await params.opts?.onPatchSummary?.({
+                      itemId: typeof evt.data.itemId === "string" ? evt.data.itemId : undefined,
+                      phase: typeof evt.data.phase === "string" ? evt.data.phase : undefined,
+                      title: typeof evt.data.title === "string" ? evt.data.title : undefined,
+                      toolCallId:
+                        typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined,
+                      name: typeof evt.data.name === "string" ? evt.data.name : undefined,
+                      added: Array.isArray(evt.data.added)
+                        ? evt.data.added.filter(
+                            (entry): entry is string => typeof entry === "string",
+                          )
+                        : undefined,
+                      modified: Array.isArray(evt.data.modified)
+                        ? evt.data.modified.filter(
+                            (entry): entry is string => typeof entry === "string",
+                          )
+                        : undefined,
+                      deleted: Array.isArray(evt.data.deleted)
+                        ? evt.data.deleted.filter(
+                            (entry): entry is string => typeof entry === "string",
+                          )
+                        : undefined,
+                      summary: typeof evt.data.summary === "string" ? evt.data.summary : undefined,
                     });
                   }
                   // Track auto-compaction and notify higher layers.

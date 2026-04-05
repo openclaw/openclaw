@@ -124,18 +124,14 @@ type EmbeddedAgentParams = {
     name?: string;
     phase?: string;
     status?: string;
+    summary?: string;
+    progressText?: string;
+    approvalId?: string;
+    approvalSlug?: string;
   }) => Promise<void> | void;
   onAgentEvent?: (payload: {
     stream: string;
-    data: {
-      itemId?: string;
-      kind?: string;
-      title?: string;
-      name?: string;
-      phase?: string;
-      status?: string;
-      completed?: boolean;
-    };
+    data: Record<string, unknown>;
   }) => Promise<void> | void;
 };
 
@@ -306,6 +302,134 @@ describe("runAgentTurnWithFallback", () => {
       name: "read",
       phase: "start",
       status: "running",
+    });
+  });
+
+  it("forwards plan, approval, command output, and patch events", async () => {
+    const onPlanUpdate = vi.fn();
+    const onApprovalEvent = vi.fn();
+    const onCommandOutput = vi.fn();
+    const onPatchSummary = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Assistant proposed a plan",
+          explanation: "Inspect code, patch it, run tests.",
+          steps: ["Inspect code", "Patch code", "Run tests"],
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "approval",
+        data: {
+          phase: "requested",
+          kind: "exec",
+          status: "pending",
+          title: "Command approval requested",
+          approvalId: "approval-1",
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "command_output",
+        data: {
+          itemId: "command:exec-1",
+          phase: "delta",
+          title: "command ls",
+          toolCallId: "exec-1",
+          output: "README.md",
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "patch",
+        data: {
+          itemId: "patch:patch-1",
+          phase: "end",
+          title: "apply patch",
+          toolCallId: "patch-1",
+          added: ["a.ts"],
+          modified: ["b.ts"],
+          deleted: [],
+          summary: "1 added, 1 modified",
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const pendingToolTasks = new Set<Promise<void>>();
+    await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {
+        onPlanUpdate,
+        onApprovalEvent,
+        onCommandOutput,
+        onPatchSummary,
+      } satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks,
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(onPlanUpdate).toHaveBeenCalledWith({
+      phase: "update",
+      title: "Assistant proposed a plan",
+      explanation: "Inspect code, patch it, run tests.",
+      steps: ["Inspect code", "Patch code", "Run tests"],
+      source: undefined,
+    });
+    expect(onApprovalEvent).toHaveBeenCalledWith({
+      phase: "requested",
+      kind: "exec",
+      status: "pending",
+      title: "Command approval requested",
+      itemId: undefined,
+      toolCallId: undefined,
+      approvalId: "approval-1",
+      approvalSlug: undefined,
+      command: undefined,
+      host: undefined,
+      reason: undefined,
+      message: undefined,
+    });
+    expect(onCommandOutput).toHaveBeenCalledWith({
+      itemId: "command:exec-1",
+      phase: "delta",
+      title: "command ls",
+      toolCallId: "exec-1",
+      name: undefined,
+      output: "README.md",
+      status: undefined,
+      exitCode: undefined,
+      durationMs: undefined,
+      cwd: undefined,
+    });
+    expect(onPatchSummary).toHaveBeenCalledWith({
+      itemId: "patch:patch-1",
+      phase: "end",
+      title: "apply patch",
+      toolCallId: "patch-1",
+      name: undefined,
+      added: ["a.ts"],
+      modified: ["b.ts"],
+      deleted: [],
+      summary: "1 added, 1 modified",
     });
   });
 

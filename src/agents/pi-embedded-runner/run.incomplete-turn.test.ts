@@ -8,7 +8,10 @@ import {
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
-import { resolvePlanningOnlyRetryInstruction } from "./run/incomplete-turn.js";
+import {
+  extractPlanningOnlyPlanDetails,
+  resolvePlanningOnlyRetryInstruction,
+} from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
@@ -96,5 +99,16 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBeNull();
+  });
+
+  it("extracts structured steps from planning-only narration", () => {
+    expect(
+      extractPlanningOnlyPlanDetails(
+        "I'll inspect the code. Then I'll patch the issue. Finally I'll run tests.",
+      ),
+    ).toEqual({
+      explanation: "I'll inspect the code. Then I'll patch the issue. Finally I'll run tests.",
+      steps: ["I'll inspect the code.", "Then I'll patch the issue.", "Finally I'll run tests."],
+    });
   });
 });
