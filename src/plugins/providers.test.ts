@@ -589,7 +589,30 @@ describe("resolvePluginProviders", () => {
       }),
     );
   });
+  it("activates owning plugins for explicit provider refs", () => {
+    setOwningProviderManifestPlugins();
 
+    resolvePluginProviders({
+      config: {},
+      providerRefs: ["openai-codex"],
+      activate: true,
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["openai"],
+        activate: true,
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["openai"],
+            entries: {
+              openai: { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
+  });
   it.each([
     {
       provider: "minimax-portal",

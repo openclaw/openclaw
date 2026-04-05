@@ -14,7 +14,6 @@ const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentWorkspaceDir: vi.fn(),
   upsertAuthProfile: vi.fn(),
-  resolveOwningPluginIdsForProvider: vi.fn(),
   resolvePluginProviders: vi.fn(),
   createClackPrompter: vi.fn(),
   loadValidConfigOrThrow: vi.fn(),
@@ -53,10 +52,6 @@ vi.mock("../../agents/workspace.js", () => ({
 
 vi.mock("../../plugins/providers.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
-}));
-
-vi.mock("../../plugins/providers.js", () => ({
-  resolveOwningPluginIdsForProvider: mocks.resolveOwningPluginIdsForProvider,
 }));
 
 vi.mock("../../wizard/clack-prompter.js", () => ({
@@ -153,7 +148,6 @@ describe("modelsAuthLoginCommand", () => {
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.resolveDefaultAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.loadValidConfigOrThrow.mockImplementation(async () => currentConfig);
-    mocks.resolveOwningPluginIdsForProvider.mockReturnValue(undefined);
     mocks.updateConfig.mockImplementation(
       async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) => {
         lastUpdatedConfig = mutator(currentConfig);
@@ -299,10 +293,9 @@ describe("modelsAuthLoginCommand", () => {
         },
       },
     });
-    mocks.resolveOwningPluginIdsForProvider.mockReturnValue(["anthropic"]);
     mocks.resolvePluginProviders.mockImplementation(
-      (params: { activate?: boolean; onlyPluginIds?: string[] } | undefined) =>
-        params?.activate === true && params?.onlyPluginIds?.[0] === "anthropic"
+      (params: { activate?: boolean; providerRefs?: string[] } | undefined) =>
+        params?.activate === true && params?.providerRefs?.[0] === "anthropic"
           ? [
               {
                 id: "anthropic",
@@ -325,19 +318,13 @@ describe("modelsAuthLoginCommand", () => {
       runtime,
     );
 
-    expect(mocks.resolveOwningPluginIdsForProvider).toHaveBeenCalledWith({
-      provider: "anthropic",
-      config: {},
-      workspaceDir: "/tmp/openclaw/workspace",
-      env: process.env,
-    });
     expect(mocks.resolvePluginProviders).toHaveBeenCalledWith(
       expect.objectContaining({
         config: {},
         workspaceDir: "/tmp/openclaw/workspace",
         bundledProviderAllowlistCompat: true,
         bundledProviderVitestCompat: true,
-        onlyPluginIds: ["anthropic"],
+        providerRefs: ["anthropic"],
         activate: true,
       }),
     );

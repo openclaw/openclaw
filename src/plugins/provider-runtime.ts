@@ -2,10 +2,7 @@ import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-prof
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
-import {
-  resolveCatalogHookProviderPluginIds,
-  resolveOwningPluginIdsForProvider,
-} from "./providers.js";
+import { resolveCatalogHookProviderPluginIds } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
@@ -104,13 +101,14 @@ function buildHookProviderCacheKey(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   onlyPluginIds?: string[];
+  providerRefs?: string[];
   env?: NodeJS.ProcessEnv;
 }) {
   const { roots } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.config ?? null)}::${JSON.stringify(params.onlyPluginIds ?? [])}`;
+  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.config ?? null)}::${JSON.stringify(params.onlyPluginIds ?? [])}::${JSON.stringify(params.providerRefs ?? [])}`;
 }
 
 export function clearProviderRuntimeHookCache(): void {
@@ -133,6 +131,7 @@ function resolveProviderPluginsForHooks(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
+  providerRefs?: string[];
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
@@ -144,6 +143,7 @@ function resolveProviderPluginsForHooks(params: {
     config: params.config,
     workspaceDir,
     onlyPluginIds: params.onlyPluginIds,
+    providerRefs: params.providerRefs,
     env,
   });
   const cached = cacheBucket.get(cacheKey);
@@ -190,20 +190,11 @@ export function resolveProviderRuntimePlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin | undefined {
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  const owningPluginIds = resolveOwningPluginIdsForProvider({
-    provider: params.provider,
-    config: params.config,
-    workspaceDir,
-    env: params.env,
-  });
-  if (!owningPluginIds || owningPluginIds.length === 0) {
-    return undefined;
-  }
   return resolveProviderPluginsForHooks({
-    ...params,
-    workspaceDir,
-    onlyPluginIds: owningPluginIds,
+    config: params.config,
+    workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
+    env: params.env,
+    providerRefs: [params.provider],
   }).find((plugin) => matchesProviderId(plugin, params.provider));
 }
 
