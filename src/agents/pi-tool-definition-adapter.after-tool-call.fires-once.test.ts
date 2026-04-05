@@ -61,7 +61,6 @@ function createToolHandlerCtx() {
     },
     hookRunner: hookMocks.runner,
     state: {
-      toolMetaById: new Map<string, unknown>(),
       ...createBaseToolHandlerState(),
       successfulCronAdds: 0,
     },

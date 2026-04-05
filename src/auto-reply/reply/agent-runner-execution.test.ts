@@ -127,7 +127,15 @@ type EmbeddedAgentParams = {
   }) => Promise<void> | void;
   onAgentEvent?: (payload: {
     stream: string;
-    data: { phase?: string; completed?: boolean };
+    data: {
+      itemId?: string;
+      kind?: string;
+      title?: string;
+      name?: string;
+      phase?: string;
+      status?: string;
+      completed?: boolean;
+    };
   }) => Promise<void> | void;
 };
 

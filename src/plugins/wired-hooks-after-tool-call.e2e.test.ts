@@ -39,7 +39,6 @@ function createToolHandlerCtx(params: {
     },
     hookRunner: hookMocks.runner,
     state: {
-      toolMetaById: new Map<string, string | undefined>(),
       ...createBaseToolHandlerState(),
     },
     log: { debug: vi.fn(), warn: vi.fn() },
