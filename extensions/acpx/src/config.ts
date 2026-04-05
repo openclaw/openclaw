@@ -62,11 +62,20 @@ function resolveWorkspaceAcpxPluginRoot(currentRoot: string): string | null {
   return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
 }
 
+function resolveRepoAcpxPluginRoot(currentRoot: string): string | null {
+  const workspaceRoot = path.join(currentRoot, "extensions", "acpx");
+  return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
+}
+
 export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
   const resolvedRoot = resolveNearestAcpxPluginRoot(moduleUrl);
   // In a live repo checkout, dist/ can be rebuilt out from under the running gateway.
   // Prefer the stable source plugin root when a built extension is running beside it.
-  return resolveWorkspaceAcpxPluginRoot(resolvedRoot) ?? resolvedRoot;
+  return (
+    resolveWorkspaceAcpxPluginRoot(resolvedRoot) ??
+    resolveRepoAcpxPluginRoot(resolvedRoot) ??
+    resolvedRoot
+  );
 }
 
 export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
