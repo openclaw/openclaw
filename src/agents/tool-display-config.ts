@@ -471,11 +471,6 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Memory Get",
       detailKeys: ["path", "from", "lines"],
     },
-    update_plan: {
-      emoji: "🗺️",
-      title: "Update Plan",
-      detailKeys: ["explanation"],
-    },
     web_search: {
       emoji: "🔎",
       title: "Web Search",
