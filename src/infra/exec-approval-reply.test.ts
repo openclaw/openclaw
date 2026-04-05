@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
+
+vi.mock("./exec-approval-surface.js", () => ({
+  listNativeExecApprovalClientLabels: vi.fn(() => ["Discord", "Matrix", "Slack", "Telegram"]),
+  supportsNativeExecApprovalClient: vi.fn((channel?: string | null) =>
+    ["discord", "matrix", "slack", "telegram"].includes((channel ?? "").trim().toLowerCase()),
+  ),
+}));
+
 import {
   buildExecApprovalActionDescriptors,
   buildExecApprovalCommandText,
@@ -32,7 +40,8 @@ describe("exec approval reply helpers", () => {
     {
       reason: "initiating-platform-disabled" as const,
       channelLabel: "Slack",
-      expected: "Exec approval is required, but chat exec approvals are not enabled on Slack.",
+      expected:
+        "Exec approval is required, but native chat exec approvals are not configured on Slack.",
     },
     {
       reason: "initiating-platform-unsupported" as const,
@@ -54,12 +63,28 @@ describe("exec approval reply helpers", () => {
     );
   });
 
-  it("mentions native chat approval clients in the fallback guidance", () => {
-    expect(
-      buildExecApprovalUnavailableReplyPayload({
-        reason: "no-approval-route",
-      }).text,
-    ).toContain("native chat approval client such as Discord, Slack, or Telegram");
+  it("mentions Matrix in the fallback native approval guidance", () => {
+    const text = buildExecApprovalUnavailableReplyPayload({
+      reason: "no-approval-route",
+    }).text;
+    expect(text).toContain("native chat approval client such as");
+    expect(text).toContain("Discord");
+    expect(text).toContain("Matrix");
+    expect(text).toContain("Slack");
+    expect(text).toContain("Telegram");
+  });
+
+  it("explains how to enable Matrix native approvals when Matrix is the initiating platform", () => {
+    const text = buildExecApprovalUnavailableReplyPayload({
+      reason: "initiating-platform-disabled",
+      channel: "matrix",
+      channelLabel: "Matrix",
+    }).text;
+
+    expect(text).toContain("native chat exec approvals are not configured on Matrix");
+    expect(text).toContain("Matrix supports native exec approvals for this account");
+    expect(text).toContain("`channels.matrix.execApprovals.approvers`");
+    expect(text).toContain("`channels.matrix.dm.allowFrom`");
   });
 
   it.each(invalidReplyMetadataCases)(

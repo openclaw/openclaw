@@ -391,6 +391,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
           details: {
             status: "approval-unavailable",
             reason: "initiating-platform-disabled",
+            channel: "discord",
             channelLabel: "Discord",
           },
         },
@@ -399,7 +400,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
 
     expect(onToolResult).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: expect.stringContaining("chat exec approvals are not enabled on Discord"),
+        text: expect.stringContaining("native chat exec approvals are not configured on Discord"),
       }),
     );
     expect(onToolResult).toHaveBeenCalledWith(

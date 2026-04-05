@@ -345,6 +345,7 @@ function readExecApprovalPendingDetails(result: unknown): {
 function readExecApprovalUnavailableDetails(result: unknown): {
   reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
   warningText?: string;
+  channel?: string;
   channelLabel?: string;
   sentApproverDms?: boolean;
 } | null {
@@ -371,6 +372,7 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   return {
     reason,
     warningText: typeof details.warningText === "string" ? details.warningText : undefined,
+    channel: typeof details.channel === "string" ? details.channel : undefined,
     channelLabel: typeof details.channelLabel === "string" ? details.channelLabel : undefined,
     sentApproverDms: details.sentApproverDms === true,
   };
@@ -431,6 +433,7 @@ async function emitToolResultOutput(params: {
         buildExecApprovalUnavailableReplyPayload({
           reason: approvalUnavailable.reason,
           warningText: approvalUnavailable.warningText,
+          channel: approvalUnavailable.channel,
           channelLabel: approvalUnavailable.channelLabel,
           sentApproverDms: approvalUnavailable.sentApproverDms,
         }),

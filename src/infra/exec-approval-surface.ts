@@ -29,6 +29,11 @@ function labelForChannel(channel?: string): string {
   );
 }
 
+function hasNativeExecApprovalCapability(channel?: string): boolean {
+  const capability = resolveChannelApprovalCapability(getChannelPlugin(channel ?? ""));
+  return Boolean(capability?.native && capability.getActionAvailabilityState);
+}
+
 export function resolveExecApprovalInitiatingSurfaceState(params: {
   channel?: string | null;
   accountId?: string | null;
@@ -55,6 +60,26 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
     return { kind: "enabled", channel, channelLabel };
   }
   return { kind: "unsupported", channel, channelLabel };
+}
+
+export function supportsNativeExecApprovalClient(channel?: string | null): boolean {
+  const normalized = normalizeMessageChannel(channel);
+  if (!normalized || normalized === INTERNAL_MESSAGE_CHANNEL || normalized === "tui") {
+    return true;
+  }
+  return hasNativeExecApprovalCapability(normalized);
+}
+
+export function listNativeExecApprovalClientLabels(params?: {
+  excludeChannel?: string | null;
+}): string[] {
+  const excludeChannel = normalizeMessageChannel(params?.excludeChannel);
+  return listChannelPlugins()
+    .filter((plugin) => plugin.id !== excludeChannel)
+    .filter((plugin) => hasNativeExecApprovalCapability(plugin.id))
+    .map((plugin) => plugin.meta.label?.trim())
+    .filter((label): label is string => Boolean(label))
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {

@@ -74,6 +74,7 @@ export type ExecToolDetails =
         | "initiating-platform-disabled"
         | "initiating-platform-unsupported"
         | "no-approval-route";
+      channel?: string;
       channelLabel?: string;
       sentApproverDms?: boolean;
       host: ExecHost;
