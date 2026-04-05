@@ -115,6 +115,37 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     });
   });
 
+  it("keeps Gemini CLI 3.1 clones sourced from CLI templates when both catalogs exist", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google-gemini-cli",
+      templateProviderId: "google",
+      ctx: createContext({
+        provider: "google-gemini-cli",
+        modelId: "gemini-3.1-pro-preview",
+        models: [
+          createTemplateModel("google-gemini-cli", "gemini-3-pro-preview", {
+            api: "google-gemini-cli",
+            baseUrl: "https://cloudcode-pa.googleapis.com",
+            contextWindow: 1_048_576,
+          }),
+          createTemplateModel("google", "gemini-3-pro-preview", {
+            api: "google-generative-ai",
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            contextWindow: 200_000,
+          }),
+        ],
+      }),
+    });
+
+    expect(model).toMatchObject({
+      provider: "google-gemini-cli",
+      id: "gemini-3.1-pro-preview",
+      api: "google-gemini-cli",
+      baseUrl: "https://cloudcode-pa.googleapis.com",
+      contextWindow: 1_048_576,
+    });
+  });
+
   it("preserves template reasoning metadata instead of forcing it on forward-compat clones", () => {
     const model = resolveGoogleGeminiForwardCompatModel({
       providerId: "google",

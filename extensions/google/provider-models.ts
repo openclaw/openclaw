@@ -21,6 +21,7 @@ const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
 type GoogleForwardCompatFamily = {
   googleTemplateIds: readonly string[];
   cliTemplateIds: readonly string[];
+  preferExternalFirstForCli?: boolean;
 };
 
 type GoogleTemplateSource = {
@@ -66,7 +67,9 @@ function buildGoogleTemplateSources(params: {
   templateProviderId?: string;
   family: GoogleForwardCompatFamily;
 }): GoogleTemplateSource[] {
-  const preferredExternalFirst = isGoogleGeminiCliProvider(params.providerId);
+  const preferredExternalFirst =
+    isGoogleGeminiCliProvider(params.providerId) &&
+    params.family.preferExternalFirstForCli === true;
   const orderedTemplateProviderIds = preferredExternalFirst
     ? [params.templateProviderId, params.providerId]
     : [params.providerId, params.templateProviderId];
@@ -100,16 +103,19 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     family = {
       googleTemplateIds: GEMINI_2_5_PRO_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_PRO_TEMPLATE_IDS,
+      preferExternalFirstForCli: true,
     };
   } else if (lower.startsWith(GEMINI_2_5_FLASH_LITE_PREFIX)) {
     family = {
       googleTemplateIds: GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS,
+      preferExternalFirstForCli: true,
     };
   } else if (lower.startsWith(GEMINI_2_5_FLASH_PREFIX)) {
     family = {
       googleTemplateIds: GEMINI_2_5_FLASH_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
+      preferExternalFirstForCli: true,
     };
   } else if (lower.startsWith(GEMINI_3_1_PRO_PREFIX)) {
     family = {
