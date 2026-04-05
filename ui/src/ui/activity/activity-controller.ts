@@ -152,12 +152,7 @@ export class ActivityController implements ReactiveController {
       return;
     }
     // eslint-disable-next-line no-console
-    console.log(
-      "[activity]",
-      payload.data?.kind,
-      "metadata:",
-      JSON.stringify(payload.data?.metadata),
-    );
+    console.log("[activity]", JSON.stringify(payload.data));
 
     this._tree = applyActivityEvent(this._tree, {
       runId: payload.runId,
