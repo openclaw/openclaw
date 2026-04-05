@@ -459,10 +459,33 @@ export function buildExecExitOutcome(params: {
   aggregated: string;
   durationMs: number;
   timeoutSec: number | null | undefined;
+  command?: string;
 }): ExecProcessOutcome {
   const exitCode = params.exit.exitCode ?? 0;
   const isNormalExit = params.exit.reason === "exit";
   const isShellFailure = exitCode === 126 || exitCode === 127;
+
+  // Detect if command was intended to run in background (nohup ... & or ending with &)
+  const isBackgroundCommand = params.command
+    ? /(?:^|[;|&]\s*)nohup\b.*&\s*$|&\s*$/.test(params.command.trim())
+    : false;
+  const isTimeout = params.exit.reason === "overall-timeout" || params.exit.timedOut;
+
+  // For background commands that timed out, treat as "backgrounded" rather than failed
+  // This prevents AI from retrying the same command
+  if (isTimeout && isBackgroundCommand) {
+    return {
+      status: "completed",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: params.durationMs,
+      aggregated:
+        params.aggregated +
+        "\n\n(Process started in background and is still running. Use 'process' tool with action='list' or action='poll' to check status.)",
+      timedOut: false,
+    };
+  }
+
   const status: ExecProcessOutcome["status"] =
     isNormalExit && !isShellFailure ? "completed" : "failed";
   if (status === "completed") {
@@ -775,6 +798,7 @@ export async function runExecProcess(opts: {
         aggregated: session.aggregated.trim(),
         durationMs,
         timeoutSec: opts.timeoutSec,
+        command: opts.command,
       });
 
       markExited(session, exit.exitCode, exit.exitSignal, outcome.status);
