@@ -1,4 +1,4 @@
-import { getBundledChannelContractSurfaceEntries } from "../../channels/plugins/contract-surfaces.js";
+import { listBootstrapChannelPlugins } from "../../channels/plugins/bootstrap-registry.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
 
 export type MessageActionTargetMode = "to" | "channelId" | "none";
@@ -78,20 +78,6 @@ const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTarg
   leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
 };
 
-type ChannelMessageActionAliasSurface = {
-  messageActionTargetAliases?: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>>;
-};
-
-function listChannelMessageActionAliasSurfaces(): Array<{
-  pluginId: string;
-  surface: ChannelMessageActionAliasSurface;
-}> {
-  return getBundledChannelContractSurfaceEntries() as Array<{
-    pluginId: string;
-    surface: ChannelMessageActionAliasSurface;
-  }>;
-}
-
 function listActionTargetAliasSpecs(
   action: ChannelMessageActionName,
   channel?: string,
@@ -105,11 +91,11 @@ function listActionTargetAliasSpecs(
   if (!normalizedChannel) {
     return specs;
   }
-  for (const entry of listChannelMessageActionAliasSurfaces()) {
-    if (entry.pluginId !== normalizedChannel) {
+  for (const plugin of listBootstrapChannelPlugins()) {
+    if (plugin.id !== normalizedChannel) {
       continue;
     }
-    const channelSpec = entry.surface.messageActionTargetAliases?.[action];
+    const channelSpec = plugin.actions?.messageActionTargetAliases?.[action];
     if (channelSpec) {
       specs.push(channelSpec);
     }

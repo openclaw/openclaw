@@ -11,13 +11,14 @@ import {
   resolveDiscoveredProviderPluginIds,
   resolveEnabledProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
+  resolveOwningPluginIdsForProvider,
   resolveOwningPluginIdsForModelRefs,
   withBundledProviderVitestCompat,
 } from "./providers.js";
+import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
-
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -26,6 +27,7 @@ export function resolvePluginProviders(params: {
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
+  providerRefs?: readonly string[];
   modelRefs?: readonly string[];
   activate?: boolean;
   cache?: boolean;
@@ -33,26 +35,52 @@ export function resolvePluginProviders(params: {
   mode?: "runtime" | "setup";
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
+  const providerOwnedPluginIds = params.providerRefs?.length
+    ? [
+        ...new Set(
+          params.providerRefs.flatMap(
+            (provider) =>
+              resolveOwningPluginIdsForProvider({
+                provider,
+                config: params.config,
+                workspaceDir,
+                env,
+              }) ?? [],
+          ),
+        ),
+      ]
+    : [];
   const modelOwnedPluginIds = params.modelRefs?.length
     ? resolveOwningPluginIdsForModelRefs({
         models: params.modelRefs,
         config: params.config,
-        workspaceDir: params.workspaceDir,
+        workspaceDir,
         env,
       })
     : [];
   const requestedPluginIds =
-    params.onlyPluginIds || modelOwnedPluginIds.length > 0
-      ? [...new Set([...(params.onlyPluginIds ?? []), ...modelOwnedPluginIds])]
+    params.onlyPluginIds ||
+    params.providerRefs?.length ||
+    params.modelRefs?.length ||
+    providerOwnedPluginIds.length > 0 ||
+    modelOwnedPluginIds.length > 0
+      ? [
+          ...new Set([
+            ...(params.onlyPluginIds ?? []),
+            ...providerOwnedPluginIds,
+            ...modelOwnedPluginIds,
+          ]),
+        ].toSorted((left, right) => left.localeCompare(right))
       : undefined;
   const runtimeConfig = withActivatedPluginIds({
     config: params.config,
-    pluginIds: modelOwnedPluginIds,
+    pluginIds: [...providerOwnedPluginIds, ...modelOwnedPluginIds],
   });
   if (params.mode === "setup") {
     const providerPluginIds = resolveDiscoveredProviderPluginIds({
       config: runtimeConfig,
-      workspaceDir: params.workspaceDir,
+      workspaceDir,
       env,
       onlyPluginIds: requestedPluginIds,
     });
@@ -66,7 +94,7 @@ export function resolvePluginProviders(params: {
       }),
       activationSourceConfig: runtimeConfig,
       autoEnabledReasons: {},
-      workspaceDir: params.workspaceDir,
+      workspaceDir,
       env,
       onlyPluginIds: providerPluginIds,
       pluginSdkResolution: params.pluginSdkResolution,
@@ -82,7 +110,7 @@ export function resolvePluginProviders(params: {
   const activation = resolveBundledPluginCompatibleActivationInputs({
     rawConfig: runtimeConfig,
     env,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     onlyPluginIds: requestedPluginIds,
     applyAutoEnable: true,
     compatMode: {
@@ -101,7 +129,7 @@ export function resolvePluginProviders(params: {
     : activation.config;
   const providerPluginIds = resolveEnabledProviderPluginIds({
     config,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     env,
     onlyPluginIds: requestedPluginIds,
   });
@@ -109,7 +137,7 @@ export function resolvePluginProviders(params: {
     config,
     activationSourceConfig: activation.activationSourceConfig,
     autoEnabledReasons: activation.autoEnabledReasons,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     env,
     onlyPluginIds: providerPluginIds,
     pluginSdkResolution: params.pluginSdkResolution,

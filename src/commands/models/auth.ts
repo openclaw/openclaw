@@ -101,7 +101,9 @@ function listProvidersWithTokenMethods(providers: ProviderPlugin[]): ProviderPlu
   return providers.filter((provider) => listTokenAuthMethods(provider).length > 0);
 }
 
-async function resolveModelsAuthContext(): Promise<ResolvedModelsAuthContext> {
+async function resolveModelsAuthContext(params?: {
+  requestedProvider?: string;
+}): Promise<ResolvedModelsAuthContext> {
   const config = await loadValidConfigOrThrow();
   const defaultAgentId = resolveDefaultAgentId(config);
   const agentDir = resolveAgentDir(config, defaultAgentId);
@@ -111,8 +113,18 @@ async function resolveModelsAuthContext(): Promise<ResolvedModelsAuthContext> {
     config,
     workspaceDir,
     mode: "setup",
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+    ...(params?.requestedProvider?.trim()
+      ? { providerRefs: [params.requestedProvider], activate: true }
+      : {}),
   });
-  return { config, agentDir, workspaceDir, providers };
+  return {
+    config,
+    agentDir,
+    workspaceDir,
+    providers,
+  };
 }
 
 function resolveRequestedProviderOrThrow(
@@ -308,7 +320,9 @@ export async function modelsAuthSetupTokenCommand(
     throw new Error("setup-token requires an interactive TTY.");
   }
 
-  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext();
+  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
+    requestedProvider: opts.provider,
+  });
   const tokenProviders = listProvidersWithTokenMethods(providers);
   if (tokenProviders.length === 0) {
     throw new Error(
@@ -566,7 +580,9 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     throw new Error("models auth login requires an interactive TTY.");
   }
 
-  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext();
+  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
+    requestedProvider: opts.provider,
+  });
   const prompter = createClackPrompter();
   const authProviders = listProvidersWithAuthMethods(providers);
   if (authProviders.length === 0) {

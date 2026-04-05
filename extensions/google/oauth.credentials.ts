@@ -63,6 +63,12 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
         return directCredentials;
       }
 
+      const bundledCredentials = readGeminiCliCredentialsFromBundle(geminiCliDir);
+      if (bundledCredentials) {
+        cachedGeminiCliCredentials = bundledCredentials;
+        return bundledCredentials;
+      }
+
       const discoveredCredentials = findGeminiCliCredentialsInTree(geminiCliDir, 10);
       if (discoveredCredentials) {
         cachedGeminiCliCredentials = discoveredCredentials;
@@ -143,12 +149,16 @@ function readGeminiCliCredentialsFile(
 function parseGeminiCliCredentials(
   content: string,
 ): { clientId: string; clientSecret: string } | null {
-  const idMatch = content.match(/(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/);
-  const secretMatch = content.match(/(GOCSPX-[A-Za-z0-9_-]+)/);
-  if (!idMatch || !secretMatch) {
+  const clientId =
+    content.match(/OAUTH_CLIENT_ID\s*=\s*["']([^"']+)["']/)?.[1] ??
+    content.match(/(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/)?.[1];
+  const clientSecret =
+    content.match(/OAUTH_CLIENT_SECRET\s*=\s*["']([^"']+)["']/)?.[1] ??
+    content.match(/(GOCSPX-[A-Za-z0-9_-]+)/)?.[1];
+  if (!clientId || !clientSecret) {
     return null;
   }
-  return { clientId: idMatch[1], clientSecret: secretMatch[1] };
+  return { clientId, clientSecret };
 }
 
 function readGeminiCliCredentialsFromKnownPaths(
@@ -184,6 +194,31 @@ function readGeminiCliCredentialsFromKnownPaths(
     if (credentials) {
       return credentials;
     }
+  }
+
+  return null;
+}
+
+function readGeminiCliCredentialsFromBundle(
+  geminiCliDir: string,
+): { clientId: string; clientSecret: string } | null {
+  const bundleDir = join(geminiCliDir, "bundle");
+  if (!credentialFs.existsSync(bundleDir)) {
+    return null;
+  }
+
+  try {
+    for (const entry of credentialFs.readdirSync(bundleDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".js")) {
+        continue;
+      }
+      const credentials = readGeminiCliCredentialsFile(join(bundleDir, entry.name));
+      if (credentials) {
+        return credentials;
+      }
+    }
+  } catch {
+    // Ignore bundle traversal failures and fall back to the recursive search.
   }
 
   return null;

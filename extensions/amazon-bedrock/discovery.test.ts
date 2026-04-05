@@ -5,6 +5,7 @@ import {
   mergeImplicitBedrockProvider,
   resetBedrockDiscoveryCacheForTest,
   resolveBedrockConfigApiKey,
+  resolveImplicitBedrockProvider,
 } from "./api.js";
 
 const sendMock = vi.fn();
@@ -147,9 +148,9 @@ describe("bedrock discovery", () => {
     expect(resolveBedrockConfigApiKey({} as NodeJS.ProcessEnv)).toBeUndefined();
 
     // When AWS_PROFILE is explicitly set, it should return the marker.
-    expect(
-      resolveBedrockConfigApiKey({ AWS_PROFILE: "default" } as NodeJS.ProcessEnv),
-    ).toBe("AWS_PROFILE");
+    expect(resolveBedrockConfigApiKey({ AWS_PROFILE: "default" } as NodeJS.ProcessEnv)).toBe(
+      "AWS_PROFILE",
+    );
   });
 
   it("merges implicit Bedrock models into explicit provider overrides", () => {
@@ -178,5 +179,49 @@ describe("bedrock discovery", () => {
         },
       }).models?.map((model) => model.id),
     ).toEqual(["amazon.nova-micro-v1:0"]);
+  });
+
+  it("prefers plugin-owned discovery config and still honors legacy fallback", async () => {
+    mockSingleActiveSummary();
+
+    const pluginEnabled = await resolveImplicitBedrockProvider({
+      config: {
+        models: {
+          bedrockDiscovery: {
+            enabled: false,
+            region: "us-west-2",
+          },
+        },
+      },
+      pluginConfig: {
+        discovery: {
+          enabled: true,
+          region: "us-east-1",
+        },
+      },
+      env: {} as NodeJS.ProcessEnv,
+      clientFactory,
+    });
+
+    expect(pluginEnabled?.baseUrl).toBe("https://bedrock-runtime.us-east-1.amazonaws.com");
+    expect(sendMock).toHaveBeenCalledTimes(1);
+
+    mockSingleActiveSummary();
+
+    const legacyEnabled = await resolveImplicitBedrockProvider({
+      config: {
+        models: {
+          bedrockDiscovery: {
+            enabled: true,
+            region: "us-west-2",
+          },
+        },
+      },
+      env: {} as NodeJS.ProcessEnv,
+      clientFactory,
+    });
+
+    expect(legacyEnabled?.baseUrl).toBe("https://bedrock-runtime.us-west-2.amazonaws.com");
+    expect(sendMock).toHaveBeenCalledTimes(2);
   });
 });

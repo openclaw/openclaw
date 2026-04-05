@@ -224,6 +224,12 @@ describe("model-selection", () => {
         expected: { provider: "openrouter", model: "anthropic/claude-sonnet-4-6" },
       },
       {
+        name: "strips duplicate Hugging Face provider prefixes",
+        variants: ["huggingface/deepseek-ai/DeepSeek-R1"],
+        defaultProvider: "huggingface",
+        expected: { provider: "huggingface", model: "deepseek-ai/DeepSeek-R1" },
+      },
+      {
         name: "normalizes Vercel Claude shorthand to anthropic-prefixed model ids",
         variants: ["vercel-ai-gateway/claude-opus-4.6"],
         defaultProvider: "openai",
