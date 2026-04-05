@@ -31,7 +31,7 @@ type VitestHostInfo = {
   totalMemoryBytes?: number;
 };
 
-export type OpenClawVitestPool = "threads";
+export type OpenClawVitestPool = "forks" | "threads";
 
 export type LocalVitestScheduling = {
   maxWorkers: number;
@@ -86,36 +86,42 @@ export function resolveLocalVitestScheduling(
   const loadAverage1m = Math.max(0, system.loadAverage1m ?? 0);
   const totalMemoryGb = (system.totalMemoryBytes ?? 0) / 1024 ** 3;
 
+  // Keep smaller hosts conservative, but let large local boxes actually use
+  // their cores. Thread workers scale much better than the old fork-first cap.
   let inferred =
-    cpuCount <= 4 ? 1 : cpuCount <= 8 ? 2 : cpuCount <= 12 ? 3 : cpuCount <= 16 ? 4 : 6;
+    cpuCount <= 2
+      ? 1
+      : cpuCount <= 4
+        ? 2
+        : cpuCount <= 8
+          ? 4
+          : Math.max(1, Math.floor(cpuCount * 0.75));
 
   if (totalMemoryGb <= 16) {
     inferred = Math.min(inferred, 2);
   } else if (totalMemoryGb <= 32) {
-    inferred = Math.min(inferred, 3);
-  } else if (totalMemoryGb <= 64) {
     inferred = Math.min(inferred, 4);
-  } else if (totalMemoryGb <= 128) {
-    inferred = Math.min(inferred, 5);
-  } else {
+  } else if (totalMemoryGb <= 64) {
     inferred = Math.min(inferred, 6);
+  } else if (totalMemoryGb <= 128) {
+    inferred = Math.min(inferred, 8);
+  } else if (totalMemoryGb <= 256) {
+    inferred = Math.min(inferred, 12);
+  } else {
+    inferred = Math.min(inferred, 16);
   }
 
   const loadRatio = loadAverage1m > 0 ? loadAverage1m / cpuCount : 0;
   if (loadRatio >= 1) {
     inferred = Math.max(1, Math.floor(inferred / 2));
   } else if (loadRatio >= 0.75) {
+    inferred = Math.max(1, inferred - 2);
+  } else if (loadRatio >= 0.5) {
     inferred = Math.max(1, inferred - 1);
   }
 
-  if (pool === "threads") {
-    inferred = Math.min(inferred, 4);
-    if (cpuCount >= 8) {
-      inferred = Math.max(1, inferred - 1);
-    }
-    if (loadRatio >= 0.5) {
-      inferred = Math.max(1, inferred - 1);
-    }
+  if (pool === "forks") {
+    inferred = Math.min(inferred, 8);
   }
 
   inferred = clamp(inferred, 1, 16);
@@ -128,28 +134,27 @@ export function resolveLocalVitestScheduling(
     };
   }
 
+  const totalCpuPercentCapacity = Math.max(100, cpuCount * 100);
+  const otherVitestCpuRatio = processStats.otherVitestCpuPercent / totalCpuPercentCapacity;
+  const otherVitestWorkerRatio = processStats.otherVitestWorkerCount / cpuCount;
+
   const highSystemContention =
-    loadRatio >= 1 ||
-    processStats.otherVitestWorkerCount >= 2 ||
-    processStats.otherVitestCpuPercent >= 150 ||
-    processStats.otherVitestRootCount >= 2;
+    loadRatio >= 1 || otherVitestWorkerRatio >= 0.75 || otherVitestCpuRatio >= 0.75;
 
   if (highSystemContention) {
+    const maxWorkers = Math.max(1, Math.floor(inferred / 2));
     return {
-      maxWorkers: 1,
-      fileParallelism: false,
-      throttledBySystem: true,
+      maxWorkers,
+      fileParallelism: maxWorkers > 1,
+      throttledBySystem: maxWorkers < inferred,
     };
   }
 
   const moderateSystemContention =
-    loadRatio >= 0.75 ||
-    processStats.otherVitestWorkerCount >= 1 ||
-    processStats.otherVitestCpuPercent >= 75 ||
-    processStats.otherVitestRootCount >= 1;
+    loadRatio >= 0.75 || otherVitestWorkerRatio >= 0.4 || otherVitestCpuRatio >= 0.4;
 
   if (moderateSystemContention) {
-    const maxWorkers = Math.min(inferred, 2);
+    const maxWorkers = Math.max(2, Math.ceil(inferred * 0.75));
     return {
       maxWorkers,
       fileParallelism: true,

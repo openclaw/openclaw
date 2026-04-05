@@ -61,7 +61,7 @@ describe("openai-codex implicit provider", () => {
     });
   });
 
-  it("replaces stale openai-codex baseUrl in generated models.json", async () => {
+  it("normalizes generated openai-codex rows back to the Codex transport when oauth exists", async () => {
     await withModelsTempHome(async () => {
       await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
         unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);

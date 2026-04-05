@@ -55,22 +55,11 @@ const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
 function nullableStringSchema(description: string) {
-  return Type.Optional(
-    Type.Unsafe<string | null>({
-      type: ["string", "null"],
-      description,
-    }),
-  );
+  return Type.Optional(Type.String({ description }));
 }
 
 function nullableStringArraySchema(description: string) {
-  return Type.Optional(
-    Type.Unsafe<string[] | null>({
-      type: ["array", "null"],
-      items: { type: "string" },
-      description,
-    }),
-  );
+  return Type.Optional(Type.Array(Type.String(), { description }));
 }
 
 function cronPayloadObjectSchema(params: { toolsAllow: TSchema }) {
@@ -138,12 +127,14 @@ const CronDeliverySchema = Type.Optional(
   ),
 );
 
-// Keep `false` expressible without reintroducing anyOf/oneOf into the raw tool schema.
 // Omitting `failureAlert` means "leave defaults/unchanged"; `false` explicitly disables alerts.
+// Runtime handles `failureAlert === false` in cron/service/timer.ts.
+// The schema declares `type: "object"` to stay compatible with providers that
+// enforce an OpenAPI 3.0 subset (e.g. Gemini via GitHub Copilot).  The
+// description tells the LLM that `false` is also accepted.
 const CronFailureAlertSchema = Type.Optional(
   Type.Unsafe<Record<string, unknown> | false>({
-    type: ["object", "boolean"],
-    not: { const: true },
+    type: "object",
     properties: {
       after: Type.Optional(Type.Number({ description: "Failures before alerting" })),
       channel: Type.Optional(Type.String({ description: "Alert channel" })),
@@ -153,7 +144,8 @@ const CronFailureAlertSchema = Type.Optional(
       accountId: Type.Optional(Type.String()),
     },
     additionalProperties: true,
-    description: "Failure alert object, or false to disable alerts for this job",
+    description:
+      "Failure alert config object, or the boolean value false to disable alerts for this job",
   }),
 );
 

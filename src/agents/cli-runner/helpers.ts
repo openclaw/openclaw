@@ -9,7 +9,9 @@ import { isClaudeCliProvider } from "../../../extensions/anthropic/api.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
+import { extensionForMime } from "../../media/mime.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
@@ -181,21 +183,15 @@ export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: 
   return { argsPrompt: params.prompt };
 }
 
-function resolveImageExtension(mimeType: string): string {
-  const normalized = mimeType.toLowerCase();
-  if (normalized.includes("png")) {
-    return "png";
-  }
-  if (normalized.includes("jpeg") || normalized.includes("jpg")) {
-    return "jpg";
-  }
-  if (normalized.includes("gif")) {
-    return "gif";
-  }
-  if (normalized.includes("webp")) {
-    return "webp";
-  }
-  return "bin";
+function resolveCliImagePath(image: ImageContent): string {
+  const ext = extensionForMime(image.mimeType) ?? ".bin";
+  const digest = crypto
+    .createHash("sha256")
+    .update(image.mimeType)
+    .update("\0")
+    .update(image.data)
+    .digest("hex");
+  return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", `${digest}${ext}`);
 }
 
 export function appendImagePathsToPrompt(prompt: string, paths: string[]): string {
@@ -247,19 +243,19 @@ export async function loadPromptRefImages(params: {
 export async function writeCliImages(
   images: ImageContent[],
 ): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-images-"));
+  const imageRoot = path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
+  await fs.mkdir(imageRoot, { recursive: true, mode: 0o700 });
   const paths: string[] = [];
   for (let i = 0; i < images.length; i += 1) {
     const image = images[i];
-    const ext = resolveImageExtension(image.mimeType);
-    const filePath = path.join(tempDir, `image-${i + 1}.${ext}`);
+    const filePath = resolveCliImagePath(image);
     const buffer = Buffer.from(image.data, "base64");
     await fs.writeFile(filePath, buffer, { mode: 0o600 });
     paths.push(filePath);
   }
-  const cleanup = async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  };
+  // Keep content-addressed image paths stable across Claude CLI runs so prompt
+  // text and argv don't churn on every turn with fresh temp-dir suffixes.
+  const cleanup = async () => {};
   return { paths, cleanup };
 }
 

@@ -29,6 +29,8 @@ import type {
   PluginOrigin,
 } from "./types.js";
 
+type PluginManifestContractListKey = "webFetchProviders" | "webSearchProviders";
+
 type SeenIdEntry = {
   candidate: PluginCandidate;
   recordIndex: number;
@@ -96,6 +98,63 @@ const DEFAULT_MANIFEST_CACHE_MS = 1000;
 
 export function clearPluginManifestRegistryCache(): void {
   registryCache.clear();
+}
+
+function listContractValues(
+  plugin: PluginManifestRecord,
+  contract: PluginManifestContractListKey,
+): readonly string[] {
+  return plugin.contracts?.[contract] ?? [];
+}
+
+export function resolveManifestContractPluginIds(params: {
+  contract: PluginManifestContractListKey;
+  origin?: PluginOrigin;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: readonly string[];
+}): string[] {
+  const onlyPluginIdSet =
+    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
+  return loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })
+    .plugins.filter(
+      (plugin) =>
+        (!params.origin || plugin.origin === params.origin) &&
+        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
+        listContractValues(plugin, params.contract).length > 0,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resolveManifestContractOwnerPluginId(params: {
+  contract: PluginManifestContractListKey;
+  value: string | undefined;
+  origin?: PluginOrigin;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const normalizedValue = params.value?.trim().toLowerCase();
+  if (!normalizedValue) {
+    return undefined;
+  }
+  return loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  }).plugins.find(
+    (plugin) =>
+      (!params.origin || plugin.origin === params.origin) &&
+      listContractValues(plugin, params.contract).some(
+        (candidate) => candidate.trim().toLowerCase() === normalizedValue,
+      ),
+  )?.id;
 }
 
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {

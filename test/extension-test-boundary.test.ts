@@ -19,6 +19,7 @@ const allowedNonExtensionTests = new Set<string>([
   "src/infra/outbound/deliver.test.ts",
   "src/plugins/interactive.test.ts",
   "src/plugins/contracts/discovery.contract.test.ts",
+  "src/plugin-sdk/telegram-command-config.test.ts",
 ]);
 
 function walk(dir: string, entries: string[] = []): string[] {

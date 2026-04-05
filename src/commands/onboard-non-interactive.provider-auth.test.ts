@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "../plugin-sdk/minimax.js";
-import { OPENAI_DEFAULT_MODEL } from "../plugin-sdk/openai.js";
+import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "../../extensions/minimax/api.js";
+import { OPENAI_DEFAULT_MODEL } from "../../extensions/openai/api.js";
 import {
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
@@ -45,7 +45,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     import("../plugins/provider-api-key-auth.runtime.js"),
     import("../plugins/provider-self-hosted-setup.js"),
     import("./zai-endpoint-detect.js"),
-    import("../plugin-sdk/openai.js"),
+    import("../../extensions/openai/api.js"),
   ]);
 
   const ZAI_FALLBACKS = {
@@ -331,6 +331,42 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
   };
 
   const choiceMap = new Map<string, ChoiceHandler>([
+    [
+      "setup-token",
+      {
+        providerId: "anthropic",
+        label: "Anthropic setup-token",
+        async runNonInteractive(ctx) {
+          const token = normalizeText(ctx.opts.token);
+          if (!token) {
+            ctx.runtime.error("Anthropic setup-token auth requires --token.");
+            ctx.runtime.exit(1);
+            return null;
+          }
+          upsertAuthProfile({
+            profileId: (ctx.opts.tokenProfileId as string | undefined) ?? "anthropic:default",
+            credential: {
+              type: "token",
+              provider: "anthropic",
+              token,
+            } as never,
+            agentDir: ctx.agentDir,
+          });
+          const withProfile = providerApiKeyAuthRuntime.applyAuthProfileConfig(
+            ctx.config as never,
+            {
+              profileId: (ctx.opts.tokenProfileId as string | undefined) ?? "anthropic:default",
+              provider: "anthropic",
+              mode: "token",
+            },
+          );
+          return providerApiKeyAuthRuntime.applyPrimaryModel(
+            withProfile,
+            "anthropic/claude-sonnet-4-6",
+          );
+        },
+      },
+    ],
     [
       "apiKey",
       createApiKeyChoice({
@@ -1059,22 +1095,27 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("rejects legacy Anthropic token onboarding", async () => {
+  it("stores legacy Anthropic setup-token onboarding again when explicitly selected", async () => {
     await withOnboardEnv("openclaw-onboard-token-", async ({ configPath, runtime }) => {
       const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
       const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
-      await expect(
-        runNonInteractiveSetupWithDefaults(runtime, {
-          authChoice: "token",
-          tokenProvider: "anthropic",
-          token,
-          tokenProfileId: "anthropic:default",
-        }),
-      ).rejects.toThrow('Auth choice "token" is no longer supported for Anthropic onboarding.');
+      await runNonInteractiveSetupWithDefaults(runtime, {
+        authChoice: "token",
+        tokenProvider: "anthropic",
+        token,
+        tokenProfileId: "anthropic:default",
+      });
 
-      await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(ensureAuthProfileStore().profiles["anthropic:default"]).toBeUndefined();
+      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+      expect(cfg.auth?.profiles?.["anthropic:default"]?.provider).toBe("anthropic");
+      expect(cfg.auth?.profiles?.["anthropic:default"]?.mode).toBe("token");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-sonnet-4-6");
+      expect(ensureAuthProfileStore().profiles["anthropic:default"]).toMatchObject({
+        provider: "anthropic",
+        type: "token",
+        token: cleanToken,
+      });
     });
   });
 

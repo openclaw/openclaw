@@ -37,6 +37,7 @@ export type {
   ChannelOutboundPayloadHint,
   ChannelOutboundTargetRef,
   ChannelAllowlistAdapter,
+  ChannelSecretsAdapter,
   ChannelCommandConversationContext,
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,

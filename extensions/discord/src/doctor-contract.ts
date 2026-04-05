@@ -11,6 +11,98 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function normalizeDiscordDmAliases(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  let changed = false;
+  let updated: Record<string, unknown> = params.entry;
+  const rawDm = updated.dm;
+  const dm = asObjectRecord(rawDm) ? (structuredClone(rawDm) as Record<string, unknown>) : null;
+  let dmChanged = false;
+  const shouldPromoteLegacyAllowFrom = !(
+    params.pathPrefix === "channels.discord" && asObjectRecord(updated.accounts)
+  );
+
+  const allowFromEqual = (a: unknown, b: unknown): boolean => {
+    if (!Array.isArray(a) || !Array.isArray(b)) {
+      return false;
+    }
+    const na = a.map((v) => String(v).trim()).filter(Boolean);
+    const nb = b.map((v) => String(v).trim()).filter(Boolean);
+    if (na.length !== nb.length) {
+      return false;
+    }
+    return na.every((v, i) => v === nb[i]);
+  };
+
+  const topDmPolicy = updated.dmPolicy;
+  const legacyDmPolicy = dm?.policy;
+  if (topDmPolicy === undefined && legacyDmPolicy !== undefined) {
+    updated = { ...updated, dmPolicy: legacyDmPolicy };
+    changed = true;
+    if (dm) {
+      delete dm.policy;
+      dmChanged = true;
+    }
+    params.changes.push(`Moved ${params.pathPrefix}.dm.policy → ${params.pathPrefix}.dmPolicy.`);
+  } else if (
+    topDmPolicy !== undefined &&
+    legacyDmPolicy !== undefined &&
+    topDmPolicy === legacyDmPolicy
+  ) {
+    if (dm) {
+      delete dm.policy;
+      dmChanged = true;
+      params.changes.push(`Removed ${params.pathPrefix}.dm.policy (dmPolicy already set).`);
+    }
+  }
+
+  const topAllowFrom = updated.allowFrom;
+  const legacyAllowFrom = dm?.allowFrom;
+  if (shouldPromoteLegacyAllowFrom) {
+    if (topAllowFrom === undefined && legacyAllowFrom !== undefined) {
+      updated = { ...updated, allowFrom: legacyAllowFrom };
+      changed = true;
+      if (dm) {
+        delete dm.allowFrom;
+        dmChanged = true;
+      }
+      params.changes.push(
+        `Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`,
+      );
+    } else if (
+      topAllowFrom !== undefined &&
+      legacyAllowFrom !== undefined &&
+      allowFromEqual(topAllowFrom, legacyAllowFrom)
+    ) {
+      if (dm) {
+        delete dm.allowFrom;
+        dmChanged = true;
+        params.changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
+      }
+    }
+  }
+
+  if (dm && asObjectRecord(rawDm) && dmChanged) {
+    const keys = Object.keys(dm);
+    if (keys.length === 0) {
+      if (updated.dm !== undefined) {
+        const { dm: _ignored, ...rest } = updated;
+        updated = rest;
+        changed = true;
+        params.changes.push(`Removed empty ${params.pathPrefix}.dm after migration.`);
+      }
+    } else {
+      updated = { ...updated, dm };
+      changed = true;
+    }
+  }
+
+  return { entry: updated, changed };
+}
+
 function normalizeDiscordStreamingAliases(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
@@ -219,6 +311,14 @@ export function normalizeCompatibilityConfig({
   let updated = rawEntry;
   let changed = false;
 
+  const dm = normalizeDiscordDmAliases({
+    entry: updated,
+    pathPrefix: "channels.discord",
+    changes,
+  });
+  updated = dm.entry;
+  changed = changed || dm.changed;
+
   const streaming = normalizeDiscordStreamingAliases({
     entry: updated,
     pathPrefix: "channels.discord",
@@ -236,16 +336,23 @@ export function normalizeCompatibilityConfig({
       if (!account) {
         continue;
       }
-      const accountStreaming = normalizeDiscordStreamingAliases({
-        entry: account,
+      let accountEntry = account;
+      let accountChanged = false;
+      const accountDm = normalizeDiscordDmAliases({
+        entry: accountEntry,
         pathPrefix: `channels.discord.accounts.${accountId}`,
         changes,
       });
-      if (accountStreaming.changed) {
-        accounts[accountId] = accountStreaming.entry;
-        accountsChanged = true;
-      }
-      const accountVoice = asObjectRecord(accountStreaming.entry.voice);
+      accountEntry = accountDm.entry;
+      accountChanged = accountDm.changed;
+      const accountStreaming = normalizeDiscordStreamingAliases({
+        entry: accountEntry,
+        pathPrefix: `channels.discord.accounts.${accountId}`,
+        changes,
+      });
+      accountEntry = accountStreaming.entry;
+      accountChanged = accountChanged || accountStreaming.changed;
+      const accountVoice = asObjectRecord(accountEntry.voice);
       if (
         accountVoice &&
         migrateLegacyTtsConfig(
@@ -254,10 +361,14 @@ export function normalizeCompatibilityConfig({
           changes,
         )
       ) {
-        accounts[accountId] = {
-          ...accountStreaming.entry,
+        accountEntry = {
+          ...accountEntry,
           voice: accountVoice,
         };
+        accountChanged = true;
+      }
+      if (accountChanged) {
+        accounts[accountId] = accountEntry;
         accountsChanged = true;
       }
     }

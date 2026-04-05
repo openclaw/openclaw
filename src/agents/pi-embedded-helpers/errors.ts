@@ -167,7 +167,25 @@ function formatTransportErrorCopy(raw: string): string | undefined {
   return undefined;
 }
 
-function isReasoningConstraintErrorMessage(raw: string): boolean {
+function formatDiskSpaceErrorCopy(raw: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const lower = raw.toLowerCase();
+  if (
+    /\benospc\b/i.test(raw) ||
+    lower.includes("no space left on device") ||
+    lower.includes("disk full")
+  ) {
+    return (
+      "OpenClaw could not write local session data because the disk is full. " +
+      "Free some disk space and try again."
+    );
+  }
+  return undefined;
+}
+
+export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
   }
@@ -219,6 +237,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("maximum context length");
   return (
     lower.includes("request_too_large") ||
+    (lower.includes("invalid_argument") && lower.includes("maximum number of tokens")) ||
     lower.includes("request exceeds the maximum size") ||
     lower.includes("context length exceeded") ||
     lower.includes("maximum context length") ||
@@ -924,6 +943,11 @@ export function formatAssistantErrorText(
     }
   }
 
+  const diskSpaceCopy = formatDiskSpaceErrorCopy(raw);
+  if (diskSpaceCopy) {
+    return diskSpaceCopy;
+  }
+
   if (isContextOverflowError(raw)) {
     return (
       "Context overflow: prompt too large for the model. " +
@@ -1020,6 +1044,11 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     const execDeniedMessage = formatExecDeniedUserMessage(trimmed);
     if (execDeniedMessage) {
       return execDeniedMessage;
+    }
+
+    const diskSpaceCopy = formatDiskSpaceErrorCopy(trimmed);
+    if (diskSpaceCopy) {
+      return diskSpaceCopy;
     }
 
     if (/incorrect role information|roles must alternate/i.test(trimmed)) {

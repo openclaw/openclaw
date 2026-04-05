@@ -71,8 +71,9 @@ export function createSignalPluginBase(params: {
   | "config"
   | "security"
   | "setup"
+  | "messaging"
 > {
-  return createChannelPluginBase({
+  const base = createChannelPluginBase({
     id: SIGNAL_CHANNEL,
     meta: {
       ...getChatChannelMeta(SIGNAL_CHANNEL),
@@ -102,7 +103,13 @@ export function createSignalPluginBase(params: {
     },
     security: signalSecurityAdapter,
     setup: params.setup,
-  }) as Pick<
+  });
+  return {
+    ...base,
+    messaging: {
+      defaultMarkdownTableMode: "bullets",
+    },
+  } as Pick<
     ChannelPlugin<ResolvedSignalAccount>,
     | "id"
     | "meta"
@@ -114,5 +121,6 @@ export function createSignalPluginBase(params: {
     | "config"
     | "security"
     | "setup"
+    | "messaging"
   >;
 }

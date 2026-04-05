@@ -82,6 +82,8 @@ sequenceDiagram
 - After handshake:
   - Requests: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`
   - Events: `{type:"event", event, payload, seq?, stateVersion?}`
+- `hello-ok.features.methods` / `events` are discovery metadata, not a
+  generated dump of every callable helper route.
 - Shared-secret auth uses `connect.params.auth.token` or
   `connect.params.auth.password`, depending on the configured gateway auth mode.
 - Identity-bearing modes such as Tailscale Serve

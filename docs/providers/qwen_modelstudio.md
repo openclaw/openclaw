@@ -51,7 +51,8 @@ openclaw onboard --auth-choice qwen-api-key-cn
 openclaw onboard --auth-choice qwen-api-key
 ```
 
-Legacy `modelstudio-*` auth-choice ids still work.
+Legacy `modelstudio-*` auth-choice ids still work as compatibility aliases, but
+the canonical onboarding ids are the `qwen-*` choices shown above.
 
 After onboarding, set a default model:
 
@@ -74,7 +75,9 @@ After onboarding, set a default model:
 | Coding Plan (subscription) | China  | `qwen-api-key-cn`          | `coding.dashscope.aliyuncs.com/v1`               |
 | Coding Plan (subscription) | Global | `qwen-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`          |
 
-The provider auto-selects the endpoint based on your auth choice. You can
+The provider auto-selects the endpoint based on your auth choice. Canonical
+choices use the `qwen-*` family; `modelstudio-*` remains compatibility-only.
+You can
 override with a custom `baseUrl` in config.
 
 Native Model Studio endpoints advertise streaming usage compatibility on the
