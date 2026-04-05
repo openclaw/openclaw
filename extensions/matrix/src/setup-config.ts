@@ -38,8 +38,8 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "groupAllowFrom",
   "defaultTo",
 ]);
-const MATRIX_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set(matrixSingleAccountKeysToMove);
-const MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS = new Set(matrixNamedAccountPromotionKeys);
+const MATRIX_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set<string>(matrixSingleAccountKeysToMove);
+const MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS = new Set<string>(matrixNamedAccountPromotionKeys);
 
 function cloneIfObject<T>(value: T): T {
   if (value && typeof value === "object") {
