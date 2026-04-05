@@ -135,7 +135,7 @@ Docs: https://docs.openclaw.ai
 - Heartbeat: skip wake delivery when the target session lane is already busy so the pending event is retried instead of getting drained too early. (#40526) Thanks @lucky7323.
 - Plugin SDK/context engines: export the missing context-engine result and subagent lifecycle types from `openclaw/plugin-sdk` so context engine plugins can type `ContextEngine` implementations without local workarounds. (#61251) Thanks @DaevMithran.
 - Agents/errors: surface an explicit disk-full message when local session or transcript writes fail with `ENOSPC`/`disk full`, so those runs stop degrading into opaque `NO_REPLY`-style failures. Thanks @vincentkoc.
-- Google Gemini CLI models: realign Gemini CLI aliases and defaults to the current stable `gemini-2.5-*` catalog and let the bundled CLI provider forward-compat clone those stable models from Google templates, so `flash-lite` and other 2.5 ids stop showing up as missing. (#35274) Thanks @mySebbe.
+- Google Gemini CLI models: add forward-compat support for stable `gemini-2.5-*` model ids by letting the bundled CLI provider clone them from Google templates, so `gemini-2.5-flash-lite` and related configured models stop showing up as missing. (#35274) Thanks @mySebbe.
 
 ## 2026.4.2
 

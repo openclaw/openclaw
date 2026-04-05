@@ -5,9 +5,9 @@ import {
 } from "openclaw/plugin-sdk/cli-backend";
 
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
-  pro: "gemini-2.5-pro",
-  flash: "gemini-2.5-flash",
-  "flash-lite": "gemini-2.5-flash-lite",
+  pro: "gemini-3.1-pro-preview",
+  flash: "gemini-3.1-flash-preview",
+  "flash-lite": "gemini-3.1-flash-lite-preview",
 };
 
 export function buildGoogleGeminiCliBackend(): CliBackendPlugin {

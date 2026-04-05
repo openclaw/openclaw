@@ -25,7 +25,7 @@ import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_GEMINI_CLI_PROVIDER_LABEL = "Gemini CLI OAuth";
-const GOOGLE_GEMINI_CLI_DEFAULT_MODEL = "google-gemini-cli/gemini-2.5-pro";
+const GOOGLE_GEMINI_CLI_DEFAULT_MODEL = "google-gemini-cli/gemini-3.1-pro-preview";
 const GOOGLE_GEMINI_CLI_ENV_VARS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
