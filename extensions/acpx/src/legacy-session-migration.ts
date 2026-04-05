@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginLogger } from "../runtime-api.js";
@@ -121,7 +122,7 @@ export async function migrateLegacyAcpxSessions(params: {
   logger?: PluginLogger;
 }): Promise<void> {
   const sessionDir = path.join(params.stateDir, "sessions");
-  let entries: fs.Dirent[];
+  let entries: Dirent[];
   try {
     entries = await fs.readdir(sessionDir, { withFileTypes: true });
   } catch (error) {
