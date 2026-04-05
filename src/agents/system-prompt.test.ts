@@ -169,6 +169,33 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds stronger execution-bias guidance for actionable turns", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("## Execution Bias");
+    expect(prompt).toContain(
+      "If the user asks you to do the work, start doing it in the same turn.",
+    );
+    expect(prompt).toContain(
+      "Commentary-only turns are incomplete when tools are available and the next action is clear.",
+    );
+  });
+
+  it("narrows silent reply guidance to true no-delivery cases", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain(
+      `Use ${SILENT_REPLY_TOKEN} ONLY when no user-visible reply is required.`,
+    );
+    expect(prompt).toContain(
+      "Never use it to avoid doing requested work or to end an actionable turn early.",
+    );
+  });
+
   it("keeps manual /approve instructions for non-native approval channels", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

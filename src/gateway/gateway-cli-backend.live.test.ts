@@ -31,6 +31,8 @@ const DEFAULT_CLAUDE_ARGS = [
   "stream-json",
   "--include-partial-messages",
   "--verbose",
+  "--setting-sources",
+  "user",
   "--permission-mode",
   "bypassPermissions",
 ];
@@ -43,7 +45,27 @@ const DEFAULT_CODEX_ARGS = [
   "read-only",
   "--skip-git-repo-check",
 ];
-const DEFAULT_CLEAR_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"];
+const DEFAULT_CLEAR_ENV = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_API_KEY_OLD",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_UNIX_SOCKET",
+  "CLAUDE_CONFIG_DIR",
+  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+  "CLAUDE_CODE_OAUTH_SCOPES",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_PLUGIN_CACHE_DIR",
+  "CLAUDE_CODE_PLUGIN_SEED_DIR",
+  "CLAUDE_CODE_REMOTE",
+  "CLAUDE_CODE_USE_COWORK_PLUGINS",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_USE_VERTEX",
+];
 
 function randomImageProbeCode(len = 6): string {
   // Chosen to avoid common OCR confusions in our 5x7 bitmap font.

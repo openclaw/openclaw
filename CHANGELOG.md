@@ -117,6 +117,7 @@ Docs: https://docs.openclaw.ai
 - Agents/exec: restore `host=node` routing for node-pinned and `host=auto` sessions, while still blocking sandboxed `auto` sessions from jumping to gateway. (#60788) Thanks @openperf.
 - Agents/compaction: keep assistant tool calls and displaced tool results in the same compaction chunk so strict summarization providers stop rejecting orphaned tool pairs. (#58849) Thanks @openperf.
 - Outbound/sanitizer: strip leaked `<tool_call>`, `<function_calls>`, and model special tokens from shared user-visible assistant text, including truncated tool-call streams, so internal scaffolding no longer bleeds into replies across surfaces. (#60619) Thanks @oliviareid-svg.
+- Providers/OpenAI: make GPT-5 and Codex runs act sooner with lower-verbosity defaults, visible progress during tool work, and a one-shot retry when a turn only narrates the plan instead of taking action.
 - Telegram: restore DM voice-note preflight transcription so direct-message audio stops arriving as raw `<media:audio>` placeholders. (#61008) Thanks @manueltarouca.
 - Control UI/avatar: honor `ui.assistant.avatar` when serving `/avatar/:agentId` so Appearance UI avatar paths stop falling back to initials placeholders. (#60778) Thanks @hannasdev.
 - Control UI/Overview: prevent gateway access token/password visibility toggle buttons from overlapping their inputs at narrow widths. (#56924) Thanks @bbddbb1.
@@ -136,7 +137,20 @@ Docs: https://docs.openclaw.ai
 - Heartbeat: skip wake delivery when the target session lane is already busy so the pending event is retried instead of getting drained too early. (#40526) Thanks @lucky7323.
 - Plugin SDK/context engines: export the missing context-engine result and subagent lifecycle types from `openclaw/plugin-sdk` so context engine plugins can type `ContextEngine` implementations without local workarounds. (#61251) Thanks @DaevMithran.
 - Agents/errors: surface an explicit disk-full message when local session or transcript writes fail with `ENOSPC`/`disk full`, so those runs stop degrading into opaque `NO_REPLY`-style failures. Thanks @vincentkoc.
+  <<<<<<< HEAD
+- Google Gemini CLI models: add forward-compat support for stable `gemini-2.5-*` model ids by letting the bundled CLI provider clone them from Google templates, so `gemini-2.5-flash-lite` and related configured models stop showing up as missing. (#35274) Thanks @mySebbe.
 - Telegram/reasoning: only create a Telegram reasoning preview lane when the session is explicitly `reasoning:stream`, so hidden `<think>` traces from streamed replies stop surfacing as chat previews on normal sessions. Thanks @vincentkoc.
+- Feishu/reasoning: only expose streamed reasoning previews when the session is explicitly `reasoning:stream`, so hidden reasoning traces do not surface on normal streaming sessions. Thanks @vincentkoc.
+- Providers/OpenAI: support GPT-5.4 assistant `phase` metadata across OpenAI-family Responses replay and the Gateway `/v1/responses` compatibility layer, including `commentary` tool preambles and `final_answer` replies.
+- Models/Anthropic CLI auth: replace migrated `agents.defaults.models` allowlists when `openclaw models auth login --provider anthropic --method cli --set-default` switches to `claude-cli/*`, so stale `anthropic/*` entries do not linger beside the migrated Claude CLI defaults. Thanks @vincentkoc.
+- Plugins/auth-choice: apply provider-owned auth config patches without recursively preserving replaced default-model maps, so Anthropic Claude CLI and similar migrations can intentionally swap model allowlists during onboarding and setup instead of accumulating stale entries. Thanks @vincentkoc.
+- Anthropic CLI onboarding: rewrite migrated fallback model refs during non-interactive Claude CLI setup too, so onboarding and scripted setup no longer keep stale `anthropic/*` fallbacks after switching the primary model to `claude-cli/*`. Thanks @vincentkoc.
+- Agents/Claude CLI: treat malformed bare `--permission-mode` backend overrides as missing and fail safe back to `bypassPermissions`, so custom `cliBackends.claude-cli.args` security config cannot accidentally consume the next flag as a bogus permission mode. Thanks @vincentkoc.
+- Agents/Claude CLI/security: clear inherited Claude Code provider-routing and managed-auth env overrides, and mark OpenClaw-launched Claude CLI runs as host-managed, so Claude CLI backdoor sessions cannot be silently redirected to proxy, Bedrock, Vertex, Foundry, or parent-managed token contexts. Thanks @vincentkoc.
+- Agents/Claude CLI/security: clear inherited Claude Code config-root and plugin-root env overrides like `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_PLUGIN_*`, so OpenClaw-launched Claude CLI runs cannot be silently pointed at an alternate Claude config/plugin tree with different hooks, plugins, or auth context. Thanks @vincentkoc.
+- Agents/Claude CLI/security: force host-managed Claude CLI backdoor runs to `--setting-sources user`, even under custom backend arg overrides, so repo-local `.claude` project/local settings, hooks, and plugin discovery do not silently execute inside non-interactive OpenClaw sessions. Thanks @vincentkoc.
+- Agents/Claude CLI/images: reuse stable hydrated image file paths and preserve shared media extensions like HEIC when passing image refs to local CLI runs, so Claude CLI image prompts stop thrashing KV cache prefixes and oddball image formats do not fall back to `.bin`. Thanks @vincentkoc.
+- Google Gemini CLI auth: detect personal OAuth mode from local Gemini settings and skip Code Assist project discovery for those logins, so personal Google accounts stop failing with `loadCodeAssist 400 Bad Request`. (#49226) Thanks @bobworrall.
 
 ## 2026.4.2
 

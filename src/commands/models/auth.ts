@@ -38,8 +38,8 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { openUrl } from "../onboard-helpers.js";
 import {
+  applyProviderAuthConfigPatch,
   applyDefaultModel,
-  mergeConfigPatch,
   pickAuthMethod,
   resolveProviderMatch,
 } from "../provider-auth-helpers.js";
@@ -241,7 +241,7 @@ async function persistProviderAuthResult(params: {
   await updateConfig((cfg) => {
     let next = cfg;
     if (params.result.configPatch) {
-      next = mergeConfigPatch(next, params.result.configPatch);
+      next = applyProviderAuthConfigPatch(next, params.result.configPatch);
     }
     for (const profile of params.result.profiles) {
       next = applyAuthProfileConfig(next, {
