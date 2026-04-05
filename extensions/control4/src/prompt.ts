@@ -1,4 +1,4 @@
-import { getItems, type C4Item } from "./client.js";
+import { getItems, getUiConfiguration, type C4Item } from "./client.js";
 
 const STRUCTURAL_TYPES = new Set(["root", "site", "building", "floor", "room"]);
 
@@ -55,14 +55,71 @@ function formatDeviceEntry(item: C4Item): string {
   return `${item.name}[${item.id}]`;
 }
 
+type AudioSource = {
+  id: number;
+  name: string;
+  type: string;
+};
+
+type RoomAudioMap = Map<number, AudioSource[]>;
+
+/**
+ * Parse the ui_configuration response into a roomId → AudioSource[] map.
+ * Handles: single source object vs array, missing sources, watch vs listen type.
+ */
+function parseUiConfig(rawConfig: unknown): RoomAudioMap {
+  const map = new Map<number, AudioSource[]>();
+  if (!rawConfig || typeof rawConfig !== "object") return map;
+
+  const config = rawConfig as Record<string, unknown>;
+  const experiences = config["experiences"];
+  if (!Array.isArray(experiences)) return map;
+
+  for (const exp of experiences) {
+    if (!exp || typeof exp !== "object") continue;
+    const e = exp as Record<string, unknown>;
+
+    // Only care about "listen" type (audio zones, not video)
+    if (e["type"] !== "listen") continue;
+
+    const roomId = typeof e["room_id"] === "number" ? e["room_id"] : null;
+    if (roomId == null) continue;
+
+    const sourcesObj = e["sources"] as Record<string, unknown> | undefined;
+    if (!sourcesObj) continue;
+
+    // "source" can be a single object (when only one source) or an array
+    const rawSources = sourcesObj["source"];
+    const sourceList = Array.isArray(rawSources) ? rawSources : rawSources ? [rawSources] : [];
+
+    const sources: AudioSource[] = [];
+    for (const s of sourceList) {
+      if (!s || typeof s !== "object") continue;
+      const src = s as Record<string, unknown>;
+      const id = typeof src["id"] === "number" ? src["id"] : null;
+      const name = typeof src["name"] === "string" ? src["name"] : null;
+      const type = typeof src["type"] === "string" ? src["type"] : "";
+      if (id == null || name == null) continue;
+      sources.push({ id, name, type });
+    }
+
+    if (sources.length > 0) {
+      map.set(roomId, sources);
+    }
+  }
+
+  return map;
+}
+
 type RoomSummary = {
   id: number;
   name: string;
   groups: Record<string, C4Item[]>;
   totalDevices: number;
+  audioSources: AudioSource[];
 };
 
-function buildRoomSummaries(items: C4Item[]): RoomSummary[] {
+function buildRoomSummaries(items: C4Item[], audioMap: RoomAudioMap): RoomSummary[] {
   const rooms = items.filter((i) => i.typeName === "room").sort((a, b) => a.id - b.id);
   const devices = items.filter((i) => !STRUCTURAL_TYPES.has(i.typeName));
 
@@ -94,6 +151,7 @@ function buildRoomSummaries(items: C4Item[]): RoomSummary[] {
       name: room.name,
       groups,
       totalDevices: roomDevices.length,
+      audioSources: audioMap.get(room.id) ?? [],
     });
   }
   return summaries;
@@ -114,6 +172,11 @@ function formatRoomBlock(room: RoomSummary): string {
     } else {
       lines.push(`  ${cat}: ${devs.map(formatDeviceEntry).join(", ")}`);
     }
+  }
+
+  if (room.audioSources.length > 0) {
+    const srcList = room.audioSources.map((s) => `[${s.id}] ${s.name}`).join(", ");
+    lines.push(`  Audio sources: ${srcList} (send audio commands to room [${room.id}])`);
   }
 
   return lines.join("\n");
@@ -140,8 +203,16 @@ export async function buildControl4Prompt(): Promise<string> {
 
   let body: string;
   try {
-    const items = await fetchWithRetry(() => getItems());
-    const summaries = buildRoomSummaries(items);
+    const [items, uiConfig] = await Promise.all([
+      fetchWithRetry(() => getItems()),
+      fetchWithRetry(() => getUiConfiguration()).catch((err) => {
+        process.stderr.write(`[control4] ui_configuration fetch failed: ${err}\n`);
+        return null;
+      }),
+    ]);
+
+    const audioMap = uiConfig ? parseUiConfig(uiConfig) : new Map<number, AudioSource[]>();
+    const summaries = buildRoomSummaries(items, audioMap);
     const devices = items.filter((i) => !STRUCTURAL_TYPES.has(i.typeName));
 
     const roomBlocks = summaries.map(formatRoomBlock).join("\n\n");
@@ -156,6 +227,12 @@ export async function buildControl4Prompt(): Promise<string> {
       "- Lights ON/OFF: command=ON or OFF",
       "- Dim lights: command=RAMP_TO_LEVEL, params={LEVEL:'0'-'100'}",
       "- Thermostat mode: command=SET_HVAC_MODE, params={MODE:'COOL'|'HEAT'|'AUTO'|'OFF'}",
+      "- Set heat target: command=SET_SETPOINT_HEAT, params={FAHRENHEIT:'72'}",
+      "- Set cool target: command=SET_SETPOINT_COOL, params={FAHRENHEIT:'78'}",
+      "- Audio source: command=SELECT_AUDIO_DEVICE, params={deviceid:'<source_id>'} → send to room ID",
+      "- Volume: command=SET_VOLUME_LEVEL, params={LEVEL:'0'-'100'} → send to room ID",
+      "- Playback: command=PLAY|PAUSE|STOP|SKIP FWD|SKIP REV → send to room ID",
+      "- Audio off: command=DISCONNECT → send to room ID",
       "- Query state: use control4_status with device IDs",
       "",
       "### Usage",

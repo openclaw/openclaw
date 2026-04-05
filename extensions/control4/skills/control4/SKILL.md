@@ -1,16 +1,17 @@
 ---
 name: control4
-description: Use Control4 tools to control home automation devices — lights, thermostats, locks, and more — via natural language.
+description: Use Control4 tools to control home automation devices — lights, thermostats, locks, audio, and more — via natural language.
 ---
 
 ## Key principle
-Your system context already lists every room and its device IDs. **Use those IDs directly** in `control4_command` — you do not need to call `control4_find` first for lights, thermostats, or locks in named rooms.
+Your system context already lists every room and its device IDs. **Use those IDs directly** in `control4_command` — you do not need to call `control4_find` first for lights, thermostats, locks, or audio in named rooms.
 
 ## Room + device inventory
 The system prompt includes a full map like:
 ```
 [42] Kitchen
   Lights: Wireless Dimmer[43], Cans dining room side[44], Kitchen Sink[46], ...
+  Audio sources: [946] Pandora, [947] AirPlay (send audio commands to room [42])
 ```
 
 When the user asks to control a named room, extract the device IDs from the map and call `control4_command` immediately.
@@ -26,17 +27,55 @@ When the user asks to control a named room, extract the device IDs from the map 
 1. Read IDs: 508, 509
 2. Call `control4_command(deviceIds=[508,509], command="RAMP_TO_LEVEL", params={LEVEL:"50"})`
 
+**Play AirPlay in the kitchen** — do this:
+1. Read audio sources from context: [947] AirPlay, room ID 42
+2. Call `control4_command(deviceIds=[42], command="SELECT_AUDIO_DEVICE", params={deviceid:"947"})`
+
+**Play Pandora in the living room** — do this:
+1. Read audio sources from context: [946] Pandora, room ID (e.g. 55)
+2. Call `control4_command(deviceIds=[55], command="SELECT_AUDIO_DEVICE", params={deviceid:"946"})`
+3. Then `control4_command(deviceIds=[55], command="PLAY")` if needed
+
+**Volume up in kitchen** — do this:
+1. Room ID 42
+2. Call `control4_command(deviceIds=[42], command="SET_VOLUME_LEVEL", params={LEVEL:"60"})`
+
+**Set thermostat to 72°F heat** — do this:
+1. Thermostat ID from context (e.g. 652)
+2. Call `control4_command(deviceIds=[652], command="SET_SETPOINT_HEAT", params={FAHRENHEIT:"72"})`
+
 **Only use `control4_find`** when:
 - The user mentions a specific device by an ambiguous name not in the context
 - You need to search by manufacturer, model, or a non-obvious attribute
 
 ## Commands reference
+
+### Lights
 | Action | command | params |
 |---|---|---|
 | Turn on/off | `ON` or `OFF` | — |
 | Dim to level | `RAMP_TO_LEVEL` | `{LEVEL: "0"–"100"}` |
 | Set brightness | `SET_SCALE` | `{SCALE: "0"–"100"}` |
-| Thermostat mode | `SET_HVAC_MODE` | `{MODE: "COOL"\|"HEAT"\|"AUTO"\|"OFF"}` |
+
+### Thermostat
+| Action | command | params |
+|---|---|---|
+| Set operating mode | `SET_HVAC_MODE` | `{MODE: "COOL"\|"HEAT"\|"AUTO"\|"OFF"}` |
+| Set heat target | `SET_SETPOINT_HEAT` | `{FAHRENHEIT: "72"}` |
+| Set cool target | `SET_SETPOINT_COOL` | `{FAHRENHEIT: "78"}` |
+
+### Audio (send all audio commands to the **room ID**, not a device ID)
+| Action | command | params |
+|---|---|---|
+| Select source | `SELECT_AUDIO_DEVICE` | `{deviceid: "<source_id>"}` |
+| Play | `PLAY` | — |
+| Pause | `PAUSE` | — |
+| Stop | `STOP` | — |
+| Next track | `SKIP FWD` | — |
+| Previous track | `SKIP REV` | — |
+| Set volume | `SET_VOLUME_LEVEL` | `{LEVEL: "0"–"100"}` |
+| Mute on/off | `MUTE_ON` / `MUTE_OFF` | — |
+| Power off | `DISCONNECT` | — |
 
 ## Querying state
 Use `control4_status(deviceIds=[...])` to read current light level, temperature, or lock state.
@@ -62,36 +101,12 @@ When `control4_status` returns thermostat variables, apply these rules:
 **Example thermostat status reply:**
 > Main Thermostat: 64°F (current), heat set 64°F, cool set 80°F, mode: Heat
 
-## Audio and music streaming
-
-### Discovery
-Use `control4_find` to locate audio devices before using commands:
-- `control4_find(query: "audio zone media player")` — finds amplifiers and zone controllers
-- `control4_find(query: "pandora airplay shairbridge")` — finds streaming source devices
-
-### Audio commands reference
-| Action | command | params |
-|---|---|---|
-| Play | `PLAY` | — |
-| Pause | `PAUSE` | — |
-| Stop | `STOP` | — |
-| Next track | `SKIP FWD` | — |
-| Previous track | `SKIP REV` | — |
-| Set volume | `SET_VOLUME_LEVEL` | `{LEVEL: "0"–"100"}` |
-| Mute on | `MUTE_ON` | — |
-| Mute off | `MUTE_OFF` | — |
-| Select input/source | `SELECT_SOURCE` | depends on device |
-
-### AirPlay (ShairBridge)
-- ShairBridge is a Control4 AirPlay receiver device — the user streams from their iPhone to it
-- WhatsApp controls routing and volume; it does **not** trigger AirPlay streaming itself
-- To route AirPlay to a room: find the room's audio zone/amplifier, then send `SELECT_SOURCE` selecting ShairBridge as input
-- Example: "Play AirPlay in the living room" → find living room audio zone ID → `control4_command(deviceIds=[...], command="SELECT_SOURCE", params={...})`
-
-### Pandora (Media Service Proxy / MSP driver)
-- Find the Pandora or MSP device via `control4_find(query: "pandora")`
-- Send `PLAY` to start the current station, `STOP` to stop, `SKIP FWD` to skip track
-- Station selection may require inspecting device variables via `control4_status`
+## Audio source notes
+- Audio sources are listed per-room in the system prompt under "Audio sources: [id] Name, ..."
+- The source IDs (e.g. 946 for Pandora, 947 for AirPlay) are passed to `SELECT_AUDIO_DEVICE`
+- All audio commands (`PLAY`, `PAUSE`, `SET_VOLUME_LEVEL`, etc.) go to the **room ID**, not the source ID
+- AirPlay: the user streams from their phone to the Control4 ShairBridge — WhatsApp selects the routing
+- After `SELECT_AUDIO_DEVICE`, send `PLAY` if playback doesn't start automatically
 
 ## Notes
 - "Wireless Dimmer" entries are individual dimmer circuits — send to all in a room to control all lights.

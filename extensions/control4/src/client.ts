@@ -169,3 +169,15 @@ export async function getVariables(deviceId: number): Promise<C4Variable[]> {
   }
   return [];
 }
+
+let _uiConfigLogged = false;
+
+/** Fetch the UI configuration from the director (room → audio/video source map). */
+export async function getUiConfiguration(): Promise<unknown> {
+  const result = await directorGet("/api/v1/agents/ui_configuration");
+  if (!_uiConfigLogged) {
+    process.stderr.write(`[control4] ui_configuration: ${JSON.stringify(result)}\n`);
+    _uiConfigLogged = true;
+  }
+  return result;
+}
