@@ -390,9 +390,13 @@ export function resolveMemorySearchConfig(
   if (
     multimodalActive &&
     !(
-      multimodalProvider?.supportsMultimodalEmbeddings?.({
-        model: resolved.model,
-      }) ?? builtinMultimodalSupport
+      // Fall back to the built-in helper when the provider is not registered yet
+      // or when a registered adapter does not implement multimodal capability checks.
+      (
+        multimodalProvider?.supportsMultimodalEmbeddings?.({
+          model: resolved.model,
+        }) ?? builtinMultimodalSupport
+      )
     )
   ) {
     throw new Error(
