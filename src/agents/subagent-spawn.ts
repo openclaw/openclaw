@@ -678,10 +678,12 @@ export async function spawnSubagentDirect(
         return acc;
       })(),
       denyPaths:
+        requesterFsCeiling?.denyPaths ||
         subagentFs?.denyPaths ||
         sessionsSpawnFs?.denyPaths ||
         params.fsPolicy?.denyPaths
           ? [
+              ...(requesterFsCeiling?.denyPaths ?? []),
               ...(subagentFs?.denyPaths ?? []),
               ...(sessionsSpawnFs?.denyPaths ?? []),
               ...(params.fsPolicy?.denyPaths ?? []),

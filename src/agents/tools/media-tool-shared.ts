@@ -5,7 +5,11 @@ import { getDefaultLocalRoots } from "../../media/web-media.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import type { ToolModelConfig } from "./model-config.helpers.js";
-import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
+import {
+  getApiKeyForModel,
+  normalizeWorkspaceDir,
+  requireApiKey,
+} from "./tool-runtime.helpers.js";
 
 type TextToolAttempt = {
   provider: string;
@@ -31,7 +35,11 @@ export function applyImageGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   imageGenerationModelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "imageGenerationModel", imageGenerationModelConfig);
+  return applyAgentDefaultModelConfig(
+    cfg,
+    "imageGenerationModel",
+    imageGenerationModelConfig,
+  );
 }
 
 function applyAgentDefaultModelConfig(
@@ -77,7 +85,8 @@ export function resolveMediaToolLocalRoots(
 
   // Back-compat: older call sites passed { workspaceOnly: true } directly.
   // Treat it as fsPolicy.workspaceOnly.
-  const workspaceOnly = policy?.workspaceOnly === true || options?.workspaceOnly === true;
+  const workspaceOnly =
+    policy?.workspaceOnly === true || options?.workspaceOnly === true;
 
   // For workspace-only mode we must hard-limit roots to workspace.
   if (workspaceOnly) {
@@ -97,14 +106,30 @@ export function resolveMediaToolLocalRoots(
       // Use platform-aware check to support Windows paths (C:\...) and POSIX (/...).
       if (path.isAbsolute(pattern)) {
         // Find first glob-magic character and take the directory prefix.
-        const magicChars = ["*", "?", "[", "{"];
-        let firstMagic = -1;
-        for (const ch of magicChars) {
-          const idx = pattern.indexOf(ch);
-          if (idx >= 0 && (firstMagic < 0 || idx < firstMagic)) {
-            firstMagic = idx;
+        // Include extglob operators (!, +, @) when followed by '(' (e.g. @(foo|bar)).
+        const firstMagic = (() => {
+          for (let i = 0; i < pattern.length; i += 1) {
+            const ch = pattern[i];
+
+            // minimatch supports escaping via backslash.
+            if (ch === "\\") {
+              i += 1;
+              continue;
+            }
+
+            if (ch === "*" || ch === "?" || ch === "[" || ch === "{") {
+              return i;
+            }
+
+            if (
+              (ch === "!" || ch === "+" || ch === "@") &&
+              pattern[i + 1] === "("
+            ) {
+              return i;
+            }
           }
-        }
+          return -1;
+        })();
         if (firstMagic >= 0) {
           // Take the directory prefix (last path separator before magic)
           const lastSep = Math.max(
@@ -137,9 +162,13 @@ export function resolvePromptAndModelOverride(
   modelOverride?: string;
 } {
   const prompt =
-    typeof args.prompt === "string" && args.prompt.trim() ? args.prompt.trim() : defaultPrompt;
+    typeof args.prompt === "string" && args.prompt.trim()
+      ? args.prompt.trim()
+      : defaultPrompt;
   const modelOverride =
-    typeof args.model === "string" && args.model.trim() ? args.model.trim() : undefined;
+    typeof args.model === "string" && args.model.trim()
+      ? args.model.trim()
+      : undefined;
   return { prompt, modelOverride };
 }
 
@@ -165,7 +194,10 @@ export function resolveModelFromRegistry(params: {
   provider: string;
   modelId: string;
 }): Model<Api> {
-  const model = params.modelRegistry.find(params.provider, params.modelId) as Model<Api> | null;
+  const model = params.modelRegistry.find(
+    params.provider,
+    params.modelId,
+  ) as Model<Api> | null;
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.modelId}`);
   }
