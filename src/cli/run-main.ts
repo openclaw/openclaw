@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { CommanderError } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { normalizeEnv } from "../infra/env.js";
@@ -158,8 +159,11 @@ export async function runCli(argv: string[] = process.argv) {
 
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
-      const { outputRootHelp } = await import("./program/root-help.js");
-      await outputRootHelp();
+      const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
+      if (!outputPrecomputedRootHelpText()) {
+        const { outputRootHelp } = await import("./program/root-help.js");
+        await outputRootHelp();
+      }
       return;
     }
 
@@ -228,7 +232,14 @@ export async function runCli(argv: string[] = process.argv) {
       }
     }
 
-    await program.parseAsync(parseArgv);
+    try {
+      await program.parseAsync(parseArgv);
+    } catch (error) {
+      if (!(error instanceof CommanderError)) {
+        throw error;
+      }
+      process.exitCode = error.exitCode;
+    }
   } finally {
     await closeCliMemoryManagers();
   }

@@ -1,13 +1,11 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
-import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
+import type { ChannelOutboundAdapter, ChannelOutboundContext } from "../channels/plugins/types.js";
 import type { CliDeps } from "../cli/deps.js";
+import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
+import { createWhatsAppTestPlugin } from "../infra/outbound/targets.test-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import {
-  loadBundledPluginPublicSurfaceSync,
-  loadBundledPluginTestApiSync,
-} from "../test-utils/bundled-plugin-public-surface.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
@@ -29,73 +27,6 @@ type ChannelCase = {
   >;
   expectedTo: string;
 };
-
-let discordOutboundCache: ChannelOutboundAdapter | undefined;
-let imessageOutboundCache: ChannelOutboundAdapter | undefined;
-let signalOutboundCache: ChannelOutboundAdapter | undefined;
-let slackOutboundCache: ChannelOutboundAdapter | undefined;
-let telegramOutboundCache: ChannelOutboundAdapter | undefined;
-let whatsappOutboundCache: ChannelOutboundAdapter | undefined;
-
-function getDiscordOutbound(): ChannelOutboundAdapter {
-  if (!discordOutboundCache) {
-    ({ discordOutbound: discordOutboundCache } = loadBundledPluginTestApiSync<{
-      discordOutbound: ChannelOutboundAdapter;
-    }>("discord"));
-  }
-  return discordOutboundCache;
-}
-
-function getIMessageOutbound(): ChannelOutboundAdapter {
-  if (!imessageOutboundCache) {
-    ({ imessageOutbound: imessageOutboundCache } = loadBundledPluginPublicSurfaceSync<{
-      imessageOutbound: ChannelOutboundAdapter;
-    }>({
-      pluginId: "imessage",
-      artifactBasename: "src/outbound-adapter.js",
-    }));
-  }
-  return imessageOutboundCache;
-}
-
-function getSignalOutbound(): ChannelOutboundAdapter {
-  if (!signalOutboundCache) {
-    ({ signalOutbound: signalOutboundCache } = loadBundledPluginTestApiSync<{
-      signalOutbound: ChannelOutboundAdapter;
-    }>("signal"));
-  }
-  return signalOutboundCache;
-}
-
-function getSlackOutbound(): ChannelOutboundAdapter {
-  if (!slackOutboundCache) {
-    ({ slackOutbound: slackOutboundCache } = loadBundledPluginTestApiSync<{
-      slackOutbound: ChannelOutboundAdapter;
-    }>("slack"));
-  }
-  return slackOutboundCache;
-}
-
-function getTelegramOutbound(): ChannelOutboundAdapter {
-  if (!telegramOutboundCache) {
-    ({ telegramOutbound: telegramOutboundCache } = loadBundledPluginPublicSurfaceSync<{
-      telegramOutbound: ChannelOutboundAdapter;
-    }>({
-      pluginId: "telegram",
-      artifactBasename: "src/outbound-adapter.js",
-    }));
-  }
-  return telegramOutboundCache;
-}
-
-function getWhatsAppOutbound(): ChannelOutboundAdapter {
-  if (!whatsappOutboundCache) {
-    ({ whatsappOutbound: whatsappOutboundCache } = loadBundledPluginTestApiSync<{
-      whatsappOutbound: ChannelOutboundAdapter;
-    }>("whatsapp"));
-  }
-  return whatsappOutboundCache;
-}
 
 const CASES: ChannelCase[] = [
   {
@@ -152,39 +83,95 @@ async function runExplicitAnnounceTurn(params: {
   });
 }
 
+type CoreChannel = ChannelCase["channel"];
+type TestSendFn = (
+  to: string,
+  text: string,
+  options?: Record<string, unknown>,
+) => Promise<{ messageId?: string } & Record<string, unknown>>;
+
+function withRequiredMessageId(channel: CoreChannel, result: Awaited<ReturnType<TestSendFn>>) {
+  return {
+    channel,
+    ...result,
+    messageId:
+      typeof result.messageId === "string" && result.messageId.trim()
+        ? result.messageId
+        : `${channel}-test-message`,
+  };
+}
+
+function resolveCoreChannelSender(
+  channel: CoreChannel,
+  deps: ChannelOutboundContext["deps"],
+): TestSendFn {
+  const sender = resolveOutboundSendDep<TestSendFn>(deps, channel);
+  if (!sender) {
+    throw new Error(`missing ${channel} sender`);
+  }
+  return sender;
+}
+
+function createCliDelegatingOutbound(params: {
+  channel: CoreChannel;
+  deliveryMode?: ChannelOutboundAdapter["deliveryMode"];
+  resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
+}): ChannelOutboundAdapter {
+  return {
+    deliveryMode: params.deliveryMode ?? "direct",
+    ...(params.resolveTarget ? { resolveTarget: params.resolveTarget } : {}),
+    sendText: async ({ cfg, to, text, accountId, deps }) =>
+      withRequiredMessageId(
+        params.channel,
+        await resolveCoreChannelSender(params.channel, deps)(to, text, {
+          cfg,
+          accountId: accountId ?? undefined,
+        }),
+      ),
+  };
+}
+
+const whatsappResolveTarget = createWhatsAppTestPlugin().outbound?.resolveTarget;
+
 describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();
     setActivePluginRegistry(
       createTestRegistry([
         {
-          pluginId: "telegram",
-          plugin: createOutboundTestPlugin({ id: "telegram", outbound: getTelegramOutbound() }),
-          source: "test",
-        },
-        {
-          pluginId: "signal",
-          plugin: createOutboundTestPlugin({ id: "signal", outbound: getSignalOutbound() }),
-          source: "test",
-        },
-        {
           pluginId: "slack",
-          plugin: createOutboundTestPlugin({ id: "slack", outbound: getSlackOutbound() }),
+          plugin: createOutboundTestPlugin({
+            id: "slack",
+            outbound: createCliDelegatingOutbound({ channel: "slack" }),
+          }),
           source: "test",
         },
         {
           pluginId: "discord",
-          plugin: createOutboundTestPlugin({ id: "discord", outbound: getDiscordOutbound() }),
+          plugin: createOutboundTestPlugin({
+            id: "discord",
+            outbound: createCliDelegatingOutbound({ channel: "discord" }),
+          }),
           source: "test",
         },
         {
           pluginId: "whatsapp",
-          plugin: createOutboundTestPlugin({ id: "whatsapp", outbound: getWhatsAppOutbound() }),
+          plugin: createOutboundTestPlugin({
+            id: "whatsapp",
+            outbound: createCliDelegatingOutbound({
+              channel: "whatsapp",
+              deliveryMode: "gateway",
+              resolveTarget: whatsappResolveTarget,
+            }),
+          }),
           source: "test",
         },
         {
           pluginId: "imessage",
-          plugin: createOutboundTestPlugin({ id: "imessage", outbound: getIMessageOutbound() }),
+          plugin: createOutboundTestPlugin({
+            id: "imessage",
+            outbound: createCliDelegatingOutbound({ channel: "imessage" }),
+          }),
           source: "test",
         },
       ]),

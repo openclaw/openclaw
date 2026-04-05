@@ -323,7 +323,7 @@ export async function runWebHeartbeatOnce(opts: {
 
 export function resolveHeartbeatRecipients(
   cfg: ReturnType<typeof loadConfig>,
-  opts: { to?: string; all?: boolean } = {},
+  opts: { to?: string; all?: boolean; accountId?: string } = {},
 ) {
   return resolveWhatsAppHeartbeatRecipients(cfg, opts);
 }

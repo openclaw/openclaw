@@ -7,6 +7,7 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import {
@@ -72,12 +73,12 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
 ]);
 
 export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg, currentChannelId }) => {
-    const account = resolveBlueBubblesAccount({ cfg: cfg });
+  describeMessageTool: ({ cfg, accountId, currentChannelId }) => {
+    const account = resolveBlueBubblesAccount({ cfg, accountId });
     if (!account.enabled || !account.configured) {
       return null;
     }
-    const gate = createActionGate(cfg.channels?.bluebubbles?.actions);
+    const gate = createActionGate(account.config.actions);
     const actions = new Set<ChannelMessageActionName>();
     const macOS26 = isMacOS26OrHigher(account.accountId);
     const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
@@ -173,7 +174,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         baseUrl,
         password,
         target,
-        allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+        allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
       });
       if (!resolved) {
         throw new Error(`BlueBubbles ${action} failed: chatGuid not found for target.`);

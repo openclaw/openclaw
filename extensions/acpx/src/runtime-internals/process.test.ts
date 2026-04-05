@@ -403,9 +403,7 @@ describe("spawnAndCollect", () => {
       { signal: controller.signal },
     );
 
-    setTimeout(() => {
-      controller.abort();
-    }, 10);
+    controller.abort();
 
     const result = await resultPromise;
     expect(result.error?.name).toBe("AbortError");

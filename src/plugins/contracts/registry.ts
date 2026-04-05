@@ -3,23 +3,32 @@ import {
   BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
   BUNDLED_PROVIDER_PLUGIN_IDS,
+  BUNDLED_REALTIME_TRANSCRIPTION_PLUGIN_IDS,
+  BUNDLED_REALTIME_VOICE_PLUGIN_IDS,
   BUNDLED_SPEECH_PLUGIN_IDS,
   BUNDLED_WEB_FETCH_PLUGIN_IDS,
   BUNDLED_WEB_SEARCH_PLUGIN_IDS,
+  BUNDLED_VIDEO_GENERATION_PLUGIN_IDS,
 } from "../bundled-capability-metadata.js";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
   ProviderPlugin,
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
+  VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
 } from "../types.js";
 import {
   loadVitestImageGenerationProviderContractRegistry,
   loadVitestMediaUnderstandingProviderContractRegistry,
+  loadVitestRealtimeTranscriptionProviderContractRegistry,
+  loadVitestRealtimeVoiceProviderContractRegistry,
   loadVitestSpeechProviderContractRegistry,
+  loadVitestVideoGenerationProviderContractRegistry,
 } from "./speech-vitest-registry.js";
 
 type BundledCapabilityRuntimeRegistry = ReturnType<typeof loadBundledCapabilityRuntimeRegistry>;
@@ -38,17 +47,24 @@ type WebFetchProviderContractEntry = CapabilityContractEntry<WebFetchProviderPlu
 };
 
 type SpeechProviderContractEntry = CapabilityContractEntry<SpeechProviderPlugin>;
+type RealtimeTranscriptionProviderContractEntry =
+  CapabilityContractEntry<RealtimeTranscriptionProviderPlugin>;
+type RealtimeVoiceProviderContractEntry = CapabilityContractEntry<RealtimeVoiceProviderPlugin>;
 type MediaUnderstandingProviderContractEntry =
   CapabilityContractEntry<MediaUnderstandingProviderPlugin>;
 type ImageGenerationProviderContractEntry = CapabilityContractEntry<ImageGenerationProviderPlugin>;
+type VideoGenerationProviderContractEntry = CapabilityContractEntry<VideoGenerationProviderPlugin>;
 
 type PluginRegistrationContractEntry = {
   pluginId: string;
   cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
+  realtimeTranscriptionProviderIds: string[];
+  realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
+  videoGenerationProviderIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
@@ -94,10 +110,16 @@ let webSearchProviderContractRegistryByPluginIdCache: Map<
   WebSearchProviderContractEntry[]
 > | null = null;
 let speechProviderContractRegistryCache: SpeechProviderContractEntry[] | null = null;
+let realtimeTranscriptionProviderContractRegistryCache:
+  | RealtimeTranscriptionProviderContractEntry[]
+  | null = null;
+let realtimeVoiceProviderContractRegistryCache: RealtimeVoiceProviderContractEntry[] | null = null;
 let mediaUnderstandingProviderContractRegistryCache:
   | MediaUnderstandingProviderContractEntry[]
   | null = null;
 let imageGenerationProviderContractRegistryCache: ImageGenerationProviderContractEntry[] | null =
+  null;
+let videoGenerationProviderContractRegistryCache: VideoGenerationProviderContractEntry[] | null =
   null;
 const providerContractPluginIdsByProviderId = createProviderContractPluginIdsByProviderId();
 
@@ -387,6 +409,36 @@ function loadSpeechProviderContractRegistry(): SpeechProviderContractEntry[] {
   return speechProviderContractRegistryCache;
 }
 
+function loadRealtimeVoiceProviderContractRegistry(): RealtimeVoiceProviderContractEntry[] {
+  if (!realtimeVoiceProviderContractRegistryCache) {
+    realtimeVoiceProviderContractRegistryCache = process.env.VITEST
+      ? loadVitestRealtimeVoiceProviderContractRegistry()
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds: BUNDLED_REALTIME_VOICE_PLUGIN_IDS,
+          pluginSdkResolution: "dist",
+        }).realtimeVoiceProviders.map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        }));
+  }
+  return realtimeVoiceProviderContractRegistryCache;
+}
+
+function loadRealtimeTranscriptionProviderContractRegistry(): RealtimeTranscriptionProviderContractEntry[] {
+  if (!realtimeTranscriptionProviderContractRegistryCache) {
+    realtimeTranscriptionProviderContractRegistryCache = process.env.VITEST
+      ? loadVitestRealtimeTranscriptionProviderContractRegistry()
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds: BUNDLED_REALTIME_TRANSCRIPTION_PLUGIN_IDS,
+          pluginSdkResolution: "dist",
+        }).realtimeTranscriptionProviders.map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        }));
+  }
+  return realtimeTranscriptionProviderContractRegistryCache;
+}
+
 function loadMediaUnderstandingProviderContractRegistry(): MediaUnderstandingProviderContractEntry[] {
   if (!mediaUnderstandingProviderContractRegistryCache) {
     mediaUnderstandingProviderContractRegistryCache = process.env.VITEST
@@ -415,6 +467,21 @@ function loadImageGenerationProviderContractRegistry(): ImageGenerationProviderC
         }));
   }
   return imageGenerationProviderContractRegistryCache;
+}
+
+function loadVideoGenerationProviderContractRegistry(): VideoGenerationProviderContractEntry[] {
+  if (!videoGenerationProviderContractRegistryCache) {
+    videoGenerationProviderContractRegistryCache = process.env.VITEST
+      ? loadVitestVideoGenerationProviderContractRegistry()
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds: BUNDLED_VIDEO_GENERATION_PLUGIN_IDS,
+          pluginSdkResolution: "dist",
+        }).videoGenerationProviders.map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        }));
+  }
+  return videoGenerationProviderContractRegistryCache;
 }
 
 function createLazyArrayView<T>(load: () => T[]): T[] {
@@ -519,11 +586,20 @@ export const speechProviderContractRegistry: SpeechProviderContractEntry[] = cre
   loadSpeechProviderContractRegistry,
 );
 
+export const realtimeTranscriptionProviderContractRegistry: RealtimeTranscriptionProviderContractEntry[] =
+  createLazyArrayView(loadRealtimeTranscriptionProviderContractRegistry);
+
+export const realtimeVoiceProviderContractRegistry: RealtimeVoiceProviderContractEntry[] =
+  createLazyArrayView(loadRealtimeVoiceProviderContractRegistry);
+
 export const mediaUnderstandingProviderContractRegistry: MediaUnderstandingProviderContractEntry[] =
   createLazyArrayView(loadMediaUnderstandingProviderContractRegistry);
 
 export const imageGenerationProviderContractRegistry: ImageGenerationProviderContractEntry[] =
   createLazyArrayView(loadImageGenerationProviderContractRegistry);
+
+export const videoGenerationProviderContractRegistry: VideoGenerationProviderContractEntry[] =
+  createLazyArrayView(loadVideoGenerationProviderContractRegistry);
 
 function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEntry[] {
   return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => ({
@@ -531,8 +607,11 @@ function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEnt
     cliBackendIds: uniqueStrings(entry.cliBackendIds),
     providerIds: uniqueStrings(entry.providerIds),
     speechProviderIds: uniqueStrings(entry.speechProviderIds),
+    realtimeTranscriptionProviderIds: uniqueStrings(entry.realtimeTranscriptionProviderIds),
+    realtimeVoiceProviderIds: uniqueStrings(entry.realtimeVoiceProviderIds),
     mediaUnderstandingProviderIds: uniqueStrings(entry.mediaUnderstandingProviderIds),
     imageGenerationProviderIds: uniqueStrings(entry.imageGenerationProviderIds),
+    videoGenerationProviderIds: uniqueStrings(entry.videoGenerationProviderIds),
     webFetchProviderIds: uniqueStrings(entry.webFetchProviderIds),
     webSearchProviderIds: uniqueStrings(entry.webSearchProviderIds),
     toolNames: uniqueStrings(entry.toolNames),

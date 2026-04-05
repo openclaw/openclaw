@@ -1,48 +1,43 @@
-import { listBundledChannelPlugins } from "../channels/plugins/bundled.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import {
+  listBundledChannelPlugins,
+  setBundledChannelRuntime,
+} from "../channels/plugins/bundled.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/index.js";
-import { loadBundledPluginTestApiSync } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
-const { googlechatPlugin } = loadBundledPluginTestApiSync<{
-  googlechatPlugin: ChannelPlugin;
-}>("googlechat");
-const { matrixPlugin, setMatrixRuntime } = loadBundledPluginTestApiSync<{
-  matrixPlugin: ChannelPlugin;
-  setMatrixRuntime: (runtime: PluginRuntime) => void;
-}>("matrix");
-const { msteamsPlugin } = loadBundledPluginTestApiSync<{
-  msteamsPlugin: ChannelPlugin;
-}>("msteams");
-const { nostrPlugin } = loadBundledPluginTestApiSync<{
-  nostrPlugin: ChannelPlugin;
-}>("nostr");
-const { tlonPlugin } = loadBundledPluginTestApiSync<{
-  tlonPlugin: ChannelPlugin;
-}>("tlon");
-const { whatsappPlugin } = loadBundledPluginTestApiSync<{
-  whatsappPlugin: ChannelPlugin;
-}>("whatsapp");
+function resolveChannelPluginsForTests(onlyPluginIds?: readonly string[]) {
+  const scopedIds = onlyPluginIds ? new Set(onlyPluginIds) : null;
+  return listBundledChannelPlugins().filter((plugin) => !scopedIds || scopedIds.has(plugin.id));
+}
 
-export function setDefaultChannelPluginRegistryForTests(): void {
-  setMatrixRuntime({
+function createChannelTestRuntime(): PluginRuntime {
+  return {
     state: {
       resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
     },
-  } as Parameters<typeof setMatrixRuntime>[0]);
-  const channels = [
-    ...listBundledChannelPlugins(),
-    matrixPlugin,
-    msteamsPlugin,
-    nostrPlugin,
-    tlonPlugin,
-    googlechatPlugin,
-    whatsappPlugin,
-  ].map((plugin) => ({
+  } as PluginRuntime;
+}
+
+export function setChannelPluginRegistryForTests(onlyPluginIds?: readonly string[]): void {
+  const plugins = resolveChannelPluginsForTests(onlyPluginIds);
+  const runtime = createChannelTestRuntime();
+  for (const plugin of plugins) {
+    try {
+      setBundledChannelRuntime(plugin.id, runtime);
+    } catch {
+      // Most bundled channels do not need a runtime setter for contract tests.
+    }
+  }
+
+  const channels = plugins.map((plugin) => ({
     pluginId: plugin.id,
     plugin,
     source: "test" as const,
   })) as unknown as Parameters<typeof createTestRegistry>[0];
   setActivePluginRegistry(createTestRegistry(channels));
+}
+
+export function setDefaultChannelPluginRegistryForTests(): void {
+  setChannelPluginRegistryForTests();
 }

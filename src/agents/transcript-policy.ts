@@ -11,6 +11,7 @@ export type TranscriptPolicy = {
   sanitizeMode: TranscriptSanitizeMode;
   sanitizeToolCallIds: boolean;
   toolCallIdMode?: ToolCallIdMode;
+  preserveNativeAnthropicToolUseIds: boolean;
   repairToolUseResultPairing: boolean;
   preserveSignatures: boolean;
   sanitizeThoughtSignatures?: {
@@ -29,6 +30,7 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeMode: "images-only",
   sanitizeToolCallIds: false,
   toolCallIdMode: undefined,
+  preserveNativeAnthropicToolUseIds: false,
   repairToolUseResultPairing: true,
   preserveSignatures: false,
   sanitizeThoughtSignatures: undefined,
@@ -44,7 +46,14 @@ function isAnthropicApi(modelApi?: string | null): boolean {
   return modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream";
 }
 
-function buildTransportReplayFallback(params: {
+/**
+ * Provides a narrow replay-policy fallback for providers that do not have an
+ * owning runtime plugin.
+ *
+ * This exists to preserve generic custom-provider behavior. Bundled providers
+ * should express replay ownership through `buildReplayPolicy` instead.
+ */
+function buildUnownedProviderTransportReplayFallback(params: {
   modelApi?: string | null;
   modelId?: string | null;
 }): ProviderReplayPolicy | undefined {
@@ -107,6 +116,9 @@ function mergeTranscriptPolicy(
       ? { sanitizeToolCallIds: policy.sanitizeToolCallIds }
       : {}),
     ...(policy.toolCallIdMode ? { toolCallIdMode: policy.toolCallIdMode as ToolCallIdMode } : {}),
+    ...(typeof policy.preserveNativeAnthropicToolUseIds === "boolean"
+      ? { preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds }
+      : {}),
     ...(typeof policy.repairToolUseResultPairing === "boolean"
       ? { repairToolUseResultPairing: policy.repairToolUseResultPairing }
       : {}),
@@ -162,13 +174,16 @@ export function resolveTranscriptPolicy(params: {
     model: params.model,
   };
 
-  const pluginPolicy = runtimePlugin?.buildReplayPolicy?.(context);
-  if (pluginPolicy != null) {
-    return mergeTranscriptPolicy(pluginPolicy);
+  // Once a provider adopts the replay-policy hook, replay policy should come
+  // from the plugin, not from transport-family defaults in core.
+  const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
+  if (buildReplayPolicy) {
+    const pluginPolicy = buildReplayPolicy(context);
+    return mergeTranscriptPolicy(pluginPolicy ?? undefined);
   }
 
   return mergeTranscriptPolicy(
-    buildTransportReplayFallback({
+    buildUnownedProviderTransportReplayFallback({
       modelApi: params.modelApi,
       modelId: params.modelId,
     }),

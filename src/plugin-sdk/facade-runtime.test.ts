@@ -14,6 +14,7 @@ import {
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const FACADE_RUNTIME_GLOBAL = "__openclawTestLoadBundledPluginPublicSurfaceModuleSync";
 
 function createBundledPluginDir(prefix: string, marker: string): string {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -46,9 +47,10 @@ function createCircularPluginDir(prefix: string): string {
   fs.writeFileSync(
     path.join(rootDir, "facade.mjs"),
     [
-      `import { loadBundledPluginPublicSurfaceModuleSync } from ${JSON.stringify(
-        new URL("./facade-runtime.js", import.meta.url).href,
-      )};`,
+      `const loadBundledPluginPublicSurfaceModuleSync = globalThis.${FACADE_RUNTIME_GLOBAL};`,
+      `if (typeof loadBundledPluginPublicSurfaceModuleSync !== "function") {`,
+      '  throw new Error("missing facade runtime test loader");',
+      "}",
       `export const marker = loadBundledPluginPublicSurfaceModuleSync({ dirName: "demo", artifactBasename: "api.js" }).marker;`,
       "",
     ].join("\n"),
@@ -73,6 +75,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   resetFacadeRuntimeStateForTest();
+  vi.doUnmock("../plugins/manifest-registry.js");
+  delete (globalThis as typeof globalThis & Record<string, unknown>)[FACADE_RUNTIME_GLOBAL];
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -123,6 +127,8 @@ describe("plugin-sdk facade runtime", () => {
   it("breaks circular facade re-entry during module evaluation", () => {
     const dir = createCircularPluginDir("openclaw-facade-circular-");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
+    (globalThis as typeof globalThis & Record<string, unknown>)[FACADE_RUNTIME_GLOBAL] =
+      loadBundledPluginPublicSurfaceModuleSync;
 
     const loaded = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
       dirName: "demo",
@@ -132,6 +138,60 @@ describe("plugin-sdk facade runtime", () => {
     expect(loaded.marker).toBe("circular-ok");
   });
 
+  it("back-fills the sentinel before post-load facade tracking re-enters", async () => {
+    const dir = createBundledPluginDir("openclaw-facade-post-load-", "post-load-ok");
+    const reentryMarkers: Array<string | undefined> = [];
+
+    vi.resetModules();
+    vi.doMock("../plugins/manifest-registry.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
+      return {
+        ...actual,
+        loadPluginManifestRegistry: vi.fn(() => {
+          const load = (
+            globalThis as typeof globalThis & {
+              [FACADE_RUNTIME_GLOBAL]?: typeof loadBundledPluginPublicSurfaceModuleSync;
+            }
+          )[FACADE_RUNTIME_GLOBAL];
+          if (typeof load !== "function") {
+            throw new Error("missing facade runtime test loader");
+          }
+          const reentered = load<{ marker?: string }>({
+            dirName: "demo",
+            artifactBasename: "api.js",
+          });
+          reentryMarkers.push(reentered.marker);
+          return {
+            plugins: [
+              {
+                id: "demo",
+                rootDir: path.join(dir, "demo"),
+                origin: "bundled",
+              },
+            ],
+          };
+        }),
+      };
+    });
+
+    const facadeRuntime = await import("./facade-runtime.js");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
+    (globalThis as typeof globalThis & Record<string, unknown>)[FACADE_RUNTIME_GLOBAL] =
+      facadeRuntime.loadBundledPluginPublicSurfaceModuleSync;
+
+    const loaded = facadeRuntime.loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+      dirName: "demo",
+      artifactBasename: "api.js",
+    });
+
+    expect(loaded.marker).toBe("post-load-ok");
+    expect(reentryMarkers.length).toBeGreaterThan(0);
+    expect(reentryMarkers.every((marker) => marker === "post-load-ok")).toBe(true);
+    expect(facadeRuntime.listImportedBundledPluginFacadeIds()).toEqual(["demo"]);
+    facadeRuntime.resetFacadeRuntimeStateForTest();
+    vi.doUnmock("../plugins/manifest-registry.js");
+    vi.resetModules();
+  });
   it("clears the cache on load failure so retries re-execute", () => {
     const dir = createThrowingPluginDir("openclaw-facade-throw-");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
@@ -143,7 +203,7 @@ describe("plugin-sdk facade runtime", () => {
       }),
     ).toThrow("plugin load failure");
 
-    expect(listImportedBundledPluginFacadeIds()).toEqual(["bad"]);
+    expect(listImportedBundledPluginFacadeIds()).toEqual([]);
 
     // A second call must also throw (not return a stale empty sentinel).
     expect(() =>

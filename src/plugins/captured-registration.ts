@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { buildPluginApi } from "./api-builder.js";
+import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   AnyAgentTool,
@@ -10,7 +11,10 @@ import type {
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
   ProviderPlugin,
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
+  VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
 } from "./types.js";
@@ -27,10 +31,14 @@ export type CapturedPluginRegistration = {
   cliRegistrars: CapturedPluginCliRegistration[];
   cliBackends: CliBackendPlugin[];
   speechProviders: SpeechProviderPlugin[];
+  realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
+  realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
+  videoGenerationProviders: VideoGenerationProviderPlugin[];
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
+  memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
   tools: AnyAgentTool[];
 };
 
@@ -42,10 +50,14 @@ export function createCapturedPluginRegistration(params?: {
   const cliRegistrars: CapturedPluginCliRegistration[] = [];
   const cliBackends: CliBackendPlugin[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
+  const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
+  const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
+  const videoGenerationProviders: VideoGenerationProviderPlugin[] = [];
   const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
+  const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
   const tools: AnyAgentTool[] = [];
   const noopLogger = {
     info() {},
@@ -59,10 +71,14 @@ export function createCapturedPluginRegistration(params?: {
     cliRegistrars,
     cliBackends,
     speechProviders,
+    realtimeTranscriptionProviders,
+    realtimeVoiceProviders,
     mediaUnderstandingProviders,
     imageGenerationProviders,
+    videoGenerationProviders,
     webFetchProviders,
     webSearchProviders,
+    memoryEmbeddingProviders,
     tools,
     api: buildPluginApi({
       id: "captured-plugin-registration",
@@ -106,17 +122,29 @@ export function createCapturedPluginRegistration(params?: {
         registerSpeechProvider(provider: SpeechProviderPlugin) {
           speechProviders.push(provider);
         },
+        registerRealtimeTranscriptionProvider(provider: RealtimeTranscriptionProviderPlugin) {
+          realtimeTranscriptionProviders.push(provider);
+        },
+        registerRealtimeVoiceProvider(provider: RealtimeVoiceProviderPlugin) {
+          realtimeVoiceProviders.push(provider);
+        },
         registerMediaUnderstandingProvider(provider: MediaUnderstandingProviderPlugin) {
           mediaUnderstandingProviders.push(provider);
         },
         registerImageGenerationProvider(provider: ImageGenerationProviderPlugin) {
           imageGenerationProviders.push(provider);
         },
+        registerVideoGenerationProvider(provider: VideoGenerationProviderPlugin) {
+          videoGenerationProviders.push(provider);
+        },
         registerWebFetchProvider(provider: WebFetchProviderPlugin) {
           webFetchProviders.push(provider);
         },
         registerWebSearchProvider(provider: WebSearchProviderPlugin) {
           webSearchProviders.push(provider);
+        },
+        registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter) {
+          memoryEmbeddingProviders.push(adapter);
         },
         registerTool(tool) {
           if (typeof tool !== "function") {

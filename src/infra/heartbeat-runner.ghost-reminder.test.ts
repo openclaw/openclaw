@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
@@ -27,9 +26,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       messageId: "m1",
       chatId: "155462274",
     });
-    const getReplySpy = vi
-      .spyOn(replyModule, "getReplyFromConfig")
-      .mockResolvedValue({ text: replyText });
+    const getReplySpy = vi.fn().mockResolvedValue({ text: replyText });
     return { sendTelegram, getReplySpy };
   };
 
@@ -117,6 +114,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
           agentId: "main",
           reason: params.reason,
           deps: {
+            getReplyFromConfig: getReplySpy,
             telegram: sendTelegram,
           },
         });
@@ -278,6 +276,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
         agentId: "main",
         reason: "wake",
         deps: {
+          getReplyFromConfig: replySpy,
           telegram: sendTelegram,
         },
       });
@@ -340,6 +339,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
         agentId: "main",
         reason: "wake",
         deps: {
+          getReplyFromConfig: replySpy,
           telegram: sendTelegram,
         },
       });

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 import type {
   AssembleResult,
   BootstrapResult,
@@ -22,12 +22,37 @@ type AcquireSessionWriteLockFn =
   typeof import("../../session-write-lock.js").acquireSessionWriteLock;
 
 type SubscriptionMock = ReturnType<SubscribeEmbeddedPiSessionFn>;
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type BootstrapContext = {
+  bootstrapFiles: WorkspaceBootstrapFile[];
+  contextFiles: EmbeddedContextFile[];
+};
+type SessionManagerMocks = {
+  getLeafEntry: UnknownMock;
+  branch: UnknownMock;
+  resetLeaf: UnknownMock;
+  buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
+  appendCustomEntry: UnknownMock;
+};
+type AttemptSpawnWorkspaceHoisted = {
+  spawnSubagentDirectMock: UnknownMock;
+  createAgentSessionMock: UnknownMock;
+  sessionManagerOpenMock: UnknownMock;
+  resolveSandboxContextMock: UnknownMock;
+  subscribeEmbeddedPiSessionMock: Mock<SubscribeEmbeddedPiSessionFn>;
+  acquireSessionWriteLockMock: Mock<AcquireSessionWriteLockFn>;
+  installToolResultContextGuardMock: UnknownMock;
+  flushPendingToolResultsAfterIdleMock: AsyncUnknownMock;
+  releaseWsSessionMock: UnknownMock;
+  resolveBootstrapContextForRunMock: Mock<() => Promise<BootstrapContext>>;
+  getGlobalHookRunnerMock: Mock<() => unknown>;
+  initializeGlobalHookRunnerMock: UnknownMock;
+  runContextEngineMaintenanceMock: AsyncUnknownMock;
+  sessionManager: SessionManagerMocks;
+};
 
-const hoisted = vi.hoisted(() => {
-  type BootstrapContext = {
-    bootstrapFiles: WorkspaceBootstrapFile[];
-    contextFiles: EmbeddedContextFile[];
-  };
+const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const spawnSubagentDirectMock = vi.fn();
   const createAgentSessionMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
@@ -51,6 +76,7 @@ const hoisted = vi.hoisted(() => {
         getLastToolError: () => undefined,
         getUsageTotals: () => undefined,
         getCompactionCount: () => 0,
+        getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
         isCompacting: () => false,
         isCompactionInFlight: () => false,
       }) satisfies SubscriptionMock,
@@ -90,7 +116,7 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-export function getHoisted() {
+export function getHoisted(): AttemptSpawnWorkspaceHoisted {
   return hoisted;
 }
 
@@ -250,8 +276,8 @@ vi.mock("../system-prompt.js", () => ({
   createSystemPromptOverride: (prompt: string) => () => prompt,
 }));
 
-vi.mock("../extra-params.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../extra-params.js")>();
+vi.mock("../extra-params.js", async () => {
+  const actual = await vi.importActual<typeof import("../extra-params.js")>("../extra-params.js");
   return {
     ...actual,
     applyExtraParamsToAgent: () => ({ effectiveExtraParams: {} }),
@@ -487,7 +513,11 @@ export type MutableSession = {
   isStreaming: boolean;
   agent: {
     streamFn?: unknown;
-    replaceMessages: (messages: unknown[]) => void;
+    transport?: string;
+    state: {
+      messages: unknown[];
+      systemPrompt?: string;
+    };
   };
   prompt: (prompt: string, options?: { images?: unknown[] }) => Promise<void>;
   abort: () => Promise<void>;
@@ -510,6 +540,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getLastToolError: () => undefined,
     getUsageTotals: () => undefined,
     getCompactionCount: () => 0,
+    getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
     isCompacting: () => false,
     isCompactionInFlight: () => false,
   };
@@ -583,8 +614,13 @@ export function createDefaultEmbeddedSession(params?: {
     isCompacting: false,
     isStreaming: false,
     agent: {
-      replaceMessages: (messages: unknown[]) => {
-        session.messages = [...messages];
+      state: {
+        get messages() {
+          return session.messages;
+        },
+        set messages(messages: unknown[]) {
+          session.messages = [...messages];
+        },
       },
     },
     prompt: async (prompt, options) => {

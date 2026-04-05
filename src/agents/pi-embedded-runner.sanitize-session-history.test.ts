@@ -16,6 +16,7 @@ import {
   TEST_SESSION_ID,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+import type { TranscriptPolicy } from "./transcript-policy.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock("./pi-embedded-helpers.js", async () => ({
@@ -121,6 +122,7 @@ describe("sanitizeSessionHistory", () => {
     provider?: string;
     modelApi?: string;
     modelId?: string;
+    policy?: TranscriptPolicy;
   }) =>
     sanitizeSessionHistory({
       messages: params.messages,
@@ -129,6 +131,7 @@ describe("sanitizeSessionHistory", () => {
       modelId: params.modelId ?? "claude-opus-4-6",
       sessionManager: makeMockSessionManager(),
       sessionId: TEST_SESSION_ID,
+      policy: params.policy,
     });
 
   const getAssistantMessage = (messages: AgentMessage[]) => {
@@ -159,7 +162,7 @@ describe("sanitizeSessionHistory", () => {
       ],
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: makeUsage(0, 0, 0),
       stopReason: "stop",
       timestamp: nextTimestamp(),
@@ -185,7 +188,7 @@ describe("sanitizeSessionHistory", () => {
     content: [{ type: "text", text: params.text }],
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     stopReason: "stop",
     timestamp: params.timestamp ?? nextTimestamp(),
     usage: params.usage,
@@ -209,7 +212,7 @@ describe("sanitizeSessionHistory", () => {
     content,
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: params.usage ?? makeUsage(0, 0, 0),
     stopReason: params.stopReason ?? "stop",
     timestamp: params.timestamp ?? nextTimestamp(),
@@ -363,7 +366,7 @@ describe("sanitizeSessionHistory", () => {
       messages: mockMessages,
       modelApi: "openai-completions",
       provider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
       sessionManager: mockSessionManager,
       sessionId: TEST_SESSION_ID,
     });
@@ -769,7 +772,7 @@ describe("sanitizeSessionHistory", () => {
       makeModelSnapshotEntry({
         provider: "openai",
         modelApi: "openai-responses",
-        modelId: "gpt-5.2-codex",
+        modelId: "gpt-5.4",
       }),
     ];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
@@ -778,7 +781,7 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeWithOpenAIResponses({
       sanitizeSessionHistory,
       messages,
-      modelId: "gpt-5.2-codex",
+      modelId: "gpt-5.4",
       sessionManager,
     });
 
@@ -798,7 +801,7 @@ describe("sanitizeSessionHistory", () => {
       makeModelSnapshotEntry({
         provider: "openai",
         modelApi: "openai-responses",
-        modelId: "gpt-5.2",
+        modelId: "gpt-5.4",
       }),
     ];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
@@ -930,6 +933,83 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
+  it("keeps the earlier anthropic replay prefix stable after a later subagent turn", async () => {
+    setNonGoogleModelApi();
+
+    const priorToolId = "toolu_01ABCDEF1234567890";
+    const laterToolId = "toolu_01ZZZZZZ9999999999";
+    const nativeAnthropicPolicy: TranscriptPolicy = {
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
+      repairToolUseResultPairing: true,
+      preserveSignatures: true,
+      sanitizeThoughtSignatures: undefined,
+      sanitizeThinkingSignatures: false,
+      dropThinkingBlocks: true,
+      applyGoogleTurnOrdering: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+    };
+    const baseMessages = castAgentMessages([
+      makeUserMessage("Read IDENTITY.md"),
+      makeAssistantMessage(
+        [
+          { type: "toolUse", id: priorToolId, name: "read", input: { path: "IDENTITY.md" } },
+        ] as unknown as AssistantMessage["content"],
+        { stopReason: "toolUse" },
+      ),
+      {
+        role: "toolResult",
+        toolCallId: priorToolId,
+        toolUseId: priorToolId,
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+      makeAssistantMessage([{ type: "text", text: "done" }]),
+    ]);
+    const withSubagentMessages = castAgentMessages([
+      ...baseMessages,
+      makeUserMessage("Ask a subagent for an emoji"),
+      makeAssistantMessage(
+        [
+          { type: "toolUse", id: laterToolId, name: "subagent", input: { prompt: "emoji" } },
+        ] as unknown as AssistantMessage["content"],
+        { stopReason: "toolUse" },
+      ),
+      {
+        role: "toolResult",
+        toolCallId: laterToolId,
+        toolUseId: laterToolId,
+        toolName: "subagent",
+        content: [{ type: "text", text: "😀" }],
+        isError: false,
+      },
+      makeAssistantMessage([{ type: "text", text: "it was 😀" }]),
+    ]);
+
+    const sanitizedBase = await sanitizeAnthropicHistory({
+      messages: baseMessages,
+      policy: nativeAnthropicPolicy,
+    });
+    const sanitizedWithSubagent = await sanitizeAnthropicHistory({
+      messages: withSubagentMessages,
+      policy: nativeAnthropicPolicy,
+    });
+
+    expect(sanitizedWithSubagent.slice(0, sanitizedBase.length)).toEqual(sanitizedBase);
+    expect((sanitizedBase[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      { type: "toolUse", id: priorToolId, name: "read", input: { path: "IDENTITY.md" } },
+    ]);
+    expect(
+      (sanitizedBase[2] as Extract<AgentMessage, { role: "toolResult" }> & { toolUseId?: string })
+        .toolCallId,
+    ).toBe(priorToolId);
+  });
+
   it("preserves latest assistant thinking blocks for amazon-bedrock replay", async () => {
     setNonGoogleModelApi();
 
@@ -957,7 +1037,7 @@ describe("sanitizeSessionHistory", () => {
 
     const messages = makeThinkingAndTextAssistantMessages();
 
-    const result = await sanitizeGithubCopilotHistory({ messages, modelId: "gpt-5.2" });
+    const result = await sanitizeGithubCopilotHistory({ messages, modelId: "gpt-5.4" });
     const types = getAssistantContentTypes(result);
     expect(types).toContain("thinking");
   });
