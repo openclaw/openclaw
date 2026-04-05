@@ -28,34 +28,43 @@ one-off details.
 
 ## Promotion signals
 
-Dreaming combines four signals:
+Dreaming combines six signals:
 
 - **Frequency**: how often the same candidate was recalled.
 - **Relevance**: how strong recall scores were when it was retrieved.
 - **Query diversity**: how many distinct query intents surfaced it.
 - **Recency**: temporal weighting over recent recalls.
+- **Consolidation**: whether recalls repeated across distinct days instead of one burst.
+- **Conceptual richness**: derived concept tags from the note path and snippet text.
 
 Promotion requires all configured threshold gates to pass, not just one signal.
 
 ### Signal weights
 
-| Signal    | Weight | Description                                      |
-| --------- | ------ | ------------------------------------------------ |
-| Frequency | 0.35   | How often the same entry was recalled            |
-| Relevance | 0.35   | Average recall scores when retrieved             |
-| Diversity | 0.15   | Count of distinct query intents that surfaced it |
-| Recency   | 0.15   | Temporal decay (14-day half-life)                |
+| Signal              | Weight | Description                                      |
+| ------------------- | ------ | ------------------------------------------------ |
+| Frequency           | 0.24   | How often the same entry was recalled            |
+| Relevance           | 0.30   | Average recall scores when retrieved             |
+| Query diversity     | 0.15   | Count of distinct query intents that surfaced it |
+| Recency             | 0.15   | Temporal decay (14-day half-life)                |
+| Consolidation       | 0.10   | Reward recalls repeated across multiple days     |
+| Conceptual richness | 0.06   | Reward entries with richer derived concept tags  |
 
 ## How it works
 
 1. **Recall tracking** -- Every `memory_search` hit is recorded to
-   `memory/.dreams/short-term-recall.json` with recall count, scores, and query
-   hash.
+   `memory/.dreams/short-term-recall.json` with recall count, scores, query
+   hash, recall days, and concept tags.
 2. **Scheduled scoring** -- On the configured cadence, candidates are ranked
    using weighted signals. All threshold gates must pass simultaneously.
-3. **Promotion** -- Qualifying entries are appended to `MEMORY.md` with a
-   promoted timestamp.
-4. **Cleanup** -- Already-promoted entries are filtered from future cycles. A
+3. **Workspace fan-out** -- Each dreaming cycle runs once per configured memory
+   workspace, so one agent's sessions consolidate into that agent's memory
+   workspace.
+4. **Promotion** -- Before appending anything, dreaming re-reads the current
+   daily note and skips candidates whose source snippet no longer exists.
+   Qualifying live entries are appended to `MEMORY.md` with a promoted
+   timestamp.
+5. **Cleanup** -- Already-promoted entries are filtered from future cycles. A
    file lock prevents concurrent runs.
 
 ## Modes
@@ -76,7 +85,7 @@ automatically. You do not need to manually create a cron job for this feature.
 
 You can still tune behavior with explicit overrides such as:
 
-- `dreaming.frequency` (cron expression)
+- `dreaming.cron` (cron expression)
 - `dreaming.timezone`
 - `dreaming.limit`
 - `dreaming.minScore`
@@ -142,7 +151,8 @@ See [memory CLI](/cli/memory) for the full flag reference.
 
 When dreaming is enabled, the Gateway sidebar shows a **Dreams** tab with
 memory stats (short-term count, long-term count, promoted count) and the next
-scheduled cycle time.
+scheduled cycle time. Daily counters honor `dreaming.timezone` when set and
+otherwise fall back to the configured user timezone.
 
 ## Further reading
 

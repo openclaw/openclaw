@@ -26,6 +26,16 @@ function createLogger() {
   };
 }
 
+async function writeDailyMemoryNote(
+  workspaceDir: string,
+  date: string,
+  lines: string[],
+): Promise<void> {
+  const notePath = path.join(workspaceDir, "memory", `${date}.md`);
+  await fs.mkdir(path.dirname(notePath), { recursive: true });
+  await fs.writeFile(notePath, `${lines.join("\n")}\n`, "utf-8");
+}
+
 function createCronHarness(
   initialJobs: CronJobLike[] = [],
   opts?: { removeResult?: "boolean" | "unknown"; removeThrowsForIds?: string[] },
@@ -504,6 +514,7 @@ describe("short-term dreaming trigger", () => {
     const logger = createLogger();
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-"));
     tempDirs.push(workspaceDir);
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
 
     await recordShortTermRecalls({
       workspaceDir,
@@ -545,6 +556,10 @@ describe("short-term dreaming trigger", () => {
     const logger = createLogger();
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-strict-"));
     tempDirs.push(workspaceDir);
+    await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+      "Move backups to S3 Glacier.",
+      "Retain quarterly snapshots.",
+    ]);
 
     await recordShortTermRecalls({
       workspaceDir,
@@ -646,6 +661,10 @@ describe("short-term dreaming trigger", () => {
     const logger = createLogger();
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-repair-"));
     tempDirs.push(workspaceDir);
+    await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+      "Move backups to S3 Glacier and sync router failover notes.",
+      "Keep router recovery docs current.",
+    ]);
     const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     await fs.writeFile(
@@ -722,6 +741,7 @@ describe("short-term dreaming trigger", () => {
     const logger = createLogger();
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-verbose-"));
     tempDirs.push(workspaceDir);
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
 
     await recordShortTermRecalls({
       workspaceDir,
@@ -763,6 +783,91 @@ describe("short-term dreaming trigger", () => {
     );
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining("memory-core: dreaming applied details"),
+    );
+  });
+
+  it("fans out one dreaming run across configured agent workspaces", async () => {
+    const logger = createLogger();
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-multi-"));
+    tempDirs.push(workspaceRoot);
+    const alphaWorkspace = path.join(workspaceRoot, "alpha");
+    const betaWorkspace = path.join(workspaceRoot, "beta");
+
+    await writeDailyMemoryNote(alphaWorkspace, "2026-04-02", ["Alpha backup note."]);
+    await writeDailyMemoryNote(betaWorkspace, "2026-04-02", ["Beta router note."]);
+    await recordShortTermRecalls({
+      workspaceDir: alphaWorkspace,
+      query: "alpha backup",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Alpha backup note.",
+          source: "memory",
+        },
+      ],
+    });
+    await recordShortTermRecalls({
+      workspaceDir: betaWorkspace,
+      query: "beta router",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Beta router note.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir: alphaWorkspace,
+      cfg: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              enabled: true,
+            },
+          },
+          list: [
+            {
+              id: "alpha",
+              workspace: alphaWorkspace,
+            },
+            {
+              id: "beta",
+              workspace: betaWorkspace,
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result?.handled).toBe(true);
+    expect(await fs.readFile(path.join(alphaWorkspace, "MEMORY.md"), "utf-8")).toContain(
+      "Alpha backup note.",
+    );
+    expect(await fs.readFile(path.join(betaWorkspace, "MEMORY.md"), "utf-8")).toContain(
+      "Beta router note.",
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "memory-core: dreaming promotion complete (workspaces=2, candidates=2, applied=2, failed=0).",
     );
   });
 });

@@ -855,6 +855,10 @@ export async function runMemorySearch(
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory search");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
+  const dreaming = resolveShortTermPromotionDreamingConfig({
+    pluginConfig: resolveMemoryPluginConfig(cfg),
+    cfg,
+  });
   await withMemoryManagerForAgent({
     cfg,
     agentId,
@@ -881,6 +885,7 @@ export async function runMemorySearch(
         workspaceDir,
         query,
         results,
+        timezone: dreaming.timezone,
       }).catch(() => {
         // Recall tracking is best-effort and must not block normal search results.
       });
@@ -947,6 +952,10 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
       let applyResult: Awaited<ReturnType<typeof applyShortTermPromotions>> | undefined;
       if (opts.apply) {
         try {
+          const dreaming = resolveShortTermPromotionDreamingConfig({
+            pluginConfig: resolveMemoryPluginConfig(cfg),
+            cfg,
+          });
           applyResult = await applyShortTermPromotions({
             workspaceDir,
             candidates,
@@ -954,6 +963,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
             minScore: opts.minScore,
             minRecallCount: opts.minRecallCount,
             minUniqueQueries: opts.minUniqueQueries,
+            timezone: dreaming.timezone,
           });
         } catch (err) {
           defaultRuntime.error(`Memory promote apply failed: ${formatErrorMessage(err)}`);
