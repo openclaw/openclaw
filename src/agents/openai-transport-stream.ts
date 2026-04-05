@@ -345,7 +345,7 @@ function convertResponsesTools(
     type: "function",
     name: tool.name,
     description: tool.description,
-    parameters: tool.parameters,
+    parameters: strict ? normalizeOpenAIStrictToolParameters(tool.parameters) : tool.parameters,
     strict,
   }));
 }
@@ -1257,6 +1257,26 @@ function resolveOpenAIStrictToolSetting(
   return undefined;
 }
 
+function normalizeOpenAIStrictToolParameters(schema: unknown): Record<string, unknown> {
+  if (!schema || typeof schema !== "object") {
+    return { type: "object", properties: {}, additionalProperties: false };
+  }
+  const record = { ...(schema as Record<string, unknown>) };
+  if (record.type !== "object") {
+    record.type = "object";
+  }
+  if (
+    !record.properties ||
+    typeof record.properties !== "object" ||
+    Array.isArray(record.properties)
+  ) {
+    record.properties = {};
+  }
+  // Native OpenAI strict tool mode requires a closed top-level object schema.
+  record.additionalProperties = false;
+  return record;
+}
+
 function convertTools(
   tools: NonNullable<Context["tools"]>,
   compat: ReturnType<typeof getCompat>,
@@ -1268,7 +1288,7 @@ function convertTools(
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters,
+      parameters: strict ? normalizeOpenAIStrictToolParameters(tool.parameters) : tool.parameters,
       ...(strict === undefined ? {} : { strict }),
     },
   }));
