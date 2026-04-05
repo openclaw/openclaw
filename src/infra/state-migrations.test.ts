@@ -55,7 +55,14 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
   await fs.writeFile(path.join(stateDir, "sessions", "trace.jsonl"), "{}\n", "utf8");
   await fs.writeFile(
     path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json"),
-    `${JSON.stringify({ "group:123@g.us": { sessionId: "group-session", updatedAt: 5 } }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        "group:123@g.us": { sessionId: "group-session", updatedAt: 5 },
+        "group:legacy-room": { sessionId: "generic-group-session", updatedAt: 4 },
+      },
+      null,
+      2,
+    )}\n`,
     "utf8",
   );
   await fs.writeFile(path.join(stateDir, "agent", "settings.json"), '{"ok":true}\n', "utf8");
@@ -95,7 +102,7 @@ describe("state migrations", () => {
     expect(detected.targetAgentId).toBe("worker-1");
     expect(detected.targetMainKey).toBe("desk");
     expect(detected.sessions.hasLegacy).toBe(true);
-    expect(detected.sessions.legacyKeys).toEqual(["group:123@g.us"]);
+    expect(detected.sessions.legacyKeys).toEqual(["group:123@g.us", "group:legacy-room"]);
     expect(detected.agentDir.hasLegacy).toBe(true);
     expect(detected.channelPlans.hasLegacy).toBe(true);
     expect(detected.channelPlans.plans.map((plan) => plan.targetPath)).toEqual([
@@ -128,7 +135,7 @@ describe("state migrations", () => {
     expect(result.changes).toEqual([
       `Migrated latest direct-chat session → agent:worker-1:desk`,
       `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
-      "Canonicalized 1 legacy session key(s)",
+      "Canonicalized 2 legacy session key(s)",
       "Moved trace.jsonl → agents/worker-1/sessions",
       "Moved agent file settings.json → agents/worker-1/agent",
       `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "alpha")}`,
@@ -144,6 +151,9 @@ describe("state migrations", () => {
     ) as Record<string, { sessionId: string }>;
     expect(mergedStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
     expect(mergedStore["agent:worker-1:whatsapp:group:123@g.us"]?.sessionId).toBe("group-session");
+    expect(mergedStore["agent:worker-1:unknown:group:legacy-room"]?.sessionId).toBe(
+      "generic-group-session",
+    );
 
     await expect(
       fs.readFile(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"), "utf8"),

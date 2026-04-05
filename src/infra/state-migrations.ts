@@ -210,6 +210,10 @@ function canonicalizeSessionKeyForAgent(params: {
     const rest = raw.slice("subagent:".length);
     return `agent:${agentId}:subagent:${rest}`.toLowerCase();
   }
+  // Channel-owned legacy shapes must win before the generic group/channel
+  // fallback. WhatsApp shipped channel-qualified group sessions, so
+  // `group:123@g.us` must canonicalize to `...:whatsapp:group:...`, not the
+  // generic `...:unknown:group:...` bucket.
   for (const surface of getLegacySessionSurfaces()) {
     const canonicalized = surface.canonicalizeLegacySessionKey?.({
       key: raw,

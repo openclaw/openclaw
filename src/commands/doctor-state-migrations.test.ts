@@ -228,6 +228,30 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
   });
 
+  it("keeps shipped WhatsApp legacy group keys channel-qualified during migration", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+    const targetDir = path.join(root, "agents", "main", "sessions");
+
+    writeLegacySessionsFixture({
+      root,
+      sessions: {
+        "group:123@g.us": { sessionId: "wa", updatedAt: 10 },
+        "group:abc": { sessionId: "generic", updatedAt: 9 },
+      },
+    });
+
+    const store = await runAndReadSessionsStore({
+      root,
+      cfg,
+      targetDir,
+      now: () => 123,
+    });
+
+    expect(store["agent:main:whatsapp:group:123@g.us"]?.sessionId).toBe("wa");
+    expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("generic");
+  });
+
   it("migrates legacy agent dir with conflict fallback", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     writeLegacyAgentFiles(root, {
