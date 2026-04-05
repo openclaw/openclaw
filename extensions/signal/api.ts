@@ -1,3 +1,5 @@
+export { signalPlugin } from "./src/channel.js";
+export { signalSetupPlugin } from "./src/channel.setup.js";
 export * from "./src/accounts.js";
 export * from "./src/format.js";
 export * from "./src/identity.js";

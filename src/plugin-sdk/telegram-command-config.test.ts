@@ -1,22 +1,17 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import * as telegramCommandConfig from "./telegram-command-config.js";
 
-vi.mock("../channels/plugins/contract-surfaces.js", () => ({
-  getBundledChannelContractSurfaceModule: vi.fn(() => null),
-}));
-
-let telegramCommandConfig: typeof import("./telegram-command-config.js");
-
-beforeAll(async () => {
-  vi.resetModules();
-  telegramCommandConfig = await import("./telegram-command-config.js");
-});
-
-describe("telegram command config fallback", () => {
-  it("keeps command validation available when the bundled contract surface is unavailable", () => {
-    expect(telegramCommandConfig.TELEGRAM_COMMAND_NAME_PATTERN.test("hello_world")).toBe(true);
-    expect(telegramCommandConfig.normalizeTelegramCommandName("/Hello-World")).toBe(
-      "hello_world",
+describe("telegram command config", () => {
+  it("exposes the same regex via the helper", () => {
+    expect(telegramCommandConfig.getTelegramCommandNamePattern()).toBe(
+      telegramCommandConfig.TELEGRAM_COMMAND_NAME_PATTERN,
     );
+    expect(telegramCommandConfig.TELEGRAM_COMMAND_NAME_PATTERN.test("hello_world")).toBe(true);
+  });
+
+  it("validates and normalizes commands", () => {
+    expect(telegramCommandConfig.TELEGRAM_COMMAND_NAME_PATTERN.test("hello_world")).toBe(true);
+    expect(telegramCommandConfig.normalizeTelegramCommandName("/Hello-World")).toBe("hello_world");
     expect(telegramCommandConfig.normalizeTelegramCommandDescription("  hi  ")).toBe("hi");
 
     expect(

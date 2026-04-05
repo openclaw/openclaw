@@ -2020,6 +2020,7 @@ describe("doctor config flow", () => {
 
   it("does not report repeat talk provider normalization on consecutive repair runs", async () => {
     await withTempHome(async (home) => {
+      const providerId = "acme-speech";
       const configDir = path.join(home, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
@@ -2029,9 +2030,9 @@ describe("doctor config flow", () => {
             talk: {
               interruptOnSpeech: true,
               silenceTimeoutMs: 1500,
-              provider: "elevenlabs",
+              provider: providerId,
               providers: {
-                elevenlabs: {
+                [providerId]: {
                   apiKey: "secret-key",
                   voiceId: "voice-123",
                   modelId: "eleven_v3",

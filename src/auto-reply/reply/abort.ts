@@ -38,6 +38,7 @@ import {
 } from "./abort-primitives.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 
 export { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 export {
@@ -187,8 +188,10 @@ export function stopSubagentsForRequester(params: {
         storeCache.set(storePath, store);
       }
       const entry = store[childKey];
-      const sessionId = entry?.sessionId;
-      const aborted = sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false;
+      const sessionId = replyRunRegistry.resolveSessionId(childKey) ?? entry?.sessionId;
+      const aborted =
+        (childKey ? replyRunRegistry.abort(childKey) : false) ||
+        (sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false);
       const markedTerminated =
         abortDeps.markSubagentRunTerminated({
           runId: run.runId,
@@ -270,8 +273,10 @@ export async function tryFastAbortFromMessage(params: {
         );
       }
     }
-    const sessionId = entry?.sessionId;
-    const aborted = sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false;
+    const sessionId = replyRunRegistry.resolveSessionId(resolvedTargetKey) ?? entry?.sessionId;
+    const aborted =
+      replyRunRegistry.abort(resolvedTargetKey) ||
+      (sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false);
     const cleared = clearSessionQueues([resolvedTargetKey, sessionId]);
     if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
       logVerbose(

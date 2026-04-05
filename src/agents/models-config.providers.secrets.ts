@@ -73,8 +73,10 @@ export function resolveEnvApiKeyVarName(
   return match ? match[1] : undefined;
 }
 
-export function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): string {
-  return resolveAwsSdkEnvVarName(env) ?? "AWS_PROFILE";
+export function resolveAwsSdkApiKeyVarName(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return resolveAwsSdkEnvVarName(env);
 }
 
 export function normalizeHeaderValues(params: {
@@ -277,15 +279,28 @@ export function resolveMissingProviderApiKey(params: {
 
   const authMode = params.provider.auth;
   if (params.providerApiKeyResolver && (!authMode || authMode === "aws-sdk")) {
+    const resolvedApiKey = params.providerApiKeyResolver(params.env);
+    if (!resolvedApiKey) {
+      // Resolver returned nothing (e.g. no AWS env vars on an instance-role setup).
+      // Don't inject an undefined/empty apiKey — let the sdk credential chain handle it.
+      return params.provider;
+    }
     return {
       ...params.provider,
-      apiKey: params.providerApiKeyResolver(params.env),
+      apiKey: resolvedApiKey,
     };
   }
   if (authMode === "aws-sdk") {
+    const awsEnvVar = resolveAwsSdkApiKeyVarName(params.env);
+    if (!awsEnvVar) {
+      // No AWS env vars found — don't inject a fake apiKey marker.
+      // The aws-sdk credential chain (instance roles, ECS task roles, etc.)
+      // will resolve credentials at request time without needing an apiKey field.
+      return params.provider;
+    }
     return {
       ...params.provider,
-      apiKey: resolveAwsSdkApiKeyVarName(params.env),
+      apiKey: awsEnvVar,
     };
   }
 
@@ -493,6 +508,31 @@ function resolveXaiConfigFallbackAuth(params: { provider: string; config?: OpenC
           ? pluginApiKeyRef.id.trim()
           : resolveNonEnvSecretRefApiKeyMarker(pluginApiKeyRef.source),
       source: "plugins.entries.xai.config.webSearch.apiKey",
+      mode: "api-key",
+    };
+  }
+  const legacyGrokApiKey = normalizeOptionalSecretInput(
+    (params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined | null)?.grok
+      ?.apiKey,
+  );
+  if (legacyGrokApiKey) {
+    return {
+      apiKey: legacyGrokApiKey,
+      source: "tools.web.search.grok.apiKey",
+      mode: "api-key",
+    };
+  }
+  const legacyGrokApiKeyRef = coerceSecretRef(
+    (params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined | null)?.grok
+      ?.apiKey,
+  );
+  if (legacyGrokApiKeyRef) {
+    return {
+      apiKey:
+        legacyGrokApiKeyRef.source === "env"
+          ? legacyGrokApiKeyRef.id.trim()
+          : resolveNonEnvSecretRefApiKeyMarker(legacyGrokApiKeyRef.source),
+      source: "tools.web.search.grok.apiKey",
       mode: "api-key",
     };
   }

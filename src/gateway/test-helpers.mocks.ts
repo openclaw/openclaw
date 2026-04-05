@@ -6,7 +6,6 @@ import path from "node:path";
 import { Mock, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
@@ -14,19 +13,13 @@ import type { HooksConfig } from "../config/types.hooks.js";
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createDefaultGatewayTestChannels } from "./test-helpers.channels.js";
+import { createDefaultGatewayTestSpeechProviders } from "./test-helpers.speech.js";
 
 function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
   return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
 }
-
-type StubChannelOptions = {
-  id: ChannelPlugin["id"];
-  label: string;
-  summary?: Record<string, unknown>;
-};
 
 type GetReplyFromConfigFn = (
   ctx: MsgContext,
@@ -36,177 +29,26 @@ type GetReplyFromConfigFn = (
 type CronIsolatedRunFn = (...args: unknown[]) => Promise<{ status: string; summary: string }>;
 type AgentCommandFn = (...args: unknown[]) => Promise<void>;
 type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
-
-const createStubOutboundAdapter = (channelId: ChannelPlugin["id"]): ChannelOutboundAdapter => ({
-  deliveryMode: "direct",
-  sendText: async () => ({
-    channel: channelId,
-    messageId: `${channelId}-msg`,
-  }),
-  sendMedia: async () => ({
-    channel: channelId,
-    messageId: `${channelId}-msg`,
-  }),
-});
-
-const createStubChannelPlugin = (params: StubChannelOptions): ChannelPlugin => ({
-  id: params.id,
-  meta: {
-    id: params.id,
-    label: params.label,
-    selectionLabel: params.label,
-    docsPath: `/channels/${params.id}`,
-    blurb: "test stub.",
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [DEFAULT_ACCOUNT_ID],
-    resolveAccount: () => ({}),
-    isConfigured: async () => false,
-  },
-  status: {
-    buildChannelSummary: async () => ({
-      configured: false,
-      ...(params.summary ? params.summary : {}),
-    }),
-  },
-  outbound: createStubOutboundAdapter(params.id),
-  messaging: {
-    normalizeTarget: (raw) => raw,
-  },
-  gateway: {
-    logoutAccount: async () => ({
-      cleared: false,
-      envToken: false,
-      loggedOut: false,
-    }),
-  },
-});
-
-type StubSpeechProviderOptions = {
-  id: SpeechProviderPlugin["id"];
-  label: string;
-  aliases?: string[];
-  voices?: string[];
-};
-
-const createStubSpeechProvider = (params: StubSpeechProviderOptions): SpeechProviderPlugin => ({
-  id: params.id,
-  label: params.label,
-  aliases: params.aliases,
-  voices: params.voices,
-  isConfigured: () => true,
-  synthesize: async () => ({
-    audioBuffer: Buffer.from(`${params.id}-audio`, "utf8"),
-    outputFormat: "mp3",
-    fileExtension: ".mp3",
-    voiceCompatible: true,
-  }),
-  listVoices: async () =>
-    (params.voices ?? []).map((voiceId) => ({
-      id: voiceId,
-      name: voiceId,
-    })),
-});
+type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
+type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
 
 const createStubPluginRegistry = (): PluginRegistry => ({
   plugins: [],
   tools: [],
   hooks: [],
   typedHooks: [],
-  channels: [
-    {
-      pluginId: "whatsapp",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "whatsapp", label: "WhatsApp" }),
-    },
-    {
-      pluginId: "telegram",
-      source: "test",
-      plugin: createStubChannelPlugin({
-        id: "telegram",
-        label: "Telegram",
-        summary: { tokenSource: "none", lastProbeAt: null },
-      }),
-    },
-    {
-      pluginId: "discord",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "discord", label: "Discord" }),
-    },
-    {
-      pluginId: "slack",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "slack", label: "Slack" }),
-    },
-    {
-      pluginId: "signal",
-      source: "test",
-      plugin: createStubChannelPlugin({
-        id: "signal",
-        label: "Signal",
-        summary: { lastProbeAt: null },
-      }),
-    },
-    {
-      pluginId: "imessage",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),
-    },
-    {
-      pluginId: "msteams",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "msteams", label: "Microsoft Teams" }),
-    },
-    {
-      pluginId: "matrix",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "matrix", label: "Matrix" }),
-    },
-    {
-      pluginId: "zalo",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "zalo", label: "Zalo" }),
-    },
-    {
-      pluginId: "zalouser",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "zalouser", label: "Zalo Personal" }),
-    },
-    {
-      pluginId: "bluebubbles",
-      source: "test",
-      plugin: createStubChannelPlugin({ id: "bluebubbles", label: "BlueBubbles" }),
-    },
-  ],
+  channels: createDefaultGatewayTestChannels(),
   channelSetups: [],
   providers: [],
-  speechProviders: [
-    {
-      pluginId: "openai",
-      source: "test",
-      provider: createStubSpeechProvider({
-        id: "openai",
-        label: "OpenAI",
-        voices: ["alloy", "nova"],
-      }),
-    },
-    {
-      pluginId: "elevenlabs",
-      source: "test",
-      provider: createStubSpeechProvider({
-        id: "elevenlabs",
-        label: "ElevenLabs",
-        voices: ["EXAVITQu4vr4xnSDxMaL", "voice-default"],
-      }),
-    },
-  ],
+  speechProviders: createDefaultGatewayTestSpeechProviders(),
   realtimeTranscriptionProviders: [],
   realtimeVoiceProviders: [],
   mediaUnderstandingProviders: [],
   imageGenerationProviders: [],
+  videoGenerationProviders: [],
   webFetchProviders: [],
   webSearchProviders: [],
+  memoryEmbeddingProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],
@@ -240,6 +82,8 @@ const hoisted = vi.hoisted(() => {
       };
       cronIsolatedRun: Mock<CronIsolatedRunFn>;
       agentCommand: Mock<AgentCommandFn>;
+      runBtwSideQuestion: Mock<RunBtwSideQuestionFn>;
+      dispatchInboundMessage: Mock<DispatchInboundMessageFn>;
       testIsNixMode: { value: boolean };
       sessionStoreSaveDelayMs: { value: number };
       embeddedRunMock: {
@@ -288,6 +132,8 @@ const hoisted = vi.hoisted(() => {
     },
     cronIsolatedRun: vi.fn(async () => ({ status: "ok", summary: "ok" })),
     agentCommand: vi.fn().mockResolvedValue(undefined),
+    runBtwSideQuestion: vi.fn().mockResolvedValue(undefined),
+    dispatchInboundMessage: vi.fn(),
     testIsNixMode: { value: false },
     sessionStoreSaveDelayMs: { value: 0 },
     embeddedRunMock: {
@@ -353,6 +199,9 @@ export const testTailscaleWhois = hoisted.testTailscaleWhois;
 export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun: Mock<CronIsolatedRunFn> = hoisted.cronIsolatedRun;
 export const agentCommand: Mock<AgentCommandFn> = hoisted.agentCommand;
+export const runBtwSideQuestion: Mock<RunBtwSideQuestionFn> = hoisted.runBtwSideQuestion;
+export const dispatchInboundMessageMock: Mock<DispatchInboundMessageFn> =
+  hoisted.dispatchInboundMessage;
 export const getReplyFromConfig: Mock<GetReplyFromConfigFn> = hoisted.getReplyFromConfig;
 export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {
   getReplyFromConfig.mockImplementationOnce(impl);
@@ -507,69 +356,6 @@ vi.mock("../config/config.js", async () => {
       .update(raw ?? "")
       .digest("hex");
 
-  const readConfigFileSnapshot = async () => {
-    if (testState.legacyIssues.length > 0) {
-      const raw = JSON.stringify(testState.legacyParsed ?? {});
-      return {
-        path: resolveConfigPath(),
-        exists: true,
-        raw,
-        parsed: testState.legacyParsed ?? {},
-        valid: false,
-        config: {},
-        hash: hashConfigRaw(raw),
-        issues: testState.legacyIssues.map((issue) => ({
-          path: issue.path,
-          message: issue.message,
-        })),
-        legacyIssues: testState.legacyIssues,
-      };
-    }
-    const configPath = resolveConfigPath();
-    try {
-      await fs.access(configPath);
-    } catch {
-      return {
-        path: configPath,
-        exists: false,
-        raw: null,
-        parsed: {},
-        valid: true,
-        config: {},
-        hash: hashConfigRaw(null),
-        issues: [],
-        legacyIssues: [],
-      };
-    }
-    try {
-      const raw = await fs.readFile(configPath, "utf-8");
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      return {
-        path: configPath,
-        exists: true,
-        raw,
-        parsed,
-        valid: true,
-        config: parsed,
-        hash: hashConfigRaw(raw),
-        issues: [],
-        legacyIssues: [],
-      };
-    } catch (err) {
-      return {
-        path: configPath,
-        exists: true,
-        raw: null,
-        parsed: {},
-        valid: false,
-        config: {},
-        hash: hashConfigRaw(null),
-        issues: [{ path: "", message: `read failed: ${String(err)}` }],
-        legacyIssues: [],
-      };
-    }
-  };
-
   const composeTestConfig = (baseConfig: Record<string, unknown>) => {
     const fileAgents =
       baseConfig.agents &&
@@ -652,7 +438,16 @@ vi.mock("../config/config.js", async () => {
       fileGateway.auth = testState.gatewayAuth;
     }
     if (testState.gatewayControlUi) {
-      fileGateway.controlUi = testState.gatewayControlUi;
+      const fileControlUi =
+        fileGateway.controlUi &&
+        typeof fileGateway.controlUi === "object" &&
+        !Array.isArray(fileGateway.controlUi)
+          ? (fileGateway.controlUi as Record<string, unknown>)
+          : {};
+      fileGateway.controlUi = {
+        ...fileControlUi,
+        ...testState.gatewayControlUi,
+      };
     }
     const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
 
@@ -694,12 +489,110 @@ vi.mock("../config/config.js", async () => {
     } as OpenClawConfig;
   };
 
+  const readConfigFileSnapshot = async () => {
+    if (testState.legacyIssues.length > 0) {
+      const raw = JSON.stringify(testState.legacyParsed ?? {});
+      return {
+        path: resolveConfigPath(),
+        exists: true,
+        raw,
+        parsed: testState.legacyParsed ?? {},
+        valid: false,
+        config: {},
+        hash: hashConfigRaw(raw),
+        issues: testState.legacyIssues.map((issue) => ({
+          path: issue.path,
+          message: issue.message,
+        })),
+        legacyIssues: testState.legacyIssues,
+      };
+    }
+    const configPath = resolveConfigPath();
+    try {
+      await fs.access(configPath);
+    } catch {
+      return {
+        path: configPath,
+        exists: false,
+        raw: null,
+        parsed: {},
+        valid: true,
+        config: composeTestConfig({}),
+        hash: hashConfigRaw(null),
+        issues: [],
+        legacyIssues: [],
+      };
+    }
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      return {
+        path: configPath,
+        exists: true,
+        raw,
+        parsed,
+        valid: true,
+        config: composeTestConfig(parsed),
+        hash: hashConfigRaw(raw),
+        issues: [],
+        legacyIssues: [],
+      };
+    } catch (err) {
+      return {
+        path: configPath,
+        exists: true,
+        raw: null,
+        parsed: {},
+        valid: false,
+        config: {},
+        hash: hashConfigRaw(null),
+        issues: [{ path: "", message: `read failed: ${String(err)}` }],
+        legacyIssues: [],
+      };
+    }
+  };
+
   const writeConfigFile = vi.fn(async (cfg: Record<string, unknown>) => {
     const configPath = resolveConfigPath();
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     const raw = JSON.stringify(cfg, null, 2).trimEnd().concat("\n");
     await fs.writeFile(configPath, raw, "utf-8");
+    actual.resetConfigRuntimeState();
   });
+
+  const readConfigFileSnapshotForWrite = async () => ({
+    snapshot: await readConfigFileSnapshot(),
+    writeOptions: {
+      expectedConfigPath: resolveConfigPath(),
+    },
+  });
+
+  const loadTestConfig = () => {
+    const configPath = resolveConfigPath();
+    let fileConfig: Record<string, unknown> = {};
+    try {
+      if (fsSync.existsSync(configPath)) {
+        const raw = fsSync.readFileSync(configPath, "utf-8");
+        fileConfig = JSON.parse(raw) as Record<string, unknown>;
+      }
+    } catch {
+      fileConfig = {};
+    }
+    return applyPluginAutoEnable({
+      config: composeTestConfig(fileConfig),
+      env: process.env,
+    }).config;
+  };
+
+  const loadRuntimeAwareTestConfig = () => {
+    const runtimeSnapshot = actual.getRuntimeConfigSnapshot();
+    if (runtimeSnapshot) {
+      return runtimeSnapshot;
+    }
+    const config = loadTestConfig();
+    actual.setRuntimeConfigSnapshot(config);
+    return config;
+  };
 
   return {
     ...actual,
@@ -718,23 +611,8 @@ vi.mock("../config/config.js", async () => {
     }),
     applyConfigOverrides: (cfg: OpenClawConfig) =>
       composeTestConfig(cfg as Record<string, unknown>),
-    loadConfig: () => {
-      const configPath = resolveConfigPath();
-      let fileConfig: Record<string, unknown> = {};
-      try {
-        if (fsSync.existsSync(configPath)) {
-          const raw = fsSync.readFileSync(configPath, "utf-8");
-          fileConfig = JSON.parse(raw) as Record<string, unknown>;
-        }
-      } catch {
-        fileConfig = {};
-      }
-      const config = applyPluginAutoEnable({
-        config: composeTestConfig(fileConfig),
-        env: process.env,
-      }).config;
-      return config;
-    },
+    loadConfig: loadRuntimeAwareTestConfig,
+    getRuntimeConfig: loadRuntimeAwareTestConfig,
     parseConfigJson5: (raw: string) => {
       try {
         return { ok: true, parsed: JSON.parse(raw) as unknown };
@@ -748,6 +626,7 @@ vi.mock("../config/config.js", async () => {
       issues: [],
     }),
     readConfigFileSnapshot,
+    readConfigFileSnapshotForWrite,
     writeConfigFile,
   };
 });
@@ -804,15 +683,41 @@ vi.mock("../commands/agent.js", () => ({
   agentCommand,
   agentCommandFromIngress: agentCommand,
 }));
+vi.mock("../agents/btw.js", () => ({
+  runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
+    hoisted.runBtwSideQuestion(...args),
+}));
+vi.mock("/src/agents/btw.js", () => ({
+  runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
+    hoisted.runBtwSideQuestion(...args),
+}));
 vi.mock("../auto-reply/dispatch.js", async () => {
-  return await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
+  const actual = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
     "../auto-reply/dispatch.js",
   );
+  return {
+    ...actual,
+    dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
+      const impl = hoisted.dispatchInboundMessage.getMockImplementation();
+      return impl
+        ? hoisted.dispatchInboundMessage(...args)
+        : actual.dispatchInboundMessage(...args);
+    },
+  };
 });
 vi.mock("/src/auto-reply/dispatch.js", async () => {
-  return await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
+  const actual = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
     "../auto-reply/dispatch.js",
   );
+  return {
+    ...actual,
+    dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
+      const impl = hoisted.dispatchInboundMessage.getMockImplementation();
+      return impl
+        ? hoisted.dispatchInboundMessage(...args)
+        : actual.dispatchInboundMessage(...args);
+    },
+  };
 });
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>

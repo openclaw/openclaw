@@ -28,6 +28,7 @@ MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
 MINGIT_ZIP_PATH=""
 MINGIT_ZIP_NAME=""
+WINDOWS_INSTALL_SCRIPT_PATH=""
 WINDOWS_ONBOARD_SCRIPT_PATH=""
 SERVER_PID=""
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-windows.XXXXXX)"
@@ -749,17 +750,31 @@ ensure_current_build() {
 
 ensure_guest_git() {
   local host_ip="$1"
-  local mingit_url
+  local mingit_url mingit_url_q mingit_name_q
   mingit_url="http://$host_ip:$HOST_PORT/$MINGIT_ZIP_NAME"
   if guest_exec cmd.exe /d /s /c "where git.exe >nul 2>nul && git.exe --version"; then
     return
   fi
-  guest_exec cmd.exe /d /s /c "if exist \"%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\" rmdir /s /q \"%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\""
-  guest_exec cmd.exe /d /s /c "if not exist \"%LOCALAPPDATA%\\OpenClaw\\deps\" mkdir \"%LOCALAPPDATA%\\OpenClaw\\deps\""
-  guest_exec cmd.exe /d /s /c "mkdir \"%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\""
-  guest_exec cmd.exe /d /s /c "curl.exe -fsSL \"$mingit_url\" -o \"%TEMP%\\$MINGIT_ZIP_NAME\""
-  guest_exec cmd.exe /d /s /c "tar.exe -xf \"%TEMP%\\$MINGIT_ZIP_NAME\" -C \"%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\""
-  guest_exec cmd.exe /d /s /c "del /q \"%TEMP%\\$MINGIT_ZIP_NAME\" & set \"PATH=%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\usr\\bin;%PATH%\" && git.exe --version"
+  mingit_url_q="$(ps_single_quote "$mingit_url")"
+  mingit_name_q="$(ps_single_quote "$MINGIT_ZIP_NAME")"
+  guest_powershell "$(cat <<EOF
+\$depsRoot = Join-Path \$env:LOCALAPPDATA 'OpenClaw\deps'
+\$portableGit = Join-Path \$depsRoot 'portable-git'
+\$archive = Join-Path \$env:TEMP '${mingit_name_q}'
+if (Test-Path \$portableGit) {
+  Remove-Item \$portableGit -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path \$portableGit | Out-Null
+if (-not (Test-Path \$portableGit)) {
+  throw 'portable git directory missing after create'
+}
+curl.exe -fsSL '${mingit_url_q}' -o \$archive
+tar.exe -xf \$archive -C \$portableGit
+Remove-Item \$archive -Force -ErrorAction SilentlyContinue
+\$env:PATH = "\$portableGit\cmd;\$portableGit\mingw64\bin;\$portableGit\usr\bin;\$env:PATH"
+git.exe --version
+EOF
+)"
 }
 
 pack_main_tgz() {
@@ -869,13 +884,200 @@ EOF
 install_main_tgz() {
   local host_ip="$1"
   local temp_name="$2"
-  local tgz_url
+  local tgz_url script_url
+  local runner_name log_name done_name done_status launcher_state guest_log
+  local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
+  local log_state_path
   tgz_url="http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
-  # Global npm installs on the Windows guest can stay silent for long stretches.
-  # Treat the phase log plus retry wrapper as the primary signal before assuming
-  # the guest hung.
-  run_windows_retry "main tgz install" 2 \
-    guest_exec cmd.exe /d /s /c "set \"PATH=%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\usr\\bin;%PATH%\" && curl.exe -fsSL \"$tgz_url\" -o \"%TEMP%\\$temp_name\" && npm.cmd install -g \"%TEMP%\\$temp_name\" --no-fund --no-audit && \"%APPDATA%\\npm\\openclaw.cmd\" --version"
+  write_install_runner_script
+  script_url="http://$host_ip:$HOST_PORT/$(basename "$WINDOWS_INSTALL_SCRIPT_PATH")"
+  runner_name="openclaw-install-$RANDOM-$RANDOM.ps1"
+  log_name="openclaw-install-$RANDOM-$RANDOM.log"
+  done_name="openclaw-install-$RANDOM-$RANDOM.done"
+  log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-install-log-state.XXXXXX")"
+  : >"$log_state_path"
+  start_seconds="$SECONDS"
+  poll_deadline=$((SECONDS + TIMEOUT_INSTALL_S + 60))
+  startup_checked=0
+
+  guest_powershell "$(cat <<EOF
+\$runner = Join-Path \$env:TEMP '$runner_name'
+\$log = Join-Path \$env:TEMP '$log_name'
+\$done = Join-Path \$env:TEMP '$done_name'
+Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
+curl.exe -fsSL '$script_url' -o \$runner
+Start-Process powershell.exe -ArgumentList @(
+  '-NoProfile',
+  '-ExecutionPolicy', 'Bypass',
+  '-File', \$runner,
+  '-TgzUrl', '$tgz_url',
+  '-TempName', '$temp_name',
+  '-LogPath', \$log,
+  '-DonePath', \$done
+) -WindowStyle Hidden | Out-Null
+EOF
+)"
+
+  stream_windows_install_log() {
+    set +e
+    guest_log="$(
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+    )"
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]] || [[ -z "$guest_log" ]]; then
+      return "$log_rc"
+    fi
+    GUEST_LOG="$guest_log" python3 - "$log_state_path" <<'PY'
+import os
+import pathlib
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+previous = state_path.read_text(encoding="utf-8", errors="replace")
+current = os.environ["GUEST_LOG"].replace("\r\n", "\n").replace("\r", "\n")
+
+if current.startswith(previous):
+    sys.stdout.write(current[len(previous):])
+else:
+    sys.stdout.write(current)
+
+state_path.write_text(current, encoding="utf-8")
+PY
+  }
+
+  while :; do
+    set +e
+    done_status="$(
+      guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+    )"
+    poll_rc=$?
+    set -e
+    done_status="${done_status//$'\r'/}"
+    if [[ $poll_rc -ne 0 ]]; then
+      warn "windows install helper poll failed; retrying"
+      if (( SECONDS >= poll_deadline )); then
+        warn "windows install helper timed out while polling done file"
+        rm -f "$log_state_path"
+        return 1
+      fi
+      sleep 2
+      continue
+    fi
+    set +e
+    stream_windows_install_log
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]]; then
+      warn "windows install helper live log poll failed; retrying"
+    fi
+    if [[ -n "$done_status" ]]; then
+      if ! stream_windows_install_log; then
+        warn "windows install helper log drain failed after completion"
+      fi
+      rm -f "$log_state_path"
+      [[ "$done_status" == "0" ]]
+      return $?
+    fi
+    if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
+      set +e
+      launcher_state="$(
+        guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
+      )"
+      state_rc=$?
+      set -e
+      launcher_state="${launcher_state//$'\r'/}"
+      startup_checked=1
+      if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
+        warn "windows install helper failed to materialize guest files"
+        rm -f "$log_state_path"
+        return 1
+      fi
+    fi
+    if (( SECONDS >= poll_deadline )); then
+      if ! stream_windows_install_log; then
+        warn "windows install helper log drain failed after timeout"
+      fi
+      warn "windows install helper timed out waiting for done file"
+      rm -f "$log_state_path"
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+write_install_runner_script() {
+  WINDOWS_INSTALL_SCRIPT_PATH="$MAIN_TGZ_DIR/openclaw-install-main.ps1"
+  cat >"$WINDOWS_INSTALL_SCRIPT_PATH" <<'EOF'
+param(
+  [Parameter(Mandatory = $true)][string]$TgzUrl,
+  [Parameter(Mandatory = $true)][string]$TempName,
+  [Parameter(Mandatory = $true)][string]$LogPath,
+  [Parameter(Mandatory = $true)][string]$DonePath
+)
+
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
+
+function Write-ProgressLog {
+  param([Parameter(Mandatory = $true)][string]$Stage)
+
+  "==> $Stage" | Tee-Object -FilePath $LogPath -Append | Out-Null
+}
+
+function Invoke-Logged {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][scriptblock]$Command
+  )
+
+  $output = $null
+  $previousErrorActionPreference = $ErrorActionPreference
+  $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $PSNativeCommandUseErrorActionPreference = $false
+    $output = & $Command *>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+  }
+
+  if ($null -ne $output) {
+    $output | Tee-Object -FilePath $LogPath -Append | Out-Null
+  }
+
+  if ($exitCode -ne 0) {
+    throw "$Label failed with exit code $exitCode"
+  }
+}
+
+try {
+  $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
+  $tgz = Join-Path $env:TEMP $TempName
+  Remove-Item $tgz, $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
+  Write-ProgressLog 'install.start'
+  Write-ProgressLog 'install.download-tgz'
+  Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
+  Write-ProgressLog 'install.install-tgz'
+  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
+  $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
+  Write-ProgressLog 'install.verify-version'
+  Invoke-Logged 'openclaw --version' { & $openclaw --version }
+  Write-ProgressLog 'install.done'
+  Set-Content -Path $DonePath -Value ([string]0)
+  exit 0
+} catch {
+  if (Test-Path $LogPath) {
+    Add-Content -Path $LogPath -Value ($_ | Out-String)
+  } else {
+    ($_ | Out-String) | Set-Content -Path $LogPath
+  }
+  Set-Content -Path $DonePath -Value '1'
+  exit 1
+}
+EOF
 }
 
 verify_version_contains() {

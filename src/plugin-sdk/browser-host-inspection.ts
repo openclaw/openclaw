@@ -2,9 +2,11 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";
 
-type BrowserExecutable = PluginSdkFacadeTypeMap["browser-runtime"]["types"]["BrowserExecutable"];
+export type BrowserExecutable = {
+  kind: "chrome" | "chromium" | "edge" | "canary";
+  path: string;
+};
 
 const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
 

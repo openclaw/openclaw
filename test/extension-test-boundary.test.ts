@@ -19,6 +19,7 @@ const allowedNonExtensionTests = new Set<string>([
   "src/infra/outbound/deliver.test.ts",
   "src/plugins/interactive.test.ts",
   "src/plugins/contracts/discovery.contract.test.ts",
+  "src/plugin-sdk/telegram-command-config.test.ts",
 ]);
 
 function walk(dir: string, entries: string[] = []): string[] {
@@ -146,7 +147,6 @@ describe("non-extension test boundaries", () => {
       "../plugin-sdk/synthetic.js",
       "../plugin-sdk/xai.js",
       "../plugin-sdk/xiaomi.js",
-      "../plugin-sdk/zai.js",
     ]);
     const file = "src/commands/onboard-auth.test.ts";
     const source = fs.readFileSync(path.join(repoRoot, file), "utf8");

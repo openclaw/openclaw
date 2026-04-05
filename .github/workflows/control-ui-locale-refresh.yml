@@ -1,0 +1,107 @@
+name: Control UI Locale Refresh
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ui/src/i18n/locales/en.ts
+      - ui/src/i18n/lib/types.ts
+      - scripts/control-ui-i18n.ts
+      - package.json
+      - .github/workflows/control-ui-locale-refresh.yml
+  release:
+    types:
+      - published
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: control-ui-locale-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: github.repository == 'openclaw/openclaw'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        locale:
+          - zh-CN
+          - zh-TW
+          - pt-BR
+          - de
+          - es
+          - ja-JP
+          - ko
+          - fr
+          - tr
+          - id
+          - pl
+    runs-on: ubuntu-latest
+    name: Refresh ${{ matrix.locale }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: true
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Ensure translation provider secrets exist
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "Missing OPENCLAW_DOCS_I18N_OPENAI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY secret."
+            exit 1
+          fi
+
+      - name: Refresh control UI locale files
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENCLAW_CONTROL_UI_I18N_MODEL: gpt-5.4
+          OPENCLAW_CONTROL_UI_I18N_THINKING: low
+        run: node --import tsx scripts/control-ui-i18n.ts sync --locale "${{ matrix.locale }}" --write
+
+      - name: Commit and push locale updates
+        env:
+          LOCALE: ${{ matrix.locale }}
+          TARGET_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- ui/src/i18n; then
+            echo "No control UI locale changes for ${LOCALE}."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A ui/src/i18n
+          FAST_COMMIT=1 git commit -m "chore(ui): refresh ${LOCALE} control ui locale"
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin "${TARGET_BRANCH}"
+            git rebase "origin/${TARGET_BRANCH}"
+            if git push origin HEAD:"${TARGET_BRANCH}"; then
+              exit 0
+            fi
+            echo "Push attempt ${attempt} for ${LOCALE} failed; retrying."
+            sleep $((attempt * 2))
+          done
+
+          echo "Failed to push ${LOCALE} locale update after retries."
+          exit 1

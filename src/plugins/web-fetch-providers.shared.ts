@@ -1,7 +1,7 @@
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
-import { resolveBundledWebFetchPluginIds } from "./bundled-web-fetch.js";
 import { type NormalizedPluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
+import { resolveManifestContractPluginIds } from "./manifest-registry.js";
 import type { PluginWebFetchProviderEntry } from "./types.js";
 
 function resolveBundledWebFetchCompatPluginIds(params: {
@@ -9,7 +9,9 @@ function resolveBundledWebFetchCompatPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
 }): string[] {
-  return resolveBundledWebFetchPluginIds({
+  return resolveManifestContractPluginIds({
+    contract: "webFetchProviders",
+    origin: "bundled",
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,

@@ -581,7 +581,6 @@ describe("plugin status reports", () => {
           name: "Google",
           description: "Google provider plugin",
           origin: "bundled",
-          cliBackendIds: ["google-gemini-cli"],
           providerIds: ["google"],
           mediaUnderstandingProviderIds: ["google"],
           imageGenerationProviderIds: ["google"],
@@ -598,13 +597,7 @@ describe("plugin status reports", () => {
     expectInspectShape(inspect!, {
       shape: "hybrid-capability",
       capabilityMode: "hybrid",
-      capabilityKinds: [
-        "cli-backend",
-        "text-inference",
-        "media-understanding",
-        "image-generation",
-        "web-search",
-      ],
+      capabilityKinds: ["text-inference", "media-understanding", "image-generation", "web-search"],
     });
     expect(inspect?.usesLegacyBeforeAgentStart).toBe(true);
     expect(inspect?.compatibility).toEqual([
@@ -651,25 +644,24 @@ describe("plugin status reports", () => {
     expectCapabilityKinds(inspect[1], ["text-inference", "web-search"]);
   });
 
-  it("treats a CLI-backend-only plugin as a plain capability", () => {
+  it("treats a CLI-command-only plugin as a non-capability", () => {
     setSinglePluginLoadResult(
       createPluginRecord({
-        id: "anthropic",
-        name: "Anthropic",
-        cliBackendIds: ["claude-cli"],
+        id: "openai",
+        name: "OpenAI",
+        cliCommands: ["openai"],
       }),
     );
 
-    const inspect = expectInspectReport("anthropic");
+    const inspect = expectInspectReport("openai");
 
     expectInspectShape(inspect, {
-      shape: "plain-capability",
-      capabilityMode: "plain",
-      capabilityKinds: ["cli-backend"],
+      shape: "non-capability",
+      capabilityMode: "none",
+      capabilityKinds: [],
     });
-    expect(inspect.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
+    expect(inspect.capabilities).toEqual([]);
   });
-
   it("builds compatibility warnings for legacy compatibility paths", () => {
     setPluginLoadResult({
       plugins: [

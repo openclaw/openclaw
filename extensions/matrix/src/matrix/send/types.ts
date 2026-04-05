@@ -82,6 +82,8 @@ export type ReactionEventContent = MatrixReactionEventContent;
 export type MatrixSendResult = {
   messageId: string;
   roomId: string;
+  primaryMessageId?: string;
+  messageIds?: string[];
 };
 
 export type MatrixSendOpts = {

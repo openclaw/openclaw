@@ -8,21 +8,20 @@ import { resolveMemorySearchConfig } from "./memory-search.js";
 
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
 
-describe("memory search config", () => {
-  beforeEach(() => {
-    clearMemoryEmbeddingProviders();
-    registerMemoryEmbeddingProvider({
-      id: "openai",
-      defaultModel: "text-embedding-3-small",
-      transport: "remote",
-      create: async () => ({ provider: null }),
-    });
-    registerMemoryEmbeddingProvider({
-      id: "local",
-      defaultModel: "local-default",
-      transport: "local",
-      create: async () => ({ provider: null }),
-    });
+function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolean }): void {
+  registerMemoryEmbeddingProvider({
+    id: "openai",
+    defaultModel: "text-embedding-3-small",
+    transport: "remote",
+    create: async () => ({ provider: null }),
+  });
+  registerMemoryEmbeddingProvider({
+    id: "local",
+    defaultModel: "local-default",
+    transport: "local",
+    create: async () => ({ provider: null }),
+  });
+  if (options?.includeGemini !== false) {
     registerMemoryEmbeddingProvider({
       id: "gemini",
       defaultModel: "gemini-embedding-001",
@@ -34,24 +33,31 @@ describe("memory search config", () => {
           .replace(/^(gemini|google)\//, "") === "gemini-embedding-2-preview",
       create: async () => ({ provider: null }),
     });
-    registerMemoryEmbeddingProvider({
-      id: "voyage",
-      defaultModel: "voyage-4-large",
-      transport: "remote",
-      create: async () => ({ provider: null }),
-    });
-    registerMemoryEmbeddingProvider({
-      id: "mistral",
-      defaultModel: "mistral-embed",
-      transport: "remote",
-      create: async () => ({ provider: null }),
-    });
-    registerMemoryEmbeddingProvider({
-      id: "ollama",
-      defaultModel: "nomic-embed-text",
-      transport: "remote",
-      create: async () => ({ provider: null }),
-    });
+  }
+  registerMemoryEmbeddingProvider({
+    id: "voyage",
+    defaultModel: "voyage-4-large",
+    transport: "remote",
+    create: async () => ({ provider: null }),
+  });
+  registerMemoryEmbeddingProvider({
+    id: "mistral",
+    defaultModel: "mistral-embed",
+    transport: "remote",
+    create: async () => ({ provider: null }),
+  });
+  registerMemoryEmbeddingProvider({
+    id: "ollama",
+    defaultModel: "nomic-embed-text",
+    transport: "remote",
+    create: async () => ({ provider: null }),
+  });
+}
+
+describe("memory search config", () => {
+  beforeEach(() => {
+    clearMemoryEmbeddingProviders();
+    registerBaseMemoryEmbeddingProviders();
   });
 
   afterEach(() => {
@@ -311,6 +317,29 @@ describe("memory search config", () => {
     expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
       /memorySearch\.multimodal requires a provider adapter that supports multimodal embeddings/,
     );
+  });
+
+  it("accepts Gemini multimodal memory even when the runtime registry has not registered Gemini yet", () => {
+    clearMemoryEmbeddingProviders();
+    registerBaseMemoryEmbeddingProviders({ includeGemini: false });
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "gemini",
+            model: "gemini-embedding-2-preview",
+            multimodal: { enabled: true, modalities: ["image"] },
+          },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.provider).toBe("gemini");
+    expect(resolved?.multimodal).toEqual({
+      enabled: true,
+      modalities: ["image"],
+      maxFileBytes: 10 * 1024 * 1024,
+    });
   });
 
   it("rejects multimodal memory when fallback is configured", () => {

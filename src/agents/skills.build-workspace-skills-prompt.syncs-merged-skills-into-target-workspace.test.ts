@@ -100,6 +100,15 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const extraDir = path.join(sourceWorkspace, ".extra");
     const bundledDir = path.join(sourceWorkspace, ".bundled");
     const managedDir = path.join(sourceWorkspace, ".managed");
+    const workspaceSkillDir = path.join(sourceWorkspace, "skills", "demo-skill");
+
+    await fs.mkdir(path.join(workspaceSkillDir, ".git"), { recursive: true });
+    await fs.writeFile(path.join(workspaceSkillDir, ".git", "config"), "gitdir");
+    await fs.mkdir(path.join(workspaceSkillDir, "node_modules", "pkg"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceSkillDir, "node_modules", "pkg", "index.js"),
+      "export {}",
+    );
 
     await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
       syncSkillsToWorkspace({
@@ -121,6 +130,12 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Bundled version");
     expect(prompt).not.toContain("Extra version");
     expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
+    expect(await pathExists(path.join(targetWorkspace, "skills", "demo-skill", ".git"))).toBe(
+      false,
+    );
+    expect(
+      await pathExists(path.join(targetWorkspace, "skills", "demo-skill", "node_modules")),
+    ).toBe(false);
   });
 
   it("syncs the explicit agent skill subset instead of inherited defaults", async () => {

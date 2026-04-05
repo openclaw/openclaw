@@ -3,6 +3,7 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
@@ -934,7 +935,7 @@ export async function processMessage(
         chatGuid: message.chatGuid,
         chatId: message.chatId,
         chatIdentifier: message.chatIdentifier,
-        allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+        allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
       });
       if (fetchedParticipants?.length) {
         message.participants = fetchedParticipants;
@@ -1147,7 +1148,7 @@ export async function processMessage(
           baseUrl,
           password,
           target: resolveTarget,
-          allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+          allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
         })) ?? undefined;
     }
   }

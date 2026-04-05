@@ -346,6 +346,59 @@ describe("runEmbeddedPiAgent", () => {
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
   });
 
+  it("retries a planning-only GPT turn once with an act-now steer", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["gpt-5.4"]);
+    const sessionKey = nextSessionKey();
+
+    runEmbeddedAttemptMock
+      .mockImplementationOnce(async (params: unknown) => {
+        expect((params as { prompt?: string }).prompt).toBe("ship it");
+        return makeEmbeddedRunnerAttempt({
+          assistantTexts: ["I'll inspect the files, make the change, and run the checks."],
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            model: "gpt-5.4",
+            content: [
+              {
+                type: "text",
+                text: "I'll inspect the files, make the change, and run the checks.",
+              },
+            ],
+          }),
+        });
+      })
+      .mockImplementationOnce(async (params: unknown) => {
+        expect((params as { prompt?: string }).prompt).toContain(
+          "Do not restate the plan. Act now",
+        );
+        return makeEmbeddedRunnerAttempt({
+          assistantTexts: ["done"],
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            model: "gpt-5.4",
+            content: [{ type: "text", text: "done" }],
+          }),
+        });
+      });
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "ship it",
+      provider: "openai",
+      model: "gpt-5.4",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("planning-only-retry"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]).toMatchObject({ text: "done" });
+  });
+
   it("handles prompt error paths without dropping user state", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-error"]);

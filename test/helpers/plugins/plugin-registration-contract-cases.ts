@@ -7,7 +7,6 @@ export const pluginRegistrationContractCases = {
     pluginId: "anthropic",
     providerIds: ["anthropic"],
     mediaUnderstandingProviderIds: ["anthropic"],
-    cliBackendIds: ["claude-cli"],
     requireDescribeImages: true,
   },
   brave: {
@@ -48,7 +47,6 @@ export const pluginRegistrationContractCases = {
     webSearchProviderIds: ["gemini"],
     mediaUnderstandingProviderIds: ["google"],
     imageGenerationProviderIds: ["google"],
-    cliBackendIds: ["google-gemini-cli"],
     requireDescribeImages: true,
     requireGenerateImage: true,
   },
@@ -96,7 +94,6 @@ export const pluginRegistrationContractCases = {
     realtimeVoiceProviderIds: ["openai"],
     mediaUnderstandingProviderIds: ["openai", "openai-codex"],
     imageGenerationProviderIds: ["openai"],
-    cliBackendIds: ["codex-cli"],
     requireSpeechVoices: true,
     requireDescribeImages: true,
     requireGenerateImage: true,

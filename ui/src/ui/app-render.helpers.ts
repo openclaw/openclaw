@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
@@ -16,8 +15,14 @@ import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { parseAgentSessionKey } from "./session-key.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
+import {
+  listThinkingLevelLabels,
+  normalizeThinkLevel,
+  resolveThinkingDefaultForModel,
+} from "./thinking.ts";
 import type { SessionsListResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
@@ -133,11 +138,16 @@ function renderCronFilterIcon(hiddenCount: number) {
 export function renderChatSessionSelect(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
   const modelSelect = renderChatModelSelect(state);
+  const thinkingSelect = renderChatThinkingSelect(state);
+  const selectedSessionLabel =
+    sessionGroups.flatMap((group) => group.options).find((entry) => entry.key === state.sessionKey)
+      ?.label ?? state.sessionKey;
   return html`
     <div class="chat-controls__session-row">
       <label class="field chat-controls__session">
         <select
           .value=${state.sessionKey}
+          title=${selectedSessionLabel}
           ?disabled=${!state.connected || sessionGroups.length === 0}
           @change=${(e: Event) => {
             const next = (e.target as HTMLSelectElement).value;
@@ -162,7 +172,7 @@ export function renderChatSessionSelect(state: AppViewState) {
           )}
         </select>
       </label>
-      ${modelSelect}
+      ${modelSelect} ${thinkingSelect}
     </div>
   `;
 }
@@ -436,6 +446,7 @@ export function renderChatMobileToggle(state: AppViewState) {
               )}
             </select>
           </label>
+          ${renderChatThinkingSelect(state)}
           <div class="chat-controls__thinking">
             <button
               class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
@@ -532,15 +543,139 @@ function renderChatModelSelect(state: AppViewState) {
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
   const disabled =
     !state.connected || busy || (state.chatModelsLoading && options.length === 0) || !state.client;
+  const selectedLabel =
+    currentOverride === ""
+      ? defaultLabel
+      : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
   return html`
     <label class="field chat-controls__session chat-controls__model">
       <select
         data-chat-model-select="true"
         aria-label="Chat model"
+        title=${selectedLabel}
         ?disabled=${disabled}
         @change=${async (e: Event) => {
           const next = (e.target as HTMLSelectElement).value.trim();
           await switchChatModel(state, next);
+        }}
+      >
+        <option value="" ?selected=${currentOverride === ""}>${defaultLabel}</option>
+        ${repeat(
+          options,
+          (entry) => entry.value,
+          (entry) =>
+            html`<option value=${entry.value} ?selected=${entry.value === currentOverride}>
+              ${entry.label}
+            </option>`,
+        )}
+      </select>
+    </label>
+  `;
+}
+
+type ChatThinkingSelectOption = {
+  value: string;
+  label: string;
+};
+
+type ChatThinkingSelectState = {
+  currentOverride: string;
+  defaultLabel: string;
+  options: ChatThinkingSelectOption[];
+};
+
+function resolveThinkingTargetModel(state: AppViewState): {
+  provider: string | null;
+  model: string | null;
+} {
+  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  return {
+    provider: activeRow?.modelProvider ?? state.sessionsResult?.defaults?.modelProvider ?? null,
+    model: activeRow?.model ?? state.sessionsResult?.defaults?.model ?? null,
+  };
+}
+
+function buildThinkingOptions(
+  provider: string | null,
+  model: string | null,
+  currentOverride: string,
+): ChatThinkingSelectOption[] {
+  const seen = new Set<string>();
+  const options: ChatThinkingSelectOption[] = [];
+
+  const addOption = (value: string, label?: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    options.push({
+      value: trimmed,
+      label:
+        label ??
+        trimmed
+          .split(/[-_]/g)
+          .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+          .join(" "),
+    });
+  };
+
+  for (const label of listThinkingLevelLabels(provider)) {
+    const normalized = normalizeThinkLevel(label) ?? label.trim().toLowerCase();
+    addOption(normalized);
+  }
+  if (currentOverride) {
+    addOption(currentOverride);
+  }
+  return options;
+}
+
+function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelectState {
+  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  const persisted = activeRow?.thinkingLevel;
+  const currentOverride =
+    typeof persisted === "string" && persisted.trim()
+      ? (normalizeThinkLevel(persisted) ?? persisted.trim())
+      : "";
+  const { provider, model } = resolveThinkingTargetModel(state);
+  const defaultLevel =
+    provider && model
+      ? resolveThinkingDefaultForModel({
+          provider,
+          model,
+          catalog: state.chatModelCatalog ?? [],
+        })
+      : "off";
+  return {
+    currentOverride,
+    defaultLabel: `Default (${defaultLevel})`,
+    options: buildThinkingOptions(provider, model, currentOverride),
+  };
+}
+
+function renderChatThinkingSelect(state: AppViewState) {
+  const { currentOverride, defaultLabel, options } = resolveChatThinkingSelectState(state);
+  const busy =
+    state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
+  const disabled = !state.connected || busy || !state.client;
+  const selectedLabel =
+    currentOverride === ""
+      ? defaultLabel
+      : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
+  return html`
+    <label class="field chat-controls__session chat-controls__thinking-select">
+      <select
+        data-chat-thinking-select="true"
+        aria-label="Chat thinking level"
+        title=${selectedLabel}
+        ?disabled=${disabled}
+        @change=${async (e: Event) => {
+          const next = (e.target as HTMLSelectElement).value.trim();
+          await switchChatThinkingLevel(state, next);
         }}
       >
         <option value="" ?selected=${currentOverride === ""}>${defaultLabel}</option>
@@ -584,6 +719,60 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     // Roll back so the picker reflects the actual server model.
     state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
     state.lastError = `Failed to set model: ${String(err)}`;
+  }
+}
+
+function patchSessionThinkingLevel(
+  state: AppViewState,
+  sessionKey: string,
+  thinkingLevel: string | undefined,
+) {
+  const current = state.sessionsResult;
+  if (!current) {
+    return;
+  }
+  state.sessionsResult = {
+    ...current,
+    sessions: current.sessions.map((row) =>
+      row.key === sessionKey
+        ? {
+            ...row,
+            thinkingLevel,
+          }
+        : row,
+    ),
+  };
+}
+
+async function switchChatThinkingLevel(state: AppViewState, nextThinkingLevel: string) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const targetSessionKey = state.sessionKey;
+  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
+  const previousThinkingLevel = activeRow?.thinkingLevel;
+  const normalizedNext =
+    (normalizeThinkLevel(nextThinkingLevel) ?? nextThinkingLevel.trim()) || undefined;
+  const normalizedPrev =
+    typeof previousThinkingLevel === "string" && previousThinkingLevel.trim()
+      ? (normalizeThinkLevel(previousThinkingLevel) ?? previousThinkingLevel.trim())
+      : undefined;
+  if ((normalizedPrev ?? "") === (normalizedNext ?? "")) {
+    return;
+  }
+  state.lastError = null;
+  patchSessionThinkingLevel(state, targetSessionKey, normalizedNext);
+  state.chatThinkingLevel = normalizedNext ?? null;
+  try {
+    await state.client.request("sessions.patch", {
+      key: targetSessionKey,
+      thinkingLevel: normalizedNext ?? null,
+    });
+    await refreshSessionOptions(state);
+  } catch (err) {
+    patchSessionThinkingLevel(state, targetSessionKey, previousThinkingLevel);
+    state.chatThinkingLevel = normalizedPrev ?? null;
+    state.lastError = `Failed to set thinking level: ${String(err)}`;
   }
 }
 

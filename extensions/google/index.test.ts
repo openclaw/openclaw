@@ -1,9 +1,9 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { Context, Model } from "@mariozechner/pi-ai";
 import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,

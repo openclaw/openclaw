@@ -2,13 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
-import {
-  BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
-  BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
-  BUNDLED_REALTIME_TRANSCRIPTION_PLUGIN_IDS,
-  BUNDLED_REALTIME_VOICE_PLUGIN_IDS,
-  BUNDLED_SPEECH_PLUGIN_IDS,
-} from "../bundled-capability-metadata.js";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import { buildPluginLoaderAliasMap, buildPluginLoaderJitiOptions } from "../sdk-alias.js";
@@ -18,6 +11,7 @@ import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
+  VideoGenerationProviderPlugin,
 } from "../types.js";
 
 export type SpeechProviderContractEntry = {
@@ -44,6 +38,19 @@ export type ImageGenerationProviderContractEntry = {
   pluginId: string;
   provider: ImageGenerationProviderPlugin;
 };
+
+export type VideoGenerationProviderContractEntry = {
+  pluginId: string;
+  provider: VideoGenerationProviderPlugin;
+};
+
+type ManifestContractKey =
+  | "speechProviders"
+  | "mediaUnderstandingProviders"
+  | "realtimeVoiceProviders"
+  | "realtimeTranscriptionProviders"
+  | "imageGenerationProviders"
+  | "videoGenerationProviders";
 
 function buildVitestCapabilityAliasMap(modulePath: string): Record<string, string> {
   const { ["openclaw/plugin-sdk"]: _ignoredRootAlias, ...scopedAliasMap } =
@@ -77,6 +84,19 @@ function resolveNamedBuilder<T>(moduleExport: unknown, pattern: RegExp): (() => 
   return undefined;
 }
 
+function resolveNamedBuilders<T>(moduleExport: unknown, pattern: RegExp): Array<() => T> {
+  if (!moduleExport || typeof moduleExport !== "object") {
+    return [];
+  }
+  const matches: Array<() => T> = [];
+  for (const [key, value] of Object.entries(moduleExport as Record<string, unknown>)) {
+    if (pattern.test(key) && typeof value === "function") {
+      matches.push(value as () => T);
+    }
+  }
+  return matches;
+}
+
 function resolveNamedValues<T>(
   moduleExport: unknown,
   pattern: RegExp,
@@ -92,6 +112,14 @@ function resolveNamedValues<T>(
     }
   }
   return matches;
+}
+
+function resolveBundledManifestPluginIds(contract: ManifestContractKey): string[] {
+  return loadPluginManifestRegistry({})
+    .plugins.filter(
+      (plugin) => plugin.origin === "bundled" && (plugin.contracts?.[contract]?.length ?? 0) > 0,
+    )
+    .map((plugin) => plugin.id);
 }
 
 function resolveTestApiModuleRecords(pluginIds: readonly string[]) {
@@ -120,7 +148,9 @@ function isMediaUnderstandingProvider(value: unknown): value is MediaUnderstandi
 
 export function loadVitestSpeechProviderContractRegistry(): SpeechProviderContractEntry[] {
   const registrations: SpeechProviderContractEntry[] = [];
-  const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(BUNDLED_SPEECH_PLUGIN_IDS);
+  const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(
+    resolveBundledManifestPluginIds("speechProviders"),
+  );
 
   for (const plugin of manifests) {
     if (!plugin.rootDir) {
@@ -164,7 +194,7 @@ export function loadVitestSpeechProviderContractRegistry(): SpeechProviderContra
 export function loadVitestMediaUnderstandingProviderContractRegistry(): MediaUnderstandingProviderContractEntry[] {
   const registrations: MediaUnderstandingProviderContractEntry[] = [];
   const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(
-    BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
+    resolveBundledManifestPluginIds("mediaUnderstandingProviders"),
   );
 
   for (const plugin of manifests) {
@@ -207,7 +237,7 @@ export function loadVitestMediaUnderstandingProviderContractRegistry(): MediaUnd
 export function loadVitestRealtimeVoiceProviderContractRegistry(): RealtimeVoiceProviderContractEntry[] {
   const registrations: RealtimeVoiceProviderContractEntry[] = [];
   const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(
-    BUNDLED_REALTIME_VOICE_PLUGIN_IDS,
+    resolveBundledManifestPluginIds("realtimeVoiceProviders"),
   );
 
   for (const plugin of manifests) {
@@ -252,7 +282,7 @@ export function loadVitestRealtimeVoiceProviderContractRegistry(): RealtimeVoice
 export function loadVitestRealtimeTranscriptionProviderContractRegistry(): RealtimeTranscriptionProviderContractEntry[] {
   const registrations: RealtimeTranscriptionProviderContractEntry[] = [];
   const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(
-    BUNDLED_REALTIME_TRANSCRIPTION_PLUGIN_IDS,
+    resolveBundledManifestPluginIds("realtimeTranscriptionProviders"),
   );
 
   for (const plugin of manifests) {
@@ -297,7 +327,7 @@ export function loadVitestRealtimeTranscriptionProviderContractRegistry(): Realt
 export function loadVitestImageGenerationProviderContractRegistry(): ImageGenerationProviderContractEntry[] {
   const registrations: ImageGenerationProviderContractEntry[] = [];
   const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(
-    BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
+    resolveBundledManifestPluginIds("imageGenerationProviders"),
   );
 
   for (const plugin of manifests) {
@@ -308,9 +338,56 @@ export function loadVitestImageGenerationProviderContractRegistry(): ImageGenera
     if (!fs.existsSync(testApiPath)) {
       continue;
     }
-    const builder = resolveNamedBuilder<ImageGenerationProviderPlugin>(
+    const builders = resolveNamedBuilders<ImageGenerationProviderPlugin>(
       createVitestCapabilityLoader(testApiPath)(testApiPath),
-      /^build.+ImageGenerationProvider$/u,
+      /ImageGenerationProvider$/u,
+    );
+    if (builders.length === 0) {
+      continue;
+    }
+    registrations.push(
+      ...builders.map((builder) => ({
+        pluginId: plugin.id,
+        provider: builder(),
+      })),
+    );
+    unresolvedPluginIds.delete(plugin.id);
+  }
+
+  if (unresolvedPluginIds.size === 0) {
+    return registrations;
+  }
+
+  const runtimeRegistry = loadBundledCapabilityRuntimeRegistry({
+    pluginIds: [...unresolvedPluginIds],
+    pluginSdkResolution: "dist",
+  });
+  registrations.push(
+    ...runtimeRegistry.imageGenerationProviders.map((entry) => ({
+      pluginId: entry.pluginId,
+      provider: entry.provider,
+    })),
+  );
+  return registrations;
+}
+
+export function loadVitestVideoGenerationProviderContractRegistry(): VideoGenerationProviderContractEntry[] {
+  const registrations: VideoGenerationProviderContractEntry[] = [];
+  const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(
+    resolveBundledManifestPluginIds("videoGenerationProviders"),
+  );
+
+  for (const plugin of manifests) {
+    if (!plugin.rootDir) {
+      continue;
+    }
+    const testApiPath = path.join(plugin.rootDir, "test-api.ts");
+    if (!fs.existsSync(testApiPath)) {
+      continue;
+    }
+    const builder = resolveNamedBuilder<VideoGenerationProviderPlugin>(
+      createVitestCapabilityLoader(testApiPath)(testApiPath),
+      /^build.+VideoGenerationProvider$/u,
     );
     if (!builder) {
       continue;
@@ -331,7 +408,7 @@ export function loadVitestImageGenerationProviderContractRegistry(): ImageGenera
     pluginSdkResolution: "dist",
   });
   registrations.push(
-    ...runtimeRegistry.imageGenerationProviders.map((entry) => ({
+    ...runtimeRegistry.videoGenerationProviders.map((entry) => ({
       pluginId: entry.pluginId,
       provider: entry.provider,
     })),

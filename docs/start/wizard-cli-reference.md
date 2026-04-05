@@ -86,7 +86,7 @@ It does not install or modify anything on the remote host.
   </Step>
   <Step title="Health check">
     - Starts gateway (if needed) and runs `openclaw health`.
-    - `openclaw status --deep` adds gateway health probes to status output.
+    - `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported.
   </Step>
   <Step title="Skills">
     - Reads available skills and checks requirements.
@@ -128,19 +128,6 @@ What you set:
 <AccordionGroup>
   <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
-  </Accordion>
-  <Accordion title="Anthropic Claude CLI">
-    Reuses a local Claude CLI login on the gateway host and switches model
-    selection to `claude-cli/...`.
-
-    This is the preferred interactive Anthropic path in `openclaw onboard` and
-    `openclaw configure`.
-
-    - macOS: checks Keychain item "Claude Code-credentials"
-    - Linux and Windows: reuses `~/.claude/.credentials.json` if present
-
-    On macOS, choose "Always Allow" so launchd starts do not block.
-
   </Accordion>
   <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     If `~/.codex/auth.json` exists, the wizard can reuse it.

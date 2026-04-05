@@ -627,4 +627,9 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
+  /** Experimental tool flags. Default off unless explicitly enabled. */
+  experimental?: {
+    /** Enable the structured `update_plan` tool for all providers. OpenAI-family runs auto-enable it. */
+    planTool?: boolean;
+  };
 };

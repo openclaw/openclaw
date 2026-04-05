@@ -1,7 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
-import { discoverConfigurablePlugins, discoverUnconfiguredPlugins } from "./setup.plugin-config.js";
+import type { WizardPrompter } from "./prompts.js";
+import {
+  discoverConfigurablePlugins,
+  discoverUnconfiguredPlugins,
+  setupPluginConfig,
+} from "./setup.plugin-config.js";
+
+const loadPluginManifestRegistry = vi.fn();
+
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry,
+}));
 
 function makeManifestPlugin(
   id: string,
@@ -157,5 +168,111 @@ describe("discoverUnconfiguredPlugins", () => {
       config: {},
     });
     expect(result).toHaveLength(0);
+  });
+
+  it("treats dotted uiHint paths as configured when nested config exists", () => {
+    const plugins = [
+      makeManifestPlugin(
+        "brave",
+        {
+          "webSearch.mode": { label: "Brave Search Mode" },
+        },
+        {
+          type: "object",
+          properties: {
+            webSearch: {
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  enum: ["web", "llm-context"],
+                },
+              },
+            },
+          },
+        },
+      ),
+    ];
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          brave: {
+            config: {
+              webSearch: {
+                mode: "llm-context",
+              },
+            },
+          },
+        },
+      },
+    };
+    const result = discoverUnconfiguredPlugins({
+      manifestPlugins: plugins,
+      config,
+    });
+    expect(result).toHaveLength(0);
+  });
+});
+
+describe("setupPluginConfig", () => {
+  it("writes dotted uiHint values into nested plugin config", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          ...makeManifestPlugin(
+            "brave",
+            {
+              "webSearch.mode": { label: "Brave Search Mode" },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                webSearch: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    mode: {
+                      type: "string",
+                      enum: ["web", "llm-context"],
+                    },
+                  },
+                },
+              },
+            },
+          ),
+          enabledByDefault: true,
+        },
+      ],
+    });
+
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          entries: {
+            brave: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => "llm-context") as unknown as WizardPrompter["select"],
+        multiselect: vi.fn(async () => ["brave"]) as unknown as WizardPrompter["multiselect"],
+        text: vi.fn(async () => ""),
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(result.plugins?.entries?.brave?.config).toEqual({
+      webSearch: {
+        mode: "llm-context",
+      },
+    });
+    expect(result.plugins?.entries?.brave?.config?.["webSearch.mode"]).toBeUndefined();
   });
 });

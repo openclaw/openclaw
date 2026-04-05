@@ -76,6 +76,7 @@ describe("watch-node script", () => {
           PATH: "/usr/bin",
           OPENCLAW_WATCH_MODE: "1",
           OPENCLAW_WATCH_SESSION: "1700000000000-4242",
+          OPENCLAW_NO_RESPAWN: "1",
           OPENCLAW_WATCH_COMMAND: "gateway --force",
         }),
       }),
@@ -144,6 +145,70 @@ describe("watch-node script", () => {
     expect(watcher.close).toHaveBeenCalledTimes(1);
     expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("restarts when the runner exits with a SIGTERM-derived code unexpectedly", async () => {
+    const childA = Object.assign(new EventEmitter(), {
+      kill: vi.fn(),
+    });
+    const childB = Object.assign(new EventEmitter(), {
+      kill: vi.fn(() => {}),
+    });
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const createWatcher = vi.fn(() => watcher);
+    const fakeProcess = createFakeProcess();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force"],
+      createWatcher,
+      process: fakeProcess,
+      spawn,
+    });
+
+    childA.emit("exit", 143, null);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+    expect(childB.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces no-respawn for watch children even when supervisor hints are inherited", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force"],
+      createWatcher,
+      env: {
+        LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
+        PATH: "/usr/bin",
+      },
+      process: fakeProcess,
+      spawn,
+    });
+
+    expect(spawn).toHaveBeenCalledWith(
+      "/usr/local/bin/node",
+      ["scripts/run-node.mjs", "gateway", "--force"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
+          OPENCLAW_NO_RESPAWN: "1",
+        }),
+      }),
+    );
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
   });
 
   it("ignores test-only changes and restarts on non-test source changes", async () => {

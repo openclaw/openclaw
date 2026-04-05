@@ -365,7 +365,57 @@ describe("createImageGenerateTool", () => {
       },
     });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
-    expect(text).not.toContain("MEDIA:");
+    expect(text).toContain("MEDIA:/tmp/generated-1.png");
+    expect(text).toContain("MEDIA:/tmp/generated-2.png");
+  });
+
+  it("includes MEDIA paths in content text so follow-up replies use the real saved file", async () => {
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("jpg-data"),
+          mimeType: "image/jpeg",
+          fileName: "kodo_sawaki_zazen.jpg",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+      id: "kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+      size: 8,
+      contentType: "image/jpeg",
+    });
+
+    const tool = createImageGenerateTool({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "google/gemini-3.1-flash-image-preview" },
+          },
+        },
+      },
+    });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image_generate tool");
+    }
+
+    const result = await tool.execute("call-regression", { prompt: "kodo sawaki zazen" });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain(
+      "MEDIA:/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+    );
+    expect(result.details).toMatchObject({
+      media: {
+        mediaUrls: [
+          "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+        ],
+      },
+    });
   });
 
   it("rejects counts outside the supported range", async () => {

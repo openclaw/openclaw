@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import "./test-helpers/fast-openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
 function findToolDescription(toolName: string, senderIsOwner: boolean) {

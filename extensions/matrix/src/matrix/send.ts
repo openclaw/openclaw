@@ -202,6 +202,7 @@ export async function sendMessageMatrix(
         return eventId;
       };
 
+      const messageIds: string[] = [];
       let lastMessageId = "";
       if (opts.mediaUrl) {
         const maxBytes = resolveMediaMaxBytes(opts.accountId, cfg);
@@ -259,6 +260,9 @@ export async function sendMessageMatrix(
         });
         const eventId = await sendContent(content);
         lastMessageId = eventId ?? lastMessageId;
+        if (eventId) {
+          messageIds.push(eventId);
+        }
         const textChunks = useVoice ? chunks : rest;
         // Voice messages use a generic media body ("Voice message"), so keep any
         // transcript follow-up attached to the same reply/thread context.
@@ -276,6 +280,9 @@ export async function sendMessageMatrix(
           });
           const followupEventId = await sendContent(followup);
           lastMessageId = followupEventId ?? lastMessageId;
+          if (followupEventId) {
+            messageIds.push(followupEventId);
+          }
         }
       } else {
         for (const chunk of chunks.length ? chunks : [""]) {
@@ -291,12 +298,17 @@ export async function sendMessageMatrix(
           });
           const eventId = await sendContent(content);
           lastMessageId = eventId ?? lastMessageId;
+          if (eventId) {
+            messageIds.push(eventId);
+          }
         }
       }
 
       return {
         messageId: lastMessageId || "unknown",
         roomId,
+        primaryMessageId: messageIds[0] ?? (lastMessageId || "unknown"),
+        messageIds,
       };
     },
   );
@@ -423,6 +435,8 @@ export async function sendSingleTextMessageMatrix(
       return {
         messageId: eventId ?? "unknown",
         roomId: resolvedRoom,
+        primaryMessageId: eventId ?? "unknown",
+        messageIds: eventId ? [eventId] : [],
       };
     },
   );

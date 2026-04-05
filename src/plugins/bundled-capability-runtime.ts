@@ -119,15 +119,16 @@ function createCapabilityPluginRecord(params: {
     toolNames: [],
     hookNames: [],
     channelIds: [],
-    cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    memoryEmbeddingProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
@@ -271,7 +272,6 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
     try {
       const captured = createCapturedPluginRegistration();
       void register(captured.api);
-      record.cliBackendIds.push(...captured.cliBackends.map((entry) => entry.id));
       record.providerIds.push(...captured.providers.map((entry) => entry.id));
       record.speechProviderIds.push(...captured.speechProviders.map((entry) => entry.id));
       record.realtimeTranscriptionProviderIds.push(
@@ -286,19 +286,16 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       record.imageGenerationProviderIds.push(
         ...captured.imageGenerationProviders.map((entry) => entry.id),
       );
+      record.videoGenerationProviderIds.push(
+        ...captured.videoGenerationProviders.map((entry) => entry.id),
+      );
       record.webFetchProviderIds.push(...captured.webFetchProviders.map((entry) => entry.id));
       record.webSearchProviderIds.push(...captured.webSearchProviders.map((entry) => entry.id));
+      record.memoryEmbeddingProviderIds.push(
+        ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
+      );
       record.toolNames.push(...captured.tools.map((entry) => entry.name));
 
-      registry.cliBackends?.push(
-        ...captured.cliBackends.map((backend) => ({
-          pluginId: record.id,
-          pluginName: record.name,
-          backend,
-          source: record.source,
-          rootDir: record.rootDir,
-        })),
-      );
       registry.providers.push(
         ...captured.providers.map((provider) => ({
           pluginId: record.id,
@@ -353,6 +350,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           rootDir: record.rootDir,
         })),
       );
+      registry.videoGenerationProviders.push(
+        ...captured.videoGenerationProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
       registry.webFetchProviders.push(
         ...captured.webFetchProviders.map((provider) => ({
           pluginId: record.id,
@@ -364,6 +370,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       );
       registry.webSearchProviders.push(
         ...captured.webSearchProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.memoryEmbeddingProviders.push(
+        ...captured.memoryEmbeddingProviders.map((provider) => ({
           pluginId: record.id,
           pluginName: record.name,
           provider,

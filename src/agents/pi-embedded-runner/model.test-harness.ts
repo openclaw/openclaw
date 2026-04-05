@@ -21,8 +21,9 @@ export const OPENAI_CODEX_TEMPLATE_MODEL = {
   baseUrl: "https://chatgpt.com/backend-api",
   reasoning: true,
   input: ["text", "image"] as const,
-  cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-  contextWindow: 272000,
+  cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+  contextWindow: 1_050_000,
+  contextTokens: 272_000,
   maxTokens: 128000,
 };
 
@@ -82,8 +83,8 @@ export function buildOpenAICodexForwardCompatExpectation(
 export const GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL = {
   id: "gemini-3-pro-preview",
   name: "Gemini 3 Pro Preview (Cloud Code Assist)",
-  provider: "google-gemini-cli",
-  api: "google-gemini-cli",
+  provider: "google",
+  api: "google-generative-ai",
   baseUrl: "https://cloudcode-pa.googleapis.com",
   reasoning: true,
   input: ["text", "image"] as const,
@@ -95,8 +96,8 @@ export const GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL = {
 export const GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL = {
   id: "gemini-3-flash-preview",
   name: "Gemini 3 Flash Preview (Cloud Code Assist)",
-  provider: "google-gemini-cli",
-  api: "google-gemini-cli",
+  provider: "google",
+  api: "google-generative-ai",
   baseUrl: "https://cloudcode-pa.googleapis.com",
   reasoning: false,
   input: ["text", "image"] as const,
@@ -108,7 +109,7 @@ export const GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL = {
 export function mockGoogleGeminiCliProTemplateModel(discoverModelsMock: DiscoverModelsMock): void {
   mockTemplateModel(
     discoverModelsMock,
-    "google-gemini-cli",
+    "google",
     "gemini-3-pro-preview",
     GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
   );
@@ -119,7 +120,7 @@ export function mockGoogleGeminiCliFlashTemplateModel(
 ): void {
   mockTemplateModel(
     discoverModelsMock,
-    "google-gemini-cli",
+    "google",
     "gemini-3-flash-preview",
     GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
   );

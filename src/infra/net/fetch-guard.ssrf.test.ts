@@ -4,6 +4,22 @@ import {
   GUARDED_FETCH_MODE,
   retainSafeHeadersForCrossOriginRedirectHeaders,
 } from "./fetch-guard.js";
+import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
+
+const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
+  agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
+    this.options = options;
+  }),
+  envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
+    this: { options: unknown },
+    options: unknown,
+  ) {
+    this.options = options;
+  }),
+  proxyAgentCtor: vi.fn(function MockProxyAgent(this: { options: unknown }, options: unknown) {
+    this.options = options;
+  }),
+}));
 
 function redirectResponse(location: string): Response {
   return new Response(null, {
@@ -107,6 +123,10 @@ describe("fetchWithSsrFGuard hardening", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    agentCtor.mockClear();
+    envHttpProxyAgentCtor.mockClear();
+    proxyAgentCtor.mockClear();
+    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   });
 
   it("blocks private and legacy loopback literals before fetch", async () => {
@@ -207,6 +227,125 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
+  it("uses runtime undici fetch when attaching a dispatcher", async () => {
+    const runtimeFetch = vi.fn(async () => okResponse());
+    const originalGlobalFetch = globalThis.fetch;
+    let globalFetchCalls = 0;
+    const globalFetch = async () => {
+      globalFetchCalls += 1;
+      throw new Error("global fetch should not be used when a dispatcher is attached");
+    };
+
+    class MockAgent {
+      constructor(readonly options: unknown) {}
+    }
+    class MockEnvHttpProxyAgent {
+      constructor(readonly options: unknown) {}
+    }
+    class MockProxyAgent {
+      constructor(readonly options: unknown) {}
+    }
+
+    (globalThis as Record<string, unknown>).fetch = globalFetch as typeof fetch;
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: MockAgent,
+      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+      ProxyAgent: MockProxyAgent,
+      fetch: runtimeFetch,
+    };
+
+    try {
+      const result = await fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        lookupFn: createPublicLookup(),
+      });
+
+      expect(runtimeFetch).toHaveBeenCalledTimes(1);
+      expect(globalFetchCalls).toBe(0);
+      await result.release();
+    } finally {
+      (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
+    }
+  });
+
+  it("uses mocked global fetch when tests stub it", async () => {
+    const runtimeFetch = vi.fn(async () => {
+      throw new Error("runtime fetch should not be used when global fetch is mocked");
+    });
+    const originalGlobalFetch = globalThis.fetch;
+    const globalFetch = vi.fn(async () => okResponse());
+
+    class MockAgent {
+      constructor(readonly options: unknown) {}
+    }
+    class MockEnvHttpProxyAgent {
+      constructor(readonly options: unknown) {}
+    }
+    class MockProxyAgent {
+      constructor(readonly options: unknown) {}
+    }
+
+    (globalThis as Record<string, unknown>).fetch = globalFetch as typeof fetch;
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: MockAgent,
+      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+      ProxyAgent: MockProxyAgent,
+      fetch: runtimeFetch,
+    };
+
+    try {
+      const result = await fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        lookupFn: createPublicLookup(),
+      });
+
+      expect(globalFetch).toHaveBeenCalledTimes(1);
+      expect(runtimeFetch).not.toHaveBeenCalled();
+      await result.release();
+    } finally {
+      (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
+    }
+  });
+
+  it("keeps explicit proxy transport policy when DNS pinning is disabled", async () => {
+    const lookupFn = createPublicLookup();
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      pinDns: false,
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.example:7890",
+        proxyTls: {
+          servername: "public.example",
+        },
+      },
+    });
+
+    expect(proxyAgentCtor).toHaveBeenCalledWith({
+      uri: "http://proxy.example:7890",
+      requestTls: {
+        servername: "public.example",
+      },
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://public.example/resource",
+      expect.objectContaining({
+        dispatcher: expect.any(Object),
+      }),
+    );
     await result.release();
   });
 

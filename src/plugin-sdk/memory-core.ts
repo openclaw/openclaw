@@ -47,6 +47,14 @@ export {
   withProgressTotals,
 } from "./memory-core-host-runtime-cli.js";
 export {
+  resolveMemoryCorePluginConfig,
+  formatMemoryDreamingDay,
+  isSameMemoryDreamingDay,
+  resolveMemoryDeepDreamingConfig,
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingWorkspaces,
+} from "./memory-core-host-status.js";
+export {
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   readAgentMemoryFile,

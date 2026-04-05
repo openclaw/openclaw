@@ -328,10 +328,14 @@ export function applySubagentWaitOutcome(params: {
 
 export async function captureSubagentCompletionReply(
   sessionKey: string,
+  options?: { waitForReply?: boolean },
 ): Promise<string | undefined> {
   const immediate = await readSubagentOutput(sessionKey);
   if (immediate?.trim()) {
     return immediate;
+  }
+  if (options?.waitForReply === false) {
+    return undefined;
   }
   return await readLatestSubagentOutputWithRetry({
     sessionKey,
