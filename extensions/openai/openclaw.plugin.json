@@ -49,7 +49,7 @@
       "personality": {
         "type": "string",
         "enum": ["friendly", "off"],
-        "default": "off",
+        "default": "friendly",
         "description": "Controls the default OpenAI-specific personality used for OpenAI and OpenAI Codex runs."
       }
     }
