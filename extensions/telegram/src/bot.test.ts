@@ -1,9 +1,9 @@
 import { rm } from "node:fs/promises";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
@@ -757,8 +757,18 @@ describe("createTelegramBot", () => {
     const [chatId, messageId, text, params] = editMessageTextSpy.mock.calls[0] ?? [];
     expect(chatId).toBe(1234);
     expect(messageId).toBe(12);
-    expect(String(text)).toContain(`${INFO_EMOJI} Slash commands`);
-    expect(params).toBeUndefined();
+    expect(String(text)).toContain(`${INFO_EMOJI} Commands (2/`);
+    expect(params).toEqual({
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "◀ Prev", callback_data: "commands_page_1:main" },
+            { text: "2/5", callback_data: "commands_page_noop:main" },
+            { text: "Next ▶", callback_data: "commands_page_3:main" },
+          ],
+        ],
+      },
+    });
   });
 
   it("falls back to default agent for pagination callbacks without agent suffix", async () => {
