@@ -3,6 +3,7 @@ package ai.openclaw.app
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -22,16 +23,21 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class MainViewModel(app: Application) : AndroidViewModel(app) {
+class MainViewModel(
+  app: Application,
+  private val savedStateHandle: SavedStateHandle,
+) : AndroidViewModel(app) {
   private val nodeApp = app as NodeApp
   private val prefs = nodeApp.prefs
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
   private var foreground = true
-  private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
+  private val _requestedHomeDestination =
+    MutableStateFlow(savedStateHandle.get<String>(requestedHomeDestinationStateKey)?.let(::decodeHomeDestination))
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
-  private val _chatDraft = MutableStateFlow<String?>(null)
+  private val _chatDraft = MutableStateFlow(savedStateHandle.get<String>(chatDraftStateKey))
   val chatDraft: StateFlow<String?> = _chatDraft
-  private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
+  private val _pendingAssistantAutoSend =
+    MutableStateFlow(savedStateHandle.get<String>(pendingAssistantAutoSendStateKey))
   val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
 
   private fun ensureRuntime(): NodeRuntime {
@@ -253,26 +259,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   fun handleAssistantLaunch(request: AssistantLaunchRequest) {
-    _requestedHomeDestination.value = HomeDestination.Chat
+    setRequestedHomeDestination(HomeDestination.Chat)
     if (request.autoSend) {
-      _pendingAssistantAutoSend.value = request.prompt
-      _chatDraft.value = null
+      setPendingAssistantAutoSend(request.prompt)
+      setChatDraft(null)
       return
     }
-    _pendingAssistantAutoSend.value = null
-    _chatDraft.value = request.prompt
+    setPendingAssistantAutoSend(null)
+    setChatDraft(request.prompt)
   }
 
   fun clearRequestedHomeDestination() {
-    _requestedHomeDestination.value = null
+    setRequestedHomeDestination(null)
   }
 
   fun clearChatDraft() {
-    _chatDraft.value = null
+    setChatDraft(null)
   }
 
   fun clearPendingAssistantAutoSend() {
-    _pendingAssistantAutoSend.value = null
+    setPendingAssistantAutoSend(null)
+  }
+
+  private fun setRequestedHomeDestination(value: HomeDestination?) {
+    _requestedHomeDestination.value = value
+    savedStateHandle[requestedHomeDestinationStateKey] = value?.name
+  }
+
+  private fun setChatDraft(value: String?) {
+    _chatDraft.value = value
+    savedStateHandle[chatDraftStateKey] = value
+  }
+
+  private fun setPendingAssistantAutoSend(value: String?) {
+    _pendingAssistantAutoSend.value = value
+    savedStateHandle[pendingAssistantAutoSendStateKey] = value
   }
 
   fun setMicEnabled(enabled: Boolean) {
@@ -377,5 +398,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       thinking = thinking,
       attachments = attachments,
     )
+  }
+
+  private companion object {
+    const val requestedHomeDestinationStateKey = "requestedHomeDestination"
+    const val chatDraftStateKey = "chatDraft"
+    const val pendingAssistantAutoSendStateKey = "pendingAssistantAutoSend"
+
+    fun decodeHomeDestination(value: String): HomeDestination? {
+      return enumValues<HomeDestination>().firstOrNull { it.name == value }
+    }
   }
 }

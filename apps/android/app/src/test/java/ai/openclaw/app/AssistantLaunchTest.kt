@@ -37,6 +37,35 @@ class AssistantLaunchTest {
   }
 
   @Test
+  fun trimsAndBoundsAppActionPrompt() {
+    val oversized = "x".repeat(maxAssistantPromptChars + 123)
+    val parsed =
+      parseAssistantLaunchIntent(
+        Intent(actionAskOpenClaw).putExtra(extraAssistantPrompt, "  $oversized  "),
+      )
+
+    requireNotNull(parsed)
+    assertEquals(maxAssistantPromptChars, parsed.prompt?.length)
+    assertTrue(parsed.autoSend)
+  }
+
+  @Test
+  fun consumesAssistantLaunchIntentAfterHandling() {
+    val assist = Intent(Intent.ACTION_ASSIST)
+    val appAction = Intent(actionAskOpenClaw).putExtra(extraAssistantPrompt, "summarize mail")
+
+    assertTrue(isRestoredAssistantLaunch(assist, assistantLaunchFingerprint(assist)))
+    assertTrue(isRestoredAssistantLaunch(appAction, assistantLaunchFingerprint(appAction)))
+  }
+
+  @Test
+  fun treatsFreshIdenticalPromptAsNewWhenNoRestoredFingerprintExists() {
+    val intent = Intent(actionAskOpenClaw).putExtra(extraAssistantPrompt, "summarize mail")
+
+    assertFalse(isRestoredAssistantLaunch(intent, restoredFingerprint = null))
+  }
+
+  @Test
   fun ignoresUnrelatedIntents() {
     assertNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_VIEW)))
   }
