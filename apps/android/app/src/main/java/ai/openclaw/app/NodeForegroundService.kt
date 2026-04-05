@@ -172,8 +172,8 @@ open class NodeForegroundService : Service() {
   }
 
   internal open fun canUseBackgroundLocation(): Boolean {
-    val runtime = (application as? NodeApp)?.peekRuntime() ?: return false
-    return runtime.locationMode.value == LocationMode.Always &&
+    val prefs = (application as? NodeApp)?.prefs ?: return false
+    return prefs.effectiveLocationMode() == LocationMode.Always &&
       ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
       PackageManager.PERMISSION_GRANTED
   }

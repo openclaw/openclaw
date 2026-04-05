@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.LocationMode
+import ai.openclaw.app.restoreLocationModeAfterCanceledAlwaysGrant
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

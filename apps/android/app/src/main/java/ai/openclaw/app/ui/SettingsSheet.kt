@@ -171,7 +171,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
 
   var pendingLocationSelection by rememberSaveable { mutableStateOf<LocationMode?>(null) }
-  var previousLocationModeBeforeAlwaysPrompt by rememberSaveable { mutableStateOf<LocationMode?>(null) }
   var pendingPreciseToggle by remember { mutableStateOf(false) }
   val backgroundLocationOptionLabel =
     remember(context) {
@@ -211,12 +210,12 @@ fun SettingsSheet(viewModel: MainViewModel) {
         LocationMode.Always -> {
           if (!granted) {
             pendingLocationSelection = null
-            previousLocationModeBeforeAlwaysPrompt = null
+            viewModel.clearPendingAlwaysLocationUpgrade()
             return@rememberLauncherForActivityResult
           }
           if (hasBackgroundLocationPermission(context)) {
             pendingLocationSelection = null
-            previousLocationModeBeforeAlwaysPrompt = null
+            viewModel.clearPendingAlwaysLocationUpgrade()
             setLocationModeAndRefreshService(
               context = context,
               viewModel = viewModel,
@@ -389,25 +388,11 @@ fun SettingsSheet(viewModel: MainViewModel) {
           val locationGranted = hasAnyLocationPermission(context)
           val backgroundGranted = hasBackgroundLocationPermission(context)
           when {
-            pendingLocationSelection == LocationMode.Always -> {
-              val restoredMode = restoreLocationModeAfterCanceledAlwaysGrant(
-                previousMode = previousLocationModeBeforeAlwaysPrompt,
-                locationGranted = locationGranted,
-              )
+            viewModel.hasPendingAlwaysLocationUpgrade() -> {
               pendingLocationSelection = null
-              previousLocationModeBeforeAlwaysPrompt = null
-              if (backgroundLocationAvailable && locationGranted && backgroundGranted) {
-                setLocationModeAndRefreshService(
-                  context = context,
-                  viewModel = viewModel,
-                  mode = LocationMode.Always,
-                )
-              } else if (restoredMode != null) {
-                setLocationModeAndRefreshService(
-                  context = context,
-                  viewModel = viewModel,
-                  mode = restoredMode,
-                )
+              val reconciledMode = viewModel.reconcilePendingAlwaysLocationUpgrade()
+              if (reconciledMode != null) {
+                NodeForegroundService.refresh(context)
               }
             }
             locationMode == LocationMode.Always &&
@@ -503,7 +488,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       return
     }
     if (!hasAnyLocationPermission(context)) {
-      previousLocationModeBeforeAlwaysPrompt = locationMode
+      viewModel.beginPendingAlwaysLocationUpgrade(locationMode)
       pendingLocationSelection = LocationMode.Always
       locationPermissionLauncher.launch(
         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
@@ -512,7 +497,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
     if (hasBackgroundLocationPermission(context)) {
       pendingLocationSelection = null
-      previousLocationModeBeforeAlwaysPrompt = null
+      viewModel.clearPendingAlwaysLocationUpgrade()
       setLocationModeAndRefreshService(
         context = context,
         viewModel = viewModel,
@@ -520,7 +505,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       )
       return
     }
-    previousLocationModeBeforeAlwaysPrompt = locationMode
+    viewModel.beginPendingAlwaysLocationUpgrade(locationMode)
     pendingLocationSelection = LocationMode.Always
     setLocationModeAndRefreshService(
       context = context,
@@ -1412,19 +1397,6 @@ internal fun resolveNotificationCandidatePackages(
     .map { it.trim() }
     .filter { it.isNotEmpty() && it != blockedPackage }
     .toSet()
-}
-
-internal fun restoreLocationModeAfterCanceledAlwaysGrant(
-  previousMode: LocationMode?,
-  locationGranted: Boolean,
-): LocationMode? {
-  return when (previousMode) {
-    null -> null
-    LocationMode.Off -> LocationMode.Off
-    LocationMode.WhileUsing,
-    LocationMode.Always,
-    -> if (locationGranted) LocationMode.WhileUsing else LocationMode.Off
-  }
 }
 
 private fun setLocationModeAndRefreshService(

@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.location.LocationManager
 import androidx.core.content.ContextCompat
 import ai.openclaw.app.LocationMode
+import ai.openclaw.app.NodeForegroundService
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.Json
@@ -109,6 +110,9 @@ class LocationHandler private constructor(
         message =
           "LOCATION_BACKGROUND_UNAVAILABLE: set Location to Always and grant Background location",
       )
+    }
+    if (!isForeground() && allowsBackgroundLocation()) {
+      NodeForegroundService.refresh(appContext)
     }
     if (!dataSource.hasFinePermission(appContext) && !dataSource.hasCoarsePermission(appContext)) {
       return GatewaySession.InvokeResult.error(

@@ -13,3 +13,16 @@ enum class LocationMode(val rawValue: String) {
     }
   }
 }
+
+fun restoreLocationModeAfterCanceledAlwaysGrant(
+  previousMode: LocationMode?,
+  locationGranted: Boolean,
+): LocationMode? {
+  return when (previousMode) {
+    null -> null
+    LocationMode.Off -> LocationMode.Off
+    LocationMode.WhileUsing,
+    LocationMode.Always,
+    -> if (locationGranted) LocationMode.WhileUsing else LocationMode.Off
+  }
+}

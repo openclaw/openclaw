@@ -4,7 +4,10 @@ package ai.openclaw.app
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.core.content.edit
+import androidx.core.content.ContextCompat
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +26,8 @@ class SecurePrefs(
     val defaultWakeWords: List<String> = listOf("openclaw", "claude")
     private const val displayNameKey = "node.displayName"
     private const val locationModeKey = "location.enabledMode"
+    private const val pendingAlwaysLocationUpgradeKey = "location.pendingAlwaysUpgrade"
+    private const val pendingAlwaysLocationUpgradePreviousModeKey = "location.pendingAlwaysUpgrade.previousMode"
     private const val voiceWakeModeKey = "voiceWake.mode"
     private const val plainPrefsName = "openclaw.node"
     private const val securePrefsName = "openclaw.node.secure"
@@ -188,6 +193,49 @@ class SecurePrefs(
   fun setLocationMode(mode: LocationMode) {
     plainPrefs.edit { putString(locationModeKey, mode.rawValue) }
     _locationMode.value = mode
+  }
+
+  fun beginPendingAlwaysLocationUpgrade(previousMode: LocationMode) {
+    plainPrefs.edit {
+      putBoolean(pendingAlwaysLocationUpgradeKey, true)
+      putString(pendingAlwaysLocationUpgradePreviousModeKey, previousMode.rawValue)
+    }
+  }
+
+  fun clearPendingAlwaysLocationUpgrade() {
+    plainPrefs.edit {
+      remove(pendingAlwaysLocationUpgradeKey)
+      remove(pendingAlwaysLocationUpgradePreviousModeKey)
+    }
+  }
+
+  fun hasPendingAlwaysLocationUpgrade(): Boolean {
+    return loadPendingAlwaysLocationUpgrade() != null
+  }
+
+  fun effectiveLocationMode(): LocationMode {
+    val pendingUpgrade = loadPendingAlwaysLocationUpgrade()
+    if (pendingUpgrade != null && hasAnyLocationPermission() && hasBackgroundLocationPermission()) {
+      return LocationMode.Always
+    }
+    return _locationMode.value
+  }
+
+  fun reconcilePendingAlwaysLocationUpgrade(): LocationMode? {
+    val pendingUpgrade = loadPendingAlwaysLocationUpgrade() ?: return null
+    val locationGranted = hasAnyLocationPermission()
+    val resolvedMode =
+      if (locationGranted && hasBackgroundLocationPermission()) {
+        LocationMode.Always
+      } else {
+        restoreLocationModeAfterCanceledAlwaysGrant(
+          previousMode = pendingUpgrade.previousMode,
+          locationGranted = locationGranted,
+        ) ?: _locationMode.value
+      }
+    clearPendingAlwaysLocationUpgrade()
+    setLocationMode(resolvedMode)
+    return resolvedMode
   }
 
   fun setLocationPreciseEnabled(value: Boolean) {
@@ -527,6 +575,30 @@ class SecurePrefs(
     return LocationMode.fromRawValue(raw)
   }
 
+  private fun loadPendingAlwaysLocationUpgrade(): PendingAlwaysLocationUpgrade? {
+    if (!plainPrefs.getBoolean(pendingAlwaysLocationUpgradeKey, false)) {
+      return null
+    }
+    return PendingAlwaysLocationUpgrade(
+      previousMode =
+        LocationMode.fromRawValue(
+          plainPrefs.getString(pendingAlwaysLocationUpgradePreviousModeKey, LocationMode.Off.rawValue),
+        ),
+    )
+  }
+
+  private fun hasAnyLocationPermission(): Boolean {
+    return ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) ==
+      PackageManager.PERMISSION_GRANTED ||
+      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+      PackageManager.PERMISSION_GRANTED
+  }
+
+  private fun hasBackgroundLocationPermission(): Boolean {
+    return ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+      PackageManager.PERMISSION_GRANTED
+  }
+
   private fun loadWakeWords(): List<String> {
     val raw = plainPrefs.getString("voiceWake.triggerWords", null)?.trim()
     if (raw.isNullOrEmpty()) return defaultWakeWords
@@ -547,3 +619,7 @@ class SecurePrefs(
     }
   }
 }
+
+private data class PendingAlwaysLocationUpgrade(
+  val previousMode: LocationMode,
+)

@@ -92,7 +92,7 @@ class NodeRuntime(
     location = location,
     json = json,
     isForeground = { _isForeground.value },
-    locationMode = { locationMode.value },
+    locationMode = { prefs.effectiveLocationMode() },
     locationPreciseEnabled = { locationPreciseEnabled.value },
   )
 

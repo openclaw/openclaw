@@ -124,6 +124,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
 
   init {
+    prefs.reconcilePendingAlwaysLocationUpgrade()
     if (prefs.onboardingCompleted.value) {
       ensureRuntime()
     }
@@ -166,6 +167,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setLocationMode(mode: LocationMode) {
     prefs.setLocationMode(mode)
+  }
+
+  fun beginPendingAlwaysLocationUpgrade(previousMode: LocationMode) {
+    prefs.beginPendingAlwaysLocationUpgrade(previousMode)
+  }
+
+  fun clearPendingAlwaysLocationUpgrade() {
+    prefs.clearPendingAlwaysLocationUpgrade()
+  }
+
+  fun hasPendingAlwaysLocationUpgrade(): Boolean {
+    return prefs.hasPendingAlwaysLocationUpgrade()
+  }
+
+  fun reconcilePendingAlwaysLocationUpgrade(): LocationMode? {
+    return prefs.reconcilePendingAlwaysLocationUpgrade()
   }
 
   fun setLocationPreciseEnabled(value: Boolean) {
