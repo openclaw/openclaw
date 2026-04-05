@@ -752,7 +752,7 @@ describe("resolveMatrixAuth", () => {
     vi.mocked(readModule.credentialsMatchConfig).mockReturnValue(false);
     saveMatrixCredentialsMock.mockReset();
     touchMatrixCredentialsMock.mockReset();
-    repairCurrentTokenStorageMetaDeviceIdMock.mockReset();
+    repairCurrentTokenStorageMetaDeviceIdMock.mockReset().mockReturnValue(true);
     ensureMatrixSdkLoggingConfiguredMock.mockReset();
     matrixDoRequestMock.mockReset();
     setMatrixAuthClientDepsForTest({
@@ -1265,6 +1265,36 @@ describe("resolveMatrixAuth", () => {
     expect(saveMatrixCredentialsMock).not.toHaveBeenCalled();
     expect(repairCurrentTokenStorageMetaDeviceIdMock).not.toHaveBeenCalled();
     expect(deviceId).toBe("DEVICE123");
+  });
+
+  it("surfaces storage metadata repair failures after saving repaired credentials", async () => {
+    matrixDoRequestMock.mockResolvedValue({
+      user_id: "@bot:example.org",
+      device_id: "DEVICE123",
+    });
+    repairCurrentTokenStorageMetaDeviceIdMock.mockReturnValue(false);
+
+    await expect(
+      backfillMatrixAuthDeviceIdAfterStartup({
+        auth: {
+          accountId: "default",
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok-123",
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).rejects.toThrow(
+      "Matrix deviceId backfill saved credentials but failed to repair current-token storage metadata",
+    );
+
+    expect(saveMatrixCredentialsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: "DEVICE123",
+      }),
+      expect.any(Object),
+      "default",
+    );
   });
 
   it("resolves file-backed accessToken SecretRefs during Matrix auth", async () => {

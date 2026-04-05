@@ -977,7 +977,7 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     params.env ?? process.env,
     params.auth.accountId,
   );
-  repairCurrentTokenStorageMetaDeviceId({
+  const repairedStorageMeta = repairCurrentTokenStorageMetaDeviceId({
     homeserver: params.auth.homeserver,
     userId: params.auth.userId,
     accessToken: params.auth.accessToken,
@@ -985,5 +985,10 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     deviceId,
     env: params.env,
   });
+  if (!repairedStorageMeta) {
+    throw new Error(
+      "Matrix deviceId backfill saved credentials but failed to repair current-token storage metadata",
+    );
+  }
   return deviceId;
 }

@@ -444,7 +444,7 @@ export function writeStorageMeta(params: {
   userId: string;
   accountId?: string | null;
   deviceId?: string | null;
-}): void {
+}): boolean {
   try {
     const payload = {
       homeserver: params.homeserver,
@@ -456,8 +456,9 @@ export function writeStorageMeta(params: {
     };
     fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
     fs.writeFileSync(params.storagePaths.metaPath, JSON.stringify(payload, null, 2), "utf-8");
+    return true;
   } catch {
-    // ignore meta write failures
+    return false;
   }
 }
 
@@ -469,7 +470,7 @@ export function repairCurrentTokenStorageMetaDeviceId(params: {
   deviceId: string;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
-}): void {
+}): boolean {
   const storagePaths = resolveMatrixStoragePaths({
     homeserver: params.homeserver,
     userId: params.userId,
@@ -478,7 +479,7 @@ export function repairCurrentTokenStorageMetaDeviceId(params: {
     env: params.env,
     stateDir: params.stateDir,
   });
-  writeStorageMeta({
+  return writeStorageMeta({
     storagePaths,
     homeserver: params.homeserver,
     userId: params.userId,
