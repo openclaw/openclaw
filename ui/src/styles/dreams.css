@@ -1,0 +1,490 @@
+/* ===========================================
+   Dreams Tab – Sleeping Lobster Animation
+   =========================================== */
+
+.dreams {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 64px);
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ---- Breathing lobster ---- */
+
+.dreams__lobster {
+  animation: dreams-breathe 4s ease-in-out infinite;
+  filter: drop-shadow(0 0 40px rgba(255, 77, 77, 0.25));
+  transition: filter 0.6s ease;
+}
+
+.dreams__lobster svg {
+  width: 160px;
+  height: 160px;
+}
+
+@keyframes dreams-breathe {
+  0%,
+  100% {
+    transform: scale(1) translateY(0);
+  }
+  50% {
+    transform: scale(1.04) translateY(-4px);
+  }
+}
+
+/* ---- Sleeping eyes overlay ---- */
+
+.dreams__eyes {
+  animation: dreams-blink 6s ease-in-out infinite;
+}
+
+@keyframes dreams-blink {
+  0%,
+  90%,
+  100% {
+    opacity: 1;
+  }
+  95% {
+    opacity: 0;
+  }
+}
+
+/* ---- Floating Z's ---- */
+
+.dreams__z {
+  position: absolute;
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--accent);
+  opacity: 0;
+  animation: dreams-float-z 4s ease-out infinite;
+}
+
+.dreams__z:nth-child(1) {
+  font-size: 14px;
+  right: calc(50% - 100px);
+  top: calc(50% - 80px);
+  animation-delay: 0s;
+}
+
+.dreams__z:nth-child(2) {
+  font-size: 20px;
+  right: calc(50% - 130px);
+  top: calc(50% - 120px);
+  animation-delay: 1.2s;
+}
+
+.dreams__z:nth-child(3) {
+  font-size: 28px;
+  right: calc(50% - 160px);
+  top: calc(50% - 170px);
+  animation-delay: 2.4s;
+}
+
+@keyframes dreams-float-z {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) rotate(-5deg);
+  }
+  15% {
+    opacity: 0.7;
+  }
+  80% {
+    opacity: 0.3;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-40px) rotate(10deg);
+  }
+}
+
+/* ---- Stars ---- */
+
+.dreams__star {
+  position: absolute;
+  border-radius: 50%;
+  animation: dreams-twinkle 3s ease-in-out infinite alternate;
+}
+
+@keyframes dreams-twinkle {
+  0% {
+    opacity: 0.15;
+    transform: scale(0.8);
+  }
+  100% {
+    opacity: 0.7;
+    transform: scale(1.2);
+  }
+}
+
+/* ---- Dream thought bubble ---- */
+
+.dreams__bubble {
+  position: absolute;
+  top: calc(50% - 200px);
+  left: calc(50% - 200px);
+  padding: 16px 20px;
+  background: var(--accent-subtle);
+  border: 1px solid rgba(255, 92, 92, 0.12);
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  animation: dreams-bubble-float 6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.dreams__bubble-label {
+  font-size: 11px;
+  color: var(--accent-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.dreams__bubble-text {
+  font-size: 16px;
+  color: var(--accent);
+  font-style: italic;
+  opacity: 0.8;
+  min-width: 180px;
+  text-align: center;
+}
+
+@keyframes dreams-bubble-float {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.8;
+  }
+  50% {
+    transform: translateY(-8px);
+    opacity: 1;
+  }
+}
+
+/* Bubble trail dots */
+.dreams__bubble-dot {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--accent-subtle);
+  border: 1px solid rgba(255, 92, 92, 0.1);
+  animation: dreams-bubble-float 6s ease-in-out infinite;
+}
+
+/* ---- Moon ---- */
+
+.dreams__moon {
+  position: absolute;
+  top: 40px;
+  right: 80px;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fef3c7, #fbbf24);
+  box-shadow:
+    0 0 40px rgba(251, 191, 36, 0.2),
+    0 0 80px rgba(251, 191, 36, 0.08);
+  opacity: 0.7;
+  animation: dreams-moon-glow 8s ease-in-out infinite alternate;
+}
+
+@keyframes dreams-moon-glow {
+  0% {
+    box-shadow:
+      0 0 40px rgba(251, 191, 36, 0.2),
+      0 0 80px rgba(251, 191, 36, 0.08);
+    opacity: 0.6;
+  }
+  100% {
+    box-shadow:
+      0 0 50px rgba(251, 191, 36, 0.3),
+      0 0 100px rgba(251, 191, 36, 0.12);
+    opacity: 0.8;
+  }
+}
+
+/* ---- Ambient glow under lobster ---- */
+
+.dreams__glow {
+  position: absolute;
+  top: calc(50% + 40px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 240px;
+  height: 100px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(255, 77, 77, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+  animation: dreams-glow-pulse 4s ease-in-out infinite;
+}
+
+@keyframes dreams-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ---- Stats bar ---- */
+
+.dreams__stats {
+  position: absolute;
+  bottom: 132px;
+  display: flex;
+  align-items: center;
+  gap: 48px;
+  z-index: 1;
+}
+
+.dreams__stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.dreams__stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.dreams__stat-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.dreams__stat-divider {
+  width: 1px;
+  height: 32px;
+  background: var(--border);
+}
+
+.dreams__controls {
+  position: absolute;
+  bottom: 24px;
+  width: min(820px, calc(100% - 48px));
+  padding: 14px;
+  border: 1px solid color-mix(in oklab, var(--accent) 18%, var(--border));
+  border-radius: 18px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--panel) 92%, transparent),
+      color-mix(in oklab, var(--panel) 82%, transparent)
+    );
+  backdrop-filter: blur(10px);
+  box-shadow: 0 18px 48px rgba(3, 7, 18, 0.24);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 1;
+}
+
+.dreams__controls-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dreams__controls-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.dreams__controls-subtitle {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.dreams__controls-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dreams__phase-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dreams__phase {
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--panel) 90%, transparent);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 12px;
+  transition:
+    border-color 140ms ease,
+    transform 140ms ease,
+    background 140ms ease;
+}
+
+.dreams__phase:hover {
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--border));
+  transform: translateY(-1px);
+}
+
+.dreams__phase--active {
+  border-color: color-mix(in oklab, var(--accent) 62%, var(--border));
+  background: color-mix(in oklab, var(--accent-subtle) 70%, var(--panel));
+}
+
+.dreams__phase-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.dreams__phase-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.dreams__phase-detail {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dreams__phase-meta {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dreams__phase-meta span {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in oklab, var(--bg) 76%, transparent);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dreams__controls-note,
+.dreams__controls-error {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dreams__controls-error {
+  color: var(--danger);
+}
+
+@media (max-width: 880px) {
+  .dreams {
+    min-height: calc(100vh - 96px);
+  }
+
+  .dreams__stats {
+    position: static;
+    margin-top: 36px;
+    gap: 22px;
+  }
+
+  .dreams__controls {
+    position: static;
+    margin: 12px 16px 18px;
+    width: auto;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: color-mix(in oklab, var(--panel) 84%, transparent);
+    backdrop-filter: blur(8px);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: auto;
+  }
+
+  .dreams__phase-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- Status line ---- */
+
+.dreams__status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 32px;
+}
+
+.dreams__status-label {
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.dreams__status-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ok-muted);
+}
+
+.dreams__status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: dreams-dot-pulse 2s ease-in-out infinite;
+}
+
+@keyframes dreams-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+  }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 0 8px 2px rgba(34, 197, 94, 0.2);
+  }
+}
+
+/* ---- Idle / inactive state ---- */
+
+.dreams--idle .dreams__lobster {
+  filter: drop-shadow(0 0 20px rgba(255, 77, 77, 0.1));
+}
+
+.dreams--idle .dreams__status-dot {
+  background: var(--muted);
+  animation: none;
+}
+
+.dreams--idle .dreams__status-detail {
+  color: var(--muted);
+}
