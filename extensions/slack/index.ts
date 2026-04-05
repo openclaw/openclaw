@@ -18,7 +18,7 @@ export default defineBundledChannelEntry({
   description: "Slack channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "slackPlugin",
   },
   runtime: {
