@@ -24,7 +24,7 @@ jobs:
       matrix:
         include:
           - language: javascript-typescript
-            runs_on: blacksmith-16vcpu-ubuntu-2404
+            runs_on: ubuntu-latest
             needs_node: true
             needs_python: false
             needs_java: false
@@ -33,7 +33,7 @@ jobs:
             needs_autobuild: false
             config_file: ./.github/codeql/codeql-javascript-typescript.yml
           - language: actions
-            runs_on: blacksmith-16vcpu-ubuntu-2404
+            runs_on: ubuntu-latest
             needs_node: false
             needs_python: false
             needs_java: false
@@ -42,7 +42,7 @@ jobs:
             needs_autobuild: false
             config_file: ""
           - language: python
-            runs_on: blacksmith-16vcpu-ubuntu-2404
+            runs_on: ubuntu-latest
             needs_node: false
             needs_python: true
             needs_java: false
@@ -51,7 +51,7 @@ jobs:
             needs_autobuild: false
             config_file: ""
           - language: java-kotlin
-            runs_on: blacksmith-16vcpu-ubuntu-2404
+            runs_on: ubuntu-latest
             needs_node: false
             needs_python: false
             needs_java: true

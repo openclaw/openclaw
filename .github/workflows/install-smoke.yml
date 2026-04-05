@@ -17,7 +17,7 @@ env:
 jobs:
   docs-scope:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.check.outputs.docs_only }}
     steps:
@@ -40,7 +40,7 @@ jobs:
   install-smoke:
     needs: [docs-scope]
     if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.docs-scope.outputs.docs_only != 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout CLI
         uses: actions/checkout@v6
@@ -51,7 +51,7 @@ jobs:
       # Blacksmith can fall back to the local docker driver, which rejects gha
       # cache export/import. Keep smoke builds driver-agnostic.
       - name: Build root Dockerfile smoke image
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
@@ -68,7 +68,7 @@ jobs:
       # runtime deps declared by the plugin and that matrix discovery stays
       # healthy in the final runtime image.
       - name: Build extension Dockerfile smoke image
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
@@ -125,7 +125,7 @@ jobs:
           '
 
       - name: Build installer smoke image
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v5
         with:
           context: ./scripts/docker
           file: ./scripts/docker/install-sh-smoke/Dockerfile
@@ -136,7 +136,7 @@ jobs:
 
       - name: Build installer non-root image
         if: github.event_name != 'pull_request'
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v5
         with:
           context: ./scripts/docker
           file: ./scripts/docker/install-sh-nonroot/Dockerfile
