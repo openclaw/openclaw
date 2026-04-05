@@ -104,9 +104,9 @@ function isRateLimitLikeError(err: unknown): boolean {
   const message = typeof obj.message === "string" ? obj.message.toLowerCase() : "";
   return (
     code === "ERATELIMIT" ||
-    code === "TOO_MANY_REQUESTS" ||
     code === "RESOURCE_EXHAUSTED" ||
     code === "THROTTLING_EXCEPTION" ||
+    code === "TOO_MANY_REQUESTS" ||
     message.includes("rate limit") ||
     message.includes("429")
   );
