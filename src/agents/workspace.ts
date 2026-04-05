@@ -138,7 +138,9 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_HEARTBEAT_FILENAME
   | typeof DEFAULT_BOOTSTRAP_FILENAME
   | typeof DEFAULT_MEMORY_FILENAME
-  | typeof DEFAULT_MEMORY_ALT_FILENAME;
+  | typeof DEFAULT_MEMORY_ALT_FILENAME
+  // Custom .md files loaded via the bootstrap-extra-files hook with explicit paths
+  | (string & {});
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -584,31 +586,38 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   }
   const resolvedDir = resolveUserPath(dir);
 
-  // Resolve glob patterns into concrete file paths
-  const resolvedPaths = new Set<string>();
+  // Resolve glob patterns into concrete file paths, tracking which came from
+  // explicit (non-glob) patterns so we can relax basename validation for those.
+  const resolvedPaths = new Map<string, { explicit: boolean }>();
   for (const pattern of extraPatterns) {
     if (pattern.includes("*") || pattern.includes("?") || pattern.includes("{")) {
       try {
         const matches = fs.glob(pattern, { cwd: resolvedDir });
         for await (const m of matches) {
-          resolvedPaths.add(m);
+          if (!resolvedPaths.has(m)) {
+            resolvedPaths.set(m, { explicit: false });
+          }
         }
       } catch {
         // glob not available or pattern error — fall back to literal
-        resolvedPaths.add(pattern);
+        resolvedPaths.set(pattern, { explicit: true });
       }
     } else {
-      resolvedPaths.add(pattern);
+      resolvedPaths.set(pattern, { explicit: true });
     }
   }
 
   const files: WorkspaceBootstrapFile[] = [];
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
-  for (const relPath of resolvedPaths) {
+  for (const [relPath, meta] of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
-    // Only load files whose basename is a recognized bootstrap filename
+    // Glob-expanded paths must have a recognized bootstrap basename.
+    // Explicitly listed paths accept any .md file — this allows custom workspace
+    // files like tone_skills.md to be loaded via the bootstrap-extra-files hook.
     const baseName = path.basename(relPath);
-    if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
+    const isAllowed =
+      VALID_BOOTSTRAP_NAMES.has(baseName) || (meta.explicit && baseName.endsWith(".md"));
+    if (!isAllowed) {
       diagnostics.push({
         path: filePath,
         reason: "invalid-bootstrap-filename",
