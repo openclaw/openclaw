@@ -10,6 +10,8 @@ import {
   shortenHomeInString,
   shortenHomePath,
   sleep,
+  sliceUtf16Safe,
+  truncateUtf16Safe,
 } from "./utils.js";
 
 async function withTempDir<T>(
@@ -145,5 +147,67 @@ describe("resolveUserPath", () => {
   it("returns empty string for undefined/null input", () => {
     expect(resolveUserPath(undefined as unknown as string)).toBe("");
     expect(resolveUserPath(null as unknown as string)).toBe("");
+  });
+});
+
+describe("sliceUtf16Safe", () => {
+  it("slices ASCII strings normally", () => {
+    expect(sliceUtf16Safe("hello", 1, 4)).toBe("ell");
+  });
+
+  it("does not split a surrogate pair when start lands on low surrogate", () => {
+    // '😀' is U+1F600, encoded as two UTF-16 code units: \uD83D\uDE00
+    const s = "a😀b";
+    // s.length === 4: 'a'(0), \uD83D(1), \uDE00(2), 'b'(3)
+    // slicing at start=2 would land on the low surrogate; should skip to 3
+    expect(sliceUtf16Safe(s, 2)).toBe("b");
+  });
+
+  it("does not split a surrogate pair when end lands between pair", () => {
+    const s = "a😀b";
+    // end=2 means the high surrogate at index 1 would be orphaned; should back up to 1
+    expect(sliceUtf16Safe(s, 0, 2)).toBe("a");
+  });
+
+  it("handles negative indices", () => {
+    expect(sliceUtf16Safe("hello", -3)).toBe("llo");
+    expect(sliceUtf16Safe("hello", -3, -1)).toBe("ll");
+  });
+
+  it("returns the full string when no bounds given", () => {
+    expect(sliceUtf16Safe("abc", 0)).toBe("abc");
+  });
+
+  it("returns empty for out-of-range start", () => {
+    expect(sliceUtf16Safe("abc", 10)).toBe("");
+  });
+
+  it("swaps reversed from/to", () => {
+    expect(sliceUtf16Safe("hello", 3, 1)).toBe("el");
+  });
+});
+
+describe("truncateUtf16Safe", () => {
+  it("returns the original string when within limit", () => {
+    expect(truncateUtf16Safe("hello", 10)).toBe("hello");
+  });
+
+  it("truncates ASCII to the limit", () => {
+    expect(truncateUtf16Safe("hello", 3)).toBe("hel");
+  });
+
+  it("does not orphan a surrogate pair at the truncation boundary", () => {
+    const s = "a😀b"; // length 4
+    // limit=2 would cut between the surrogate pair; should back up
+    expect(truncateUtf16Safe(s, 2)).toBe("a");
+  });
+
+  it("handles zero and negative limits", () => {
+    expect(truncateUtf16Safe("hello", 0)).toBe("");
+    expect(truncateUtf16Safe("hello", -1)).toBe("");
+  });
+
+  it("handles empty string", () => {
+    expect(truncateUtf16Safe("", 5)).toBe("");
   });
 });
