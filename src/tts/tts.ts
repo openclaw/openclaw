@@ -30,4 +30,4 @@ export {
   type TtsResult,
   type TtsSynthesisResult,
   type TtsTelephonyResult,
-} from "../../extensions/speech-core/runtime-api.js";
+} from "../plugin-sdk/tts-runtime.js";

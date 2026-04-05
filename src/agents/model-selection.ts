@@ -1,4 +1,3 @@
-import { CLAUDE_CLI_BACKEND_ID } from "../../extensions/anthropic/cli-backend-api.js";
 import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -28,8 +27,6 @@ import {
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
-
-const BUILTIN_CLI_PROVIDER_IDS = new Set([normalizeProviderId(CLAUDE_CLI_BACKEND_ID)]);
 
 function getLog(): ReturnType<typeof createSubsystemLogger> {
   log ??= createSubsystemLogger("model-selection");
@@ -92,9 +89,6 @@ export {
 
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   const normalized = normalizeProviderId(provider);
-  if (BUILTIN_CLI_PROVIDER_IDS.has(normalized)) {
-    return true;
-  }
   const cliBackends = resolveRuntimeCliBackends();
   if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
     return true;
