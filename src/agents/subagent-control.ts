@@ -30,6 +30,7 @@ import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "./run-wait.js";
+import type { SubagentIntentLane } from "./subagent-announce.js";
 import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { countPendingDescendantRunsFromRuns } from "./subagent-registry-queries.js";
@@ -86,6 +87,7 @@ export type SubagentListItem = {
   sessionKey: string;
   label: string;
   task: string;
+  lane?: SubagentIntentLane;
   status: string;
   pendingDescendants: number;
   runtime: string;
@@ -346,6 +348,7 @@ export function buildSubagentList(params: {
       sessionKey: entry.childSessionKey,
       label,
       task,
+      ...(entry.lane ? { lane: entry.lane } : {}),
       status,
       pendingDescendants,
       runtime,

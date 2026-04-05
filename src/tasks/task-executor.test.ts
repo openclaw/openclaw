@@ -363,6 +363,7 @@ describe("task-executor", () => {
             runtime: "subagent",
             task: "Inspect PR 1",
             label: "Inspect PR 1",
+            lane: "verification",
             agentId: "main",
             mode: "run",
           },
@@ -390,6 +391,7 @@ describe("task-executor", () => {
       expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
         expect.objectContaining({
           task: "Inspect PR 1",
+          lane: "verification",
           parentFlowId: flow.flowId,
         }),
         expect.objectContaining({

@@ -12,6 +12,7 @@ import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
+const SESSIONS_SPAWN_INTENT_LANES = ["research", "planning", "execution", "verification"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 // Keep the schema local to avoid a circular import through acp-spawn/openclaw-tools.
 const SESSIONS_SPAWN_ACP_STREAM_TARGETS = ["parent"] as const;
@@ -67,6 +68,7 @@ function resolveRequesterContext(opts?: {
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
   label: Type.Optional(Type.String()),
+  lane: Type.Optional(optionalStringEnum(SESSIONS_SPAWN_INTENT_LANES)),
   taskFlow: Type.Optional(
     Type.Object({
       controllerId: Type.Optional(Type.String()),
@@ -151,6 +153,13 @@ export function createSessionsSpawnTool(
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
+      const lane =
+        params.lane === "research" ||
+        params.lane === "planning" ||
+        params.lane === "execution" ||
+        params.lane === "verification"
+          ? params.lane
+          : undefined;
       const requestedAgentId = readStringParam(params, "agentId");
       const resumeSessionId = readStringParam(params, "resumeSessionId");
       const modelOverride = readStringParam(params, "model");
@@ -229,6 +238,7 @@ export function createSessionsSpawnTool(
                   runtime,
                   task,
                   ...(label ? { label } : {}),
+                  ...(lane ? { lane } : {}),
                   ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
                   ...(modelOverride ? { model: modelOverride } : {}),
                   ...(thinkingOverrideRaw ? { thinking: thinkingOverrideRaw } : {}),
@@ -371,6 +381,7 @@ export function createSessionsSpawnTool(
         {
           task,
           label: label || undefined,
+          lane,
           agentId: requestedAgentId,
           model: modelOverride,
           thinking: thinkingOverrideRaw,
@@ -421,6 +432,7 @@ export function createSessionsSpawnTool(
                 runtime,
                 task,
                 ...(label ? { label } : {}),
+                ...(lane ? { lane } : {}),
                 ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
                 ...(modelOverride ? { model: modelOverride } : {}),
                 ...(thinkingOverrideRaw ? { thinking: thinkingOverrideRaw } : {}),
@@ -463,6 +475,7 @@ export function createSessionsSpawnTool(
               runtime,
               task,
               ...(label ? { label } : {}),
+              ...(lane ? { lane } : {}),
               ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
               ...(modelOverride ? { model: modelOverride } : {}),
               ...(thinkingOverrideRaw ? { thinking: thinkingOverrideRaw } : {}),

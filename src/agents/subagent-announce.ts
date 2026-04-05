@@ -60,12 +60,54 @@ function loadSubagentRegistryRuntime() {
   return subagentRegistryRuntimePromise;
 }
 
+export type SubagentIntentLane = "research" | "planning" | "execution" | "verification";
+
+function buildSubagentLaneGuidance(lane?: SubagentIntentLane): string[] {
+  switch (lane) {
+    case "research":
+      return [
+        "## Intent Lane",
+        "- Lane: research",
+        "- Prioritize evidence gathering, comparison, and uncertainty tracking before conclusions.",
+        "- Surface what you know, what you do not know yet, and the strongest next checks.",
+        "",
+      ];
+    case "planning":
+      return [
+        "## Intent Lane",
+        "- Lane: planning",
+        "- Prioritize assumptions, sequencing, tradeoffs, and clear execution plans.",
+        "- Avoid premature implementation unless your assigned task explicitly requires it.",
+        "",
+      ];
+    case "execution":
+      return [
+        "## Intent Lane",
+        "- Lane: execution",
+        "- Prioritize concrete implementation with tight scope and direct verification.",
+        "- Prefer shipping the requested change over broad refactors or speculative cleanup.",
+        "",
+      ];
+    case "verification":
+      return [
+        "## Intent Lane",
+        "- Lane: verification",
+        "- Prioritize testing, auditing, review, and gap-finding.",
+        "- Default to proving or disproving correctness before proposing broader changes.",
+        "",
+      ];
+    default:
+      return [];
+  }
+}
+
 export function buildSubagentSystemPrompt(params: {
   requesterSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   childSessionKey: string;
   label?: string;
   task?: string;
+  lane?: SubagentIntentLane;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
   /** Depth of the child being spawned (1 = sub-agent, 2 = sub-sub-agent). */
@@ -153,10 +195,13 @@ export function buildSubagentSystemPrompt(params: {
     );
   }
 
+  lines.push(...buildSubagentLaneGuidance(params.lane));
+
   lines.push(
     "## Session Context",
     ...[
       params.label ? `- Label: ${params.label}` : undefined,
+      params.lane ? `- Intent lane: ${params.lane}.` : undefined,
       params.requesterSessionKey
         ? `- Requester session: ${params.requesterSessionKey}.`
         : undefined,

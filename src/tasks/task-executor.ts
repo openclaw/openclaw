@@ -283,6 +283,7 @@ type ManagedChildTaskRetryLaunch = {
   runtime: Extract<TaskRuntime, "acp" | "subagent">;
   task: string;
   label?: string;
+  lane?: "research" | "planning" | "execution" | "verification";
   agentId?: string;
   model?: string;
   thinking?: string;
@@ -333,6 +334,14 @@ function readManagedChildTaskRetryLaunch(params: {
     readTrimmedString(launch?.label) ??
     readTrimmedString(state?.label) ??
     readTrimmedString(params.latestTask?.label);
+  const laneRaw = readTrimmedString(launch?.lane);
+  const lane =
+    laneRaw === "research" ||
+    laneRaw === "planning" ||
+    laneRaw === "execution" ||
+    laneRaw === "verification"
+      ? laneRaw
+      : undefined;
   const agentId =
     readTrimmedString(launch?.agentId) ?? readTrimmedString(params.latestTask?.agentId);
   const model = readTrimmedString(launch?.model);
@@ -345,6 +354,7 @@ function readManagedChildTaskRetryLaunch(params: {
     runtime,
     task,
     ...(label ? { label } : {}),
+    ...(lane ? { lane } : {}),
     ...(agentId ? { agentId } : {}),
     ...(model ? { model } : {}),
     ...(thinking ? { thinking } : {}),
@@ -397,6 +407,7 @@ function buildManagedChildTaskRetryState(params: {
       runtime: params.launch.runtime,
       task: params.launch.task,
       ...(params.launch.label ? { label: params.launch.label } : {}),
+      ...(params.launch.lane ? { lane: params.launch.lane } : {}),
       ...(params.launch.agentId ? { agentId: params.launch.agentId } : {}),
       ...(params.launch.model ? { model: params.launch.model } : {}),
       ...(params.launch.thinking ? { thinking: params.launch.thinking } : {}),
@@ -544,6 +555,7 @@ async function retryManagedChildTaskFlowUnchecked(params: {
       {
         task: launch.task,
         ...(launch.label ? { label: launch.label } : {}),
+        ...(launch.lane ? { lane: launch.lane } : {}),
         ...(launch.agentId ? { agentId: launch.agentId } : {}),
         ...(launch.model ? { model: launch.model } : {}),
         ...(launch.thinking ? { thinking: launch.thinking } : {}),

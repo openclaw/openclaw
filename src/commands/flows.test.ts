@@ -181,8 +181,9 @@ describe("flows commands", () => {
       expect(output).toContain("currentStep: spawn_child");
       expect(output).toContain("owner: agent:main:main");
       expect(output).toContain("state: Waiting on child task output");
+      expect(output).toContain("nextAction: Needs user action before retrying.");
       expect(output).toContain("retryEligible: no");
-      expect(output).toContain("retryReason: Flow has no stored child-task launch details.");
+      expect(output).toContain("retryReason: Flow already has an active child task.");
       expect(output).toContain("Linked tasks:");
       expect(output).toContain("run-child-2");
       expect(output).toContain("Collect logs");

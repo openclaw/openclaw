@@ -842,6 +842,19 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("instead of full-file `cat`");
   });
 
+  it("adds lane-specific framing when an intent lane is provided", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "inspect the failing integration",
+      lane: "verification",
+    });
+
+    expect(prompt).toContain("## Intent Lane");
+    expect(prompt).toContain("Lane: verification");
+    expect(prompt).toContain("Prioritize testing, auditing, review, and gap-finding.");
+    expect(prompt).toContain("Intent lane: verification.");
+  });
+
   it("omits ACP spawning guidance when ACP is disabled", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",

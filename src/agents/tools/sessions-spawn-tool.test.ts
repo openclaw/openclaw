@@ -174,6 +174,7 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
         task: "review repo",
+        lane: "research",
         parentFlowId: "flow-1",
       }),
       expect.any(Object),
@@ -187,6 +188,7 @@ describe("sessions_spawn tool", () => {
             kind: "sessions_spawn_child",
             runtime: "subagent",
             task: "review repo",
+            lane: "research",
           }),
         }),
       }),

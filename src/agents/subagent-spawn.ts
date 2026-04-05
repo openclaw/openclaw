@@ -12,6 +12,7 @@ import {
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
+import type { SubagentIntentLane } from "./subagent-announce.js";
 import {
   decodeStrictBase64,
   materializeSubagentAttachments,
@@ -72,6 +73,7 @@ let subagentSpawnDeps: SubagentSpawnDeps = defaultSubagentSpawnDeps;
 export type SpawnSubagentParams = {
   task: string;
   label?: string;
+  lane?: SubagentIntentLane;
   agentId?: string;
   model?: string;
   thinking?: string;
@@ -633,6 +635,7 @@ export async function spawnSubagentDirect(
     childSessionKey,
     label: label || undefined,
     task,
+    lane: params.lane,
     acpEnabled: cfg.acp?.enabled !== false && !childRuntime.sandboxed,
     childDepth,
     maxSpawnDepth,
@@ -824,6 +827,7 @@ export async function spawnSubagentDirect(
       task,
       cleanup,
       label: label || undefined,
+      lane: params.lane,
       model: resolvedModel,
       workspaceDir: spawnedMetadata.workspaceDir,
       runTimeoutSeconds,

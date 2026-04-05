@@ -9,7 +9,7 @@ import { type DeliveryContext, normalizeDeliveryContext } from "../utils/deliver
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import * as subagentAnnounceModule from "./subagent-announce.js";
-import type { SubagentRunOutcome } from "./subagent-announce.js";
+import type { SubagentIntentLane, SubagentRunOutcome } from "./subagent-announce.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -612,6 +612,7 @@ export function registerSubagentRun(params: {
   task: string;
   cleanup: "delete" | "keep";
   label?: string;
+  lane?: SubagentIntentLane;
   model?: string;
   workspaceDir?: string;
   runTimeoutSeconds?: number;

@@ -5,7 +5,7 @@ import { createRunningTaskRun } from "../tasks/task-executor.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
-import type { SubagentRunOutcome } from "./subagent-announce.js";
+import type { SubagentIntentLane, SubagentRunOutcome } from "./subagent-announce.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -265,6 +265,7 @@ export function createSubagentRunManager(params: {
     task: string;
     cleanup: "delete" | "keep";
     label?: string;
+    lane?: SubagentIntentLane;
     model?: string;
     workspaceDir?: string;
     runTimeoutSeconds?: number;
@@ -301,6 +302,7 @@ export function createSubagentRunManager(params: {
       expectsCompletionMessage: registerParams.expectsCompletionMessage,
       spawnMode,
       label: registerParams.label,
+      lane: registerParams.lane,
       model: registerParams.model,
       workspaceDir: registerParams.workspaceDir,
       runTimeoutSeconds,
