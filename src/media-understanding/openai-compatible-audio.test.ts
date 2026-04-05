@@ -28,6 +28,63 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     expect(headers.get("user-agent")).toMatch(/^openclaw\//);
   });
 
+  it("remaps .aac extension to .m4a in the uploaded filename", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+
+    await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "voice.aac",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+      provider: "openai",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-4o-mini-transcribe",
+    });
+
+    const body = getRequest().init?.body as FormData;
+    const file = body.get("file") as File;
+    expect(file.name).toBe("voice.m4a");
+  });
+
+  it("remaps .AAC extension case-insensitively", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+
+    await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "voice.AAC",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+      provider: "openai",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-4o-mini-transcribe",
+    });
+
+    const body = getRequest().init?.body as FormData;
+    const file = body.get("file") as File;
+    expect(file.name).toBe("voice.m4a");
+  });
+
+  it("leaves non-.aac extensions unchanged", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+
+    await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "note.mp3",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+      provider: "openai",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-4o-mini-transcribe",
+    });
+
+    const body = getRequest().init?.body as FormData;
+    const file = body.get("file") as File;
+    expect(file.name).toBe("note.mp3");
+  });
+
   it("does not add hidden attribution headers on custom OpenAI-compatible hosts", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
 

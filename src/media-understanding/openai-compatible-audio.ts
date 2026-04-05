@@ -44,7 +44,7 @@ export async function transcribeOpenAiCompatibleAudio(
   // OpenAI-compatible Whisper APIs validate file extension, not content.
   // .aac is valid AAC audio but not in the accepted list; remap to .m4a
   // which is the same codec in an MPEG-4 container that APIs accept.
-  const fileName = rawFileName.endsWith(".aac") ? rawFileName.slice(0, -4) + ".m4a" : rawFileName;
+  const fileName = rawFileName.replace(/\.aac$/i, ".m4a");
   const bytes = new Uint8Array(params.buffer);
   const blob = new Blob([bytes], {
     type: params.mime ?? "application/octet-stream",
