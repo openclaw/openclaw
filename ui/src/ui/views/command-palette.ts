@@ -26,55 +26,55 @@ const PALETTE_ITEMS: PaletteItem[] = [
   ...SLASH_PALETTE_ITEMS,
   {
     id: "nav-overview",
-    label: "Overview",
+    label: "commandPalette.navOverview",
     icon: "barChart",
     category: "navigation",
     action: "nav:overview",
   },
   {
     id: "nav-sessions",
-    label: "Sessions",
+    label: "commandPalette.navSessions",
     icon: "fileText",
     category: "navigation",
     action: "nav:sessions",
   },
   {
     id: "nav-cron",
-    label: "Scheduled",
+    label: "commandPalette.navScheduled",
     icon: "scrollText",
     category: "navigation",
     action: "nav:cron",
   },
-  { id: "nav-skills", label: "Skills", icon: "zap", category: "navigation", action: "nav:skills" },
+  { id: "nav-skills", label: "commandPalette.navSkills", icon: "zap", category: "navigation", action: "nav:skills" },
   {
     id: "nav-config",
-    label: "Settings",
+    label: "commandPalette.navSettings",
     icon: "settings",
     category: "navigation",
     action: "nav:config",
   },
   {
     id: "nav-agents",
-    label: "Agents",
+    label: "commandPalette.navAgents",
     icon: "folder",
     category: "navigation",
     action: "nav:agents",
   },
   {
     id: "skill-shell",
-    label: "Shell Command",
+    label: "commandPalette.shellCommand",
     icon: "monitor",
     category: "skills",
     action: "/skill shell",
-    description: "Run shell",
+    description: "commandPalette.runShell",
   },
   {
     id: "skill-debug",
-    label: "Debug Mode",
+    label: "commandPalette.debugMode",
     icon: "bug",
     category: "skills",
     action: "/verbose full",
-    description: "Toggle debug",
+    description: "commandPalette.toggleDebug",
   },
 ];
 
@@ -176,9 +176,9 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
-  search: "Search",
-  navigation: "Navigation",
-  skills: "Skills",
+  search: "commandPalette.categorySearch",
+  navigation: "commandPalette.categoryNavigation",
+  skills: "commandPalette.categorySkills",
 };
 
 function focusInput(el: Element | undefined) {
@@ -230,7 +230,7 @@ export function renderCommandPalette(props: CommandPaletteProps) {
             : grouped.map(
                 ([category, groupedItems]) => html`
                   <div class="cmd-palette__group-label">
-                    ${CATEGORY_LABELS[category] ?? category}
+                    ${t(CATEGORY_LABELS[category] ?? category)}
                   </div>
                   ${groupedItems.map((item) => {
                     const globalIndex = items.indexOf(item);
@@ -245,10 +245,10 @@ export function renderCommandPalette(props: CommandPaletteProps) {
                         @mouseenter=${() => props.onActiveIndexChange(globalIndex)}
                       >
                         <span class="nav-item__icon">${icons[item.icon]}</span>
-                        <span>${item.label}</span>
+                        <span>${t(item.label)}</span>
                         ${item.description
                           ? html`<span class="cmd-palette__item-desc muted"
-                              >${item.description}</span
+                              >${t(item.description)}</span
                             >`
                           : nothing}
                       </div>
@@ -258,9 +258,9 @@ export function renderCommandPalette(props: CommandPaletteProps) {
               )}
         </div>
         <div class="cmd-palette__footer">
-          <span><kbd>↑↓</kbd> navigate</span>
-          <span><kbd>↵</kbd> select</span>
-          <span><kbd>esc</kbd> close</span>
+          <span><kbd>↑↓</kbd> ${t("commandPalette.footerNavigate")}</span>
+          <span><kbd>↵</kbd> ${t("commandPalette.footerSelect")}</span>
+          <span><kbd>esc</kbd> ${t("commandPalette.footerClose")}</span>
         </div>
       </div>
     </div>
