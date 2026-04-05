@@ -1,91 +1,72 @@
 # cron-model-fallback
 
-> Cron job model fallback chain for OpenClaw. Run your scheduled tasks even when your primary model is offline.
+> Model fallback chain for OpenClaw cron jobs. Configure your priority list — the script tries each model until one works.
+
+**Author:** [Arthur Arsyonov](https://looi.ru) · **License:** MIT
 
 ## The Problem
 
-OpenClaw cron jobs accept a single model in `payload.model`. If that model fails (e.g., your local Ollama server is offline), the job fails silently — no retry, no fallback, just `lastRunStatus: "error"`.
-
-This is especially painful when you want to use cheap local models (Ollama) as primary, with cloud models as backup.
+OpenClaw cron jobs use a single model. When that model's provider is down, the job fails silently. No retry, no fallback.
 
 ## The Solution
 
-`fallback.py` wraps your cron task and tries models in priority order:
+A Python script (stdlib only, zero dependencies) that wraps `openclaw agent` with a configurable fallback chain:
 
 ```
-Ollama (free, local) → Gemini Flash (free, cloud) → Groq (free, cloud) → ...
+anthropic/claude-sonnet-4 → FAIL → google/gemini-2.5-flash → FAIL → groq/llama-3.3-70b → SUCCESS
 ```
-
-Each model is checked for reachability before attempting the task. The first available model runs the job.
 
 ## Quick Start
 
 ```bash
-# Install
-git clone https://github.com/YOUR_ORG/cron-model-fallback
-cd cron-model-fallback
+# 1. Place in your skills directory
+cp -r cron-model-fallback/ ~/.openclaw/workspace/skills/
 
-# Test your models
-python3 fallback.py --test --models "google/gemini-2.5-flash,groq/llama-3.3-70b-versatile"
-
-# Run a task
+# 2. Run with explicit models
 python3 fallback.py \
-  --models "google/gemini-2.5-flash,groq/llama-3.3-70b-versatile" \
-  --prompt "Summarize today's news and save to /tmp/news.md"
+  --models "anthropic/claude-sonnet-4,google/gemini-2.5-flash" \
+  --prompt "Summarize today's events"
+
+# 3. Or configure defaults in openclaw.json
 ```
 
-## Requirements
+### Configure default chain
 
-- Python 3.11+
-- OpenClaw installed and running (`openclaw` in PATH)
-- `requests` library: `pip install requests`
-
-## Authentication
-
-Set your OpenClaw token:
-
-```bash
-export OPENCLAW_TOKEN="your-token-here"
-# Or store in ~/.openclaw/openclaw.json as gateway.auth.token
-```
-
-## Architecture
-
-The script uses two strategies to check model reachability:
-
-**Ollama models** (`custom-HOST-PORT/model`): Checks `/api/tags` endpoint directly. Fast, doesn't consume tokens.
-
-**Cloud models** (Google, Groq, Anthropic, etc.): Checks OpenClaw gateway `/health` endpoint. If gateway is alive, cloud models are assumed reachable.
-
-Once a reachable model is found, the task runs via:
-```bash
-openclaw agent --message "{prompt}" --agent klin --json
-```
-
-## Use in OpenClaw Cron Jobs
+Add to `~/.openclaw/openclaw.json`:
 
 ```json
 {
-  "name": "Nightly Research",
-  "schedule": {"kind": "cron", "expr": "0 2 * * *", "tz": "Europe/Moscow"},
-  "payload": {
-    "kind": "agentTurn",
-    "message": "python3 /path/to/fallback.py --models 'custom-YOUR-OLLAMA-11434/gemma3:27b,google/gemini-2.5-flash' --prompt 'Your research task'"
+  "cron": {
+    "fallbackModels": [
+      "anthropic/claude-sonnet-4",
+      "google/gemini-2.5-flash",
+      "groq/llama-3.3-70b-versatile"
+    ]
   }
 }
 ```
 
-## Security
+Then every cron job gets fallback for free:
 
-- No hardcoded secrets anywhere in the codebase
-- Token read from environment or config file only
-- `subprocess` called with list args (no shell injection possible)
-- No `eval()` or dynamic code execution
+```bash
+python3 fallback.py --prompt "Your cron task"
+```
 
-## Contributing
+## How It Works
 
-PRs welcome. See [SKILL.md](SKILL.md) for full API reference.
+1. Reads model list from `--models` flag or `cron.fallbackModels` config
+2. For each model, calls: `openclaw agent --model <model> --message <prompt> --json`
+3. If the CLI returns non-zero or empty output → try the next model
+4. First successful response goes to stdout
 
-## License
+No provider-specific logic. No HTTP health checks. No external dependencies. Just the OpenClaw CLI and a for-loop.
 
-MIT
+## Requirements
+
+- Python 3.8+
+- OpenClaw CLI in PATH
+- Auth token (env var `OPENCLAW_TOKEN` or in `openclaw.json`)
+
+## Related
+
+- [Full guide](https://looi.ru/a/looi-clawd) — detailed article on the architecture

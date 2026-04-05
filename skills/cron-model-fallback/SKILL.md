@@ -1,6 +1,6 @@
 ---
 name: cron-model-fallback
-description: "Cron job model fallback chain for OpenClaw. Tries models in priority order until one succeeds. Solves silent cron failures when a provider is unavailable."
+description: "Cron job model fallback chain for OpenClaw. User-configurable model priority chain — tries each in order until one succeeds. No provider-specific logic."
 homepage: https://looi.ru/a/looi-clawd
 metadata:
   author: Arthur Arsyonov
@@ -9,97 +9,91 @@ metadata:
 
 # cron-model-fallback
 
-**Cron job model fallback chain for OpenClaw.**
+**User-configurable model fallback chain for OpenClaw cron jobs.**
 
-Tries models in priority order until one succeeds. Solves the problem of silent cron job failures when a model provider is unavailable (e.g., local Ollama is offline).
+Your cron job says "use model X". Model X is down. Job fails silently. This script fixes that — configure a priority chain, it tries each model until one works.
 
 ## Problem
 
-OpenClaw cron jobs accept a single `model` string in `payload.model`. If that model is unreachable, the job fails silently with `lastRunStatus: "error"` — no retry, no fallback.
+OpenClaw cron jobs accept a single model. If that model is unreachable, the job fails silently — no retry, no fallback, just `lastRunStatus: "error"`.
 
 ## Solution
 
-A wrapper script that:
-1. Checks each model for reachability before attempting (skippable with `--skip-reachability`)
-2. Passes the selected model explicitly via `--model` flag to `openclaw agent`
-3. Tries the next model in the chain if the current one fails
-4. Logs which model was used and how many attempts were made
-
-## Installation
-
-```bash
-# Place in your OpenClaw workspace skills directory
-cp -r cron-model-fallback/ ~/.openclaw/workspace/skills/
-
-# Install dependency
-pip3 install requests
-```
+A zero-dependency wrapper that:
+1. Takes a list of models in priority order (CLI flag or config file)
+2. Calls `openclaw agent --model <model>` for each, in order
+3. Returns the first successful response
+4. No provider-specific logic — works with any model OpenClaw supports
 
 ## Usage
 
-### Direct CLI
-
 ```bash
-# Test model availability
-python3 fallback.py --test --models "ollama/gemma3:12b,google/gemini-2.5-flash,groq/llama-3.3-70b"
-
-# Run a task with fallback
+# Explicit chain
 python3 fallback.py \
-  --models "ollama/gemma3:12b,google/gemini-2.5-flash" \
-  --prompt "Your cron task prompt here"
+  --models "anthropic/claude-sonnet-4,google/gemini-2.5-flash,groq/llama-3.3-70b" \
+  --prompt "Summarize today's news"
 
-# Use a specific agent
+# Defaults from config (see Configuration below)
+python3 fallback.py --prompt "Your task"
+
+# With a specific agent
 python3 fallback.py \
-  --models "ollama/gemma3:12b,google/gemini-2.5-flash" \
+  --models "google/gemini-2.5-flash,anthropic/claude-haiku-4-5" \
   --agent my-agent --prompt "Your task"
 ```
+
+## Configuration
+
+### Default fallback chain (optional)
+
+Add to `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "cron": {
+    "fallbackModels": [
+      "anthropic/claude-sonnet-4",
+      "google/gemini-2.5-flash",
+      "groq/llama-3.3-70b-versatile"
+    ]
+  }
+}
+```
+
+When `--models` is omitted, the script reads this array. This means every cron job inherits the same fallback chain without per-job configuration.
+
+### Authentication
+
+Token is read from (in priority order):
+1. `OPENCLAW_TOKEN` environment variable
+2. `~/.openclaw/openclaw.json` → `gateway.auth.token`
 
 ## Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--models` | required | Comma-separated model list, first = most preferred |
+| `--models` | from config | Comma-separated model list, first = most preferred |
 | `--prompt` | — | Task prompt string |
 | `--prompt-file` | — | Path to file containing the prompt |
-| `--agent` | (default agent) | OpenClaw agent name (optional) |
+| `--agent` | (default) | OpenClaw agent name (optional) |
 | `--timeout` | 120 | Seconds to wait per model attempt |
 | `--max-tokens` | 4096 | Maximum tokens in the response |
-| `--test` | false | Test reachability only, don't run task |
 | `--quiet` | false | Suppress progress output |
-| `--skip-reachability` | false | Skip pre-checks, just try each model |
-| `--base-url` | from env or localhost | OpenClaw gateway URL |
 
 ## Architecture
 
 ```
 fallback.py
   │
-  ├─ For each model in priority order:
-  │   ├─ Check reachability (unless --skip-reachability):
-  │   │   ├─ Ollama models → GET {ollama_host}/api/tags
-  │   │   └─ Cloud models → GET {gateway}/health
-  │   │
-  │   └─ Run task: openclaw agent --message {prompt} --model {model} --json
+  ├─ Resolve model chain: --models flag → cron.fallbackModels config
   │
-  └─ First successful response → stdout
+  └─ For each model:
+       └─ openclaw agent --model {model} --message {prompt} --json
+          ├─ Success → print result, exit 0
+          └─ Failure → try next model
 ```
 
-## Authentication
-
-Token is read from (in priority order):
-1. `OPENCLAW_TOKEN` environment variable
-2. `~/.openclaw/openclaw.json` → `gateway.auth.token`
-
-**Never hardcode tokens in cron job definitions.**
-
-## Model String Format
-
-| Provider | Format | Example |
-|----------|--------|---------|
-| Ollama (local) | `custom-HOST-PORT/model:tag` | `custom-localhost-11434/gemma3:27b` |
-| Google | `google/model-id` | `google/gemini-2.5-flash` |
-| Groq | `groq/model-id` | `groq/llama-3.3-70b-versatile` |
-| Anthropic | `anthropic/model-id` | `anthropic/claude-haiku-4-5` |
+No provider-specific code. No health checks. No API parsing. Just: call the CLI, check the exit code.
 
 ## Exit Codes
 
@@ -107,5 +101,9 @@ Token is read from (in priority order):
 |------|---------|
 | 0 | Success |
 | 1 | All models failed |
-| 2 | Configuration error |
-| 3 | Test mode: no models reachable |
+| 2 | Configuration error (no models, no token, no prompt) |
+
+## Requirements
+
+- Python 3.8+ (stdlib only, no pip dependencies)
+- OpenClaw CLI in PATH
