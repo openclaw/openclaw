@@ -9,6 +9,7 @@ const {
   resolveAgentRouteMock,
   agentCommandMock,
   transcribeAudioFileMock,
+  textToSpeechMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -66,6 +67,7 @@ const {
     resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
     agentCommandMock: vi.fn(async (_opts?: unknown, _runtime?: unknown) => ({ payloads: [] })),
     transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
+    textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
   };
 });
 
@@ -107,8 +109,15 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
-  transcribeAudioFile: transcribeAudioFileMock,
+vi.mock("../runtime.js", () => ({
+  getDiscordRuntime: () => ({
+    mediaUnderstanding: {
+      transcribeAudioFile: transcribeAudioFileMock,
+    },
+    tts: {
+      textToSpeech: textToSpeechMock,
+    },
+  }),
 }));
 
 let managerModule: typeof import("./manager.js");
@@ -157,6 +166,8 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock.mockResolvedValue({ payloads: [] });
     transcribeAudioFileMock.mockReset();
     transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
+    textToSpeechMock.mockReset();
+    textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
   });
 
   const createManager = (

@@ -16,8 +16,12 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   resolveDefaultMediaModel: vi.fn(() => "gpt-4.1-mini"),
 }));
 
-vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
-  describeImageFileWithModel: vi.fn(),
+vi.mock("./runtime.js", () => ({
+  getTelegramRuntime: () => ({
+    mediaUnderstanding: {
+      describeImageFileWithModel: vi.fn(),
+    },
+  }),
 }));
 
 const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";

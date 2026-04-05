@@ -14,9 +14,9 @@ import {
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
 } from "openclaw/plugin-sdk/media-runtime";
-import { describeImageFileWithModel } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
+import { getTelegramRuntime } from "./runtime.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
 const CACHE_VERSION = 1;
@@ -246,7 +246,7 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   logVerbose(`telegram: describing sticker with ${provider}/${model}`);
 
   try {
-    const result = await describeImageFileWithModel({
+    const result = await getTelegramRuntime().mediaUnderstanding.describeImageFileWithModel({
       filePath: imagePath,
       mime: "image/webp",
       cfg,
