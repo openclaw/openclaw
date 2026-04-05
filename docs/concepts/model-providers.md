@@ -198,6 +198,8 @@ Current bundled examples:
   media-understanding and video-generation provider registrations for its
   multimodal surfaces; Qwen video generation uses the Standard DashScope video
   endpoints with bundled Wan models such as `wan2.6-t2v` and `wan2.7-r2v`
+- `runway`: plugin-owned video-generation provider registration for native
+  Runway task-based models such as `gen4.5`
 - `minimax`: plugin-owned catalogs, bundled video-generation provider
   registration for Hailuo video models, bundled image-generation provider
   registration for `image-01`, hybrid Anthropic/OpenAI replay-policy
