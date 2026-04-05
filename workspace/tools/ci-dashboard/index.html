@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clawd CI Health</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0d1117; color: #c9d1d9; padding: 2rem; }
+    h1 { font-size: 1.5rem; margin-bottom: 1.5rem; color: #58a6ff; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; }
+    .card h3 { font-size: 0.9rem; margin-bottom: 0.5rem; }
+    .status { font-size: 0.8rem; padding: 2px 8px; border-radius: 12px; display: inline-block; }
+    .success { background: #238636; color: #fff; }
+    .failure { background: #da3633; color: #fff; }
+    .pending { background: #d29922; color: #000; }
+    .skipped { background: #484f58; color: #c9d1d9; }
+    .meta { font-size: 0.75rem; color: #8b949e; margin-top: 0.5rem; }
+    .refresh { color: #58a6ff; cursor: pointer; font-size: 0.8rem; }
+    #last-update { font-size: 0.75rem; color: #8b949e; margin-bottom: 1rem; }
+    .pr-list { margin-top: 2rem; }
+    .pr-item { padding: 0.5rem 0; border-bottom: 1px solid #21262d; font-size: 0.85rem; }
+    .pr-item a { color: #58a6ff; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <h1>Clawd CI Health Dashboard</h1>
+  <div id="last-update"></div>
+  <div class="grid" id="workflows"></div>
+  <div class="pr-list">
+    <h2 style="font-size:1.2rem; margin-bottom:1rem; color:#58a6ff;">Open PRs</h2>
+    <div id="prs"></div>
+  </div>
+
+  <script>
+    const REPO = 'tangcruz/clawd';
+    const API = `https://api.github.com/repos/${REPO}`;
+
+    async function fetchWorkflows() {
+      try {
+        const res = await fetch(`${API}/actions/runs?per_page=20`);
+        const data = await res.json();
+        const runs = data.workflow_runs || [];
+
+        // Dedupe by workflow name (latest only)
+        const latest = {};
+        runs.forEach(r => {
+          if (!latest[r.name]) latest[r.name] = r;
+        });
+
+        const container = document.getElementById('workflows');
+        container.innerHTML = '';
+
+        Object.values(latest).forEach(run => {
+          const status = run.conclusion || run.status;
+          const statusClass = status === 'success' ? 'success' :
+                             status === 'failure' ? 'failure' :
+                             status === 'skipped' ? 'skipped' : 'pending';
+
+          container.innerHTML += `
+            <div class="card">
+              <h3>${run.name}</h3>
+              <span class="status ${statusClass}">${status}</span>
+              <div class="meta">
+                Branch: ${run.head_branch}<br>
+                ${new Date(run.updated_at).toLocaleString()}
+              </div>
+            </div>
+          `;
+        });
+
+        document.getElementById('last-update').textContent =
+          `Last updated: ${new Date().toLocaleTimeString()} — `;
+
+      } catch (e) {
+        document.getElementById('workflows').innerHTML =
+          `<div class="card"><h3>Error</h3><p>${e.message}</p></div>`;
+      }
+    }
+
+    async function fetchPRs() {
+      try {
+        const res = await fetch(`${API}/pulls?state=open&per_page=30`);
+        const prs = await res.json();
+        const container = document.getElementById('prs');
+        container.innerHTML = '';
+
+        prs.forEach(pr => {
+          container.innerHTML += `
+            <div class="pr-item">
+              <a href="${pr.html_url}" target="_blank">#${pr.number}</a> ${pr.title}
+              <span class="meta">${pr.user.login} · ${new Date(pr.created_at).toLocaleDateString()}</span>
+            </div>
+          `;
+        });
+      } catch (e) {}
+    }
+
+    fetchWorkflows();
+    fetchPRs();
+    setInterval(() => { fetchWorkflows(); fetchPRs(); }, 60000);
+  </script>
+</body>
+</html>
