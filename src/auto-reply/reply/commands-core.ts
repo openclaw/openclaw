@@ -21,6 +21,7 @@ import {
   handleStatusCommand,
   handleWhoamiCommand,
 } from "./commands-info.js";
+import { handleLoopCommand } from "./commands-loop.js";
 import { handleModelsCommand } from "./commands-models.js";
 import {
   handleNarrativeModelCommand,
@@ -183,6 +184,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleStopCommand,
       handleCompactCommand,
       handleHyperfocusCommand,
+      handleLoopCommand,
       handleAbortTrigger,
     ];
   }

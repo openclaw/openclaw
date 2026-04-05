@@ -2,13 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withFileLock, type FileLockOptions } from "../../infra/file-lock.js";
 
-export type IntensiveMode = "normal" | "intensive";
+export type IntensiveMode = "normal" | "intensive" | "loop";
 
 export type ModeState = {
   mode: IntensiveMode;
   activatedAt?: string;
-  /** Optional goal for the hyperfocus session, injected into the system prompt each message. */
+  /** Optional goal for the hyperfocus/loop session, injected into the system prompt each message. */
   goal?: string;
+  /** Loop mode: max number of autonomous iterations (default 50, hard cap 100). */
+  maxIterations?: number;
+  /** Loop mode: current iteration counter (incremented each continuation turn). */
+  loopIteration?: number;
+  /** Loop mode: if true, before_model_resolve will force the default model. */
+  useDefaultModel?: boolean;
 };
 
 const LOCK_OPTIONS: FileLockOptions = {

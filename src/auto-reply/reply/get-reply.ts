@@ -1,5 +1,6 @@
 import {
   resolveAgentDir,
+  resolveAgentNarrativeDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
@@ -11,6 +12,8 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { readModeState, writeModeState } from "../../plugins/mind-memory/intensive-mode.js";
+import { getQueueSize } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -356,7 +359,7 @@ export async function getReplyFromConfig(
     workspaceDir,
   });
 
-  return runPreparedReply({
+  const runParams = {
     ctx,
     sessionCtx,
     cfg,
@@ -400,5 +403,77 @@ export async function getReplyFromConfig(
     storePath,
     workspaceDir,
     abortedLastRun,
-  });
+  };
+
+  let result = await runPreparedReply(runParams);
+
+  // Autonomous loop: if loop mode is active after the turn, deliver this result and
+  // immediately start the next iteration with a synthetic continuation prompt.
+  // Resumes from the persisted loopIteration so user-message yields work correctly.
+  try {
+    const narrativeDir = resolveAgentNarrativeDir(cfg, agentId);
+    const LOOP_MAX_CAP = 100;
+
+    // Read starting iteration from persisted state so yields resume at the right place.
+    const initialState = await readModeState(narrativeDir);
+    if (initialState.mode === "loop") {
+      const maxIter = Math.min(initialState.maxIterations ?? 50, LOOP_MAX_CAP);
+      const startIter = initialState.loopIteration ?? 0;
+
+      for (let loopIter = startIter; loopIter < maxIter; loopIter++) {
+        // Re-read mode each iteration: deactivate_loop_mode sets it to "normal".
+        const modeState = await readModeState(narrativeDir);
+        if (modeState.mode !== "loop") {
+          break;
+        }
+
+        // Deliver this iteration's result via onBlockReply so the user sees it.
+        const payloads = Array.isArray(result) ? result : result ? [result] : [];
+        for (const p of payloads) {
+          if (p && (p.text || p.mediaUrl || p.mediaUrls)) {
+            await resolvedOpts?.onBlockReply?.(p);
+          }
+        }
+
+        // Increment loop iteration counter in mode state.
+        const nextIter = loopIter + 1;
+        await writeModeState(narrativeDir, {
+          ...modeState,
+          loopIteration: nextIter,
+        });
+
+        // Emit iteration progress marker in verbose mode only.
+        if (resolvedVerboseLevel === "on" || resolvedVerboseLevel === "full") {
+          await resolvedOpts?.onBlockReply?.({ text: `🔁 Loop ${nextIter + 1}/${maxIter}` });
+        }
+
+        // Yield to pending user messages: if there is a queued task (queue size > 1,
+        // because this task itself counts as active), let it run before continuing.
+        // The user message will see loop mode still active and the loop will resume
+        // from the persisted loopIteration on its own runPreparedReply call.
+        if (getQueueSize() > 1) {
+          break;
+        }
+
+        // Build synthetic continuation prompt for the next iteration.
+        const goalSuffix = modeState.goal?.trim() ? ` Goal: ${modeState.goal.trim()}.` : "";
+        const iterLabel =
+          `[Loop autonomous continuation — you are on iteration ${nextIter + 1} of ${maxIter}.` +
+          `${goalSuffix} Continue your work. Call deactivate_loop_mode with a summary when done.]`;
+
+        // Re-run with continuation prompt injected as the user message body.
+        const continuationCtx = {
+          ...ctx,
+          Body: iterLabel,
+          CommandBody: iterLabel,
+          RawBody: iterLabel,
+        };
+        result = await runPreparedReply({ ...runParams, ctx: continuationCtx });
+      }
+    }
+  } catch {
+    // Never let loop bookkeeping break the reply delivery.
+  }
+
+  return result;
 }

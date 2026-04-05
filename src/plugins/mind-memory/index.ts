@@ -266,11 +266,11 @@ export default function register(api: PluginApi) {
     // Use stable global ID to ensure memory persists across chat sessions
     const sessionId = "global_user_memory";
     try {
-      // Skip flashbacks in hyperfocus/intensive mode — no resonance during focused work.
+      // Skip flashbacks in hyperfocus/intensive or loop mode — no resonance during focused work.
       const modeAgentId = resolveDefaultAgentId(api.config);
       const modeNarrativeDir = resolveAgentNarrativeDir(api.config, modeAgentId);
       const modeState = await readModeState(modeNarrativeDir);
-      if (modeState.mode === "intensive") {
+      if (modeState.mode === "intensive" || modeState.mode === "loop") {
         respond(true, { flashbacks: null });
         return;
       }
@@ -750,9 +750,8 @@ export default function register(api: PluginApi) {
     description:
       "Deactivates hyperfocus mode and returns to normal mode. " +
       "STORY.md, SOUL.md, USER.md, MEMORY.md, IDENTITY.md and Graphiti flashbacks will be restored. " +
-      "Provide a 'summary' with your own assessment of the session: what was accomplished, what changed, " +
-      "and what remains pending. This summary is shown to the user as the session closing message " +
-      "and stored as a Graphiti memory episode.",
+      "You MUST provide a 'summary' with your own assessment of the session: what was accomplished, what changed, " +
+      "and what remains pending. This summary is shown to the user and stored as a Graphiti memory episode.",
     parameters: {
       type: "object",
       properties: {
@@ -760,12 +759,12 @@ export default function register(api: PluginApi) {
           type: "string",
           description:
             "Your assessment of the hyperfocus session: what was accomplished, what changed, " +
-            "and what remains pending. Shown to the user and stored in long-term memory.",
+            "and what remains pending. Shown to the user and stored in long-term memory. Required.",
         },
       },
-      required: [],
+      required: ["summary"],
     },
-    execute: async (_toolCallId: string, params: { summary?: string }) => {
+    execute: async (_toolCallId: string, params: { summary: string }) => {
       try {
         const agentId = resolveDefaultAgentId(api.config);
         const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
@@ -826,6 +825,236 @@ export default function register(api: PluginApi) {
         return {
           content: [
             { type: "text", text: `Error deactivating intensive mode: ${(e as Error).message}` },
+          ],
+          isError: true,
+          details: null,
+        };
+      }
+    },
+  });
+
+  // 3c. Loop mode tools
+  api.registerTool({
+    name: "activate_loop_mode",
+    label: "activate_loop_mode",
+    description:
+      "Activates autonomous loop mode. In this mode the agent operates continuously without " +
+      "waiting for user input: after each turn the system injects a synthetic continuation prompt " +
+      "so the agent keeps working until it calls deactivate_loop_mode. " +
+      "Uses compact context (SUMMARY.md instead of STORY.md, peripheral files suppressed, no Graphiti flashbacks). " +
+      "The default model is used (not the session model). " +
+      "Optionally provide a 'goal' that will be re-injected every turn. " +
+      "Optionally provide 'maxIterations' to cap the loop (default 50, max 100).",
+    parameters: {
+      type: "object",
+      properties: {
+        goal: {
+          type: "string",
+          description:
+            "Optional task goal for this loop session (e.g. 'Refactor all route handlers'). " +
+            "Injected into every continuation prompt to keep the objective visible.",
+        },
+        maxIterations: {
+          type: "number",
+          description:
+            "Maximum number of autonomous iterations before the loop stops automatically (default 50, max 100).",
+        },
+        reason: {
+          type: "string",
+          description: "Optional reason for activating loop mode (logged for diagnostics).",
+        },
+      },
+      required: [],
+    },
+    execute: async (
+      _toolCallId: string,
+      params: { goal?: string; maxIterations?: number; reason?: string },
+    ) => {
+      try {
+        const agentId = resolveDefaultAgentId(api.config);
+        const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
+        const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
+        await mkdir(narrativeDir, { recursive: true });
+
+        const current = await readModeState(narrativeDir);
+        if (current.mode === "loop") {
+          return {
+            content: [{ type: "text", text: "Loop mode is already active." }],
+            details: null,
+          };
+        }
+
+        const storyPath = path.join(narrativeDir, "STORY.md");
+        const summaryPath = path.join(narrativeDir, "SUMMARY.md");
+
+        // SUMMARY.md must exist before activating loop mode — generate it now if missing.
+        let summaryExists = false;
+        try {
+          await access(summaryPath);
+          summaryExists = true;
+        } catch {
+          /* will generate */
+        }
+
+        if (!summaryExists) {
+          const agents = await resolveNarrativeAgents();
+          if (!agents) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Cannot activate loop mode: narrative model is not configured.",
+                },
+              ],
+              isError: true,
+              details: null,
+            };
+          }
+          await consolidator.generateSummary(
+            storyPath,
+            summaryPath,
+            workspaceDir,
+            agents.narrativeAgent,
+          );
+          try {
+            await access(summaryPath);
+          } catch {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Cannot activate loop mode: SUMMARY.md generation failed (STORY.md may be empty).",
+                },
+              ],
+              isError: true,
+              details: null,
+            };
+          }
+        }
+
+        const LOOP_MAX_CAP = 100;
+        const LOOP_DEFAULT = 50;
+        const maxIterations = Math.min(
+          typeof params.maxIterations === "number" && params.maxIterations > 0
+            ? params.maxIterations
+            : LOOP_DEFAULT,
+          LOOP_MAX_CAP,
+        );
+
+        await writeModeState(narrativeDir, {
+          mode: "loop",
+          activatedAt: new Date().toISOString(),
+          goal: params.goal?.trim() || undefined,
+          maxIterations,
+          loopIteration: 0,
+          // Tool activation always uses default model.
+          useDefaultModel: true,
+        });
+
+        if (debug) {
+          api.logger.info(
+            `🔁 [MIND] Loop mode activated. Reason: ${params.reason ?? "unspecified"}. Goal: ${params.goal ?? "unspecified"}. maxIterations: ${maxIterations}`,
+          );
+        }
+        const goalLine = params.goal?.trim() ? ` Goal: ${params.goal.trim()}.` : "";
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Loop mode activated${!summaryExists ? " (SUMMARY.md generated)" : ""}.${goalLine} ` +
+                `Using SUMMARY.md context, no flashbacks, default model. ` +
+                `Will run up to ${maxIterations} autonomous iterations. ` +
+                `Call deactivate_loop_mode with a summary when done.`,
+            },
+          ],
+          details: null,
+        };
+      } catch (e: unknown) {
+        return {
+          content: [{ type: "text", text: `Error activating loop mode: ${(e as Error).message}` }],
+          isError: true,
+          details: null,
+        };
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "deactivate_loop_mode",
+    label: "deactivate_loop_mode",
+    description:
+      "Deactivates autonomous loop mode and returns to normal mode. " +
+      "MUST be called when the loop work is complete. " +
+      "Provide a 'summary' of everything accomplished during the loop — it will be shown to the user " +
+      "and stored as a Graphiti memory episode so the work is not lost from long-term memory.",
+    parameters: {
+      type: "object",
+      properties: {
+        summary: {
+          type: "string",
+          description:
+            "Summary of everything accomplished during the loop: what was done, what changed, " +
+            "and what remains pending. Shown to the user and stored in long-term memory.",
+        },
+      },
+      required: ["summary"],
+    },
+    execute: async (_toolCallId: string, params: { summary: string }) => {
+      try {
+        const agentId = resolveDefaultAgentId(api.config);
+        const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
+        await mkdir(narrativeDir, { recursive: true });
+
+        const current = await readModeState(narrativeDir);
+        if (current.mode !== "loop") {
+          return {
+            content: [{ type: "text", text: "Loop mode is not active." }],
+            details: null,
+          };
+        }
+
+        await writeModeState(narrativeDir, { mode: "normal" });
+
+        // Store summary as Graphiti episode so loop work is preserved in long-term memory.
+        if (config.graphiti?.enabled !== false) {
+          const sessionId = "global_user_memory";
+          const durationMs = current.activatedAt
+            ? Date.now() - new Date(current.activatedAt).getTime()
+            : 0;
+          const durationMin = Math.round(durationMs / 60_000);
+          const goalPart = current.goal?.trim() ? ` Goal: ${current.goal.trim()}.` : "";
+          const durationPart = durationMin > 0 ? ` Duration: ${durationMin} minutes.` : "";
+          const iterPart =
+            typeof current.loopIteration === "number" && current.loopIteration > 0
+              ? ` Iterations: ${current.loopIteration}.`
+              : "";
+          const summaryText = params.summary?.trim() ?? "";
+          const episodeText =
+            `Loop session ended.${goalPart}${durationPart}${iterPart}` +
+            (summaryText ? ` ${summaryText}` : "");
+          void graphService
+            .addEpisode(sessionId, episodeText, new Date().toISOString())
+            .catch(() => {});
+          if (debug) {
+            api.logger.info(`🔄 [MIND] Loop episode added to graph: "${episodeText}"`);
+          }
+        }
+
+        if (debug) {
+          api.logger.info(`🔄 [MIND] Loop mode deactivated, returning to normal.`);
+        }
+        const closingText =
+          params.summary?.trim() ||
+          "Loop mode ended — full context and flashbacks active on next message.";
+        return {
+          content: [{ type: "text", text: closingText }],
+          details: null,
+        };
+      } catch (e: unknown) {
+        return {
+          content: [
+            { type: "text", text: `Error deactivating loop mode: ${(e as Error).message}` },
           ],
           isError: true,
           details: null,
@@ -1016,6 +1245,7 @@ export default function register(api: PluginApi) {
     // Read mode state to determine context injection strategy.
     const modeState = await readModeState(narrativeDir);
     const isIntensive = modeState.mode === "intensive";
+    const isLoop = modeState.mode === "loop";
 
     // Read STORY.md, SUMMARY.md and GLOSSARY.md for context injection.
     const [storyContent, summaryContent, quickContext] = await Promise.all([
@@ -1063,6 +1293,36 @@ export default function register(api: PluginApi) {
       return {
         narrativeStory: summaryContent ?? storyContent,
         extraSystemPrompt: hyperfocusSystemPrompt,
+        suppressContextFiles: ["SOUL.md", "USER.md", "MEMORY.md", "IDENTITY.md"],
+      };
+    }
+
+    // In loop mode: same condensed context as intensive, no flashbacks, no Graphiti episodes.
+    if (isLoop) {
+      const agents = await resolveNarrativeAgents();
+      if (agents) {
+        void Promise.all([
+          consolidator
+            .generateSummary(storyPath, summaryPath, workspaceDir, agents.narrativeAgent)
+            .catch(() => {}),
+          consolidator
+            .generateGlossary(storyPath, glossaryPath, workspaceDir, agents.narrativeAgent)
+            .catch(() => {}),
+        ]);
+      }
+      const startupHint =
+        "[Loop mode] Your identity and user profile are already loaded in the Narrative Story section. " +
+        "Skip the session startup file reads (SOUL.md, USER.md, MEMORY.md) — those files are suppressed in this mode. " +
+        "You are operating autonomously; call deactivate_loop_mode with a summary when your work is complete.";
+      const goalLine = modeState.goal?.trim() ? `Current loop goal: ${modeState.goal.trim()}` : "";
+      const iterLine =
+        typeof modeState.loopIteration === "number" && modeState.maxIterations
+          ? `Iteration: ${modeState.loopIteration + 1}/${modeState.maxIterations}`
+          : "";
+      const loopSystemPrompt = [startupHint, goalLine, iterLine].filter(Boolean).join("\n");
+      return {
+        narrativeStory: summaryContent ?? storyContent,
+        extraSystemPrompt: loopSystemPrompt,
         suppressContextFiles: ["SOUL.md", "USER.md", "MEMORY.md", "IDENTITY.md"],
       };
     }
@@ -1217,6 +1477,9 @@ export default function register(api: PluginApi) {
       }
     });
   }
+  // Note: loop mode with useDefaultModel:true relies on the session having no active model
+  // override — the before_model_resolve hook can only inject overrides, not clear them.
+  // If a session override is active when loop is started via tool, it will persist for that session.
 
   // 6. Register before_compaction hook: sync STORY.md from the pre-compaction message history.
   // Fire-and-forget so it does not block the compaction LLM call.
@@ -1239,12 +1502,12 @@ export default function register(api: PluginApi) {
         const glossaryPath = path.join(narrativeDir, "GLOSSARY.md");
         const summaryPath = path.join(narrativeDir, "SUMMARY.md");
 
-        // Skip narrative updates during intensive/hyperfocus mode
+        // Skip narrative updates during intensive/hyperfocus or loop mode
         const modeState = await readModeState(narrativeDir);
-        if (modeState.mode === "intensive") {
+        if (modeState.mode === "intensive" || modeState.mode === "loop") {
           if (debug) {
             api.logger.info(
-              `🎯 [MIND] before_compaction: skipping narrative update (intensive mode)`,
+              `🎯 [MIND] before_compaction: skipping narrative update (${modeState.mode} mode)`,
             );
           }
           return;
@@ -1339,12 +1602,12 @@ export default function register(api: PluginApi) {
         const glossaryPath = path.join(narrativeDir, "GLOSSARY.md");
         const summaryPath = path.join(narrativeDir, "SUMMARY.md");
 
-        // Skip narrative updates during intensive/hyperfocus mode
+        // Skip narrative updates during intensive/hyperfocus or loop mode
         const modeState = await readModeState(narrativeDir);
-        if (modeState.mode === "intensive") {
+        if (modeState.mode === "intensive" || modeState.mode === "loop") {
           if (debug) {
             api.logger.info(
-              `🎯 [MIND] after_compaction: skipping narrative update (intensive mode)`,
+              `🎯 [MIND] after_compaction: skipping narrative update (${modeState.mode} mode)`,
             );
           }
           return;
