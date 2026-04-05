@@ -1,4 +1,6 @@
+import type { Model } from "@mariozechner/pi-ai";
 import type { ProviderEndpointClass, ProviderRequestCapabilities } from "./provider-attribution.js";
+import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 
 type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;
@@ -16,6 +18,11 @@ export type OpenAICompletionsCompatDefaults = {
   maxTokensField: "max_completion_tokens" | "max_tokens";
   thinkingFormat: "openai" | "openrouter" | "zai";
   supportsStrictMode: boolean;
+};
+
+export type DetectedOpenAICompletionsCompat = {
+  capabilities: ProviderRequestCapabilities;
+  defaults: OpenAICompletionsCompatDefaults;
 };
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
@@ -88,4 +95,28 @@ export function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
   },
 ): OpenAICompletionsCompatDefaults {
   return resolveOpenAICompletionsCompatDefaults(input);
+}
+
+export function detectOpenAICompletionsCompat(
+  model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id" | "compat">,
+): DetectedOpenAICompletionsCompat {
+  const capabilities = resolveProviderRequestCapabilities({
+    provider: model.provider,
+    api: "openai-completions",
+    baseUrl: model.baseUrl,
+    capability: "llm",
+    transport: "stream",
+    modelId: model.id,
+    compat:
+      model.compat && typeof model.compat === "object"
+        ? (model.compat as { supportsStore?: boolean })
+        : undefined,
+  });
+  return {
+    capabilities,
+    defaults: resolveOpenAICompletionsCompatDefaultsFromCapabilities({
+      provider: model.provider,
+      ...capabilities,
+    }),
+  };
 }

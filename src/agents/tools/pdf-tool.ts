@@ -101,6 +101,10 @@ export function resolvePdfModelConfigForTool(params: {
     providerId: primary.provider,
     capability: "image",
   });
+  const primarySupportsNativePdf = providerSupportsNativePdfDocument({
+    cfg: params.cfg,
+    providerId: primary.provider,
+  });
   const nativePdfCandidates = resolveAutoMediaKeyProviders({
     cfg: params.cfg,
     capability: "image",
@@ -131,9 +135,9 @@ export function resolvePdfModelConfigForTool(params: {
     })
     .filter((value): value is string => Boolean(value));
 
-  if (primary.provider === "google" && googleOk && providerVision) {
+  if (primary.provider === "google" && googleOk && providerVision && primarySupportsNativePdf) {
     preferred = providerVision;
-  } else if (providerOk && (providerVision || providerDefault)) {
+  } else if (providerOk && primarySupportsNativePdf && (providerVision || providerDefault)) {
     preferred = providerVision ?? `${primary.provider}/${providerDefault}`;
   } else {
     preferred = nativePdfCandidates[0] ?? genericImageCandidates[0] ?? null;

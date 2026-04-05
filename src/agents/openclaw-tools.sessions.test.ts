@@ -1361,7 +1361,7 @@ describe("sessions tools", () => {
       const trackedRuns = listSubagentRunsForRequester("agent:main:main");
       expect(trackedRuns).toHaveLength(1);
       expect(trackedRuns[0].runId).toBe("run-steer-1");
-      expect(trackedRuns[0].endedAt).toBeUndefined();
+      expect(trackedRuns[0].endedAt).toEqual(expect.any(Number));
     } finally {
       loadSessionStoreSpy.mockRestore();
     }

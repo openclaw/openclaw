@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type GatewayCall = {
   method?: string;
@@ -45,15 +46,6 @@ function createGatewayCallModuleMock() {
   };
 }
 
-function createSessionsModuleMock() {
-  return {
-    loadSessionStore: vi.fn(() => sessionStore),
-    resolveAgentIdFromSessionKey: () => "main",
-    resolveStorePath: () => "/tmp/sessions-main.json",
-    resolveMainSessionKey: () => "agent:main:main",
-  };
-}
-
 function createSubagentDepthModuleMock() {
   return {
     getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
@@ -80,40 +72,109 @@ function createTimeoutHistoryWithNoReply() {
 
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("./subagent-depth.js", createSubagentDepthModuleMock);
-vi.mock("./subagent-announce-delivery.runtime.js", () => ({
-  createBoundDeliveryRouter: () => ({
-    resolveDestination: () => ({ mode: "none" }),
+vi.mock("./subagent-announce-delivery.runtime.js", () =>
+  createSubagentAnnounceDeliveryRuntimeMock({
+    callGateway: async (request: unknown) => {
+      const typed = request as GatewayCall;
+      gatewayCalls.push(typed);
+      if (typed.method === "chat.history") {
+        return { messages: chatHistoryMessages };
+      }
+      return await callGatewayImpl(typed);
+    },
+    loadConfig: () => configOverride,
+    loadSessionStore: () => sessionStore,
+    resolveAgentIdFromSessionKey: () => "main",
+    resolveMainSessionKey: () => "agent:main:main",
+    resolveStorePath: () => "/tmp/sessions-main.json",
+    isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
+    queueEmbeddedPiMessage: () => false,
   }),
-  resolveConversationIdFromTargets: () => "",
-  resolveExternalBestEffortDeliveryTarget: (params: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string;
-  }) => ({
-    deliver: Boolean(params.channel && params.to),
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId,
-    threadId: params.threadId,
+);
+vi.mock("./subagent-announce-delivery.js", () => ({
+  deliverSubagentAnnouncement: async (params: {
+    targetRequesterSessionKey: string;
+    triggerMessage: string;
+    requesterIsSubagent?: boolean;
+    requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
+    requesterSessionOrigin?: { provider?: string; channel?: string };
+    bestEffortDeliver?: boolean;
+    directIdempotencyKey?: string;
+    internalEvents?: unknown;
+  }) => {
+    const buildRequest = () => ({
+      method: "agent",
+      expectFinal: true,
+      timeoutMs,
+      params: {
+        sessionKey: params.targetRequesterSessionKey,
+        message: params.triggerMessage,
+        deliver: !params.requesterIsSubagent,
+        bestEffortDeliver: params.bestEffortDeliver,
+        internalEvents: params.internalEvents,
+        ...(params.requesterIsSubagent
+          ? {}
+          : {
+              channel: params.requesterOrigin?.channel,
+              to: params.requesterOrigin?.to,
+              accountId: params.requesterOrigin?.accountId,
+              threadId: params.requesterOrigin?.threadId,
+            }),
+      },
+    });
+    const timeoutMs =
+      typeof configOverride.agents?.defaults?.subagents?.announceTimeoutMs === "number" &&
+      Number.isFinite(configOverride.agents.defaults.subagents.announceTimeoutMs)
+        ? Math.min(
+            Math.max(1, Math.floor(configOverride.agents.defaults.subagents.announceTimeoutMs)),
+            2_147_000_000,
+          )
+        : 90_000;
+    const retryDelaysMs =
+      process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
+    let retryIndex = 0;
+    for (;;) {
+      const request = buildRequest();
+      gatewayCalls.push(request);
+      try {
+        await callGatewayImpl(request);
+        return { delivered: true, path: "direct" };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const delayMs = retryDelaysMs[retryIndex];
+        if (!/gateway timeout/i.test(message) || delayMs == null) {
+          return { delivered: false, path: "direct", error: message };
+        }
+        retryIndex += 1;
+      }
+    }
+  },
+  loadRequesterSessionEntry: (sessionKey: string) => ({
+    cfg: configOverride,
+    canonicalKey: sessionKey,
+    entry: sessionStore[sessionKey],
   }),
-  resolveQueueSettings: (params: {
-    cfg?: {
-      messages?: {
-        queue?: {
-          byChannel?: Record<string, string>;
-        };
-      };
-    };
-    channel?: string;
-  }) => ({
-    mode: (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "none",
-  }),
+  loadSessionEntryByKey: (sessionKey: string) => sessionStore[sessionKey],
+  resolveAnnounceOrigin: (entry: { origin?: unknown } | undefined, requesterOrigin?: unknown) =>
+    requesterOrigin ?? entry?.origin,
+  resolveSubagentCompletionOrigin: async (params: { requesterOrigin?: unknown }) =>
+    params.requesterOrigin,
+  resolveSubagentAnnounceTimeoutMs: (cfg: typeof configOverride) => {
+    const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
+    if (typeof configured !== "number" || !Number.isFinite(configured)) {
+      return 90_000;
+    }
+    return Math.min(Math.max(1, Math.floor(configured)), 2_147_000_000);
+  },
+  runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: createGatewayCallModuleMock().callGateway,
   loadConfig: () => configOverride,
-  ...createSessionsModuleMock(),
+  loadSessionStore: vi.fn(() => sessionStore),
+  resolveAgentIdFromSessionKey: () => "main",
+  resolveStorePath: () => "/tmp/sessions-main.json",
+  resolveMainSessionKey: () => "agent:main:main",
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
   queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,
   waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>

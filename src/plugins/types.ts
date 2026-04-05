@@ -69,6 +69,7 @@ import type {
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
@@ -474,7 +475,8 @@ export type ProviderPreparedRuntimeAuth = {
  * The helper methods cover the common OpenClaw auth resolution paths:
  *
  * - `resolveApiKeyFromConfigAndStore`: env/config/plain token/api_key profiles
- * - `resolveOAuthToken`: oauth/token profiles resolved through the auth store
+ * - `resolveOAuthToken`: oauth/token profiles resolved through the auth store,
+ *   optionally for an explicit provider override
  *
  * Plugins can still do extra provider-specific work on top (for example parse a
  * token blob, read a legacy credential file, or pick between aliases).
@@ -489,7 +491,7 @@ export type ProviderResolveUsageAuthContext = {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
   }) => string | undefined;
-  resolveOAuthToken: () => Promise<ProviderResolvedUsageAuth | null>;
+  resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderResolvedUsageAuth | null>;
 };
 
 /**
@@ -1697,6 +1699,7 @@ export type PluginRealtimeVoiceProviderEntry = RealtimeVoiceProviderPlugin & {
 
 export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;
 export type ImageGenerationProviderPlugin = ImageGenerationProvider;
+export type VideoGenerationProviderPlugin = VideoGenerationProvider;
 
 export type OpenClawPluginGatewayMethod = {
   method: string;
@@ -1992,6 +1995,13 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
+  /**
+   * Register a gateway RPC method for this plugin.
+   *
+   * Reserved core admin namespaces (`config.*`, `exec.approvals.*`,
+   * `wizard.*`, `update.*`) always normalize to `operator.admin` even if a
+   * narrower scope is requested.
+   */
   registerGatewayMethod: (
     method: string,
     handler: GatewayRequestHandler,
@@ -2027,6 +2037,8 @@ export type OpenClawPluginApi = {
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
+  /** Register a video generation provider (video generation capability). */
+  registerVideoGenerationProvider: (provider: VideoGenerationProviderPlugin) => void;
   /** Register a web fetch provider (web fetch capability). */
   registerWebFetchProvider: (provider: WebFetchProviderPlugin) => void;
   /** Register a web search provider (web search capability). */

@@ -41,11 +41,17 @@ const COMMON_AUTH_ERROR_PATTERNS = [
 const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests|429/,
+    /too many (?:concurrent )?requests/i,
+    /throttling(?:exception)?/i,
     "model_cooldown",
     "exceeded your current quota",
     "resource has been exhausted",
     "quota exceeded",
     "resource_exhausted",
+    "throttlingexception",
+    "throttling_exception",
+    "throttled",
+    "throttling",
     "usage limit",
     /\btpm\b/i,
     "tokens per minute",

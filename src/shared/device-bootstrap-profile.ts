@@ -10,10 +10,31 @@ export type DeviceBootstrapProfileInput = {
   scopes?: readonly string[];
 };
 
+export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
+  "operator.approvals",
+  "operator.read",
+  "operator.talk.secrets",
+  "operator.write",
+] as const;
+
+const BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET = new Set<string>(BOOTSTRAP_HANDOFF_OPERATOR_SCOPES);
+
 export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   roles: ["node", "operator"],
-  scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+  scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
 };
+
+export function resolveBootstrapProfileScopesForRole(
+  role: string,
+  scopes: readonly string[],
+): string[] {
+  const normalizedRole = normalizeDeviceAuthRole(role);
+  const normalizedScopes = normalizeDeviceAuthScopes(Array.from(scopes));
+  if (normalizedRole === "operator") {
+    return normalizedScopes.filter((scope) => BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET.has(scope));
+  }
+  return [];
+}
 
 function normalizeBootstrapRoles(roles: readonly string[] | undefined): string[] {
   if (!Array.isArray(roles)) {

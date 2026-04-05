@@ -1,12 +1,8 @@
-import { beforeAll, describe, expect, it } from "vitest";
-
-let normalizeProviderSpecificConfig: typeof import("./models-config.providers.policy.js").normalizeProviderSpecificConfig;
-let resolveProviderConfigApiKeyResolver: typeof import("./models-config.providers.policy.js").resolveProviderConfigApiKeyResolver;
-
-beforeAll(async () => {
-  ({ normalizeProviderSpecificConfig, resolveProviderConfigApiKeyResolver } =
-    await import("./models-config.providers.policy.js"));
-});
+import { describe, expect, it } from "vitest";
+import {
+  normalizeProviderSpecificConfig,
+  resolveProviderConfigApiKeyResolver,
+} from "./models-config.providers.policy.js";
 
 describe("models-config.providers.policy", () => {
   it("resolves config apiKey markers through provider plugin hooks", async () => {

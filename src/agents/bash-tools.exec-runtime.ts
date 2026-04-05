@@ -220,11 +220,18 @@ export function renderExecTargetLabel(target: ExecTarget) {
 export function isRequestedExecTargetAllowed(params: {
   configuredTarget: ExecTarget;
   requestedTarget: ExecTarget;
+  sandboxAvailable?: boolean;
 }) {
-  // `auto` is a routing strategy, not a wildcard allowlist. Keep per-call host
-  // selection pinned to the configured/session-selected target so a sandboxed
-  // session cannot silently hop to gateway or node.
-  return params.requestedTarget === params.configuredTarget;
+  if (params.requestedTarget === params.configuredTarget) {
+    return true;
+  }
+  if (params.configuredTarget === "auto") {
+    if (params.sandboxAvailable && params.requestedTarget === "gateway") {
+      return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 export function resolveExecTarget(params: {
@@ -236,11 +243,12 @@ export function resolveExecTarget(params: {
   const configuredTarget = params.configuredTarget ?? "auto";
   const requestedTarget = params.requestedTarget ?? null;
   if (params.elevatedRequested) {
+    const elevatedTarget = configuredTarget === "node" ? ("node" as const) : ("gateway" as const);
     return {
       configuredTarget,
       requestedTarget,
-      selectedTarget: "gateway" as const,
-      effectiveHost: "gateway" as const,
+      selectedTarget: elevatedTarget,
+      effectiveHost: elevatedTarget,
     };
   }
   if (
@@ -248,6 +256,7 @@ export function resolveExecTarget(params: {
     !isRequestedExecTargetAllowed({
       configuredTarget,
       requestedTarget,
+      sandboxAvailable: params.sandboxAvailable,
     })
   ) {
     throw new Error(
@@ -256,9 +265,6 @@ export function resolveExecTarget(params: {
     );
   }
   const selectedTarget = requestedTarget ?? configuredTarget;
-  // `auto` preserves the no-config "just work" default: sandbox when available,
-  // otherwise gateway. The YOLO part comes from security/ask defaults, not from
-  // `auto` itself.
   const effectiveHost =
     selectedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : selectedTarget;
   return {

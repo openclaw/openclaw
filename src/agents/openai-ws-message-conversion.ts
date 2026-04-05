@@ -10,6 +10,7 @@ import type {
 } from "./openai-ws-connection.js";
 import { normalizeToolParameterSchema } from "./pi-tools.schema.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
+import { normalizeUsage } from "./usage.js";
 
 type AnyMessage = Message & { role: string; content: unknown };
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
@@ -538,15 +539,17 @@ export function buildAssistantMessageFromResponse(
 
   const hasToolCalls = content.some((part) => part.type === "toolCall");
   const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
+  const normalizedUsage = normalizeUsage(response.usage);
+  const rawTotalTokens = normalizedUsage?.total;
 
   const message = buildAssistantMessage({
     model: modelInfo,
     content,
     stopReason,
     usage: buildUsageWithNoCost({
-      input: response.usage?.input_tokens ?? 0,
-      output: response.usage?.output_tokens ?? 0,
-      totalTokens: response.usage?.total_tokens ?? 0,
+      input: normalizedUsage?.input ?? 0,
+      output: normalizedUsage?.output ?? 0,
+      totalTokens: rawTotalTokens && rawTotalTokens > 0 ? rawTotalTokens : undefined,
     }),
   });
 
