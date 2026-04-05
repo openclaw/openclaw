@@ -804,7 +804,7 @@ export async function compactEmbeddedPiSessionDirect(
         effectiveExtraParams,
       });
       if (agentTransportOverride && session.agent.transport !== agentTransportOverride) {
-        session.agent.setTransport(agentTransportOverride);
+        session.agent.transport = agentTransportOverride;
       }
 
       try {
