@@ -7,8 +7,6 @@ CONFIG_DIR="$HOST_ROOT/.openclaw"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_ROOT:-$HOST_ROOT/workspace}"
 HOME_BIND_DIR="$CONFIG_DIR/home"
 
-sudo -v
-
 fail() {
   echo "ERROR: $*" >&2
   exit 1
@@ -53,9 +51,10 @@ if [[ "${OPENCLAW_REMOVE_HOME_BIND_DIR:-0}" == "1" ]]; then
 fi
 
 if [ -d "${HOST_ROOT}" ]; then
+  sudo -v
   echo "Removing persisted data at:"
   echo "  $HOST_ROOT"
-  sudo rm -rf $HOST_ROOT
+  sudo rm -rf "$HOST_ROOT"
 fi
 
 echo "Teardown complete."
