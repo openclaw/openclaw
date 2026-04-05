@@ -164,6 +164,8 @@ function parseGeminiCliCredentials(
 function readGeminiCliCredentialsFromKnownPaths(
   geminiCliDir: string,
 ): { clientId: string; clientSecret: string } | null {
+  const hoistedCoreDir = join(dirname(geminiCliDir), "gemini-cli-core");
+
   const searchPaths = [
     join(
       geminiCliDir,
@@ -184,6 +186,8 @@ function readGeminiCliCredentialsFromKnownPaths(
       "code_assist",
       "oauth2.js",
     ),
+    join(hoistedCoreDir, "dist", "src", "code_assist", "oauth2.js"),
+    join(hoistedCoreDir, "dist", "code_assist", "oauth2.js"),
   ];
 
   for (const path of searchPaths) {

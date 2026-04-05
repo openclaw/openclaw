@@ -511,6 +511,62 @@ describe("extractGeminiCliCredentials", () => {
     expect(mockReadFileSync.mock.calls.length).toBe(readCount);
   });
 
+  it("extracts credentials when gemini-cli-core is hoisted to parent node_modules", async () => {
+    const binDir = join(rootDir, "fake", "npm-global", "bin");
+    const geminiPath = join(binDir, "gemini");
+    const resolvedPath = join(
+      rootDir,
+      "fake",
+      "npm-global",
+      "lib",
+      "node_modules",
+      "@google",
+      "gemini-cli",
+      "bundle",
+      "gemini.js",
+    );
+    const geminiCliDir = join(
+      rootDir,
+      "fake",
+      "npm-global",
+      "lib",
+      "node_modules",
+      "@google",
+      "gemini-cli",
+    );
+    const packageJsonPath = normalizePath(join(geminiCliDir, "package.json"));
+    const hoistedOauth2Path = join(
+      rootDir,
+      "fake",
+      "npm-global",
+      "lib",
+      "node_modules",
+      "@google",
+      "gemini-cli-core",
+      "dist",
+      "src",
+      "code_assist",
+      "oauth2.js",
+    );
+
+    process.env.PATH = binDir;
+    mockExistsSync.mockImplementation((p: string) => {
+      const normalized = normalizePath(p);
+      return (
+        normalized === normalizePath(geminiPath) ||
+        normalized === packageJsonPath ||
+        normalized === normalizePath(hoistedOauth2Path)
+      );
+    });
+    mockRealpathSync.mockReturnValue(resolvedPath);
+    mockReadFileSync.mockReturnValue(FAKE_OAUTH2_CONTENT);
+
+    clearCredentialsCache();
+    const result = extractGeminiCliCredentials();
+
+    expectFakeCliCredentials(result);
+  });
+
   it("skips unrelated oauth2.js files when gemini resolves inside a Windows nvm root", async () => {
     const { unrelatedOauth2Path } = installWindowsNvmLayoutWithUnrelatedOauth({
       oauth2Content: FAKE_OAUTH2_CONTENT,
