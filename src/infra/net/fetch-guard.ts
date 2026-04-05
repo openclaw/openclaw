@@ -15,6 +15,7 @@ import {
 import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
 
 export const GUARDED_FETCH_MODE = {
   STRICT: "strict",
@@ -208,6 +209,17 @@ function rewriteRedirectInitForMethod(params: {
   };
 }
 
+async function fetchWithRuntimeDispatcher(
+  input: string,
+  init: DispatcherAwareRequestInit,
+): Promise<Response> {
+  const runtimeFetch = loadUndiciRuntimeDeps().fetch as unknown as (
+    input: string,
+    init?: DispatcherAwareRequestInit,
+  ) => Promise<unknown>;
+  return (await runtimeFetch(input, init)) as Response;
+}
+
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
   if (!defaultFetch) {
@@ -268,11 +280,11 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         dispatcher = new EnvHttpProxyAgent();
       } else if (params.pinDns === false) {
         dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
-      } else if (params.pinDns !== false) {
+      } else {
         dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
       }
 
-      const init: RequestInit & { dispatcher?: Dispatcher } = {
+      const init: DispatcherAwareRequestInit = {
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
@@ -282,9 +294,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       // Use caller-provided fetch stubs when present; otherwise fall back to
       // undici's fetch whenever we attach a dispatcher because the global fetch
       // path will not honor per-request dispatchers.
-      const fetcher =
-        dispatcher && !params.fetchImpl ? loadUndiciRuntimeDeps().fetch : defaultFetch;
-      const response = await fetcher(parsedUrl.toString(), init);
+      const response =
+        dispatcher && !params.fetchImpl
+          ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+          : await defaultFetch(parsedUrl.toString(), init);
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");
