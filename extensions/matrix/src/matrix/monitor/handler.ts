@@ -1434,15 +1434,19 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 !mustDeliverFinalNormally
               ) {
                 try {
-                  await editMessageMatrix(roomId, draftEventId, payload.text, {
-                    client,
-                    cfg,
-                    threadId: threadTarget,
-                    accountId: _route.accountId,
-                    extraContent: quietDraftStreaming
-                      ? buildMatrixFinalizedPreviewContent()
-                      : undefined,
-                  });
+                  const requiresFinalEdit =
+                    quietDraftStreaming || !draftStream.matchesPreparedText(payload.text);
+                  if (requiresFinalEdit) {
+                    await editMessageMatrix(roomId, draftEventId, payload.text, {
+                      client,
+                      cfg,
+                      threadId: threadTarget,
+                      accountId: _route.accountId,
+                      extraContent: quietDraftStreaming
+                        ? buildMatrixFinalizedPreviewContent()
+                        : undefined,
+                    });
+                  }
                 } catch {
                   await redactMatrixDraftEvent(client, roomId, draftEventId);
                   await deliverMatrixReplies({
@@ -1462,7 +1466,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 draftConsumed = true;
               } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
                 let textEditOk = !mustDeliverFinalNormally;
-                if (textEditOk && payload.text && payload.text !== draftStream.lastSentText()) {
+                if (textEditOk && payload.text && !draftStream.matchesPreparedText(payload.text)) {
                   textEditOk = await editMessageMatrix(roomId, draftEventId, payload.text, {
                     client,
                     cfg,

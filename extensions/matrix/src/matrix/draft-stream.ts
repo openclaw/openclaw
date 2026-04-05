@@ -33,8 +33,8 @@ export type MatrixDraftStream = {
   reset: () => void;
   /** The event ID of the current draft message, if any. */
   eventId: () => string | undefined;
-  /** The last text successfully sent or edited. */
-  lastSentText: () => string;
+  /** True when the provided text matches the last rendered draft payload. */
+  matchesPreparedText: (text: string) => boolean;
   /** True when preview streaming must fall back to normal final delivery. */
   mustDeliverFinalNormally: () => boolean;
 };
@@ -164,7 +164,11 @@ export function createMatrixDraftStream(params: {
     stop,
     reset,
     eventId: () => currentEventId,
-    lastSentText: () => lastSentText,
+    matchesPreparedText: (text: string) =>
+      prepareMatrixSingleText(text, {
+        cfg,
+        accountId,
+      }).trimmedText === lastSentText,
     mustDeliverFinalNormally: () => sendFailed || finalizeInPlaceBlocked,
   };
 }
