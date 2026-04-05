@@ -371,13 +371,13 @@ describeLive("gateway live (ACP bind)", () => {
 
       const cfg = loadConfig();
       const acpxEntry = cfg.plugins?.entries?.acpx;
-      const existingAgentOverrides =
+      const existingAgentOverrides: Record<string, { command?: string }> =
         typeof acpxEntry?.config === "object" &&
         acpxEntry.config &&
         typeof acpxEntry.config.agents === "object" &&
         acpxEntry.config.agents
-          ? acpxEntry.config.agents
-          : undefined;
+          ? (acpxEntry.config.agents as Record<string, { command?: string }>)
+          : {};
       const nextCfg = {
         ...cfg,
         gateway: {
