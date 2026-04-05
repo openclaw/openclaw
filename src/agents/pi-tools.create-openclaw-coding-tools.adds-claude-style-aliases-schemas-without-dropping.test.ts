@@ -4,8 +4,8 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
+import { createBrowserTool } from "../../extensions/browser/runtime-api.js";
 import { applyXaiModelCompat } from "../../extensions/xai/api.js";
-import { createBrowserTool } from "../plugin-sdk/browser.js";
 import {
   findUnsupportedSchemaKeywords,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,

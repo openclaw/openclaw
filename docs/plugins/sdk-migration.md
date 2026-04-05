@@ -296,19 +296,19 @@ Current bundled provider examples:
 </Accordion>
 
 This table is intentionally the common migration subset, not the full SDK
-surface. The generated full list of 200+ entrypoints lives in
+surface. The full list of 200+ entrypoints lives in
 `scripts/lib/plugin-sdk-entrypoints.json`.
 
-That generated list still includes some bundled-plugin helper seams such as
+That list still includes some bundled-plugin helper seams such as
 `plugin-sdk/feishu`, `plugin-sdk/feishu-setup`, `plugin-sdk/zalo`,
 `plugin-sdk/zalo-setup`, and `plugin-sdk/matrix*`. Those remain exported for
 bundled-plugin maintenance and compatibility, but they are intentionally
 omitted from the common migration table and are not the recommended target for
 new plugin code.
 
-The same rule applies to other generated bundled-helper families such as:
+The same rule applies to other bundled-helper families such as:
 
-- browser: `plugin-sdk/browser*`
+- browser support helpers: `plugin-sdk/browser-config-support`, `plugin-sdk/browser-support`
 - Matrix: `plugin-sdk/matrix*`
 - LINE: `plugin-sdk/line*`
 - IRC: `plugin-sdk/irc*`

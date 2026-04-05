@@ -79,8 +79,8 @@ export type PluginRuntimeCore = {
     transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
   };
   imageGeneration: {
-    generate: typeof import("../../plugin-sdk/image-generation-runtime.js").generateImage;
-    listProviders: typeof import("../../plugin-sdk/image-generation-runtime.js").listRuntimeImageGenerationProviders;
+    generate: typeof import("../../image-generation/runtime.js").generateImage;
+    listProviders: typeof import("../../image-generation/runtime.js").listRuntimeImageGenerationProviders;
   };
   videoGeneration: {
     generate: typeof import("../../video-generation/runtime.js").generateVideo;

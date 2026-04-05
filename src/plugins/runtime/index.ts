@@ -1,5 +1,8 @@
 import { resolveStateDir } from "../../config/paths.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
+import {
+  generateImage as generateRuntimeImage,
+  listRuntimeImageGenerationProviders,
+} from "../../image-generation/runtime.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createLazyRuntimeMethod,
@@ -56,26 +59,10 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
   };
 }
 
-type RuntimeImageGenerationModule = Pick<
-  typeof import("../../plugin-sdk/image-generation-runtime.js"),
-  "generateImage" | "listRuntimeImageGenerationProviders"
->;
-let cachedRuntimeImageGenerationModule: RuntimeImageGenerationModule | null = null;
-
-function loadRuntimeImageGenerationModule(): RuntimeImageGenerationModule {
-  cachedRuntimeImageGenerationModule ??=
-    loadBundledPluginPublicSurfaceModuleSync<RuntimeImageGenerationModule>({
-      dirName: "image-generation-core",
-      artifactBasename: "runtime-api.js",
-    });
-  return cachedRuntimeImageGenerationModule;
-}
-
 function createRuntimeImageGeneration(): PluginRuntime["imageGeneration"] {
   return {
-    generate: (params) => loadRuntimeImageGenerationModule().generateImage(params),
-    listProviders: (params) =>
-      loadRuntimeImageGenerationModule().listRuntimeImageGenerationProviders(params),
+    generate: (params) => generateRuntimeImage(params),
+    listProviders: (params) => listRuntimeImageGenerationProviders(params),
   };
 }
 

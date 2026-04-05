@@ -262,9 +262,9 @@ explicitly promotes one as public.
   </Accordion>
 
   <Accordion title="Reserved bundled-helper subpaths">
-    | Family | Current generated subpaths | Intended use |
+    | Family | Current subpaths | Intended use |
     | --- | --- | --- |
-    | Browser | `plugin-sdk/browser`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-support` | Bundled browser plugin maintenance and compatibility |
+    | Browser | `plugin-sdk/browser-config-support`, `plugin-sdk/browser-support` | Bundled browser plugin support helpers |
     | Matrix | `plugin-sdk/matrix`, `plugin-sdk/matrix-helper`, `plugin-sdk/matrix-runtime-heavy`, `plugin-sdk/matrix-runtime-shared`, `plugin-sdk/matrix-runtime-surface`, `plugin-sdk/matrix-surface`, `plugin-sdk/matrix-thread-bindings` | Bundled Matrix helper/runtime surface |
     | Line | `plugin-sdk/line`, `plugin-sdk/line-core`, `plugin-sdk/line-runtime`, `plugin-sdk/line-surface` | Bundled LINE helper/runtime surface |
     | IRC | `plugin-sdk/irc`, `plugin-sdk/irc-surface` | Bundled IRC helper surface |
