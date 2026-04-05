@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { findDeep, parseClaudeAuthOutput } from "./cli-delegation.probe.js";
 import {
   CLI_DELEGATION_SENTINEL,
   CLI_DELEGATION_AUTH_METHOD_ID,
@@ -58,17 +59,13 @@ describe("cli-delegation types", () => {
   });
 });
 
-describe("probeClaudeCliStatus", () => {
-  it("detects unauthenticated signals from stdout", async () => {
-    const { parseClaudeAuthOutput } = await import("./cli-delegation.probe.js");
-
+describe("parseClaudeAuthOutput", () => {
+  it("detects unauthenticated signals from stdout", () => {
     const result = parseClaudeAuthOutput("Not logged in. Run `claude login` to authenticate.");
     expect(result.authenticated).toBe(false);
   });
 
-  it("extracts subscription type from JSON output", async () => {
-    const { parseClaudeAuthOutput } = await import("./cli-delegation.probe.js");
-
+  it("extracts subscription type from JSON output", () => {
     const json = JSON.stringify({
       status: "authenticated",
       account: { subscriptionType: "max", email: "user@example.com" },
@@ -80,9 +77,7 @@ describe("probeClaudeCliStatus", () => {
     }
   });
 
-  it("extracts subscription type from nested JSON", async () => {
-    const { parseClaudeAuthOutput } = await import("./cli-delegation.probe.js");
-
+  it("extracts subscription type from nested JSON", () => {
     const json = JSON.stringify({
       data: { inner: { subscription_type: "pro" } },
     });
@@ -93,9 +88,7 @@ describe("probeClaudeCliStatus", () => {
     }
   });
 
-  it("extracts auth method from JSON output", async () => {
-    const { parseClaudeAuthOutput } = await import("./cli-delegation.probe.js");
-
+  it("extracts auth method from JSON output", () => {
     const json = JSON.stringify({
       authMethod: "apiKey",
       subscriptionType: "enterprise",
@@ -103,37 +96,31 @@ describe("probeClaudeCliStatus", () => {
     const result = parseClaudeAuthOutput(json);
     expect(result.authenticated).toBe(true);
     if (result.authenticated) {
-      expect(result.authMethod).toBe("apikey");
+      expect(result.authMethod).toBe("apiKey");
       expect(result.subscriptionType).toBe("enterprise");
     }
   });
 
-  it("treats non-JSON non-unauthenticated output as authenticated", async () => {
-    const { parseClaudeAuthOutput } = await import("./cli-delegation.probe.js");
-
+  it("treats non-JSON non-unauthenticated output as authenticated", () => {
     const result = parseClaudeAuthOutput("Logged in as user@example.com");
     expect(result.authenticated).toBe(true);
   });
 });
 
 describe("findDeep", () => {
-  it("finds a key in a flat object", async () => {
-    const { findDeep } = await import("./cli-delegation.probe.js");
+  it("finds a key in a flat object", () => {
     expect(findDeep({ subscriptionType: "max" }, ["subscriptionType"])).toBe("max");
   });
 
-  it("finds a key in nested objects", async () => {
-    const { findDeep } = await import("./cli-delegation.probe.js");
+  it("finds a key in nested objects", () => {
     expect(findDeep({ a: { b: { plan_type: "pro" } } }, ["plan_type"])).toBe("pro");
   });
 
-  it("returns undefined when key is not found", async () => {
-    const { findDeep } = await import("./cli-delegation.probe.js");
+  it("returns undefined when key is not found", () => {
     expect(findDeep({ foo: "bar" }, ["subscriptionType"])).toBeUndefined();
   });
 
-  it("skips empty string values", async () => {
-    const { findDeep } = await import("./cli-delegation.probe.js");
+  it("skips empty string values", () => {
     expect(findDeep({ subscriptionType: "" }, ["subscriptionType"])).toBeUndefined();
   });
 });

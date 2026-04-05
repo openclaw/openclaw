@@ -23,7 +23,7 @@ export function findDeep(obj: unknown, keys: string[]): string | undefined {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
     if (keys.includes(k) && typeof v === "string" && v.trim().length > 0) {
-      return v.trim().toLowerCase();
+      return v.trim();
     }
     const deep = findDeep(v, keys);
     if (deep) return deep;
