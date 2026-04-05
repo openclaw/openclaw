@@ -367,7 +367,9 @@ export function resolveConfiguredModelRef(params: {
         model: trimmed,
       });
       if (inferredProvider) {
-        return { provider: inferredProvider, model: trimmed };
+        return normalizeModelRef(inferredProvider, trimmed, {
+          allowPluginNormalization: params.allowPluginNormalization,
+        });
       }
 
       // Default to the configured provider if no provider is specified, but warn as this is deprecated.
