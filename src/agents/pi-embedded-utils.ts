@@ -249,6 +249,42 @@ function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): 
   return sanitizeUserFacingText(extracted, { errorContext });
 }
 
+function hasAssistantTextForPhase(msg: AssistantMessage, phase: AssistantPhase): boolean {
+  const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
+
+  if (typeof msg.content === "string") {
+    return messagePhase === phase;
+  }
+
+  if (!Array.isArray(msg.content)) {
+    return false;
+  }
+
+  const hasExplicitPhasedTextBlocks = msg.content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const record = block as { type?: unknown; textSignature?: unknown };
+    if (record.type !== "text") {
+      return false;
+    }
+    return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
+  });
+
+  return msg.content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const record = block as { type?: unknown; textSignature?: unknown };
+    if (record.type !== "text") {
+      return false;
+    }
+    const signature = parseAssistantTextSignature(record.textSignature);
+    const resolvedPhase = signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
+    return resolvedPhase === phase;
+  });
+}
+
 function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPhase): string {
   const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
   const shouldIncludeContent = (resolvedPhase?: AssistantPhase) => {
@@ -306,8 +342,8 @@ function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPh
 
 export function extractAssistantVisibleText(msg: AssistantMessage): string {
   const finalAnswerText = extractAssistantTextForPhase(msg, "final_answer");
-  if (finalAnswerText.trim()) {
-    return finalAnswerText;
+  if (hasAssistantTextForPhase(msg, "final_answer")) {
+    return finalAnswerText.trim() ? finalAnswerText : "";
   }
 
   return extractAssistantTextForPhase(msg);

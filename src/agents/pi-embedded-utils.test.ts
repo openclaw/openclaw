@@ -615,6 +615,23 @@ describe("extractAssistantVisibleText", () => {
     expect(extractAssistantVisibleText(msg)).toBe("");
   });
 
+  it("does not fall back to unphased legacy text when an empty final_answer block exists", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Legacy answer" },
+        {
+          type: "text",
+          text: "   ",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("");
+  });
+
   it("falls back to legacy unphased text when phased text is absent", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
