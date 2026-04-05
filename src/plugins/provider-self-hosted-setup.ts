@@ -1,4 +1,3 @@
-import { isReasoningModelHeuristic } from "../../extensions/ollama/api.js";
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
 import {
@@ -32,6 +31,10 @@ type OpenAICompatModelsResponse = {
     id?: string;
   }>;
 };
+
+function isReasoningModelHeuristic(modelId: string): boolean {
+  return /r1|reasoning|think|reason/i.test(modelId);
+}
 
 export async function discoverOpenAICompatibleLocalModels(params: {
   baseUrl: string;

@@ -83,8 +83,8 @@
 
 ## Docs i18n (zh-CN)
 
-- `docs/zh-CN/**` is generated; do not edit unless the user explicitly asks.
-- Pipeline: update English docs → adjust glossary (`docs/.i18n/glossary.zh-CN.json`) → run `scripts/docs-i18n` → apply targeted fixes only if instructed.
+- Simplified Chinese publish output lives in the sibling `openclaw-docs` repo; do not add or edit `docs/zh-CN/**` here.
+- Pipeline: update English docs here → adjust glossary (`docs/.i18n/glossary.zh-CN.json`) → let the publish-repo sync + `scripts/docs-i18n` run in `openclaw-docs` → apply targeted fixes only if instructed.
 - Before rerunning `scripts/docs-i18n`, add glossary entries for any new technical terms, page titles, or short nav labels that must stay in English or use a fixed translation (for example `Doctor` or `Polls`).
 - `pnpm docs:check-i18n-glossary` enforces glossary coverage for changed English doc titles and short internal doc labels before translation reruns.
 - Translation memory: `docs/.i18n/zh-CN.tm.jsonl` (generated).
