@@ -463,10 +463,7 @@ function loadSkillEntries(
         }
       }
 
-      if (
-        loadedSkills.length >= limits.maxSkillsLoadedPerSource ||
-        remainingGroupedProbeBudget <= 0
-      ) {
+      if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
         break;
       }
     }

@@ -281,6 +281,35 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(entries.map((entry) => entry.skill.name)).toContain("koze-retrieval");
   });
 
+  it("keeps scanning later direct managed skills after grouped probe budget is spent", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedDir = path.join(workspaceDir, ".managed");
+    const groupedMissRoot = path.join(managedDir, "a-group");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+
+    await fs.mkdir(path.join(groupedMissRoot, "miss-one"), { recursive: true });
+    await fs.mkdir(path.join(groupedMissRoot, "miss-two"), { recursive: true });
+    await writeSkill({
+      dir: path.join(managedDir, "z-direct"),
+      name: "z-direct",
+      description: "Direct managed skill after grouped misses",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      config: {
+        skills: {
+          limits: {
+            maxSkillsLoadedPerSource: 2,
+          },
+        },
+      },
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: bundledDir,
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("z-direct");
+  });
+
   it.runIf(process.platform !== "win32")(
     "skips workspace skill directories that resolve outside the workspace root",
     async () => {
