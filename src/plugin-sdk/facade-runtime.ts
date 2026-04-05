@@ -180,20 +180,38 @@ function getFacadeBoundaryResolvedConfig() {
   return resolved;
 }
 
-function resolveBundledPluginManifestRecordByDirName(dirName: string): PluginManifestRecord | null {
+function resolveBundledPluginManifestRecord(params: {
+  dirName: string;
+  artifactBasename: string;
+}): PluginManifestRecord | null {
   const { config } = getFacadeBoundaryResolvedConfig();
-  return (
-    loadPluginManifestRegistry({
-      config,
-      cache: true,
-    }).plugins.find(
-      (plugin) => plugin.origin === "bundled" && path.basename(plugin.rootDir) === dirName,
-    ) ?? null
-  );
+  const registry = loadPluginManifestRegistry({
+    config,
+    cache: true,
+  }).plugins;
+  const location = resolveFacadeModuleLocation(params);
+  if (location) {
+    const normalizedModulePath = path.resolve(location.modulePath);
+    const matchedRecord = registry.find((plugin) => {
+      const normalizedRootDir = path.resolve(plugin.rootDir);
+      return (
+        normalizedModulePath === normalizedRootDir ||
+        normalizedModulePath.startsWith(`${normalizedRootDir}${path.sep}`)
+      );
+    });
+    if (matchedRecord) {
+      return matchedRecord;
+    }
+  }
+
+  return registry.find((plugin) => path.basename(plugin.rootDir) === params.dirName) ?? null;
 }
 
-function resolveTrackedFacadePluginId(dirName: string): string {
-  return resolveBundledPluginManifestRecordByDirName(dirName)?.id ?? dirName;
+function resolveTrackedFacadePluginId(params: {
+  dirName: string;
+  artifactBasename: string;
+}): string {
+  return resolveBundledPluginManifestRecord(params)?.id ?? params.dirName;
 }
 
 function resolveBundledPluginPublicSurfaceAccess(params: {
@@ -210,7 +228,7 @@ function resolveBundledPluginPublicSurfaceAccess(params: {
     };
   }
 
-  const manifestRecord = resolveBundledPluginManifestRecordByDirName(params.dirName);
+  const manifestRecord = resolveBundledPluginManifestRecord(params);
   if (!manifestRecord) {
     return {
       allowed: false,
@@ -349,7 +367,7 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
   try {
     // Track the owning plugin once module evaluation begins. Facade top-level
     // code may have already executed even if the module later throws.
-    loadedFacadePluginIds.add(resolveTrackedFacadePluginId(params.dirName));
+    loadedFacadePluginIds.add(resolveTrackedFacadePluginId(params));
     loaded = getJiti(location.modulePath)(location.modulePath) as T;
     Object.assign(sentinel, loaded);
   } catch (err) {
