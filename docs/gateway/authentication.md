@@ -61,12 +61,15 @@ See [Help](/help) for details on env inheritance (`env.shellEnv`,
 
 ## Anthropic: legacy token compatibility
 
-Existing Anthropic token profiles are still honored at runtime if they are
-already configured, but OpenClaw no longer offers Anthropic setup-token auth
-for new setup via onboarding or `models auth` commands.
+Anthropic setup-token auth is still available in OpenClaw as a
+legacy/manual path. Anthropic's public Claude Code docs still cover direct
+Claude Code terminal use under Claude plans, but Anthropic separately told
+OpenClaw users that the **OpenClaw** Claude-login path counts as third-party
+harness usage and requires **Extra Usage** billed separately from the
+subscription.
 
-For new setup, use an Anthropic API key or migrate to Claude CLI on the gateway
-host.
+For the clearest setup path, use an Anthropic API key or migrate to Claude CLI
+on the gateway host.
 
 Manual token entry (any provider; writes `auth-profiles.json` + updates config):
 
@@ -137,8 +140,9 @@ Onboarding shortcut:
 openclaw onboard --auth-choice anthropic-cli
 ```
 
-Interactive `openclaw onboard` and `openclaw configure` prefer Claude CLI for
-Anthropic and no longer offer setup-token as a new setup path.
+Interactive `openclaw onboard` and `openclaw configure` still prefer Claude CLI
+for Anthropic, but Anthropic setup-token is available again as a
+legacy/manual path and should be used with the Extra Usage billing expectation.
 
 ## Checking model auth status
 

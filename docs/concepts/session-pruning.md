@@ -51,10 +51,10 @@ persisted raw image blocks in history.
 
 OpenClaw auto-enables pruning for Anthropic profiles:
 
-| Profile type                    | Pruning enabled | Heartbeat |
-| ------------------------------- | --------------- | --------- |
-| Claude CLI or legacy token auth | Yes             | 1 hour    |
-| API key                         | Yes             | 30 min    |
+| Profile type                                            | Pruning enabled | Heartbeat |
+| ------------------------------------------------------- | --------------- | --------- |
+| Anthropic OAuth/token auth (including Claude CLI reuse) | Yes             | 1 hour    |
+| API key                                                 | Yes             | 30 min    |
 
 If you set explicit values, OpenClaw does not override them.
 

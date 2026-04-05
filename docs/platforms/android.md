@@ -138,8 +138,12 @@ Pairing details: [Pairing](/channels/pairing).
 The Android Chat tab supports session selection (default `main`, plus other existing sessions):
 
 - History: `chat.history` (display-normalized; inline directive tags are
-  stripped from visible text, pure `NO_REPLY` assistant rows are omitted, and
-  oversized rows can be replaced with placeholders)
+  stripped from visible text, plain-text tool-call XML payloads (including
+  `<tool_call>...</tool_call>`, `<function_call>...</function_call>`,
+  `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and
+  truncated tool-call blocks) and leaked ASCII/full-width model control tokens
+  are stripped, pure silent-token assistant rows such as exact `NO_REPLY` /
+  `no_reply` are omitted, and oversized rows can be replaced with placeholders)
 - Send: `chat.send`
 - Push updates (best-effort): `chat.subscribe` → `event:"chat"`
 
@@ -178,7 +182,7 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
 
 ### 8) Voice + expanded Android command surface
 
-- Voice: Android uses a single mic on/off flow in the Voice tab with transcript capture and TTS playback (ElevenLabs when configured, system TTS fallback). Voice stops when the app leaves the foreground.
+- Voice: Android uses a single mic on/off flow in the Voice tab with transcript capture and `talk.speak` playback. Local system TTS is used only when `talk.speak` is unavailable. Voice stops when the app leaves the foreground.
 - Voice wake/talk-mode toggles are currently removed from Android UX/runtime.
 - Additional Android command families (availability depends on device + permissions):
   - `device.status`, `device.info`, `device.permissions`, `device.health`

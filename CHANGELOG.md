@@ -110,6 +110,16 @@ Docs: https://docs.openclaw.ai
 - Agents/exec: restore `host=node` routing for node-pinned and `host=auto` sessions, while still blocking sandboxed `auto` sessions from jumping to gateway. (#60788) Thanks @openperf.
 - Agents/compaction: keep assistant tool calls and displaced tool results in the same compaction chunk so strict summarization providers stop rejecting orphaned tool pairs. (#58849) Thanks @openperf.
 - Outbound/sanitizer: strip leaked `<tool_call>`, `<function_calls>`, and model special tokens from shared user-visible assistant text, including truncated tool-call streams, so internal scaffolding no longer bleeds into replies across surfaces. (#60619) Thanks @oliviareid-svg.
+- Control UI/avatar: honor `ui.assistant.avatar` when serving `/avatar/:agentId` so Appearance UI avatar paths stop falling back to initials placeholders. (#60778) Thanks @hannasdev.
+- Control UI/Overview: prevent gateway access token/password visibility toggle buttons from overlapping their inputs at narrow widths. (#56924) Thanks @bbddbb1.
+- Control UI/cron: highlight the Cron refresh button while refresh is in flight so the page's loading state stays visible even when prior data remains on screen. (#60394) Thanks @coder-zhuzm.
+- MS Teams: replace the deprecated Teams SDK HttpPlugin stub with `httpServerAdapter` so recurring gateway deprecation warnings stop firing and the Express 5 compatibility workaround stays on the supported SDK path. (#60939) Thanks @coolramukaka-sys.
+- CLI/Commander: preserve Commander-computed exit codes for argument and help-error paths, and cover the user-argv parse mode in the regression tests so invalid CLI invocations no longer report success when exits are intercepted. (#60923) Thanks @Linux2010.
+- Telegram/native command menu: trim long menu descriptions before dropping commands so sub-100 command sets can still fit Telegram's payload budget and keep more `/` entries visible. (#61129) Thanks @neeravmakwana.
+- Agents/Claude CLI: keep non-interactive `--permission-mode bypassPermissions` when custom `cliBackends.claude-cli.args` override defaults, so cron and heartbeat Claude CLI runs do not regress to interactive approval mode. (#61114) Thanks @cathrynlavery and @thewilloftheshadow.
+- Agents/skills: skip `.git` and `node_modules` when mirroring skills into sandbox workspaces so read-only sandboxes do not copy repo history or dependency trees. (#61090) Thanks @joelnishanth.
+- Android/Talk Mode: cancel in-flight `talk.speak` playback when speech is explicitly stopped, so stale replies stop starting after barge-in or manual stop. (#61164) Thanks @obviyus.
+- Plugins/onboarding: write dotted plugin uiHint paths like Brave `webSearch.mode` as nested plugin config so `llm-context` setup stops failing validation. (#61159) Thanks @obviyus.
 - Media: fix `sanitizeMimeType` regex to anchor at end (`$`), enforce RFC 2045 `; attribute=value` parameter grammar, and apply case-insensitive matching per RFC 2045 §5.1, avoiding matches on trailing non-parameter suffixes while preserving valid parameterized MIME types. (#9795) Thanks @shamsulalam1114.
 
 ## 2026.4.2
@@ -207,6 +217,9 @@ Docs: https://docs.openclaw.ai
 - Browser/profiles: reject remote browser profile `cdpUrl` values that violate strict SSRF policy before saving config, with clearer validation errors for blocked endpoints. (#60477) Thanks @eleqtrizit.
 - Browser/screenshots: stop sending `fromSurface: false` on CDP screenshots so managed Chrome 146+ browsers can capture images again. (#60682) Thanks @mvanhorn.
 - Mattermost/slash commands: harden native slash-command callback token validation to use constant-time secret comparison, matching the existing interaction-token path.
+- Control UI/mobile chat: reduce narrow-screen overflow by shrinking the chat pane minimum width, removing extra mobile padding, widening message groups, and hiding avatars on very small screens. (#60220) Thanks @macdao.
+- Android/Talk Mode: route spoken replies through `talk.speak`, keep compressed playback cleanup deterministic, and fall back to local TTS for legacy gateways that omit Talk error reasons. (#60954) Thanks @obviyus.
+- Android/Talk Mode: keep reply-speaker routing and teardown behavior aligned with the new remote playback path. (#60954) Thanks @MKV21.
 
 ## 2026.4.1
 

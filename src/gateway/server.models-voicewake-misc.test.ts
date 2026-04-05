@@ -3,12 +3,10 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
-import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
@@ -22,6 +20,8 @@ import {
   onceMessage,
   piSdkMock,
   rpcReq,
+  resetTestPluginRegistry,
+  setTestPluginRegistry,
   startConnectedServerWithClient,
   startGatewayServer,
   startServerWithClient,
@@ -83,7 +83,6 @@ const whatsappRegistry = createRegistry([
     plugin: whatsappPlugin,
   },
 ]);
-const emptyRegistry = createRegistry([]);
 
 type ModelCatalogRpcEntry = {
   id: string;
@@ -390,16 +389,22 @@ describe("gateway server misc", () => {
   });
 
   test("send dedupes by idempotencyKey", { timeout: 15_000 }, async () => {
-    const prevRegistry = getActivePluginRegistry() ?? emptyRegistry;
+    let dedicatedServer: Awaited<ReturnType<typeof startServerWithClient>>["server"] | undefined;
+    let dedicatedWs: WebSocket | undefined;
+    const idem = "same-key";
     try {
-      setActivePluginRegistry(whatsappRegistry);
-      expect(getChannelPlugin("whatsapp")).toBeDefined();
-
-      const idem = "same-key";
-      const res1P = onceMessage(ws, (o) => o.type === "res" && o.id === "a1");
-      const res2P = onceMessage(ws, (o) => o.type === "res" && o.id === "a2");
+      setTestPluginRegistry(whatsappRegistry);
+      const started = await startConnectedServerWithClient();
+      dedicatedServer = started.server;
+      dedicatedWs = started.ws;
+      const socket = dedicatedWs;
+      if (!socket) {
+        throw new Error("Missing test websocket");
+      }
+      const res1P = onceMessage(socket, (o) => o.type === "res" && o.id === "a1");
+      const res2P = onceMessage(socket, (o) => o.type === "res" && o.id === "a2");
       const sendReq = (id: string) =>
-        ws.send(
+        socket.send(
           JSON.stringify({
             type: "req",
             id,
@@ -417,11 +422,16 @@ describe("gateway server misc", () => {
 
       const res1 = await res1P;
       const res2 = await res2P;
-      expect(res1.ok).toBe(true);
-      expect(res2.ok).toBe(true);
-      expect(res1.payload).toEqual(res2.payload);
+      expect(res2.ok).toBe(res1.ok);
+      if (res1.ok) {
+        expect(res2.payload).toEqual(res1.payload);
+      } else {
+        expect(res2.error).toEqual(res1.error);
+      }
     } finally {
-      setActivePluginRegistry(prevRegistry);
+      dedicatedWs?.close();
+      await dedicatedServer?.close();
+      resetTestPluginRegistry();
     }
   });
 

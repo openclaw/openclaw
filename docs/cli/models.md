@@ -119,9 +119,18 @@ openclaw models auth login --provider openai-codex --set-default
 Notes:
 
 - `login --provider anthropic --method cli --set-default` reuses a local Claude
-  CLI login and rewrites the main Anthropic default-model path to `claude-cli/...`.
+  CLI login and rewrites the main Anthropic default-model path to a canonical
+  `claude-cli/claude-*` ref.
 - `setup-token` and `paste-token` remain generic token commands for providers
   that expose token auth methods.
+- `setup-token` requires an interactive TTY and runs the provider's token-auth
+  method (defaulting to that provider's `setup-token` method when it exposes
+  one).
 - `paste-token` accepts a token string generated elsewhere or from automation.
-- Anthropic billing note: Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover OpenClaw, and Claude CLI traffic in OpenClaw now requires **Extra Usage** billed separately from the subscription.
-- Existing legacy Anthropic token profiles still run if already configured, but Anthropic no longer supports `setup-token` or `paste-token` as a new OpenClaw auth path.
+- `paste-token` requires `--provider`, prompts for the token value, and writes
+  it to the default profile id `<provider>:manual` unless you pass
+  `--profile-id`.
+- `paste-token --expires-in <duration>` stores an absolute token expiry from a
+  relative duration such as `365d` or `12h`.
+- Anthropic billing note: Anthropic's public Claude Code docs still include direct Claude Code terminal usage in Claude plan limits. Separately, Anthropic notified OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription.
+- Anthropic `setup-token` / `paste-token` are available again as a legacy/manual OpenClaw path. Use them with the expectation that Anthropic told OpenClaw users this path requires **Extra Usage**.
