@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions.js";
-import { slackNativeApprovalAdapter } from "./approval-native.js";
+import { slackApprovalCapability, slackNativeApprovalAdapter } from "./approval-native.js";
 
 function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>>,
@@ -102,6 +102,17 @@ describe("slack native approval adapter", () => {
       supportsApproverDmSurface: true,
       notifyOriginWhenDmOnly: true,
     });
+  });
+
+  it("describes the correct Slack exec-approval setup path", () => {
+    const text = slackApprovalCapability.describeExecApprovalSetup?.({
+      channel: "slack",
+      channelLabel: "Slack",
+    });
+
+    expect(text).toContain("`channels.slack.execApprovals.approvers`");
+    expect(text).toContain("`commands.ownerAllowFrom`");
+    expect(text).not.toContain("`channels.slack.dm.allowFrom`");
   });
 
   it("resolves origin targets from slack turn source", async () => {

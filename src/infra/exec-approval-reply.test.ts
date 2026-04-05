@@ -2,6 +2,25 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 
 vi.mock("./exec-approval-surface.js", () => ({
+  describeNativeExecApprovalClientSetup: vi.fn(
+    (params: { channel?: string | null; channelLabel?: string | null }) => {
+      const channel = (params.channel ?? "").trim().toLowerCase();
+      const label = params.channelLabel ?? channel;
+      if (channel === "matrix") {
+        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`channels.matrix.execApprovals.approvers\` or \`channels.matrix.dm.allowFrom\`; leave \`channels.matrix.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+      }
+      if (channel === "discord") {
+        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`channels.discord.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`channels.discord.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+      }
+      if (channel === "slack") {
+        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`channels.slack.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`channels.slack.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+      }
+      if (channel === "telegram") {
+        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`channels.telegram.execApprovals.approvers\`; if you leave it unset, OpenClaw can infer numeric owner IDs from \`channels.telegram.allowFrom\` or direct-message \`defaultTo\` when possible. Leave \`channels.telegram.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+      }
+      return null;
+    },
+  ),
   listNativeExecApprovalClientLabels: vi.fn(() => ["Discord", "Matrix", "Slack", "Telegram"]),
   supportsNativeExecApprovalClient: vi.fn((channel?: string | null) =>
     ["discord", "matrix", "slack", "telegram"].includes((channel ?? "").trim().toLowerCase()),
@@ -86,6 +105,39 @@ describe("exec approval reply helpers", () => {
     expect(text).toContain("`channels.matrix.execApprovals.approvers`");
     expect(text).toContain("`channels.matrix.dm.allowFrom`");
   });
+
+  it.each([
+    {
+      channel: "discord",
+      channelLabel: "Discord",
+      expected: "`commands.ownerAllowFrom`",
+      unexpected: "`channels.discord.dm.allowFrom`",
+    },
+    {
+      channel: "slack",
+      channelLabel: "Slack",
+      expected: "`commands.ownerAllowFrom`",
+      unexpected: "`channels.slack.dm.allowFrom`",
+    },
+    {
+      channel: "telegram",
+      channelLabel: "Telegram",
+      expected: "`channels.telegram.allowFrom`",
+      unexpected: "`channels.telegram.dm.allowFrom`",
+    },
+  ])(
+    "uses channel-specific disabled setup guidance for $channelLabel",
+    ({ channel, channelLabel, expected, unexpected }) => {
+      const text = buildExecApprovalUnavailableReplyPayload({
+        reason: "initiating-platform-disabled",
+        channel,
+        channelLabel,
+      }).text;
+
+      expect(text).toContain(expected);
+      expect(text).not.toContain(unexpected);
+    },
+  );
 
   it.each(invalidReplyMetadataCases)(
     "returns null for invalid reply metadata payload: $name",

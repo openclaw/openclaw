@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { InteractiveReply, InteractiveReplyButton } from "../interactive/payload.js";
 import {
+  describeNativeExecApprovalClientSetup,
   listNativeExecApprovalClientLabels,
   supportsNativeExecApprovalClient,
 } from "./exec-approval-surface.js";
@@ -76,17 +77,6 @@ function resolveNativeExecApprovalClientList(params?: { excludeChannel?: string 
       excludeChannel: params?.excludeChannel,
     }),
   );
-}
-
-function buildNativeExecApprovalSetupText(params: {
-  channel: string;
-  channelLabel: string;
-}): string {
-  return [
-    "Approve it from the Web UI or terminal UI for now.",
-    `${params.channelLabel} supports native exec approvals for this account.`,
-    `Configure \`channels.${params.channel}.execApprovals.approvers\` or \`channels.${params.channel}.dm.allowFrom\`; leave \`channels.${params.channel}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`,
-  ].join(" ");
 }
 
 function buildGenericNativeExecApprovalFallbackText(params?: { excludeChannel?: string }): string {
@@ -386,13 +376,15 @@ export function buildExecApprovalUnavailableReplyPayload(
       `Exec approval is required, but native chat exec approvals are not configured on ${params.channelLabel ?? "this platform"}.`,
     );
     const channel = params.channel?.trim().toLowerCase();
-    if (channel && params.channelLabel && supportsNativeExecApprovalClient(channel)) {
-      lines.push(
-        buildNativeExecApprovalSetupText({
-          channel,
-          channelLabel: params.channelLabel,
-        }),
-      );
+    const setupText =
+      channel && params.channelLabel && supportsNativeExecApprovalClient(channel)
+        ? describeNativeExecApprovalClientSetup({
+            channel,
+            channelLabel: params.channelLabel,
+          })
+        : null;
+    if (setupText) {
+      lines.push(setupText);
     } else {
       lines.push(buildGenericNativeExecApprovalFallbackText());
     }

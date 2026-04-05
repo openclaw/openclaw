@@ -82,6 +82,23 @@ export function listNativeExecApprovalClientLabels(params?: {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+export function describeNativeExecApprovalClientSetup(params: {
+  channel?: string | null;
+  channelLabel?: string | null;
+}): string | null {
+  const channel = normalizeMessageChannel(params.channel);
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL || channel === "tui") {
+    return null;
+  }
+  const channelLabel = params.channelLabel?.trim() || labelForChannel(channel);
+  return (
+    resolveChannelApprovalCapability(getChannelPlugin(channel))?.describeExecApprovalSetup?.({
+      channel,
+      channelLabel,
+    }) ?? null
+  );
+}
+
 export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
   return listChannelPlugins().some(
     (plugin) =>

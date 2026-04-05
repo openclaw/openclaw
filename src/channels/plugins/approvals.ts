@@ -44,6 +44,8 @@ export function resolveChannelApprovalCapability(
       capability.getActionAvailabilityState ?? legacyCapability.getActionAvailabilityState,
     resolveApproveCommandBehavior:
       capability.resolveApproveCommandBehavior ?? legacyCapability.resolveApproveCommandBehavior,
+    describeExecApprovalSetup:
+      capability.describeExecApprovalSetup ?? legacyCapability.describeExecApprovalSetup,
     delivery: capability.delivery ?? legacyCapability.delivery,
     render: capability.render ?? legacyCapability.render,
     native: capability.native ?? legacyCapability.native,

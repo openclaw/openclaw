@@ -743,6 +743,10 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
     senderId?: string | null;
     approvalKind: ChannelApprovalKind;
   }) => ChannelApproveCommandBehavior | undefined;
+  describeExecApprovalSetup?: (params: {
+    channel: string;
+    channelLabel: string;
+  }) => string | null | undefined;
 };
 
 export type ChannelApprovalAdapter = {

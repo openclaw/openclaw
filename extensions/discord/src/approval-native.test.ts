@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions.js";
 import {
   createDiscordNativeApprovalAdapter,
+  getDiscordApprovalCapability,
   shouldHandleDiscordApprovalRequest,
 } from "./approval-native.js";
 
@@ -85,6 +86,17 @@ describe("createDiscordNativeApprovalAdapter", () => {
         },
       }),
     ).toBe(true);
+  });
+
+  it("describes the correct Discord exec-approval setup path", () => {
+    const text = getDiscordApprovalCapability().describeExecApprovalSetup?.({
+      channel: "discord",
+      channelLabel: "Discord",
+    });
+
+    expect(text).toContain("`channels.discord.execApprovals.approvers`");
+    expect(text).toContain("`commands.ownerAllowFrom`");
+    expect(text).not.toContain("`channels.discord.dm.allowFrom`");
   });
 
   it("normalizes prefixed turn-source channel ids", async () => {

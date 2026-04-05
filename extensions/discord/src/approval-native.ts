@@ -153,6 +153,8 @@ export function createDiscordApprovalCapability(configOverride?: DiscordExecAppr
   return createApproverRestrictedNativeApprovalCapability({
     channel: "discord",
     channelLabel: "Discord",
+    describeExecApprovalSetup: () =>
+      "Approve it from the Web UI or terminal UI for now. Discord supports native exec approvals for this account. Configure `channels.discord.execApprovals.approvers` or `commands.ownerAllowFrom`; leave `channels.discord.execApprovals.enabled` unset/`auto` or set it to `true`.",
     listAccountIds: listDiscordAccountIds,
     hasApprovers: ({ cfg, accountId }) =>
       getDiscordExecApprovalApprovers({ cfg, accountId, configOverride }).length > 0,
