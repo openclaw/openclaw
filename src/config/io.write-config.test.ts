@@ -468,6 +468,7 @@ describe("config io write", () => {
           channels: {
             bluebubbles: {
               serverUrl: "http://localhost:1234",
+              password: "test-password",
             },
           },
         },
@@ -502,6 +503,7 @@ describe("config io write", () => {
       expect(channels?.bluebubbles).toBeDefined();
       expect(channels?.bluebubbles).not.toHaveProperty("enrichGroupParticipantsFromContacts");
       expect(channels?.bluebubbles?.serverUrl).toBe("http://localhost:1234");
+      expect(channels?.bluebubbles?.password).toBe("test-password");
     });
 
     // Restore the default empty-plugins mock for subsequent tests.

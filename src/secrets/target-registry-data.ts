@@ -322,6 +322,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInPlan: true,
     includeInConfigure: true,
     includeInAudit: true,
+    providerIdPathSegmentIndex: 2,
   },
   {
     id: "tools.web.search.apiKey",

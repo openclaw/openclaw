@@ -399,7 +399,7 @@ describe("subagent announce seam flow", () => {
     expect(params.threadId).toBeUndefined();
   });
 
-  it("inherits session lastChannel/lastTo for completion announce when requesterOrigin lacks to", async () => {
+  it("falls back to stored delivery target when mocked completion origins omit to", async () => {
     loadSessionStoreMock.mockImplementation(() => ({
       "agent:main:main": {
         sessionId: "session-tg-group",
@@ -434,6 +434,7 @@ describe("subagent announce seam flow", () => {
       expect.objectContaining({
         deliver: true,
         channel: "telegram",
+        accountId: "bot:123",
         to: "-1001234567890",
       }),
     );

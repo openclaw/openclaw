@@ -9,7 +9,7 @@ import {
 import { isRecord } from "./shared.js";
 
 const ACPX_PLUGIN_ID = "acpx";
-const ACPX_ENABLED_BY_DEFAULT = true;
+const ACPX_ENABLED_BY_DEFAULT = false;
 
 /**
  * Walk plugin config entries and collect SecretRef assignments for MCP server

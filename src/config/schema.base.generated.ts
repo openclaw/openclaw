@@ -3090,12 +3090,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     properties: {
                       primary: {
                         type: "string",
+                        title: "Video Generation Model",
+                        description:
+                          "Optional video-generation model (provider/model) used by the shared video generation capability.",
                       },
                       fallbacks: {
                         type: "array",
                         items: {
                           type: "string",
                         },
+                        title: "Video Generation Model Fallbacks",
+                        description: "Ordered fallback video-generation models (provider/model).",
                       },
                     },
                     additionalProperties: false,
