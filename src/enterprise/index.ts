@@ -96,6 +96,38 @@ export {
 	getAllActiveAgents,
 } from "./orchestrator/agent-spawner.js";
 
+// ── Business Formation ───────────────────────────────────────────────────────
+export type { BusinessEntity, FormationRequest, ComplianceEvent } from "./formation/types.js";
+export {
+	startFormation,
+	checkNameAvailability,
+	getFormationStatus,
+	listOrgEntities,
+	getUpcomingCompliance,
+	estimateFormationCost,
+} from "./formation/formation-engine.js";
+
+// ── Revenue Engine ───────────────────────────────────────────────────────────
+export type { RevenueEvent, RevenueSummary, Client, Deal, Invoice, RevenueGoal } from "./revenue/types.js";
+export {
+	recordRevenue,
+	getRevenueSummary,
+	getDailyRevenue,
+	getBusinessHealth,
+	createClient,
+	createDeal,
+	advanceDeal,
+	createInvoice,
+	markInvoicePaid,
+	listClients,
+	listDeals,
+	listInvoices,
+	getPipelineValue,
+	setRevenueGoal,
+	getActiveGoals,
+	getAgentRevenue,
+} from "./revenue/revenue-engine.js";
+
 // ── Enterprise API ───────────────────────────────────────────────────────────
 export { handleEnterpriseRequest } from "./api/router.js";
 

@@ -21,6 +21,24 @@ import {
 import { getUsageSummary, getDailyUsage, getPlatformRevenue } from "../billing/usage-meter.js";
 import { listOrgAgents, getAgentStatus, getAllActiveAgents } from "../orchestrator/agent-spawner.js";
 import type { AutoTopUpConfig } from "../billing/types.js";
+import {
+	startFormation,
+	getFormationStatus,
+	listOrgEntities,
+	estimateFormationCost,
+	getUpcomingCompliance,
+} from "../formation/formation-engine.js";
+import type { EntityType, USState } from "../formation/types.js";
+import {
+	getBusinessHealth,
+	getRevenueSummary,
+	getDailyRevenue,
+	listClients,
+	listDeals,
+	listInvoices,
+	getPipelineValue,
+	getAgentRevenue,
+} from "../revenue/revenue-engine.js";
 
 // ── HTTP Helpers ─────────────────────────────────────────────────────────────
 
@@ -132,6 +150,23 @@ route("GET", "/enterprise/usage/daily", handleGetDailyUsage);
 
 // Dashboard (platform admin)
 route("GET", "/enterprise/dashboard", handleDashboard);
+
+// Business Formation
+route("POST", "/enterprise/formation/estimate", handleFormationEstimate);
+route("POST", "/enterprise/formation/start", handleStartFormation);
+route("GET", "/enterprise/formation/:id", handleFormationStatus);
+route("GET", "/enterprise/entities", handleListEntities);
+route("GET", "/enterprise/compliance/upcoming", handleUpcomingCompliance);
+
+// Revenue & Business
+route("GET", "/enterprise/revenue", handleGetRevenue);
+route("GET", "/enterprise/revenue/daily", handleGetDailyRevenue);
+route("GET", "/enterprise/business/health", handleBusinessHealth);
+route("GET", "/enterprise/clients", handleListClients);
+route("GET", "/enterprise/deals", handleListDeals);
+route("GET", "/enterprise/deals/pipeline", handlePipelineValue);
+route("GET", "/enterprise/invoices", handleListInvoices);
+route("GET", "/enterprise/agents/:id/revenue", handleAgentRevenue);
 
 // Stripe webhooks
 route("POST", "/enterprise/webhooks/stripe", handleStripeWebhook, false);
@@ -402,4 +437,169 @@ async function handleStripeWebhook(
 	}
 
 	sendJson(res, 200, { received: true });
+}
+
+// ── Formation Handlers ───────────────────────────────────────────────────────
+
+async function handleFormationEstimate(
+	req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+): Promise<void> {
+	if (!auth) return;
+	const body = await readBody(req);
+	const estimate = estimateFormationCost(
+		body.entity_type as EntityType,
+		body.state as USState,
+		{
+			registeredAgent: (body.registered_agent as boolean) ?? true,
+			bankAccount: (body.bank_account as boolean) ?? false,
+			einApplication: (body.ein as boolean) ?? true,
+		},
+	);
+	sendJson(res, 200, { estimate });
+}
+
+async function handleStartFormation(
+	req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+): Promise<void> {
+	if (!auth) return;
+	const body = await readBody(req);
+
+	const entity = startFormation(auth.orgId, {
+		businessPurpose: body.business_purpose as string,
+		entityType: body.entity_type as EntityType,
+		state: body.state as USState,
+		companyName: body.company_name as string,
+		alternateNames: body.alternate_names as string[] | undefined,
+		registeredAgentService: (body.registered_agent_service as "included" | "own") ?? "included",
+		principalAddress: body.principal_address as any,
+		members: body.members as any[],
+		requestEin: (body.request_ein as boolean) ?? true,
+		openBankAccount: (body.open_bank_account as boolean) ?? false,
+		bankProvider: body.bank_provider as any,
+	});
+
+	sendJson(res, 201, { entity });
+}
+
+async function handleFormationStatus(
+	_req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+	pathParams: Record<string, string>,
+): Promise<void> {
+	if (!auth) return;
+	const entity = getFormationStatus(pathParams.id);
+	if (!entity || entity.orgId !== auth.orgId) {
+		sendError(res, 404, "Entity not found");
+		return;
+	}
+	sendJson(res, 200, { entity });
+}
+
+async function handleListEntities(
+	_req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+): Promise<void> {
+	if (!auth) return;
+	sendJson(res, 200, { entities: listOrgEntities(auth.orgId) });
+}
+
+async function handleUpcomingCompliance(
+	req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+): Promise<void> {
+	if (!auth) return;
+	const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+	const days = Number.parseInt(url.searchParams.get("days") ?? "30", 10);
+	sendJson(res, 200, { events: getUpcomingCompliance(auth.orgId, days) });
+}
+
+// ── Revenue & Business Handlers ──────────────────────────────────────────────
+
+async function handleGetRevenue(
+	req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+): Promise<void> {
+	if (!auth) return;
+	const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+	const days = Number.parseInt(url.searchParams.get("days") ?? "30", 10);
+	sendJson(res, 200, { revenue: getRevenueSummary(auth.orgId, days) });
+}
+
+async function handleGetDailyRevenue(
+	req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+): Promise<void> {
+	if (!auth) return;
+	const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+	const days = Number.parseInt(url.searchParams.get("days") ?? "30", 10);
+	sendJson(res, 200, { daily: getDailyRevenue(auth.orgId, Math.min(days, 90)) });
+}
+
+async function handleBusinessHealth(
+	_req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+): Promise<void> {
+	if (!auth) return;
+	sendJson(res, 200, { health: getBusinessHealth(auth.orgId) });
+}
+
+async function handleListClients(
+	_req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+): Promise<void> {
+	if (!auth) return;
+	sendJson(res, 200, { clients: listClients(auth.orgId) });
+}
+
+async function handleListDeals(
+	_req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+): Promise<void> {
+	if (!auth) return;
+	sendJson(res, 200, { deals: listDeals(auth.orgId) });
+}
+
+async function handlePipelineValue(
+	_req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+): Promise<void> {
+	if (!auth) return;
+	sendJson(res, 200, { pipeline: getPipelineValue(auth.orgId) });
+}
+
+async function handleListInvoices(
+	_req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+): Promise<void> {
+	if (!auth) return;
+	sendJson(res, 200, { invoices: listInvoices(auth.orgId) });
+}
+
+async function handleAgentRevenue(
+	_req: IncomingMessage,
+	res: ServerResponse,
+	auth: AuthContext | null,
+	pathParams: Record<string, string>,
+): Promise<void> {
+	if (!auth) return;
+	const agent = getAgentStatus(pathParams.id);
+	if (!agent || agent.orgId !== auth.orgId) {
+		sendError(res, 404, "Agent not found");
+		return;
+	}
+	sendJson(res, 200, { revenue: getAgentRevenue(pathParams.id) });
 }
