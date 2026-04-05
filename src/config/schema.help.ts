@@ -200,6 +200,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
   "agents.list[].thinkingDefault":
     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+  "agents.list[].verboseDefault":
+    "Optional per-agent default verbose level (off|on|full). Applies when no per-message or session verbose override is set.",
   "agents.list[].reasoningDefault":
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
   "agents.list[].fastModeDefault":

@@ -5101,6 +5101,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
                 },
+                verboseDefault: {
+                  type: "string",
+                  enum: ["off", "on", "full"],
+                  title: "Agent Verbose Default",
+                  description:
+                    "Optional per-agent default verbose level (off|on|full). Applies when no per-message or session verbose override is set.",
+                },
                 reasoningDefault: {
                   type: "string",
                   enum: ["on", "off", "stream"],
@@ -22481,6 +22488,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list[].thinkingDefault": {
       label: "Agent Thinking Default",
       help: "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+      tags: ["advanced"],
+    },
+    "agents.list[].verboseDefault": {
+      label: "Agent Verbose Default",
+      help: "Optional per-agent default verbose level (off|on|full). Applies when no per-message or session verbose override is set.",
       tags: ["advanced"],
     },
     "agents.list[].reasoningDefault": {

@@ -781,6 +781,7 @@ export const AgentEntrySchema = z
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"])
       .optional(),
+    verboseDefault: z.enum(["off", "on", "full"]).optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
