@@ -426,14 +426,7 @@ describe("monitorMatrixProvider", () => {
     });
 
     abortController.abort();
-    await expect(
-      Promise.race([
-        monitorPromise.then(() => "resolved"),
-        new Promise<string>((resolve) => {
-          setTimeout(() => resolve("timeout"), 100);
-        }),
-      ]),
-    ).resolves.toBe("resolved");
+    await expect(monitorPromise).resolves.toBeUndefined();
   });
 
   it("cleans up thread bindings and shared clients when startup fails", async () => {

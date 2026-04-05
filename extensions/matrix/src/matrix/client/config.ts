@@ -799,13 +799,11 @@ export async function resolveMatrixAuth(params?: {
         ssrfPolicy: resolved.ssrfPolicy,
         dispatcherPolicy: resolved.dispatcherPolicy,
       });
-      if (!userId) {
-        const fetchedUserId = whoami.user_id?.trim();
-        if (!fetchedUserId) {
-          throw new Error("Matrix whoami did not return user_id");
-        }
-        userId = fetchedUserId;
+      const fetchedUserId = whoami.user_id?.trim();
+      if (!fetchedUserId) {
+        throw new Error("Matrix whoami did not return user_id");
       }
+      userId = fetchedUserId;
       knownDeviceId = knownDeviceId || whoami.device_id?.trim() || resolved.deviceId;
     }
 
