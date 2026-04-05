@@ -494,6 +494,8 @@ async function runAutoPinnedPromptErrorRotationCase(params: {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
+    const initialUsageStats = await readUsageStats(agentDir);
+    const initialP2LastUsed = initialUsageStats["openai:p2"]?.lastUsed;
     mockPromptErrorThenSuccessfulAttempt(params.errorMessage);
     await runAutoPinnedOpenAiTurn({
       agentDir,
@@ -505,7 +507,7 @@ async function runAutoPinnedPromptErrorRotationCase(params: {
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
     const usageStats = await readUsageStats(agentDir);
-    return { usageStats };
+    return { usageStats, initialP2LastUsed };
   });
 }
 
@@ -892,24 +894,24 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   });
 
   it("rotates for overloaded prompt failures across auto-pinned profiles", async () => {
-    const { usageStats } = await runAutoPinnedPromptErrorRotationCase({
+    const { usageStats, initialP2LastUsed } = await runAutoPinnedPromptErrorRotationCase({
       errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       sessionKey: "agent:test:overloaded-prompt-rotation",
       runId: "run:overloaded-prompt-rotation",
     });
-    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p2"]?.lastUsed).toBeGreaterThan(initialP2LastUsed);
     expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
     expect(computeBackoffMock).not.toHaveBeenCalled();
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
   });
 
   it("rotates for timeout prompt failures without cooling down the profile", async () => {
-    const { usageStats } = await runAutoPinnedPromptErrorRotationCase({
+    const { usageStats, initialP2LastUsed } = await runAutoPinnedPromptErrorRotationCase({
       errorMessage: "request ended without sending any chunks",
       sessionKey: "agent:test:timeout-prompt-rotation",
       runId: "run:timeout-prompt-rotation",
     });
-    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p2"]?.lastUsed).toBeGreaterThan(initialP2LastUsed);
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
     expect(computeBackoffMock).not.toHaveBeenCalled();
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
