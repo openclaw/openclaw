@@ -12,6 +12,7 @@ import { parseImageGenerationModelRef } from "./model-ref.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
 import type {
   GeneratedImageAsset,
+  ImageGenerationIgnoredOverride,
   ImageGenerationResolution,
   ImageGenerationResult,
   ImageGenerationSourceImage,
@@ -38,6 +39,7 @@ export type GenerateImageRuntimeResult = {
   model: string;
   attempts: FallbackAttempt[];
   metadata?: Record<string, unknown>;
+  ignoredOverrides: ImageGenerationIgnoredOverride[];
 };
 
 function resolveImageGenerationCandidates(params: {
@@ -116,6 +118,58 @@ export function listRuntimeImageGenerationProviders(params?: { config?: OpenClaw
   return listImageGenerationProviders(params?.config);
 }
 
+function resolveProviderImageGenerationOverrides(params: {
+  provider: NonNullable<ReturnType<typeof getImageGenerationProvider>>;
+  size?: string;
+  aspectRatio?: string;
+  resolution?: ImageGenerationResolution;
+  inputImages?: ImageGenerationSourceImage[];
+}) {
+  const hasInputImages = (params.inputImages?.length ?? 0) > 0;
+  const modeCaps = hasInputImages
+    ? params.provider.capabilities.edit
+    : params.provider.capabilities.generate;
+  const geometry = params.provider.capabilities.geometry;
+  const ignoredOverrides: ImageGenerationIgnoredOverride[] = [];
+  let size = params.size;
+  let aspectRatio = params.aspectRatio;
+  let resolution = params.resolution;
+
+  if (
+    size &&
+    (!modeCaps.supportsSize ||
+      ((geometry?.sizes?.length ?? 0) > 0 && !geometry?.sizes?.includes(size)))
+  ) {
+    ignoredOverrides.push({ key: "size", value: size });
+    size = undefined;
+  }
+
+  if (
+    aspectRatio &&
+    (!modeCaps.supportsAspectRatio ||
+      ((geometry?.aspectRatios?.length ?? 0) > 0 && !geometry?.aspectRatios?.includes(aspectRatio)))
+  ) {
+    ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
+    aspectRatio = undefined;
+  }
+
+  if (
+    resolution &&
+    (!modeCaps.supportsResolution ||
+      ((geometry?.resolutions?.length ?? 0) > 0 && !geometry?.resolutions?.includes(resolution)))
+  ) {
+    ignoredOverrides.push({ key: "resolution", value: resolution });
+    resolution = undefined;
+  }
+
+  return {
+    size,
+    aspectRatio,
+    resolution,
+    ignoredOverrides,
+  };
+}
+
 export async function generateImage(
   params: GenerateImageParams,
 ): Promise<GenerateImageRuntimeResult> {
@@ -144,6 +198,13 @@ export async function generateImage(
     }
 
     try {
+      const sanitized = resolveProviderImageGenerationOverrides({
+        provider,
+        size: params.size,
+        aspectRatio: params.aspectRatio,
+        resolution: params.resolution,
+        inputImages: params.inputImages,
+      });
       const result: ImageGenerationResult = await provider.generateImage({
         provider: candidate.provider,
         model: candidate.model,
@@ -152,9 +213,9 @@ export async function generateImage(
         agentDir: params.agentDir,
         authStore: params.authStore,
         count: params.count,
-        size: params.size,
-        aspectRatio: params.aspectRatio,
-        resolution: params.resolution,
+        size: sanitized.size,
+        aspectRatio: sanitized.aspectRatio,
+        resolution: sanitized.resolution,
         inputImages: params.inputImages,
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
@@ -166,6 +227,7 @@ export async function generateImage(
         model: result.model ?? candidate.model,
         attempts,
         metadata: result.metadata,
+        ignoredOverrides: sanitized.ignoredOverrides,
       };
     } catch (err) {
       lastError = err;
