@@ -95,12 +95,9 @@ describe("tasks commands", () => {
           token?: string;
           lifecycleReason?: {
             code: string;
-            evidence: string;
-            backing: {
-              kind: string;
-              taskId: string;
-              runId?: string;
-            };
+            evidence?: string;
+            summary?: string;
+            backing?: unknown;
           };
         }>;
       };
@@ -121,6 +118,18 @@ describe("tasks commands", () => {
             taskId: expect.any(String),
             runId: "task-stale-queued",
           },
+        },
+      });
+      expect(payload.findings.find((finding) => finding.kind === "task_flow")).toMatchObject({
+        kind: "task_flow",
+        code: "stale_waiting",
+        token: expect.any(String),
+        lifecycleReason: {
+          code: "waiting",
+          summary: expect.any(String),
+          backing: expect.arrayContaining([
+            expect.objectContaining({ kind: "session", relation: "owner_session" }),
+          ]),
         },
       });
     });

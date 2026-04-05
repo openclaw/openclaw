@@ -1,6 +1,10 @@
 import { listTasksForFlowId } from "./runtime-internal.js";
 import { getTaskFlowRegistryRestoreFailure, listTaskFlowRecords } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import {
+  resolveTaskFlowLifecycleStatusReason,
+  type LifecycleStatusReason,
+} from "./task-lifecycle-status.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 export type TaskFlowAuditSeverity = "warn" | "error";
@@ -20,6 +24,7 @@ export type TaskFlowAuditFinding = {
   detail: string;
   ageMs?: number;
   flow?: TaskFlowRecord;
+  lifecycleReason?: LifecycleStatusReason;
 };
 
 export type TaskFlowAuditSummary = {
@@ -56,6 +61,9 @@ function createFinding(params: {
     detail: params.detail,
     ...(typeof params.ageMs === "number" ? { ageMs: params.ageMs } : {}),
     ...(params.flow ? { flow: params.flow } : {}),
+    ...(params.flow
+      ? { lifecycleReason: resolveTaskFlowLifecycleStatusReason({ flow: params.flow }) }
+      : {}),
   };
 }
 

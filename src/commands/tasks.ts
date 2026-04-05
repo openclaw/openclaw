@@ -233,6 +233,7 @@ function toSystemAuditFindings(params: {
       ageMs: finding.ageMs,
       status: finding.flow?.status ?? "n/a",
       token: finding.flow?.flowId,
+      lifecycleReason: finding.lifecycleReason,
       ...(finding.flow ? { flow: finding.flow } : {}),
     })),
   ];

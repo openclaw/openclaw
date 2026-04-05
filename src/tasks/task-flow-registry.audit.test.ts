@@ -124,10 +124,26 @@ describe("task-flow-registry audit", () => {
           expect.objectContaining({
             code: "missing_linked_tasks",
             flow: expect.objectContaining({ flowId: running.flowId }),
+            lifecycleReason: expect.objectContaining({
+              code: "running",
+              backing: expect.arrayContaining([
+                expect.objectContaining({ kind: "session", relation: "owner_session" }),
+              ]),
+            }),
           }),
           expect.objectContaining({
             code: "blocked_task_missing",
             flow: expect.objectContaining({ flowId: blocked.flowId }),
+            lifecycleReason: expect.objectContaining({
+              code: "blocked",
+              backing: expect.arrayContaining([
+                expect.objectContaining({
+                  kind: "task",
+                  relation: "blocked_task",
+                  id: "task-missing",
+                }),
+              ]),
+            }),
           }),
         ]),
       );
