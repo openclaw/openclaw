@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import "./test-helpers/fast-core-tools.js";
@@ -14,7 +14,10 @@ import {
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { resolveRequesterStoreKey } from "./subagent-announce-delivery.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.js";
+import {
+  getLatestSubagentRunByChildSessionKey,
+  resetSubagentRegistryForTests,
+} from "./subagent-registry.js";
 
 const fastModeEnv = vi.hoisted(() => {
   const previous = process.env.OPENCLAW_TEST_FAST;
@@ -204,6 +207,13 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     installDeterministicAnnounceFlow();
   });
 
+  afterEach(() => {
+    resetSessionsSpawnAnnounceFlowOverride();
+    resetSessionsSpawnHookRunnerOverride();
+    resetSessionsSpawnConfigOverride();
+    resetSubagentRegistryForTests();
+  });
+
   afterAll(() => {
     if (fastModeEnv.previous === undefined) {
       delete process.env.OPENCLAW_TEST_FAST;
@@ -391,29 +401,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
 
-  it("sessions_spawn reports timed out when agent.wait returns timeout", async () => {
-    let announcedStatus: string | undefined;
-    setSessionsSpawnAnnounceFlowOverride(async (params) => {
-      announcedStatus = params.outcome?.status;
-      const requesterSessionKey = resolveRequesterStoreKey(
-        loadConfig(),
-        params.requesterSessionKey,
-      );
-
-      await callGatewayMock({
-        method: "agent",
-        params: {
-          sessionKey: requesterSessionKey,
-          message: `subagent task ${
-            params.outcome?.status === "timeout" ? "timed out" : "completed successfully"
-          }`,
-          deliver: false,
-        },
-      });
-
-      return true;
-    });
-
+  it("sessions_spawn records timeout when agent.wait returns timeout", async () => {
     const ctx = setupSessionsSpawnGatewayMock({
       includeChatHistory: true,
       chatHistoryText: "still working",
@@ -428,19 +416,25 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       expectsCompletionMessage: false,
     });
 
-    await waitFor(() => announcedStatus === "timeout");
+    const child = ctx.getChild();
+    if (!child.runId) {
+      throw new Error("missing child runId");
+    }
+    if (!child.sessionKey) {
+      throw new Error("missing child sessionKey");
+    }
+    const childSessionKey = child.sessionKey;
 
-    const mainMessages = ctx.calls
-      .filter((call) => call.method === "agent")
-      .filter((call) => {
-        const params = call.params as { lane?: string } | undefined;
-        return params?.lane !== "subagent";
-      })
-      .map((call) => (call.params as { message?: string } | undefined)?.message ?? "");
+    await waitFor(() => {
+      return (
+        ctx.waitCalls.some((call) => call.runId === child.runId) &&
+        getLatestSubagentRunByChildSessionKey(childSessionKey)?.outcome?.status === "timeout"
+      );
+    }, 20_000);
 
-    expect(announcedStatus).toBe("timeout");
-    expect(mainMessages.some((message) => message.includes("timed out"))).toBe(true);
-    expect(mainMessages.some((message) => message.includes("completed successfully"))).toBe(false);
+    const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
+    expect(childWait?.timeoutMs).toBe(1000);
+    expect(getLatestSubagentRunByChildSessionKey(childSessionKey)?.outcome?.status).toBe("timeout");
   });
 
   it("sessions_spawn announces with requester accountId", async () => {

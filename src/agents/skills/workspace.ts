@@ -825,6 +825,10 @@ export async function syncSkillsToWorkspace(params: {
         await fsp.cp(entry.skill.baseDir, dest, {
           recursive: true,
           force: true,
+          filter: (src) => {
+            const name = path.basename(src);
+            return !(name === ".git" || name === "node_modules");
+          },
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
