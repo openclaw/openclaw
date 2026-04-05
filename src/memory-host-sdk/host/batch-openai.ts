@@ -53,6 +53,7 @@ async function submitOpenAiBatch(params: {
     url: `${baseUrl}/batches`,
     headers: buildBatchHeaders(params.openAi, { json: true }),
     ssrfPolicy: params.openAi.ssrfPolicy,
+    fetchImpl: params.openAi.fetchImpl,
     body: {
       input_file_id: inputFileId,
       endpoint: OPENAI_BATCH_ENDPOINT,
@@ -100,6 +101,7 @@ async function fetchOpenAiBatchResource<T>(params: {
   return await withRemoteHttpResponse({
     url: `${baseUrl}${params.path}`,
     ssrfPolicy: params.openAi.ssrfPolicy,
+    fetchImpl: params.openAi.fetchImpl,
     init: {
       headers: buildBatchHeaders(params.openAi, { json: true }),
     },

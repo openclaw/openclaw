@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type MockManifestRegistry = {
+  plugins: Array<{
+    id: string;
+    origin: string;
+    providerAuthEnvVars?: Record<string, string[]>;
+  }>;
+  diagnostics: unknown[];
+};
+
 const loadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn(() => ({ plugins: [], diagnostics: [] })),
+  vi.fn<() => MockManifestRegistry>(() => ({ plugins: [], diagnostics: [] })),
 );
 
 vi.mock("../plugins/manifest-registry.js", () => ({

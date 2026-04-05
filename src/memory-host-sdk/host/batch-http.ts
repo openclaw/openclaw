@@ -6,6 +6,7 @@ export async function postJsonWithRetry<T>(params: {
   url: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: typeof fetch;
   body: unknown;
   errorPrefix: string;
 }): Promise<T> {
@@ -15,6 +16,7 @@ export async function postJsonWithRetry<T>(params: {
         url: params.url,
         headers: params.headers,
         ssrfPolicy: params.ssrfPolicy,
+        fetchImpl: params.fetchImpl,
         body: params.body,
         errorPrefix: params.errorPrefix,
         attachStatus: true,

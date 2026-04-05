@@ -11,6 +11,7 @@ export type OpenAiEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: typeof fetch;
   model: string;
 };
 
