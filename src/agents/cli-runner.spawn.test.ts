@@ -338,7 +338,7 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.SAFE_OVERRIDE).toBe("from-override");
   });
 
-  it("clears claude-cli provider-routing and auth env while keeping host-managed hardening", async () => {
+  it("clears claude-cli provider-routing, auth, and telemetry env while keeping host-managed hardening", async () => {
     const runCliAgent = await setupCliRunnerTestModule();
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example.com/v1");
     vi.stubEnv("CLAUDE_CODE_USE_BEDROCK", "1");
@@ -346,6 +346,11 @@ describe("runCliAgent spawn path", () => {
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "env-oauth-token");
     vi.stubEnv("CLAUDE_CODE_REMOTE", "1");
     vi.stubEnv("ANTHROPIC_UNIX_SOCKET", "/tmp/anthropic.sock");
+    vi.stubEnv("OTEL_LOGS_EXPORTER", "none");
+    vi.stubEnv("OTEL_METRICS_EXPORTER", "none");
+    vi.stubEnv("OTEL_TRACES_EXPORTER", "none");
+    vi.stubEnv("OTEL_EXPORTER_OTLP_PROTOCOL", "none");
+    vi.stubEnv("OTEL_SDK_DISABLED", "true");
     mockSuccessfulCliRun();
 
     await runCliAgent({
@@ -386,6 +391,11 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
     expect(input.env?.CLAUDE_CODE_REMOTE).toBeUndefined();
     expect(input.env?.ANTHROPIC_UNIX_SOCKET).toBeUndefined();
+    expect(input.env?.OTEL_LOGS_EXPORTER).toBeUndefined();
+    expect(input.env?.OTEL_METRICS_EXPORTER).toBeUndefined();
+    expect(input.env?.OTEL_TRACES_EXPORTER).toBeUndefined();
+    expect(input.env?.OTEL_EXPORTER_OTLP_PROTOCOL).toBeUndefined();
+    expect(input.env?.OTEL_SDK_DISABLED).toBeUndefined();
   });
 
   it("prepends bootstrap warnings to the CLI prompt body", async () => {
