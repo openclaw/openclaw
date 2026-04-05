@@ -264,4 +264,52 @@ describe("anthropic transport stream", () => {
       undefined,
     );
   });
+
+  it("preserves Anthropic refusal stop reasons as structured stream errors", async () => {
+    anthropicMessagesStreamMock.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "message_start",
+          message: { id: "msg_refusal", usage: { input_tokens: 12, output_tokens: 0 } },
+        };
+        yield {
+          type: "message_delta",
+          delta: { stop_reason: "refusal" },
+          usage: { input_tokens: 12, output_tokens: 0 },
+        };
+      })(),
+    );
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      undefined,
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "do the refused thing" }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "sk-ant-api",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Unhandled stop reason: refusal");
+  });
 });

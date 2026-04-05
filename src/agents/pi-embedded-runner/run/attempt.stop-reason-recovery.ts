@@ -3,21 +3,116 @@ import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/p
 import { buildStreamErrorAssistantMessage } from "../../stream-message-shared.js";
 
 const UNHANDLED_STOP_REASON_RE = /^Unhandled stop reason:\s*(.+)$/i;
+const NORMALIZED_UNHANDLED_STOP_REASON_RE =
+  /^The model stopped because the provider returned an unhandled stop reason:\s*(.+?)\.\s*Please rephrase and try again\.\s*$/i;
+
+type RefusedTurnLeafEntry =
+  | {
+      type?: string;
+      parentId?: string | null;
+      message?: {
+        role?: string;
+        errorMessage?: unknown;
+      };
+    }
+  | null
+  | undefined;
+
+type RefusedTurnSessionManager = {
+  getLeafEntry?: () => RefusedTurnLeafEntry;
+  branch: (entryId: string) => void;
+  resetLeaf: () => void;
+  buildSessionContext: () => { messages: unknown[] };
+};
+
+type RefusedTurnActiveSession = {
+  agent: {
+    state: {
+      messages: unknown[];
+    };
+  };
+};
 
 function formatUnhandledStopReasonErrorMessage(stopReason: string): string {
   return `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`;
 }
 
-function normalizeUnhandledStopReasonMessage(message: unknown): string | undefined {
+export function extractUnhandledStopReason(message: unknown): string | undefined {
   if (typeof message !== "string") {
     return undefined;
   }
-  const match = message.trim().match(UNHANDLED_STOP_REASON_RE);
+  const trimmed = message.trim();
+  const match =
+    trimmed.match(UNHANDLED_STOP_REASON_RE) ?? trimmed.match(NORMALIZED_UNHANDLED_STOP_REASON_RE);
   const stopReason = match?.[1]?.trim();
   if (!stopReason) {
     return undefined;
   }
+  return stopReason.toLowerCase();
+}
+
+function normalizeUnhandledStopReasonMessage(message: unknown): string | undefined {
+  const stopReason = extractUnhandledStopReason(message);
+  if (!stopReason) {
+    return undefined;
+  }
   return formatUnhandledStopReasonErrorMessage(stopReason);
+}
+
+export function isAnthropicRefusalStopReasonMessage(message: unknown): boolean {
+  const stopReason = extractUnhandledStopReason(message);
+  return stopReason === "refusal" || stopReason === "sensitive";
+}
+
+function rewindRefusedTurnLeaf(
+  sessionManager: RefusedTurnSessionManager,
+  activeSession: RefusedTurnActiveSession,
+  leafEntry: RefusedTurnLeafEntry,
+): boolean {
+  if (!leafEntry || leafEntry.type !== "message") {
+    return false;
+  }
+  if (leafEntry.parentId) {
+    sessionManager.branch(leafEntry.parentId);
+  } else {
+    sessionManager.resetLeaf();
+  }
+  activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+  return true;
+}
+
+export function rollbackAnthropicRefusedTurn(params: {
+  activeSession: RefusedTurnActiveSession;
+  sessionManager?: RefusedTurnSessionManager;
+}): boolean {
+  const sessionManager = params.sessionManager;
+  if (!sessionManager?.getLeafEntry) {
+    return false;
+  }
+
+  const assistantLeaf = sessionManager.getLeafEntry();
+  if (
+    assistantLeaf?.type !== "message" ||
+    assistantLeaf.message?.role !== "assistant" ||
+    !isAnthropicRefusalStopReasonMessage(assistantLeaf.message?.errorMessage)
+  ) {
+    return false;
+  }
+
+  const rewoundAssistant = rewindRefusedTurnLeaf(
+    sessionManager,
+    params.activeSession,
+    assistantLeaf,
+  );
+  if (!rewoundAssistant) {
+    return false;
+  }
+
+  const userLeaf = sessionManager.getLeafEntry();
+  if (userLeaf?.type === "message" && userLeaf.message?.role === "user") {
+    rewindRefusedTurnLeaf(sessionManager, params.activeSession, userLeaf);
+  }
+  return true;
 }
 
 function patchUnhandledStopReasonInAssistantMessage(message: unknown): void {

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -165,7 +166,11 @@ import {
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
 } from "./attempt.sessions-yield.js";
-import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
+import {
+  isAnthropicRefusalStopReasonMessage,
+  rollbackAnthropicRefusedTurn,
+  wrapStreamFnHandleSensitiveStopReason,
+} from "./attempt.stop-reason-recovery.js";
 import {
   appendAttemptCacheTtlIfNeeded,
   composeSystemPromptWithHookContext,
@@ -1453,6 +1458,7 @@ export async function runEmbeddedAttempt(
       scheduleAbortTimer(params.timeoutMs, "initial");
 
       let messagesSnapshot: AgentMessage[] = [];
+      let preservedRefusalAssistant: AssistantMessage | undefined;
       let sessionIdUsed = activeSession.sessionId;
       const onAbort = () => {
         const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
@@ -1847,6 +1853,26 @@ export async function runEmbeddedAttempt(
         }
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
+        const refusalAssistant = messagesSnapshot
+          .slice()
+          .toReversed()
+          .find(
+            (message): message is AssistantMessage =>
+              message.role === "assistant" &&
+              isAnthropicRefusalStopReasonMessage(
+                (message as { errorMessage?: unknown }).errorMessage,
+              ),
+          );
+        if (
+          refusalAssistant &&
+          rollbackAnthropicRefusedTurn({
+            activeSession,
+            sessionManager,
+          })
+        ) {
+          preservedRefusalAssistant = refusalAssistant;
+          messagesSnapshot = activeSession.messages.slice();
+        }
 
         if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
           try {
@@ -1962,10 +1988,12 @@ export async function runEmbeddedAttempt(
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
-      const lastAssistant = messagesSnapshot
-        .slice()
-        .toReversed()
-        .find((m) => m.role === "assistant");
+      const lastAssistant =
+        preservedRefusalAssistant ??
+        messagesSnapshot
+          .slice()
+          .toReversed()
+          .find((m) => m.role === "assistant");
 
       const toolMetasNormalized = toolMetas
         .filter(

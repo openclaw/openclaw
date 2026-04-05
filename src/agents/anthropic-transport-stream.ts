@@ -628,6 +628,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         ) as AsyncIterable<Record<string, unknown>>;
         stream.push({ type: "start", partial: output as never });
         const blocks = output.content;
+        let terminalStopReason: string | undefined;
         for await (const event of anthropicStream) {
           if (event.type === "message_start") {
             const message = event.message as
@@ -820,6 +821,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const delta = event.delta as { stop_reason?: string } | undefined;
             const usage = event.usage as Record<string, unknown> | undefined;
             if (delta?.stop_reason) {
+              terminalStopReason = delta.stop_reason;
               output.stopReason = mapStopReason(delta.stop_reason);
             }
             if (typeof usage?.input_tokens === "number") {
@@ -841,6 +843,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               output.usage.cacheWrite;
             calculateCost(model, output.usage);
           }
+        }
+        if (
+          output.stopReason === "error" &&
+          (terminalStopReason === "refusal" || terminalStopReason === "sensitive")
+        ) {
+          throw new Error(`Unhandled stop reason: ${terminalStopReason}`);
         }
         finalizeTransportStream({ stream, output, signal: transportOptions.signal });
       } catch (error) {
