@@ -1,5 +1,9 @@
 import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/errors.js";
 import { truncateUtf16Safe } from "../utils.js";
+import {
+  resolveTaskLifecycleStatusReason,
+  type LifecycleStatusReason,
+} from "./task-lifecycle-status.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 const ACTIVE_TASK_STATUSES = new Set(["queued", "running"]);
@@ -121,7 +125,9 @@ export function formatTaskStatusDetail(task: TaskRecord): string | undefined {
 
 export type TaskStatusSnapshot = {
   latest?: TaskRecord;
+  latestReason?: LifecycleStatusReason;
   focus?: TaskRecord;
+  focusReason?: LifecycleStatusReason;
   visible: TaskRecord[];
   active: TaskRecord[];
   recentTerminal: TaskRecord[];
@@ -141,9 +147,12 @@ export function buildTaskStatusSnapshot(
   const visible = active.length > 0 ? [...active, ...recentTerminal] : recentTerminal;
   const focus =
     active[0] ?? recentTerminal.find((task) => isFailureTask(task)) ?? recentTerminal[0];
+  const latest = active[0] ?? recentTerminal[0];
   return {
-    latest: active[0] ?? recentTerminal[0],
+    latest,
+    ...(latest ? { latestReason: resolveTaskLifecycleStatusReason(latest) } : {}),
     focus,
+    ...(focus ? { focusReason: resolveTaskLifecycleStatusReason(focus) } : {}),
     visible,
     active,
     recentTerminal,

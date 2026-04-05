@@ -262,6 +262,24 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("approval denied");
   });
 
+  it("surfaces compact task backing hints in the session task line", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:status-task-linked",
+      runId: "run-status-task-linked",
+      task: "linked background task",
+      progressSummary: "still working",
+    });
+
+    const reply = await buildStatusReplyForTest({});
+
+    expect(reply?.text).toContain("linked background task");
+    expect(reply?.text).toContain("still working");
+    expect(reply?.text).toContain("linked flow");
+    expect(reply?.text).toContain("child session");
+  });
+
   it("does not leak internal runtime context through the task status line", async () => {
     createRunningTaskRun({
       runtime: "subagent",

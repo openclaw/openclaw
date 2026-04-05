@@ -23,6 +23,10 @@ import {
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
 import {
+  formatLifecycleBackingSummary,
+  formatLifecycleStatusReasonSummary,
+} from "../../tasks/task-lifecycle-status.js";
+import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
 } from "../../tasks/task-status-access.js";
@@ -76,8 +80,10 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
         ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
         : "recently finished";
   const title = formatTaskStatusTitle(task);
-  const detail = formatTaskStatusDetail(task);
-  const parts = [headline, task.runtime, title, detail].filter(Boolean);
+  const reason = snapshot.focusReason;
+  const detail = formatTaskStatusDetail(task) ?? formatLifecycleStatusReasonSummary(reason);
+  const backing = formatLifecycleBackingSummary(reason);
+  const parts = [headline, task.runtime, title, detail, backing].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 

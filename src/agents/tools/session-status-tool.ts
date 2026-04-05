@@ -22,6 +22,10 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  formatLifecycleBackingSummary,
+  formatLifecycleStatusReasonSummary,
+} from "../../tasks/task-lifecycle-status.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
@@ -135,8 +139,10 @@ function formatSessionTaskLine(params: {
         ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
         : `latest ${task.status.replaceAll("_", " ")}`;
   const title = formatTaskStatusTitle(task);
-  const detail = formatTaskStatusDetail(task);
-  const parts = [headline, task.runtime, title, detail].filter(Boolean);
+  const reason = snapshot.focusReason;
+  const detail = formatTaskStatusDetail(task) ?? formatLifecycleStatusReasonSummary(reason);
+  const backing = formatLifecycleBackingSummary(reason);
+  const parts = [headline, task.runtime, title, detail, backing].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 

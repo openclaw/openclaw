@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  formatLifecycleBackingSummary,
+  resolveTaskFlowLifecycleStatusReason,
+  resolveTaskLifecycleStatusReason,
+} from "./task-lifecycle-status.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   buildTaskStatusSnapshot,
@@ -54,6 +59,26 @@ describe("task status snapshot", () => {
 
     expect(snapshot.totalCount).toBe(0);
     expect(snapshot.focus).toBeUndefined();
+  });
+
+  it("enriches the focused snapshot task with a lifecycle reason", () => {
+    const running = makeTask({
+      status: "running",
+      progressSummary: "Indexing the latest threads",
+      parentFlowId: "flow-123",
+      childSessionKey: "agent:main:child",
+    });
+
+    const snapshot = buildTaskStatusSnapshot([running], { now: NOW });
+
+    expect(snapshot.focusReason).toMatchObject({
+      code: "running",
+      summary: "Indexing the latest threads",
+      backing: expect.arrayContaining([
+        { kind: "flow", relation: "parent_flow", id: "flow-123" },
+        { kind: "session", relation: "child_session", id: "agent:main:child" },
+      ]),
+    });
   });
 });
 
@@ -142,5 +167,50 @@ describe("task status formatting", () => {
         ].join("\n"),
       ),
     ).toBe("");
+  });
+
+  it("derives lifecycle reason evidence and compact backing for blocked tasks", () => {
+    const reason = resolveTaskLifecycleStatusReason(
+      makeTask({
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session required.",
+        parentFlowId: "flow-123",
+        childSessionKey: "agent:main:child",
+      }),
+    );
+
+    expect(reason).toMatchObject({
+      code: "blocked",
+      summary: "Writable session required.",
+      backing: expect.arrayContaining([
+        { kind: "flow", relation: "parent_flow", id: "flow-123" },
+        { kind: "session", relation: "child_session", id: "agent:main:child" },
+      ]),
+    });
+    expect(reason.evidence?.map((entry) => entry.kind)).toContain("terminal_summary");
+    expect(formatLifecycleBackingSummary(reason)).toBe("linked flow · child session");
+  });
+
+  it("derives waiting reasons and task linkage for flows", () => {
+    const reason = resolveTaskFlowLifecycleStatusReason({
+      flow: {
+        ownerKey: "agent:main:main",
+        status: "waiting",
+        currentStep: "wait for approval",
+        waitJson: { kind: "task", taskId: "task-123" },
+        updatedAt: NOW,
+      },
+    });
+
+    expect(reason).toMatchObject({
+      code: "waiting_on_task",
+      summary: "Waiting on another task.",
+      backing: [
+        { kind: "session", relation: "owner_session", id: "agent:main:main" },
+        { kind: "task", relation: "wait_task", id: "task-123" },
+      ],
+    });
+    expect(reason.evidence?.map((entry) => entry.kind)).toContain("wait");
   });
 });

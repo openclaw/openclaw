@@ -68,6 +68,9 @@ describe("buildTasksReply", () => {
     expect(reply.text).toContain("Current session: 2 active · 3 total");
     expect(reply.text).toContain("🟢 active background task");
     expect(reply.text).toContain("🟡 queued background task");
+    expect(reply.text).toContain("Queued for execution.");
+    expect(reply.text).toContain("linked flow");
+    expect(reply.text).toContain("child session");
     expect(reply.text).toContain("🔴 failed background task");
     expect(reply.text).toContain("approval denied");
   });

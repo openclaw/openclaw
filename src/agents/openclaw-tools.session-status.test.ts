@@ -426,6 +426,7 @@ describe("session_status tool", () => {
         deliveryStatus: "pending",
         notifyPolicy: "done_only",
         createdAt: Date.now() - 5_000,
+        childSessionKey: "agent:main:subagent:child",
         progressSummary: "Indexing the latest threads",
       },
     ]);
@@ -439,6 +440,7 @@ describe("session_status tool", () => {
     expect(text).toContain("acp");
     expect(text).toContain("Summarize inbox backlog");
     expect(text).toContain("Indexing the latest threads");
+    expect(text).toContain("child session");
   });
 
   it("hides stale completed task rows from session_status output", async () => {

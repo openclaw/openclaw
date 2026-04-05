@@ -94,6 +94,10 @@ describe("runtime tasks", () => {
       ownerKey: "agent:main:main",
       goal: "Review inbox",
       currentStep: "triage",
+      statusReason: {
+        code: "queued",
+        summary: "Queued: triage",
+      },
       state: { lane: "priority" },
       taskSummary: {
         total: 1,
@@ -106,6 +110,18 @@ describe("runtime tasks", () => {
           title: "Review PR 1",
           label: "Inbox triage",
           runId: "runtime-task-run",
+          statusReason: expect.objectContaining({
+            code: "running",
+            summary: "Inspecting",
+            backing: expect.arrayContaining([
+              { kind: "flow", relation: "parent_flow", id: created.flowId },
+              {
+                kind: "session",
+                relation: "child_session",
+                id: "agent:main:subagent:child",
+              },
+            ]),
+          }),
         }),
       ],
     });
@@ -125,6 +141,10 @@ describe("runtime tasks", () => {
       flowId: created.flowId,
       title: "Review PR 1",
       progressSummary: "Inspecting",
+      statusReason: expect.objectContaining({
+        code: "running",
+        summary: "Inspecting",
+      }),
     });
     expect(taskRuns.findLatest()?.id).toBe(child.task.taskId);
     expect(taskRuns.resolve("runtime-task-run")?.id).toBe(child.task.taskId);

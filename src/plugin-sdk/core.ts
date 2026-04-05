@@ -123,6 +123,13 @@ export type {
   TaskRunDetail,
   TaskRunView,
 } from "../plugins/runtime/task-domain-types.js";
+export type {
+  LifecycleBackingLink,
+  LifecycleBackingLinkRelation,
+  LifecycleStatusEvidence,
+  LifecycleStatusEvidenceKind,
+  LifecycleStatusReason,
+} from "../tasks/task-lifecycle-status.js";
 
 export { definePluginEntry } from "./plugin-entry.js";
 export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";

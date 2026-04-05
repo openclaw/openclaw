@@ -6,6 +6,10 @@ import type {
   TaskRunView,
 } from "../plugins/runtime/task-domain-types.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import {
+  resolveTaskFlowLifecycleStatusReason,
+  resolveTaskLifecycleStatusReason,
+} from "./task-lifecycle-status.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
 
@@ -36,6 +40,7 @@ export function mapTaskRunView(task: TaskRecord): TaskRunView {
     ...(task.label ? { label: task.label } : {}),
     title: task.task,
     status: task.status,
+    statusReason: resolveTaskLifecycleStatusReason(task),
     deliveryStatus: task.deliveryStatus,
     notifyPolicy: task.notifyPolicy,
     createdAt: task.createdAt,
@@ -60,6 +65,7 @@ export function mapTaskFlowView(flow: TaskFlowRecord): TaskFlowView {
     ownerKey: flow.ownerKey,
     ...(flow.requesterOrigin ? { requesterOrigin: { ...flow.requesterOrigin } } : {}),
     status: flow.status,
+    statusReason: resolveTaskFlowLifecycleStatusReason({ flow }),
     notifyPolicy: flow.notifyPolicy,
     goal: flow.goal,
     ...(flow.currentStep ? { currentStep: flow.currentStep } : {}),

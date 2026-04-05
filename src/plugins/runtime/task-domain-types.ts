@@ -1,4 +1,5 @@
 import type { JsonValue } from "../../tasks/task-flow-registry.types.js";
+import type { LifecycleStatusReason } from "../../tasks/task-lifecycle-status.js";
 import type {
   TaskDeliveryStatus,
   TaskNotifyPolicy,
@@ -35,6 +36,7 @@ export type TaskRunView = {
   label?: string;
   title: string;
   status: TaskStatus;
+  statusReason?: LifecycleStatusReason;
   deliveryStatus: TaskDeliveryStatus;
   notifyPolicy: TaskNotifyPolicy;
   createdAt: number;
@@ -62,6 +64,7 @@ export type TaskFlowView = {
   ownerKey: string;
   requesterOrigin?: DeliveryContext;
   status: import("../../tasks/task-flow-registry.types.js").TaskFlowStatus;
+  statusReason?: LifecycleStatusReason;
   notifyPolicy: TaskNotifyPolicy;
   goal: string;
   currentStep?: string;

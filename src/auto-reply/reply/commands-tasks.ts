@@ -2,6 +2,11 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { logVerbose } from "../../globals.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+import {
+  formatLifecycleBackingSummary,
+  formatLifecycleStatusReasonSummary,
+  resolveTaskLifecycleStatusReason,
+} from "../../tasks/task-lifecycle-status.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import {
   listTasksForAgentIdForStatus,
@@ -62,7 +67,10 @@ function formatTaskTiming(task: TaskRecord): string | undefined {
 }
 
 function formatTaskDetail(task: TaskRecord): string | undefined {
-  return formatTaskStatusDetail(task);
+  return (
+    formatTaskStatusDetail(task) ??
+    formatLifecycleStatusReasonSummary(resolveTaskLifecycleStatusReason(task))
+  );
 }
 
 function formatVisibleTask(task: TaskRecord, index: number): string {
@@ -70,10 +78,14 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
   const status = task.status.replaceAll("_", " ");
   const timing = formatTaskTiming(task);
   const detail = formatTaskDetail(task);
+  const backing = formatLifecycleBackingSummary(resolveTaskLifecycleStatusReason(task));
   const meta = [TASK_RUNTIME_LABELS[task.runtime], status, timing].filter(Boolean).join(" · ");
   const lines = [`${index + 1}. ${TASK_STATUS_ICONS[task.status]} ${title}`, `   ${meta}`];
   if (detail) {
     lines.push(`   ${detail}`);
+  }
+  if (backing) {
+    lines.push(`   ${backing}`);
   }
   return lines.join("\n");
 }
