@@ -132,6 +132,8 @@ export type WhatsAppAccountConfig = WhatsAppConfigCore &
     enabled?: boolean;
     /** Override auth directory (Baileys multi-file auth state). */
     authDir?: string;
+    /** HTTP/HTTPS proxy URL for WebSocket connections (e.g., http://127.0.0.1:7890). */
+    proxy?: string;
   };
 
 declare module "./types.channels.js" {
