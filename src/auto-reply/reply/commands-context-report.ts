@@ -313,6 +313,12 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     ? `Tools: ${formatNameList(toolNames, 30)}`
     : "Tools: (none)";
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
+  const runSnapshotLine =
+    report.source === "run"
+      ? `Last run snapshot: ${report.sourceRunId ?? "unknown"}${report.sourceMessageId ? ` | leaf=${report.sourceMessageId}` : ""}`
+      : null;
+  const runGeneratedLine =
+    report.source === "run" ? `Run generated: ${new Date(report.generatedAt).toISOString()}` : null;
   const promptHashLine = `Prompt hash: ${report.promptHash ?? "unknown"}`;
   const trackedPromptLine = `Tracked prompt estimate: ${formatCharsAndTokens(trackedPrompt.chars)}`;
   const truncationSeverityLine = `Truncation severity: ${truncationSeverity}`;
@@ -379,6 +385,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     `Bootstrap max/file: ${bootstrapMaxLabel}`,
     `Bootstrap max/total: ${bootstrapTotalLabel}`,
     sandboxLine,
+    ...(runSnapshotLine ? [runSnapshotLine] : []),
+    ...(runGeneratedLine ? [runGeneratedLine] : []),
     systemPromptLine,
     promptHashLine,
     trackedPromptLine,
@@ -394,6 +402,50 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   ];
 
   if (sub === "detail" || sub === "deep") {
+    const estimateComparisonLines =
+      sub === "deep" && report.source === "run"
+        ? await (async () => {
+            const estimateReport = await buildEstimateContextReport(params);
+            const comparison = compareContextReports(report, estimateReport);
+            const estimateTracked = resolveTrackedPrompt(estimateReport);
+            const lines = [
+              "Estimate vs last run:",
+              `- current estimate: ${formatCharsAndTokens(estimateTracked.chars)}`,
+              `- tracked drift: ${formatDeltaCharsAndTokens(comparison.trackedCharsDelta, comparison.trackedTokensDelta)}`,
+            ];
+            if (comparison.systemPromptCharsDelta !== 0) {
+              lines.push(
+                `- system prompt drift: ${formatDeltaCharsAndTokens(comparison.systemPromptCharsDelta, estimateTokensFromChars(comparison.systemPromptCharsDelta))}`,
+              );
+            }
+            if (comparison.projectContextCharsDelta !== 0) {
+              lines.push(
+                `- Project Context drift: ${formatDeltaCharsAndTokens(comparison.projectContextCharsDelta, estimateTokensFromChars(comparison.projectContextCharsDelta))}`,
+              );
+            }
+            if (comparison.toolSchemaCharsDelta !== 0) {
+              lines.push(
+                `- tool schema drift: ${formatDeltaCharsAndTokens(comparison.toolSchemaCharsDelta, estimateTokensFromChars(comparison.toolSchemaCharsDelta))}`,
+              );
+            }
+            lines.push(`- prompt hash: ${comparison.promptHashChanged ? "changed" : "unchanged"}`);
+            lines.push(
+              comparison.truncationSeverityChanged
+                ? `- truncation severity: ${comparison.runTruncationSeverity} -> ${comparison.estimateTruncationSeverity}`
+                : `- truncation severity: unchanged (${comparison.estimateTruncationSeverity})`,
+            );
+            lines.push(
+              comparison.topContributorChanged
+                ? `- largest contributor: ${comparison.runTopContributor ?? "none"} -> ${comparison.estimateTopContributor ?? "none"}`
+                : `- largest contributor: unchanged (${comparison.estimateTopContributor ?? comparison.runTopContributor ?? "none"})`,
+            );
+            return lines;
+          })()
+        : [];
+    const estimateHintLine =
+      sub === "detail" && report.source === "run"
+        ? "Tip: use /context deep or /context delta for current estimate-vs-last-run drift."
+        : null;
     const perSkill = formatListTop(
       report.skills.entries.map((s) => ({ name: s.name, value: s.blockChars })),
       30,
@@ -449,6 +501,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         trackedPromptLine,
         actualContextLine,
         ...(overheadLine ? [overheadLine] : []),
+        ...(estimateComparisonLines.length ? ["", ...estimateComparisonLines] : []),
+        ...(estimateHintLine ? ["", estimateHintLine] : []),
         "",
         totalsLine,
         "",

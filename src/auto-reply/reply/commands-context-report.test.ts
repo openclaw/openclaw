@@ -34,6 +34,8 @@ function makeParams(
       systemPromptReport: {
         source: "run",
         generatedAt: Date.now(),
+        sourceRunId: "run-ctx",
+        sourceMessageId: "leaf-ctx",
         workspaceDir: "/tmp/workspace",
         bootstrapMaxChars: options?.omitBootstrapLimits ? undefined : 20_000,
         bootstrapTotalMaxChars: options?.omitBootstrapLimits ? undefined : 150_000,
@@ -105,10 +107,14 @@ describe("buildContextReply", () => {
         totalTokens: 900,
       }),
     );
+    expect(result.text).toContain("Last run snapshot: run-ctx | leaf=leaf-ctx");
     expect(result.text).toContain("Prompt hash: unknown");
     expect(result.text).toContain("Tracked prompt estimate: 1,020 chars (~255 tok)");
     expect(result.text).toContain("Actual context usage (cached): 900 tok");
     expect(result.text).toContain("Untracked provider/runtime overhead: ~645 tok");
+    expect(result.text).toContain(
+      "Tip: use /context deep or /context delta for current estimate-vs-last-run drift.",
+    );
     expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
   });
 
@@ -124,6 +130,18 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Actual context usage (cached): unavailable");
     expect(result.text).toContain("Session tokens (cached): unknown / ctx=8,192");
     expect(result.text).not.toContain("~645 tok");
+  });
+
+  it("shows estimate-vs-run drift in deep output", async () => {
+    const result = await buildContextReply(
+      makeParams("/context deep", false, {
+        contextTokens: 8_192,
+        totalTokens: 900,
+      }),
+    );
+    expect(result.text).toContain("Estimate vs last run:");
+    expect(result.text).toContain("- current estimate:");
+    expect(result.text).toContain("- tracked drift:");
   });
 
   it("compares last run and current estimate drift", () => {
