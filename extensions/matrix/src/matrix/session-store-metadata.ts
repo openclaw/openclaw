@@ -48,6 +48,7 @@ type MatrixStoredSessionEntryLike = {
     from?: unknown;
     to?: unknown;
     nativeChannelId?: unknown;
+    nativeDirectUserId?: unknown;
     accountId?: unknown;
     chatType?: unknown;
   };
@@ -80,16 +81,18 @@ export function resolveMatrixStoredSessionMeta(entry?: MatrixStoredSessionEntryL
     originNativeChannelId: entry.origin?.nativeChannelId,
     originTo: entry.origin?.to,
   });
-  const directUserId = resolveMatrixDirectUserId({
-    from: trimMaybeString(entry.origin?.from),
-    to:
-      (roomId ? `room:${roomId}` : undefined) ??
-      trimMaybeString(entry.deliveryContext?.to) ??
-      trimMaybeString(entry.lastTo) ??
-      trimMaybeString(entry.origin?.to),
-    chatType:
-      trimMaybeString(entry.origin?.chatType) ?? trimMaybeString(entry.chatType) ?? undefined,
-  });
+  const directUserId =
+    trimMaybeString(entry.origin?.nativeDirectUserId) ??
+    resolveMatrixDirectUserId({
+      from: trimMaybeString(entry.origin?.from),
+      to:
+        (roomId ? `room:${roomId}` : undefined) ??
+        trimMaybeString(entry.deliveryContext?.to) ??
+        trimMaybeString(entry.lastTo) ??
+        trimMaybeString(entry.origin?.to),
+      chatType:
+        trimMaybeString(entry.origin?.chatType) ?? trimMaybeString(entry.chatType) ?? undefined,
+    });
   if (!channel && !accountId && !roomId && !directUserId) {
     return null;
   }

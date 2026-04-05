@@ -19,6 +19,7 @@ export type SessionOrigin = {
   from?: string;
   to?: string;
   nativeChannelId?: string;
+  nativeDirectUserId?: string;
   accountId?: string;
   threadId?: string | number;
 };

@@ -1160,6 +1160,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         CommandAuthorized: commandAuthorized,
         CommandSource: "text" as const,
         NativeChannelId: roomId,
+        NativeDirectUserId: isDirectMessage ? senderId : undefined,
         OriginatingChannel: "matrix" as const,
         OriginatingTo: `room:${roomId}`,
       });

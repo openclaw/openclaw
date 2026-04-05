@@ -196,17 +196,18 @@ describe("resolveMatrixOutboundSessionRoute", () => {
         chatType: "direct",
         origin: {
           chatType: "direct",
-          from: "matrix:@alice:example.org",
-          to: "room:@alice:example.org",
+          from: "matrix:@bob:example.org",
+          to: "room:@bob:example.org",
           nativeChannelId: "!dm:example.org",
+          nativeDirectUserId: "@alice:example.org",
           accountId: "ops",
         },
         deliveryContext: {
           channel: "matrix",
-          to: "room:@alice:example.org",
+          to: "room:@bob:example.org",
           accountId: "ops",
         },
-        lastTo: "room:@alice:example.org",
+        lastTo: "room:@bob:example.org",
         lastAccountId: "ops",
       },
     });
@@ -243,6 +244,65 @@ describe("resolveMatrixOutboundSessionRoute", () => {
       chatType: "direct",
       from: "matrix:@alice:example.org",
       to: "room:!dm:example.org",
+    });
+  });
+
+  it("does not reuse the canonical DM room for a different Matrix user after latest metadata drift", () => {
+    const storePath = createTempStore({
+      "agent:main:matrix:channel:!dm:example.org": {
+        sessionId: "sess-1",
+        updatedAt: Date.now(),
+        chatType: "direct",
+        origin: {
+          chatType: "direct",
+          from: "matrix:@bob:example.org",
+          to: "room:@bob:example.org",
+          nativeChannelId: "!dm:example.org",
+          nativeDirectUserId: "@alice:example.org",
+          accountId: "ops",
+        },
+        deliveryContext: {
+          channel: "matrix",
+          to: "room:@bob:example.org",
+          accountId: "ops",
+        },
+        lastTo: "room:@bob:example.org",
+        lastAccountId: "ops",
+      },
+    });
+    const cfg = {
+      session: {
+        store: storePath,
+      },
+      channels: {
+        matrix: {
+          dm: {
+            sessionScope: "per-room",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const route = resolveMatrixOutboundSessionRoute({
+      cfg,
+      agentId: "main",
+      accountId: "ops",
+      currentSessionKey: "agent:main:matrix:channel:!dm:example.org",
+      target: "@bob:example.org",
+      resolvedTarget: {
+        to: "@bob:example.org",
+        kind: "user",
+        source: "normalized",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
+      peer: { kind: "direct", id: "@bob:example.org" },
+      chatType: "direct",
+      from: "matrix:@bob:example.org",
+      to: "room:@bob:example.org",
     });
   });
 

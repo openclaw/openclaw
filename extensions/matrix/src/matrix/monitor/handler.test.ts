@@ -778,10 +778,11 @@ describe("matrix monitor handler pairing account scope", () => {
           ChatType: "direct",
           Provider: "matrix",
           Surface: "matrix",
-          From: "matrix:@user:example.org",
-          To: "room:@user:example.org",
+          From: "matrix:@other:example.org",
+          To: "room:@other:example.org",
+          NativeDirectUserId: "@user:example.org",
           OriginatingChannel: "matrix",
-          OriginatingTo: "room:@user:example.org",
+          OriginatingTo: "room:@other:example.org",
         },
       });
 
