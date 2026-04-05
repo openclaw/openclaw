@@ -114,6 +114,7 @@ import { renderConfig } from "./views/config.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
+import { shouldRenderLoginGate } from "./views/overview-hints.ts";
 import { renderOverview } from "./views/overview.ts";
 
 // Lazy-loaded view modules – deferred so the initial bundle stays small.
@@ -351,9 +352,16 @@ export function renderApp(state: AppViewState) {
       : undefined;
   _pendingUpdate = requestHostUpdate;
 
-  // Gate: require successful gateway connection before showing the dashboard.
+  const showLoginGate = shouldRenderLoginGate({
+    connected: state.connected,
+    gatewayUrl: state.settings.gatewayUrl,
+    lastError: state.lastError,
+    lastErrorCode: state.lastErrorCode,
+  });
+
+  // Show the login gate only when the user needs to reconfigure auth or gateway access.
   // The gateway URL confirmation overlay is always rendered so URL-param flows still work.
-  if (!state.connected) {
+  if (showLoginGate) {
     return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
   }
 
@@ -526,6 +534,12 @@ export function renderApp(state: AppViewState) {
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
             <div class="topbar-status">
+              ${!state.connected && !showLoginGate
+                ? html`<div class="pill topbar-connection-pill" title="Gateway status: Connecting">
+                    <span class="statusDot warn" aria-hidden="true"></span>
+                    <span>Connecting...</span>
+                  </div>`
+                : nothing}
               ${isChat ? renderChatMobileToggle(state) : nothing}
               ${renderTopbarThemeModeToggle(state)}
             </div>

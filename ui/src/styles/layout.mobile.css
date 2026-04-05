@@ -306,6 +306,10 @@
     display: none;
   }
 
+  .topbar-status .topbar-connection-pill span:nth-child(2) {
+    display: inline;
+  }
+
   .shell-nav,
   .shell--nav-collapsed .shell-nav {
     width: min(92vw, 320px);
