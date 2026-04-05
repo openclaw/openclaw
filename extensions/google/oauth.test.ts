@@ -25,6 +25,76 @@ const mockExistsSync = vi.fn();
 const mockReadFileSync = vi.fn();
 const mockRealpathSync = vi.fn();
 const mockReaddirSync = vi.fn();
+const mockSettingsExistsSync = vi.fn();
+const mockSettingsReadFileSync = vi.fn();
+
+describe("resolveGeminiCliSelectedAuthType", () => {
+  const ENV_KEYS = ["GOOGLE_GENAI_USE_GCA"] as const;
+
+  let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
+  let resolveGeminiCliSelectedAuthType: typeof import("./oauth.settings.js").resolveGeminiCliSelectedAuthType;
+  let setOAuthSettingsFsForTest: typeof import("./oauth.settings.js").setOAuthSettingsFsForTest;
+
+  beforeAll(async () => {
+    ({ resolveGeminiCliSelectedAuthType, setOAuthSettingsFsForTest } =
+      await import("./oauth.settings.js"));
+  });
+
+  beforeEach(() => {
+    envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+    delete process.env.GOOGLE_GENAI_USE_GCA;
+    mockSettingsExistsSync.mockReset();
+    mockSettingsReadFileSync.mockReset();
+    setOAuthSettingsFsForTest({
+      existsSync: (...args) => mockSettingsExistsSync(...args),
+      readFileSync: (...args) => mockSettingsReadFileSync(...args),
+      homedir: () => "/mock/home",
+    });
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      const value = envSnapshot[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    setOAuthSettingsFsForTest();
+  });
+
+  it("prefers GOOGLE_GENAI_USE_GCA personal auth mode over settings detection", () => {
+    process.env.GOOGLE_GENAI_USE_GCA = "true";
+    mockSettingsExistsSync.mockReturnValue(false);
+
+    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+  });
+
+  it("reads the nested security auth selection from ~/.gemini/settings.json", () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+  });
+
+  it("falls back to legacy top-level selectedAuthType keys", () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({ selectedAuthType: "oauth-personal" }),
+    );
+
+    expect(resolveGeminiCliSelectedAuthType()).toBe("oauth-personal");
+  });
+});
 
 describe("extractGeminiCliCredentials", () => {
   const normalizePath = (value: string) =>
@@ -458,6 +528,7 @@ describe("loginGeminiCliOAuth", () => {
     "GEMINI_CLI_OAUTH_CLIENT_SECRET",
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_CLOUD_PROJECT_ID",
+    "GOOGLE_GENAI_USE_GCA",
   ] as const;
 
   const EXPECTED_LOAD_CODE_ASSIST_METADATA = {
@@ -504,7 +575,7 @@ describe("loginGeminiCliOAuth", () => {
     note: () => Promise<void>;
     prompt: () => Promise<string>;
     progress: { update: () => void; stop: () => void };
-  }) => Promise<{ projectId: string }>;
+  }) => Promise<{ projectId?: string }>;
 
   async function runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth: LoginGeminiCliOAuthFn) {
     let authUrl = "";
@@ -536,6 +607,12 @@ describe("loginGeminiCliOAuth", () => {
   }
 
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
+  let setOAuthSettingsFsForTest: typeof import("./oauth.settings.js").setOAuthSettingsFsForTest;
+
+  beforeAll(async () => {
+    ({ setOAuthSettingsFsForTest } = await import("./oauth.settings.js"));
+  });
+
   beforeEach(() => {
     envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
     process.env.OPENCLAW_GEMINI_OAUTH_CLIENT_ID = "test-client-id.apps.googleusercontent.com";
@@ -544,6 +621,15 @@ describe("loginGeminiCliOAuth", () => {
     delete process.env.GEMINI_CLI_OAUTH_CLIENT_SECRET;
     delete process.env.GOOGLE_CLOUD_PROJECT;
     delete process.env.GOOGLE_CLOUD_PROJECT_ID;
+    delete process.env.GOOGLE_GENAI_USE_GCA;
+    mockSettingsExistsSync.mockReset();
+    mockSettingsReadFileSync.mockReset();
+    setOAuthSettingsFsForTest({
+      existsSync: (...args) => mockSettingsExistsSync(...args),
+      readFileSync: (...args) => mockSettingsReadFileSync(...args),
+      homedir: () => "/mock/home",
+    });
+    mockSettingsExistsSync.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -555,6 +641,7 @@ describe("loginGeminiCliOAuth", () => {
         process.env[key] = value;
       }
     }
+    setOAuthSettingsFsForTest();
     vi.unstubAllGlobals();
   });
 
@@ -693,5 +780,43 @@ describe("loginGeminiCliOAuth", () => {
     await runRemoteLoginExpectingProjectId(loginGeminiCliOAuth, "env-project");
     expect(requests.filter((url) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
     expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);
+  });
+
+  it("skips loadCodeAssist entirely when Gemini CLI is configured for personal OAuth", async () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    const requests: string[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = getRequestUrl(input);
+      requests.push(url);
+
+      if (url === TOKEN_URL) {
+        return responseJson({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url === USERINFO_URL) {
+        return responseJson({ email: "lobster@openclaw.ai" });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    expect(result.projectId).toBeUndefined();
+    expect(requests).toEqual([TOKEN_URL, USERINFO_URL]);
   });
 });
