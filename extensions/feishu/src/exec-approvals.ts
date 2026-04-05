@@ -2,13 +2,16 @@ import {
   createChannelExecApprovalProfile,
   isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
+  matchesApprovalRequestFilters,
   resolveApprovalApprovers,
-  resolveApprovalRequestAccountId,
+  resolveApprovalRequestChannelAccountId,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { resolveFeishuAccount } from "./accounts.js";
+import { listFeishuAccountIds, resolveFeishuAccount } from "./accounts.js";
+import { parseFeishuDirectConversationId } from "./conversation-id.js";
 
 type FeishuExecApprovalConfig = {
   enabled?: boolean;
@@ -23,17 +26,19 @@ function normalizeApproverId(value: string | number): string {
 }
 
 function normalizeFeishuDirectApproverId(value: string | number): string | undefined {
-  const normalized = normalizeApproverId(value);
-  if (!normalized) {
-    return undefined;
+  // Parse through prefixed forms (user:ou_xxx, feishu:user:ou_xxx, etc.)
+  // then validate that the resolved ID is an ou_ open_id — the identifier
+  // used in Feishu card action callbacks (event.operator.open_id).
+  const parsed = parseFeishuDirectConversationId(value);
+  if (parsed) {
+    return parsed;
   }
-  // Only accept ou_ (open_id) — the identifier used in Feishu card action
-  // callbacks (event.operator.open_id).  on_ (union_id) would silently fail
-  // approver checks at runtime.
-  if (!normalized.startsWith("ou_")) {
-    return undefined;
+  // Also accept bare ou_ IDs
+  const raw = String(value).trim();
+  if (raw.startsWith("ou_")) {
+    return raw;
   }
-  return normalized;
+  return undefined;
 }
 
 export function resolveFeishuExecApprovalConfig(params: {
@@ -76,23 +81,64 @@ export function isFeishuExecApprovalTargetRecipient(params: {
   });
 }
 
+function countFeishuExecApprovalEligibleAccounts(params: {
+  cfg: OpenClawConfig;
+  request: ExecApprovalRequest | PluginApprovalRequest;
+}): number {
+  return listFeishuAccountIds(params.cfg).filter((accountId) => {
+    const account = resolveFeishuAccount({ cfg: params.cfg, accountId });
+    if (!account.enabled || !account.configured) {
+      return false;
+    }
+    const config = resolveFeishuExecApprovalConfig({ cfg: params.cfg, accountId });
+    return (
+      isChannelExecApprovalClientEnabledFromConfig({
+        enabled: config?.enabled,
+        approverCount: getFeishuExecApprovalApprovers({ cfg: params.cfg, accountId }).length,
+      }) &&
+      matchesApprovalRequestFilters({
+        request: params.request.request,
+        agentFilter: config?.agentFilter,
+        sessionFilter: config?.sessionFilter,
+        fallbackAgentIdFromSessionKey: true,
+      })
+    );
+  }).length;
+}
+
+function matchesFeishuRequestAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  request: ExecApprovalRequest | PluginApprovalRequest;
+}): boolean {
+  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
+  const boundAccountId = resolveApprovalRequestChannelAccountId({
+    cfg: params.cfg,
+    request: params.request,
+    channel: "feishu",
+  });
+  // For non-Feishu turn sources with no bound account, only handle if there
+  // is exactly one eligible Feishu account to avoid duplicate prompts.
+  if (turnSourceChannel && turnSourceChannel !== "feishu" && !boundAccountId) {
+    return (
+      countFeishuExecApprovalEligibleAccounts({
+        cfg: params.cfg,
+        request: params.request,
+      }) <= 1
+    );
+  }
+  return (
+    !boundAccountId ||
+    !params.accountId ||
+    normalizeAccountId(boundAccountId) === normalizeAccountId(params.accountId)
+  );
+}
+
 const feishuExecApprovalProfile = createChannelExecApprovalProfile({
   resolveConfig: resolveFeishuExecApprovalConfig,
   resolveApprovers: getFeishuExecApprovalApprovers,
   isTargetRecipient: isFeishuExecApprovalTargetRecipient,
-  matchesRequestAccount: ({ cfg, accountId, request }) => {
-    const boundAccountId = resolveApprovalRequestAccountId({
-      cfg,
-      request,
-      channel:
-        request.request.turnSourceChannel?.trim().toLowerCase() === "feishu" ? null : "feishu",
-    });
-    return (
-      !boundAccountId ||
-      !accountId ||
-      normalizeAccountId(boundAccountId) === normalizeAccountId(accountId)
-    );
-  },
+  matchesRequestAccount: matchesFeishuRequestAccount,
   fallbackAgentIdFromSessionKey: true,
   requireClientEnabledForLocalPromptSuppression: true,
 });
