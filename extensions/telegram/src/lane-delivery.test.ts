@@ -567,6 +567,82 @@ describe("createLaneTextDeliverer", () => {
     });
   });
 
+  it("prefers the active preview over stale archived retries and deletes the stale previews", async () => {
+    const harness = createHarness({
+      answerMessageId: 1003,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Attempt C partial",
+    });
+    harness.archivedAnswerPreviews.push(
+      {
+        messageId: 1001,
+        textSnapshot: "Attempt A partial",
+        deleteIfUnused: false,
+      },
+      {
+        messageId: 1002,
+        textSnapshot: "Attempt B partial",
+        deleteIfUnused: false,
+      },
+    );
+
+    const result = await deliverFinalAnswer(harness, "Attempt C final");
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: "Attempt C final",
+      messageId: 1003,
+    });
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneName: "answer",
+        messageId: 1003,
+        text: "Attempt C final",
+        context: "final",
+      }),
+    );
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(1001);
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(1002);
+    expect(harness.archivedAnswerPreviews).toEqual([]);
+  });
+
+  it("consumes the best matching archived preview and deletes older stale previews", async () => {
+    const harness = createHarness({
+      answerMessageId: 1003,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Attempt C partial",
+    });
+    harness.archivedAnswerPreviews.push(
+      {
+        messageId: 1001,
+        textSnapshot: "Attempt A partial",
+        deleteIfUnused: false,
+      },
+      {
+        messageId: 1002,
+        textSnapshot: "Attempt B partial",
+        deleteIfUnused: false,
+      },
+    );
+
+    const result = await deliverFinalAnswer(harness, "Attempt B final");
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: "Attempt B final",
+      messageId: 1002,
+    });
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneName: "answer",
+        messageId: 1002,
+        text: "Attempt B final",
+        context: "final",
+      }),
+    );
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(1001);
+    expect(harness.deletePreviewMessage).not.toHaveBeenCalledWith(1002);
+    expect(harness.archivedAnswerPreviews).toEqual([]);
+  });
+
   it("deletes consumed boundary previews after fallback final send", async () => {
     const harness = createHarness();
     harness.archivedAnswerPreviews.push({

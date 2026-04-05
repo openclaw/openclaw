@@ -2399,6 +2399,44 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(finalTextSentViaDeliverReplies).toBe(true);
   });
 
+  it("cleans up stale partial previews from failed attempts once a later attempt finalizes", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Attempt A partial" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Attempt B partial" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Attempt C partial" });
+        await dispatcherOptions.deliver({ text: "Attempt C final" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+    const bot = createBot();
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial", bot });
+
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).toHaveBeenNthCalledWith(
+      1,
+      123,
+      1003,
+      "Attempt C final",
+      expect.any(Object),
+    );
+    expect((bot.api.deleteMessage as ReturnType<typeof vi.fn>).mock.calls).toEqual(
+      expect.arrayContaining([
+        [123, 1001],
+        [123, 1002],
+      ]),
+    );
+  });
+
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
     const statusReactionController = {
       setThinking: vi.fn(async () => {}),
