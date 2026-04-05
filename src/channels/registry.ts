@@ -1,4 +1,7 @@
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginChannelRegistry,
+} from "../plugins/runtime.js";
 import { getChatChannelMeta, listChatChannels, type ChatChannelMeta } from "./chat-meta.js";
 import {
   CHANNEL_IDS,
@@ -19,7 +22,21 @@ type RegisteredChannelPluginEntry = {
   };
 };
 
+/**
+ * List registered channel plugin entries.
+ *
+ * Uses the pinned channel registry (stable after gateway startup) as the primary
+ * source, falling back to the mutable active registry. This prevents intermittent
+ * "unknown channel" errors when the active registry is temporarily empty during
+ * plugin reload cycles.
+ *
+ * Fixes: https://github.com/openclaw/openclaw/issues/61358
+ */
 function listRegisteredChannelPluginEntries(): RegisteredChannelPluginEntry[] {
+  const pinned = getActivePluginChannelRegistry();
+  if (pinned && pinned.channels && pinned.channels.length > 0) {
+    return pinned.channels;
+  }
   return getActivePluginRegistry()?.channels ?? [];
 }
 
