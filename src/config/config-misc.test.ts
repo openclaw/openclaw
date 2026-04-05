@@ -497,7 +497,7 @@ describe("config strict validation", () => {
     }
   });
 
-  it("accepts top-level memorySearch via auto-migration and reports legacyIssues", async () => {
+  it("rejects top-level memorySearch until doctor repairs it and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         memorySearch: {
@@ -509,18 +509,17 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
-      expect(snap.sourceConfig.agents?.defaults?.memorySearch).toMatchObject({
+      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toMatchObject({
         provider: "local",
         fallback: "none",
         query: { maxResults: 7 },
       });
-      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toBeUndefined();
     });
   });
 
-  it("accepts top-level heartbeat agent settings via auto-migration and reports legacyIssues", async () => {
+  it("rejects top-level heartbeat agent settings until doctor repairs them and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         heartbeat: {
@@ -531,17 +530,16 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
-      expect(snap.sourceConfig.agents?.defaults?.heartbeat).toMatchObject({
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
         every: "30m",
         model: "anthropic/claude-3-5-haiku-20241022",
       });
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toBeUndefined();
     });
   });
 
-  it("accepts top-level heartbeat visibility via auto-migration and reports legacyIssues", async () => {
+  it("rejects top-level heartbeat visibility until doctor repairs it and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         heartbeat: {
@@ -553,18 +551,17 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
-      expect(snap.sourceConfig.channels?.defaults?.heartbeat).toMatchObject({
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
         showOk: true,
         showAlerts: false,
         useIndicator: true,
       });
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toBeUndefined();
     });
   });
 
-  it("accepts legacy messages.tts provider keys via auto-migration and reports legacyIssues", async () => {
+  it("rejects legacy messages.tts provider keys until doctor repairs them and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         messages: {
@@ -580,15 +577,15 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "messages.tts")).toBe(true);
-      expect(snap.sourceConfig.messages?.tts?.providers?.elevenlabs).toEqual({
-        apiKey: "test-key",
-        voiceId: "voice-1",
+      expect(snap.sourceConfig.messages?.tts).toEqual({
+        provider: "elevenlabs",
+        elevenlabs: {
+          apiKey: "test-key",
+          voiceId: "voice-1",
+        },
       });
-      expect(
-        (snap.sourceConfig.messages?.tts as Record<string, unknown> | undefined)?.elevenlabs,
-      ).toBeUndefined();
     });
   });
 
@@ -614,7 +611,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("accepts legacy sandbox perSession via auto-migration and reports legacyIssues", async () => {
+  it("rejects legacy sandbox perSession until doctor repairs it and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         agents: {
@@ -636,21 +633,17 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "agents.defaults.sandbox")).toBe(
         true,
       );
       expect(snap.legacyIssues.some((issue) => issue.path === "agents.list")).toBe(true);
-      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({
-        scope: "session",
-      });
-      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({
-        scope: "shared",
-      });
+      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
+      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ perSession: false });
     });
   });
 
-  it("accepts legacy x_search auth via auto-migration and reports legacyIssues", async () => {
+  it("rejects legacy x_search auth until doctor repairs it and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         tools: {
@@ -664,20 +657,17 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "tools.web.x_search.apiKey")).toBe(
         true,
       );
-      expect(snap.sourceConfig.plugins?.entries?.xai?.config?.webSearch).toMatchObject({
-        apiKey: "test-key",
-      });
       expect(
         (snap.sourceConfig.tools?.web?.x_search as Record<string, unknown> | undefined)?.apiKey,
-      ).toBeUndefined();
+      ).toBe("test-key");
     });
   });
 
-  it("accepts legacy thread binding ttlHours via auto-migration and reports legacyIssues", async () => {
+  it("rejects legacy thread binding ttlHours until doctor repairs it and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         session: {
@@ -703,37 +693,18 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "session.threadBindings")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels")).toBe(true);
-      expect(snap.sourceConfig.session?.threadBindings).toMatchObject({
-        idleHours: 24,
-      });
-      expect(snap.sourceConfig.channels?.discord?.threadBindings).toMatchObject({
-        idleHours: 12,
-      });
+      expect(snap.sourceConfig.session?.threadBindings).toMatchObject({ ttlHours: 24 });
+      expect(snap.sourceConfig.channels?.discord?.threadBindings).toMatchObject({ ttlHours: 12 });
       expect(snap.sourceConfig.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
-        idleHours: 6,
+        ttlHours: 6,
       });
-      expect(
-        (snap.sourceConfig.session?.threadBindings as Record<string, unknown> | undefined)
-          ?.ttlHours,
-      ).toBeUndefined();
-      expect(
-        (snap.sourceConfig.channels?.discord?.threadBindings as Record<string, unknown> | undefined)
-          ?.ttlHours,
-      ).toBeUndefined();
-      expect(
-        (
-          snap.sourceConfig.channels?.discord?.accounts?.alpha?.threadBindings as
-            | Record<string, unknown>
-            | undefined
-        )?.ttlHours,
-      ).toBeUndefined();
     });
   });
 
-  it("accepts legacy channel streaming aliases via auto-migration and reports legacyIssues", async () => {
+  it("rejects legacy channel streaming aliases until doctor repairs them and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         channels: {
@@ -764,7 +735,7 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.telegram")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
@@ -775,36 +746,20 @@ describe("config strict validation", () => {
         true,
       );
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack")).toBe(true);
-      expect(snap.sourceConfig.channels?.telegram).toMatchObject({
-        streaming: "block",
-      });
-      expect(
-        (snap.sourceConfig.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
-      ).toBeUndefined();
-      expect(snap.sourceConfig.channels?.discord).toMatchObject({
-        streaming: "off",
-      });
+      expect(snap.sourceConfig.channels?.telegram).toMatchObject({ streamMode: "block" });
+      expect(snap.sourceConfig.channels?.discord).toMatchObject({ streaming: false });
       expect(snap.sourceConfig.channels?.discord?.accounts?.work).toMatchObject({
-        streaming: "block",
+        streamMode: "block",
       });
-      expect(
-        (snap.sourceConfig.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
-      ).toBeUndefined();
-      expect(
-        (
-          snap.sourceConfig.channels?.googlechat?.accounts?.work as
-            | Record<string, unknown>
-            | undefined
-        )?.streamMode,
-      ).toBeUndefined();
-      expect(snap.sourceConfig.channels?.slack).toMatchObject({
-        streaming: "partial",
-        nativeStreaming: true,
+      expect(snap.sourceConfig.channels?.googlechat).toMatchObject({ streamMode: "append" });
+      expect(snap.sourceConfig.channels?.googlechat?.accounts?.work).toMatchObject({
+        streamMode: "replace",
       });
+      expect(snap.sourceConfig.channels?.slack).toMatchObject({ streaming: true });
     });
   });
 
-  it("accepts legacy nested channel allow aliases via auto-migration and reports legacyIssues", async () => {
+  it("rejects legacy nested channel allow aliases until doctor repairs them and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         channels: {
@@ -869,7 +824,7 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack.accounts")).toBe(
         true,
@@ -882,39 +837,17 @@ describe("config strict validation", () => {
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
         true,
       );
-      expect(snap.sourceConfig.channels?.slack?.channels?.ops).toMatchObject({
-        enabled: false,
-      });
+      expect(snap.sourceConfig.channels?.slack?.channels?.ops).toMatchObject({ allow: false });
       expect(snap.sourceConfig.channels?.googlechat?.groups?.["spaces/aaa"]).toMatchObject({
-        enabled: false,
+        allow: false,
       });
       expect(snap.sourceConfig.channels?.discord?.guilds?.["100"]?.channels?.general).toMatchObject(
-        {
-          enabled: false,
-        },
+        { allow: false },
       );
-      expect(
-        (snap.sourceConfig.channels?.slack?.channels?.ops as Record<string, unknown> | undefined)
-          ?.allow,
-      ).toBeUndefined();
-      expect(
-        (
-          snap.sourceConfig.channels?.googlechat?.groups?.["spaces/aaa"] as
-            | Record<string, unknown>
-            | undefined
-        )?.allow,
-      ).toBeUndefined();
-      expect(
-        (
-          snap.sourceConfig.channels?.discord?.guilds?.["100"]?.channels?.general as
-            | Record<string, unknown>
-            | undefined
-        )?.allow,
-      ).toBeUndefined();
     });
   });
 
-  it("accepts telegram groupMentionsOnly via auto-migration and reports legacyIssues", async () => {
+  it("rejects telegram groupMentionsOnly until doctor repairs it and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         channels: {
@@ -926,21 +859,15 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(
         snap.legacyIssues.some((issue) => issue.path === "channels.telegram.groupMentionsOnly"),
       ).toBe(true);
-      expect(snap.sourceConfig.channels?.telegram?.groups?.["*"]).toMatchObject({
-        requireMention: true,
-      });
-      expect(
-        (snap.sourceConfig.channels?.telegram as Record<string, unknown> | undefined)
-          ?.groupMentionsOnly,
-      ).toBeUndefined();
+      expect(snap.sourceConfig.channels?.telegram).toMatchObject({ groupMentionsOnly: true });
     });
   });
 
-  it("accepts legacy plugins.entries.*.config.tts provider keys via auto-migration", async () => {
+  it("rejects legacy plugins.entries.*.config.tts provider keys until doctor repairs them", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         plugins: {
@@ -962,7 +889,7 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "plugins.entries")).toBe(true);
       const voiceCallTts = (
         snap.sourceConfig.plugins?.entries as
@@ -979,15 +906,17 @@ describe("config strict validation", () => {
             >
           | undefined
       )?.["voice-call"]?.config?.tts;
-      expect(voiceCallTts?.providers?.openai).toEqual({
-        model: "gpt-4o-mini-tts",
-        voice: "alloy",
+      expect(voiceCallTts).toEqual({
+        provider: "openai",
+        openai: {
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+        },
       });
-      expect(voiceCallTts?.openai).toBeUndefined();
     });
   });
 
-  it("accepts legacy discord voice tts provider keys via auto-migration and reports legacyIssues", async () => {
+  it("rejects legacy discord voice tts provider keys until doctor repairs them and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         channels: {
@@ -1017,32 +946,24 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.voice.tts")).toBe(
         true,
       );
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
         true,
       );
-      expect(snap.sourceConfig.channels?.discord?.voice?.tts?.providers?.elevenlabs).toEqual({
-        voiceId: "voice-1",
+      expect(snap.sourceConfig.channels?.discord?.voice?.tts).toEqual({
+        provider: "elevenlabs",
+        elevenlabs: {
+          voiceId: "voice-1",
+        },
       });
-      expect(
-        snap.sourceConfig.channels?.discord?.accounts?.main?.voice?.tts?.providers?.microsoft,
-      ).toEqual({
-        voice: "en-US-AvaNeural",
+      expect(snap.sourceConfig.channels?.discord?.accounts?.main?.voice?.tts).toEqual({
+        edge: {
+          voice: "en-US-AvaNeural",
+        },
       });
-      expect(
-        (snap.sourceConfig.channels?.discord?.voice?.tts as Record<string, unknown> | undefined)
-          ?.elevenlabs,
-      ).toBeUndefined();
-      expect(
-        (
-          snap.sourceConfig.channels?.discord?.accounts?.main?.voice?.tts as
-            | Record<string, unknown>
-            | undefined
-        )?.edge,
-      ).toBeUndefined();
     });
   });
 

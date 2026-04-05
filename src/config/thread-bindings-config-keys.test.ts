@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { migrateLegacyConfig } from "./legacy-migrate.js";
+import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { validateConfigObjectRaw } from "./validation.js";
 
 describe("thread binding config keys", () => {

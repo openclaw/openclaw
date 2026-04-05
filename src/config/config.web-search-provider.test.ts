@@ -389,7 +389,7 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts legacy scoped provider config for bundled providers via auto-migration", () => {
+  it("rejects legacy scoped provider config for bundled providers until doctor repairs it", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
         web: {
@@ -403,21 +403,7 @@ describe("web search provider config", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.config.tools?.web?.search).toEqual({
-      provider: "gemini",
-    });
-    expect(res.config.plugins?.entries?.google).toEqual({
-      enabled: true,
-      config: {
-        webSearch: {
-          apiKey: "legacy-key",
-        },
-      },
-    });
+    expect(res.ok).toBe(false);
   });
 
   it("accepts gemini provider with no extra config", () => {

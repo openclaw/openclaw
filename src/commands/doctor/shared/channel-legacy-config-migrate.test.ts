@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyChannelDoctorCompatibilityMigrations } from "./legacy-config.js";
+import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 
 describe("bundled channel legacy config migrations", () => {
   it("normalizes legacy private-network aliases exposed through bundled contract surfaces", () => {

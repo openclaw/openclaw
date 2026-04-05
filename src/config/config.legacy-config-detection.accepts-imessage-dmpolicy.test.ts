@@ -2,9 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-const { loadConfig, migrateLegacyConfig, readConfigFileSnapshot, validateConfigObject } =
+const { loadConfig, readConfigFileSnapshot, validateConfigObject } =
   await vi.importActual<typeof import("./config.js")>("./config.js");
+const { migrateLegacyConfig: migrateLegacyConfigFromDoctor } = await vi.importActual<
+  typeof import("../commands/doctor/shared/legacy-config-migrate.js")
+>("../commands/doctor/shared/legacy-config-migrate.js");
 import { withTempHome } from "./test-helpers.js";
+
+const migrateLegacyConfig = migrateLegacyConfigFromDoctor;
 
 async function expectLoadRejectionPreservesField(params: {
   config: unknown;
@@ -219,7 +224,7 @@ describe("legacy config detection", () => {
     await withSnapshotForConfig(
       { channels: { telegram: { groupMentionsOnly: true } } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(true);
+        expect(ctx.snapshot.valid).toBe(false);
         expect(
           ctx.snapshot.legacyIssues.some(
             (issue) => issue.path === "channels.telegram.groupMentionsOnly",
@@ -263,7 +268,7 @@ describe("legacy config detection", () => {
     await withSnapshotForConfig(
       { memorySearch: { provider: "local", fallback: "none" } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(true);
+        expect(ctx.snapshot.valid).toBe(false);
         expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
       },
     );
@@ -272,7 +277,7 @@ describe("legacy config detection", () => {
     await withSnapshotForConfig(
       { heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(true);
+        expect(ctx.snapshot.valid).toBe(false);
         expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
       },
     );
@@ -316,7 +321,7 @@ describe("legacy config detection", () => {
     await withSnapshotForConfig(
       { memorySearch: { provider: "local", fallback: "none" } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(true);
+        expect(ctx.snapshot.valid).toBe(false);
         expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
       },
     );
