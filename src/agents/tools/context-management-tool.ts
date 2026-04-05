@@ -4,6 +4,7 @@ import { logDebug } from "../../logger.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { AgentToolResult } from "@mariozechner/pi-agent-core";
 
 const CONTEXT_ACTIONS = [
   "analyze",
@@ -73,7 +74,7 @@ export function createContextManagementTool(
       },
       required: ["action", "contextType"],
     },
-    execute: async (toolCallId, params, signal, onUpdate) => {
+    execute: async (toolCallId, params, _signal, _onUpdate) => {
       const action = readStringParam(params, "action");
       const contextType = readStringParam(params, "contextType");
       const maxTokens = readNumberParam(params, "maxTokens") ?? 50000;
@@ -105,7 +106,7 @@ export function createContextManagementTool(
 
 async function analyzeContext(
   contextType: string,
-  config?: OpenClawConfig,
+  _config?: OpenClawConfig,
 ): Promise<ContextAnalysisResult> {
   // Simulate context analysis - in real implementation, this would
   // analyze actual session data, memory stores, etc.
@@ -134,8 +135,8 @@ async function analyzeContext(
 async function optimizeContext(
   contextType: string,
   maxTokens: number,
-  threshold: number,
-  config?: OpenClawConfig,
+  _threshold: number,
+  _config?: OpenClawConfig,
 ): Promise<ContextOptimizationResult> {
   const startTime = Date.now();
   const mockData = getMockContextData(contextType);
@@ -161,8 +162,8 @@ async function optimizeContext(
 
 async function summarizeContext(
   contextType: string,
-  config?: OpenClawConfig,
-): Promise<any> {
+  _config?: OpenClawConfig,
+): Promise<AgentToolResult<unknown>> {
   return jsonResult({
     summary: `Context summary for ${contextType}`,
     keyPoints: [
@@ -177,8 +178,8 @@ async function summarizeContext(
 async function compressContext(
   contextType: string,
   maxTokens: number,
-  config?: OpenClawConfig,
-): Promise<any> {
+  _config?: OpenClawConfig,
+): Promise<AgentToolResult<unknown>> {
   return jsonResult({
     compressed: true,
     originalTokens: Math.floor(Math.random() * 50000) + 10000,
@@ -191,8 +192,8 @@ async function compressContext(
 async function cleanupContext(
   contextType: string,
   threshold: number,
-  config?: OpenClawConfig,
-): Promise<any> {
+  _config?: OpenClawConfig,
+): Promise<AgentToolResult<unknown>> {
   const mockData = getMockContextData(contextType);
   const itemsToRemove = Math.floor(mockData.totalItems * (1 - threshold));
   
@@ -205,7 +206,7 @@ async function cleanupContext(
   });
 }
 
-function getMockContextData(contextType: string) {
+function getMockContextData(_contextType: string) {
   const baseData = {
     totalItems: Math.floor(Math.random() * 2000) + 100,
     estimatedTokens: Math.floor(Math.random() * 80000) + 5000,

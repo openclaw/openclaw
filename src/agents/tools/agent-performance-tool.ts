@@ -1,7 +1,6 @@
-import { Type } from "@sinclair/typebox";
+import { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logDebug } from "../../logger.js";
-import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
@@ -175,7 +174,7 @@ async function runBenchmark(
 async function profileAgent(
   metric: string,
   config?: OpenClawConfig,
-): Promise<any> {
+): Promise<AgentToolResult<unknown>> {
   const profileData = {
     metric,
     timestamp: new Date().toISOString(),
@@ -199,7 +198,7 @@ async function profileAgent(
 async function diagnosePerformance(
   metric: string,
   config?: OpenClawConfig,
-): Promise<any> {
+): Promise<AgentToolResult<unknown>> {
   const issues = [
     "High memory usage detected",
     "Slow response times on complex queries",
@@ -227,7 +226,7 @@ async function diagnosePerformance(
 async function getOptimizationSuggestions(
   metric: string,
   config?: OpenClawConfig,
-): Promise<any> {
+): Promise<AgentToolResult<unknown>> {
   const suggestions = {
     immediate: [
       "Enable response caching for repeated queries",
