@@ -13,6 +13,7 @@ import {
   ensureApiKeyFromOptionEnvOrPrompt,
   listProfilesForProvider,
   normalizeApiKeyInput,
+  readClaudeCliCredentialsCached,
   type OpenClawConfig as ProviderAuthConfig,
   suggestOAuthProfileIdForLegacyDefault,
   type AuthProfileStore,
@@ -25,6 +26,7 @@ import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shar
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
+import { CLAUDE_CLI_BACKEND_ID } from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfig,
@@ -212,6 +214,10 @@ function resolveAnthropic46ForwardCompatModel(params: {
     modelId: trimmedModelId,
     templateIds,
     ctx: params.ctx,
+    patch:
+      params.ctx.provider.trim().toLowerCase() === CLAUDE_CLI_BACKEND_ID
+        ? { provider: CLAUDE_CLI_BACKEND_ID }
+        : undefined,
   });
 }
 
@@ -276,6 +282,24 @@ function buildAnthropicAuthDoctorHint(params: {
     `- suggested profile: ${suggested}`,
     `Fix: run "${formatCliCommand("openclaw doctor --yes")}"`,
   ].join("\n");
+}
+
+function resolveClaudeCliSyntheticAuth() {
+  const credential = readClaudeCliCredentialsCached({ allowKeychainPrompt: false });
+  if (!credential) {
+    return undefined;
+  }
+  return credential.type === "oauth"
+    ? {
+        apiKey: credential.access,
+        source: "Claude CLI native auth",
+        mode: "oauth" as const,
+      }
+    : {
+        apiKey: credential.token,
+        source: "Claude CLI native auth",
+        mode: "token" as const,
+      };
 }
 
 async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
@@ -347,6 +371,7 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     id: providerId,
     label: "Anthropic",
     docsPath: "/providers/models",
+    hookAliases: [CLAUDE_CLI_BACKEND_ID],
     envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
     deprecatedProfileIds: [claudeCliProfileId],
     oauthProfileIdRepairs: [
@@ -425,6 +450,10 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     normalizeConfig: ({ providerConfig }) => normalizeAnthropicProviderConfig(providerConfig),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
+    resolveSyntheticAuth: ({ provider }) =>
+      provider.trim().toLowerCase() === CLAUDE_CLI_BACKEND_ID
+        ? resolveClaudeCliSyntheticAuth()
+        : undefined,
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",

@@ -301,6 +301,25 @@ describe("provider-runtime", () => {
   });
 
   it("returns no runtime plugin when the provider has no owning plugin", () => {
+  it("matches providers by hook alias for runtime hook lookup", () => {
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(["anthropic"]);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        hookAliases: ["claude-cli"],
+        auth: [],
+      },
+    ]);
+
+    expectProviderRuntimePluginLoad({
+      provider: "claude-cli",
+      expectedPluginId: "anthropic",
+      expectedOnlyPluginIds: ["anthropic"],
+    });
+  });
+
+  it("returns no runtime plugin when the provider has no owning plugin", () => {
     expectProviderRuntimePluginLoad({
       provider: "anthropic",
     });
