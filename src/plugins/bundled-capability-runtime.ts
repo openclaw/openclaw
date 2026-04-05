@@ -129,6 +129,7 @@ function createCapabilityPluginRecord(params: {
     videoGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    memoryEmbeddingProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
@@ -292,6 +293,9 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       );
       record.webFetchProviderIds.push(...captured.webFetchProviders.map((entry) => entry.id));
       record.webSearchProviderIds.push(...captured.webSearchProviders.map((entry) => entry.id));
+      record.memoryEmbeddingProviderIds.push(
+        ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
+      );
       record.toolNames.push(...captured.tools.map((entry) => entry.name));
 
       registry.cliBackends?.push(
@@ -377,6 +381,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       );
       registry.webSearchProviders.push(
         ...captured.webSearchProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.memoryEmbeddingProviders.push(
+        ...captured.memoryEmbeddingProviders.map((provider) => ({
           pluginId: record.id,
           pluginName: record.name,
           provider,

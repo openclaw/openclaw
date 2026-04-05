@@ -1,11 +1,5 @@
 import { isIP } from "node:net";
 import path from "node:path";
-import {
-  redactCdpUrl,
-  resolveBrowserConfig,
-  resolveBrowserControlAuth,
-  resolveProfile,
-} from "../../extensions/browser/runtime-api.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { listChannelPlugins } from "../channels/plugins/index.js";
@@ -23,6 +17,12 @@ import {
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { isBlockedHostnameOrIp, isPrivateNetworkAllowedByPolicy } from "../infra/net/ssrf.js";
+import {
+  redactCdpUrl,
+  resolveBrowserConfig,
+  resolveProfile,
+} from "../plugin-sdk/browser-config.js";
+import { resolveBrowserControlAuth } from "../plugin-sdk/browser-control-auth.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   formatPermissionDetail,

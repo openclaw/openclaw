@@ -1,6 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { migrateAmazonBedrockLegacyConfig } from "../../extensions/amazon-bedrock/config-api.js";
-import { migrateVoiceCallLegacyConfigInput } from "../../extensions/voice-call/config-api.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -10,7 +8,11 @@ import { migrateLegacyWebSearchConfig } from "../config/legacy-web-search.js";
 import { migrateLegacyXSearchConfig } from "../config/legacy-x-search.js";
 import { normalizeTalkSection } from "../config/talk.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../infra/google-api-base-url.js";
-import { normalizeCompatibilityConfig as normalizeElevenLabsCompatibilityConfig } from "../plugin-sdk/elevenlabs.js";
+import {
+  ELEVENLABS_TALK_PROVIDER_ID,
+  normalizeCompatibilityConfig as normalizeElevenLabsCompatibilityConfig,
+} from "../plugin-sdk/elevenlabs.js";
+import { runPluginSetupConfigMigrations } from "../plugins/setup-registry.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
@@ -86,37 +88,6 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     };
   };
 
-  const normalizeVoiceCallLegacyConfig = () => {
-    const rawVoiceCallConfig = next.plugins?.entries?.["voice-call"]?.config;
-    if (!isRecord(rawVoiceCallConfig)) {
-      return;
-    }
-
-    const migration = migrateVoiceCallLegacyConfigInput({
-      value: rawVoiceCallConfig,
-      configPathPrefix: "plugins.entries.voice-call.config",
-    });
-    if (migration.changes.length === 0) {
-      return;
-    }
-
-    const plugins = structuredClone(next.plugins ?? {});
-    const entries = { ...plugins.entries };
-    const existingVoiceCallEntry = isRecord(entries["voice-call"])
-      ? (entries["voice-call"] as Record<string, unknown>)
-      : {};
-    entries["voice-call"] = {
-      ...existingVoiceCallEntry,
-      config: migration.config,
-    };
-    plugins.entries = entries;
-    next = {
-      ...next,
-      plugins,
-    };
-    changes.push(...migration.changes);
-  };
-
   const seedMissingDefaultAccountsFromSingleAccountBase = () => {
     const channels = next.channels as Record<string, unknown> | undefined;
     if (!channels) {
@@ -188,11 +159,12 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
 
   seedMissingDefaultAccountsFromSingleAccountBase();
   normalizeLegacyBrowserProfiles();
-  normalizeVoiceCallLegacyConfig();
-  const bedrockMigration = migrateAmazonBedrockLegacyConfig(next);
-  if (bedrockMigration.changes.length > 0) {
-    next = bedrockMigration.config;
-    changes.push(...bedrockMigration.changes);
+  const setupMigration = runPluginSetupConfigMigrations({
+    config: next,
+  });
+  if (setupMigration.changes.length > 0) {
+    next = setupMigration.config;
+    changes.push(...setupMigration.changes);
   }
   const webSearchMigration = migrateLegacyWebSearchConfig(next);
   if (webSearchMigration.changes.length > 0) {

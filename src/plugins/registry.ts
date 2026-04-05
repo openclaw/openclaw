@@ -17,8 +17,10 @@ import type { PluginActivationSource } from "./config-state.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive-registry.js";
+import type { PluginManifestContracts } from "./manifest.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderAdapter,
   registerMemoryEmbeddingProvider,
 } from "./memory-embedding-providers.js";
 import {
@@ -160,6 +162,8 @@ export type PluginWebFetchProviderRegistration =
   PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
 export type PluginWebSearchProviderRegistration =
   PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
+export type PluginMemoryEmbeddingProviderRegistration =
+  PluginOwnedProviderRegistration<MemoryEmbeddingProviderAdapter>;
 
 export type PluginHookRegistration = {
   pluginId: string;
@@ -230,6 +234,7 @@ export type PluginRecord = {
   videoGenerationProviderIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
+  memoryEmbeddingProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
@@ -239,6 +244,7 @@ export type PluginRecord = {
   configSchema: boolean;
   configUiHints?: Record<string, PluginConfigUiHint>;
   configJsonSchema?: Record<string, unknown>;
+  contracts?: PluginManifestContracts;
   memorySlotSelected?: boolean;
 };
 
@@ -259,6 +265,7 @@ export type PluginRegistry = {
   videoGenerationProviders: PluginVideoGenerationProviderRegistration[];
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
+  memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];
@@ -1208,26 +1215,29 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerMemoryRuntime(runtime);
               },
               registerMemoryEmbeddingProvider: (adapter) => {
-                if (!hasKind(record.kind, "memory")) {
+                if (hasKind(record.kind, "memory")) {
+                  if (
+                    Array.isArray(record.kind) &&
+                    record.kind.length > 1 &&
+                    !record.memorySlotSelected
+                  ) {
+                    pushDiagnostic({
+                      level: "warn",
+                      pluginId: record.id,
+                      source: record.source,
+                      message:
+                        "dual-kind plugin not selected for memory slot; skipping memory embedding provider registration",
+                    });
+                    return;
+                  }
+                } else if (
+                  !(record.contracts?.memoryEmbeddingProviders ?? []).includes(adapter.id)
+                ) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
                     source: record.source,
-                    message: "only memory plugins can register memory embedding providers",
-                  });
-                  return;
-                }
-                if (
-                  Array.isArray(record.kind) &&
-                  record.kind.length > 1 &&
-                  !record.memorySlotSelected
-                ) {
-                  pushDiagnostic({
-                    level: "warn",
-                    pluginId: record.id,
-                    source: record.source,
-                    message:
-                      "dual-kind plugin not selected for memory slot; skipping memory embedding provider registration",
+                    message: `plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: ${adapter.id}`,
                   });
                   return;
                 }
@@ -1246,6 +1256,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 }
                 registerMemoryEmbeddingProvider(adapter, {
                   ownerPluginId: record.id,
+                });
+                registry.memoryEmbeddingProviders.push({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  provider: adapter,
+                  source: record.source,
+                  rootDir: record.rootDir,
                 });
               },
               on: (hookName, handler, opts) =>

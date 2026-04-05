@@ -270,6 +270,9 @@ describe("config schema", () => {
         planTool: true,
       },
     });
+    if (!parsed) {
+      throw new Error("expected parsed tools config");
+    }
 
     expect(parsed?.experimental?.planTool).toBe(true);
   });

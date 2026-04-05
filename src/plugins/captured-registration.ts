@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { buildPluginApi } from "./api-builder.js";
+import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   AnyAgentTool,
@@ -37,6 +38,7 @@ export type CapturedPluginRegistration = {
   videoGenerationProviders: VideoGenerationProviderPlugin[];
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
+  memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
   tools: AnyAgentTool[];
 };
 
@@ -55,6 +57,7 @@ export function createCapturedPluginRegistration(params?: {
   const videoGenerationProviders: VideoGenerationProviderPlugin[] = [];
   const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
+  const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
   const tools: AnyAgentTool[] = [];
   const noopLogger = {
     info() {},
@@ -75,6 +78,7 @@ export function createCapturedPluginRegistration(params?: {
     videoGenerationProviders,
     webFetchProviders,
     webSearchProviders,
+    memoryEmbeddingProviders,
     tools,
     api: buildPluginApi({
       id: "captured-plugin-registration",
@@ -138,6 +142,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerWebSearchProvider(provider: WebSearchProviderPlugin) {
           webSearchProviders.push(provider);
+        },
+        registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter) {
+          memoryEmbeddingProviders.push(adapter);
         },
         registerTool(tool) {
           if (typeof tool !== "function") {

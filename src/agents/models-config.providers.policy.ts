@@ -1,15 +1,10 @@
-import { resolveMantleBearerToken } from "../../extensions/amazon-bedrock-mantle/discovery.js";
-import { resolveBedrockConfigApiKey } from "../../extensions/amazon-bedrock/api.js";
-import { resolveAnthropicVertexConfigApiKey } from "../../extensions/anthropic-vertex/region.js";
-import {
-  normalizeGoogleProviderConfig,
-  shouldNormalizeGoogleProviderConfig,
-} from "../../extensions/google/api.js";
 import { MODEL_APIS } from "../config/types.models.js";
+import { resolveMantleBearerToken } from "../plugin-sdk/amazon-bedrock-mantle.js";
 import {
   applyProviderNativeStreamingUsageCompatWithPlugin,
   normalizeProviderConfigWithPlugin,
 } from "../plugins/provider-runtime.js";
+import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 const GENERIC_PROVIDER_APIS = new Set<string>([
@@ -59,8 +54,15 @@ export function normalizeProviderSpecificConfig(
   providerKey: string,
   provider: ProviderConfig,
 ): ProviderConfig {
-  if (shouldNormalizeGoogleProviderConfig(providerKey, provider)) {
-    return normalizeGoogleProviderConfig(providerKey, provider);
+  const setupProvider = resolvePluginSetupProvider({
+    provider: resolveProviderPluginLookupKey(providerKey, provider),
+  });
+  const setupNormalized = setupProvider?.normalizeConfig?.({
+    provider: providerKey,
+    providerConfig: provider,
+  });
+  if (setupNormalized && setupNormalized !== provider) {
+    return setupNormalized;
   }
   const runtimeProviderKey = resolveProviderPluginLookupKey(providerKey, provider);
   if (!PROVIDERS_WITH_RUNTIME_NORMALIZE_CONFIG.has(runtimeProviderKey)) {
@@ -84,19 +86,20 @@ export function resolveProviderConfigApiKeyResolver(
   providerKey: string,
   provider?: ProviderConfig,
 ): ((env: NodeJS.ProcessEnv) => string | undefined) | undefined {
-  if (providerKey.trim() === "amazon-bedrock") {
+  const setupProvider = resolvePluginSetupProvider({
+    provider: resolveProviderPluginLookupKey(providerKey, provider),
+  });
+  const resolveSetupConfigApiKey = setupProvider?.resolveConfigApiKey;
+  if (resolveSetupConfigApiKey) {
     return (env) => {
-      const resolved = resolveBedrockConfigApiKey(env);
+      const resolved = resolveSetupConfigApiKey({
+        provider: providerKey,
+        env,
+      });
       return resolved?.trim() || undefined;
     };
   }
   const runtimeProviderKey = resolveProviderPluginLookupKey(providerKey, provider).trim();
-  if (runtimeProviderKey === "anthropic-vertex") {
-    return (env) => {
-      const resolved = resolveAnthropicVertexConfigApiKey(env);
-      return resolved?.trim() || undefined;
-    };
-  }
   if (runtimeProviderKey === "amazon-bedrock-mantle") {
     return (env) =>
       resolveMantleBearerToken(env)?.trim() ? "AWS_BEARER_TOKEN_BEDROCK" : undefined;

@@ -1988,6 +1988,25 @@ export type OpenClawPluginModule =
 
 export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
 
+export type PluginConfigMigration = (config: OpenClawConfig) =>
+  | {
+      config: OpenClawConfig;
+      changes: string[];
+    }
+  | null
+  | undefined;
+
+export type PluginLegacyConfigMigration = (raw: Record<string, unknown>, changes: string[]) => void;
+
+export type PluginSetupAutoEnableContext = {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+};
+
+export type PluginSetupAutoEnableProbe = (
+  ctx: PluginSetupAutoEnableContext,
+) => string | string[] | null | undefined;
+
 /** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
   id: string;
@@ -2049,6 +2068,12 @@ export type OpenClawPluginApi = {
   registerService: (service: OpenClawPluginService) => void;
   /** Register a text-only CLI backend used by the local CLI runner. */
   registerCliBackend: (backend: CliBackendPlugin) => void;
+  /** Register a lightweight config migration that can run before plugin runtime loads. */
+  registerConfigMigration: (migrate: PluginConfigMigration) => void;
+  /** Register a lightweight raw legacy-config migration for pre-schema config repair. */
+  registerLegacyConfigMigration: (migrate: PluginLegacyConfigMigration) => void;
+  /** Register a lightweight config probe that can auto-enable this plugin generically. */
+  registerAutoEnableProbe: (probe: PluginSetupAutoEnableProbe) => void;
   /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
   /** Register a speech synthesis provider (speech capability). */

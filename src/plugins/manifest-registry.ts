@@ -29,7 +29,10 @@ import type {
   PluginOrigin,
 } from "./types.js";
 
-type PluginManifestContractListKey = "webFetchProviders" | "webSearchProviders";
+type PluginManifestContractListKey =
+  | "memoryEmbeddingProviders"
+  | "webFetchProviders"
+  | "webSearchProviders";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;

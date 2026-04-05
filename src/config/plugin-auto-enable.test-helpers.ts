@@ -5,6 +5,7 @@ import {
   clearPluginManifestRegistryCache,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
+import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
@@ -16,6 +17,7 @@ const tempDirs: string[] = [];
 export function resetPluginAutoEnableTestState(): void {
   clearPluginDiscoveryCache();
   clearPluginManifestRegistryCache();
+  clearPluginSetupRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 }
 

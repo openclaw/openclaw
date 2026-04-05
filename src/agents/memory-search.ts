@@ -9,7 +9,7 @@ import {
   supportsMemoryMultimodalEmbeddings,
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
-import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
+import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 

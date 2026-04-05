@@ -8,6 +8,7 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry.js";
 
 type CapabilityProviderRegistryKey =
+  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
@@ -16,6 +17,7 @@ type CapabilityProviderRegistryKey =
   | "videoGenerationProviders";
 
 type CapabilityContractKey =
+  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
@@ -27,6 +29,7 @@ type CapabilityProviderForKey<K extends CapabilityProviderRegistryKey> =
   PluginRegistry[K][number] extends { provider: infer T } ? T : never;
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
+  memoryEmbeddingProviders: "memoryEmbeddingProviders",
   speechProviders: "speechProviders",
   realtimeTranscriptionProviders: "realtimeTranscriptionProviders",
   realtimeVoiceProviders: "realtimeVoiceProviders",
