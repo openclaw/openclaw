@@ -67,16 +67,19 @@ const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const SOURCE_LOCALE = "en";
-const BATCH_SIZE = 40;
-const TRANSLATE_MAX_ATTEMPTS = 3;
+const MAX_BATCH_ITEMS = 20;
+const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
+const TRANSLATE_MAX_ATTEMPTS = 2;
 const TRANSLATE_BASE_DELAY_MS = 15_000;
 const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
 const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
+const ENV_THINKING = "OPENCLAW_CONTROL_UI_I18N_THINKING";
 const ENV_PI_EXECUTABLE = "OPENCLAW_CONTROL_UI_I18N_PI_EXECUTABLE";
 const ENV_PI_ARGS = "OPENCLAW_CONTROL_UI_I18N_PI_ARGS";
 const ENV_PI_PACKAGE_VERSION = "OPENCLAW_CONTROL_UI_I18N_PI_PACKAGE_VERSION";
+const ENV_BATCH_CHAR_BUDGET = "OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET";
 const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
 
 const LOCALE_ENTRIES: readonly LocaleEntry[] = [
@@ -476,6 +479,23 @@ function resolvePromptTimeoutMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROMPT_TIMEOUT_MS;
 }
 
+function resolveThinkingLevel(): "low" | "high" {
+  return process.env[ENV_THINKING]?.trim().toLowerCase() === "high" ? "high" : "low";
+}
+
+function resolveBatchCharBudget(): number {
+  const raw = process.env[ENV_BATCH_CHAR_BUDGET]?.trim();
+  if (!raw) {
+    return DEFAULT_BATCH_CHAR_BUDGET;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_BATCH_CHAR_BUDGET;
+}
+
+function estimateBatchChars(items: readonly TranslationBatchItem[]): number {
+  return items.reduce((total, item) => total + item.key.length + item.text.length + 8, 2);
+}
+
 type PiCommand = {
   args: string[];
   executable: string;
@@ -614,6 +634,7 @@ type TranslationBatchContext = LocaleRunContext & {
   batchCount: number;
   batchIndex: number;
   locale: string;
+  splitDepth?: number;
   segmentLabel?: string;
 };
 
@@ -629,6 +650,32 @@ function formatLocaleLabel(locale: string, context: LocaleRunContext): string {
 function formatBatchLabel(context: TranslationBatchContext): string {
   const suffix = context.segmentLabel ? `.${context.segmentLabel}` : "";
   return `${formatLocaleLabel(context.locale, context)} batch ${context.batchIndex}/${context.batchCount}${suffix}`;
+}
+
+function buildTranslationBatches(items: readonly TranslationBatchItem[]): TranslationBatchItem[][] {
+  const batches: TranslationBatchItem[][] = [];
+  const budget = resolveBatchCharBudget();
+  let current: TranslationBatchItem[] = [];
+  let currentChars = 2;
+
+  for (const item of items) {
+    const itemChars = estimateBatchChars([item]);
+    const wouldOverflow = current.length > 0 && currentChars + itemChars > budget;
+    const reachedMaxItems = current.length >= MAX_BATCH_ITEMS;
+    if (wouldOverflow || reachedMaxItems) {
+      batches.push(current);
+      current = [];
+      currentChars = 2;
+    }
+    current.push(item);
+    currentChars += itemChars;
+  }
+
+  if (current.length > 0) {
+    batches.push(current);
+  }
+
+  return batches;
 }
 
 class PiRpcClient {
@@ -656,7 +703,7 @@ class PiRpcClient {
       "--model",
       resolveConfiguredModel(),
       "--thinking",
-      "high",
+      resolveThinkingLevel(),
       "--no-session",
       "--system-prompt",
       systemPrompt,
@@ -877,6 +924,7 @@ async function translateBatch(
   context: TranslationBatchContext,
 ): Promise<Map<string, string>> {
   const batchLabel = formatBatchLabel(context);
+  const splitDepth = context.splitDepth ?? 0;
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < TRANSLATE_MAX_ATTEMPTS; attempt += 1) {
     const attemptNumber = attempt + 1;
@@ -911,13 +959,18 @@ async function translateBatch(
         );
         const left = await translateBatch(clientAccess, items.slice(0, midpoint), {
           ...context,
+          splitDepth: splitDepth + 1,
           segmentLabel: `${context.segmentLabel ?? ""}a`,
         });
         const right = await translateBatch(clientAccess, items.slice(midpoint), {
           ...context,
+          splitDepth: splitDepth + 1,
           segmentLabel: `${context.segmentLabel ?? ""}b`,
         });
         return new Map([...left, ...right]);
+      }
+      if (isPromptTimeoutError(lastError)) {
+        break;
       }
       if (attempt + 1 < TRANSLATE_MAX_ATTEMPTS) {
         const delayMs = TRANSLATE_BASE_DELAY_MS * attemptNumber;
@@ -993,9 +1046,10 @@ async function syncLocale(
   }
 
   if (allowTranslate && pending.length > 0) {
-    const batchCount = Math.ceil(pending.length / BATCH_SIZE);
+    const batches = buildTranslationBatches(pending);
+    const batchCount = batches.length;
     logProgress(
-      `${localeLabel}: start keys=${sourceFlat.size} pending=${pending.length} batches=${batchCount} provider=${resolveConfiguredProvider()} model=${resolveConfiguredModel()} timeout=${formatDuration(resolvePromptTimeoutMs())}`,
+      `${localeLabel}: start keys=${sourceFlat.size} pending=${pending.length} batches=${batchCount} provider=${resolveConfiguredProvider()} model=${resolveConfiguredModel()} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
     );
     let client: PiRpcClient | null = null;
     const clientAccess: ClientAccess = {
@@ -1014,12 +1068,11 @@ async function syncLocale(
       },
     };
     try {
-      for (let index = 0; index < pending.length; index += BATCH_SIZE) {
-        const batch = pending.slice(index, index + BATCH_SIZE);
+      for (const [batchIndex, batch] of batches.entries()) {
         const translated = await translateBatch(clientAccess, batch, {
           ...context,
           batchCount,
-          batchIndex: Math.floor(index / BATCH_SIZE) + 1,
+          batchIndex: batchIndex + 1,
           locale: entry.locale,
         });
         for (const item of batch) {
@@ -1218,7 +1271,7 @@ async function main() {
   }
 
   logProgress(
-    `command=${args.command} locales=${entries.length} provider=${hasTranslationProvider() ? resolveConfiguredProvider() : "fallback-only"} model=${hasTranslationProvider() ? resolveConfiguredModel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())}`,
+    `command=${args.command} locales=${entries.length} provider=${hasTranslationProvider() ? resolveConfiguredProvider() : "fallback-only"} model=${hasTranslationProvider() ? resolveConfiguredModel() : "n/a"} thinking=${hasTranslationProvider() ? resolveThinkingLevel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
   );
   const outcomes: SyncOutcome[] = [];
   for (const [index, entry] of entries.entries()) {
