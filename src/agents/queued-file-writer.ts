@@ -5,7 +5,7 @@ export type QueuedFileWriter = {
   filePath: string;
   write: (line: string) => void;
   /** Returns a promise that resolves when all queued writes have completed. */
-  drain?: () => Promise<void>;
+  drain: () => Promise<void>;
 };
 
 /** Number of consecutive failures before emitting a warning. */
