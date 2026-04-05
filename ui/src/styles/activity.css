@@ -442,6 +442,23 @@
   margin: 0;
 }
 
+/* JSON syntax highlighting */
+.json-key {
+  color: #e06c75;
+}
+
+.json-string {
+  color: #98c379;
+}
+
+.json-number {
+  color: #d19a66;
+}
+
+.json-bool {
+  color: #56b6c2;
+}
+
 /* Empty state */
 .activity-empty {
   display: flex;

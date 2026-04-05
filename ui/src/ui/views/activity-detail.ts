@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { ActivityNode } from "../activity/activity-types.ts";
 import { icons } from "../icons.ts";
 
@@ -31,19 +32,50 @@ function renderField(label: string, value: string | number | null | undefined) {
   `;
 }
 
-function formatJsonPreview(value: unknown): string {
+function parseJsonSafe(value: unknown): unknown {
   if (typeof value === "string") {
     try {
-      return JSON.stringify(JSON.parse(value), null, 2);
+      return JSON.parse(value);
     } catch {
       return value;
     }
   }
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
+  return value;
+}
+
+function renderJsonHighlighted(value: unknown): ReturnType<typeof html> {
+  const parsed = parseJsonSafe(value);
+  if (typeof parsed === "string") {
+    return html`<pre class="activity-detail__json">${parsed}</pre>`;
   }
+  try {
+    const json = JSON.stringify(parsed, null, 2);
+    const highlighted = json.replace(
+      /("(?:[^"\\]|\\.)*")\s*:|("(?:[^"\\]|\\.)*")|(true|false|null)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+      (match, key, str, bool, num) => {
+        if (key) {
+          return `<span class="json-key">${escapeHtml(key)}</span>:`;
+        }
+        if (str) {
+          return `<span class="json-string">${escapeHtml(str)}</span>`;
+        }
+        if (bool) {
+          return `<span class="json-bool">${bool}</span>`;
+        }
+        if (num) {
+          return `<span class="json-number">${num}</span>`;
+        }
+        return match;
+      },
+    );
+    return html`<pre class="activity-detail__json">${unsafeHTML(highlighted)}</pre>`;
+  } catch {
+    return html`<pre class="activity-detail__json">${String(value)}</pre>`;
+  }
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function renderMetadataBlock(metadata: Record<string, unknown>) {
@@ -109,17 +141,13 @@ export function renderActivityDetail(props: ActivityDetailProps) {
               <div class="activity-detail__section">
                 <div class="activity-detail__section-title muted">Input</div>
                 ${node.metadata.args
-                  ? html`<pre class="activity-detail__json">
-${formatJsonPreview(node.metadata.args)}</pre
-                    >`
+                  ? renderJsonHighlighted(node.metadata.args)
                   : html`<span class="muted">No input data</span>`}
               </div>
               <div class="activity-detail__section">
                 <div class="activity-detail__section-title muted">Output</div>
                 ${node.metadata.result
-                  ? html`<pre class="activity-detail__json">
-${formatJsonPreview(node.metadata.result)}</pre
-                    >`
+                  ? renderJsonHighlighted(node.metadata.result)
                   : html`<span class="muted"
                       >${node.status === "running" ? "Waiting for result…" : "No output data"}</span
                     >`}
