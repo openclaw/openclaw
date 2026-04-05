@@ -4,6 +4,7 @@ import {
   GUARDED_FETCH_MODE,
   retainSafeHeadersForCrossOriginRedirectHeaders,
 } from "./fetch-guard.js";
+import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
 
 function redirectResponse(location: string): Response {
   return new Response(null, {
@@ -594,5 +595,98 @@ describe("fetchWithSsrFGuard hardening", () => {
       mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       expectEnvProxy: true,
     });
+  });
+
+  it("uses undici.fetch when a guard-created dispatcher is present", async () => {
+    const previousGlobalFetch = globalThis.fetch;
+    const globalFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init as { dispatcher?: unknown } | undefined)?.dispatcher) {
+        const invalid = new Error("invalid onRequestStart method");
+        (invalid as { code?: string }).code = "UND_ERR_INVALID_ARG";
+        const err = new TypeError("fetch failed");
+        (err as { cause?: unknown }).cause = invalid;
+        throw err;
+      }
+      return okResponse();
+    });
+    const undiciFetch = vi.fn(async () => okResponse());
+
+    class TestAgent {
+      constructor(public readonly options?: Record<string, unknown>) {}
+    }
+    class TestEnvHttpProxyAgent {
+      constructor(public readonly options?: Record<string, unknown>) {}
+    }
+    class TestProxyAgent {
+      constructor(public readonly options?: string | Record<string, unknown>) {}
+    }
+
+    (globalThis as { fetch?: typeof fetch }).fetch = globalFetch as unknown as typeof fetch;
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: undiciFetch,
+    };
+
+    try {
+      const result = await fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        lookupFn: createPublicLookup(),
+      });
+      expect(undiciFetch).toHaveBeenCalledTimes(1);
+      expect(globalFetch).not.toHaveBeenCalled();
+      await result.release();
+    } finally {
+      (globalThis as { fetch?: typeof fetch }).fetch = previousGlobalFetch;
+      delete (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY];
+    }
+  });
+
+  it("uses undici.fetch when fetchImpl explicitly points to global fetch", async () => {
+    const previousGlobalFetch = globalThis.fetch;
+    const globalFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init as { dispatcher?: unknown } | undefined)?.dispatcher) {
+        const invalid = new Error("invalid onRequestStart method");
+        (invalid as { code?: string }).code = "UND_ERR_INVALID_ARG";
+        const err = new TypeError("fetch failed");
+        (err as { cause?: unknown }).cause = invalid;
+        throw err;
+      }
+      return okResponse();
+    });
+    const undiciFetch = vi.fn(async () => okResponse());
+
+    class TestAgent {
+      constructor(public readonly options?: Record<string, unknown>) {}
+    }
+    class TestEnvHttpProxyAgent {
+      constructor(public readonly options?: Record<string, unknown>) {}
+    }
+    class TestProxyAgent {
+      constructor(public readonly options?: string | Record<string, unknown>) {}
+    }
+
+    (globalThis as { fetch?: typeof fetch }).fetch = globalFetch as unknown as typeof fetch;
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: undiciFetch,
+    };
+
+    try {
+      const result = await fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl: globalThis.fetch,
+        lookupFn: createPublicLookup(),
+      });
+      expect(undiciFetch).toHaveBeenCalledTimes(1);
+      expect(globalFetch).not.toHaveBeenCalled();
+      await result.release();
+    } finally {
+      (globalThis as { fetch?: typeof fetch }).fetch = previousGlobalFetch;
+      delete (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY];
+    }
   });
 });

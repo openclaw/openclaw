@@ -249,7 +249,24 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         ...(signal ? { signal } : {}),
       };
 
-      const response = await fetcher(parsedUrl.toString(), init);
+      // Node's built-in global fetch can reject dispatcher instances from a
+      // separate undici package version ("invalid onRequestStart method").
+      // When this guard creates/uses an undici dispatcher and the caller is
+      // using global fetch (implicitly or explicitly), route through the same
+      // undici runtime dependency family.
+      const shouldUseUndiciRuntimeFetch =
+        dispatcher && (params.fetchImpl === undefined || params.fetchImpl === globalThis.fetch);
+      const runtimeFetch: FetchLike | undefined = shouldUseUndiciRuntimeFetch
+        ? async (input, init) => {
+            const undiciFetch = loadUndiciRuntimeDeps().fetch as unknown as (
+              input: unknown,
+              init?: unknown,
+            ) => Promise<unknown>;
+            const undiciResponse = await undiciFetch(input, init);
+            return undiciResponse as Response;
+          }
+        : undefined;
+      const response = await (runtimeFetch ?? fetcher)(parsedUrl.toString(), init);
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");
