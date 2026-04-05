@@ -22,11 +22,15 @@ function hasOpenAiAnthropicToolPayloadCompatFlag(model: { compat?: unknown }): b
 function requiresAnthropicToolPayloadCompatibilityForModel(
   model: {
     api?: unknown;
+    provider?: unknown;
     compat?: unknown;
   },
   options?: AnthropicToolPayloadCompatibilityOptions,
 ): boolean {
   if (model.api !== "anthropic-messages") {
+    return false;
+  }
+  if (model.provider === "kimi") {
     return false;
   }
   return (

@@ -250,6 +250,20 @@ describe("resolveExtraParams", () => {
     expect(result).toBeUndefined();
   });
 
+  it("applies default runtime params for OpenAI GPT-5 models", () => {
+    const result = resolveExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5.4",
+    });
+
+    expect(result).toEqual({
+      parallel_tool_calls: true,
+      text_verbosity: "low",
+      openaiWsWarmup: true,
+    });
+  });
+
   it("returns params for exact provider/model key", () => {
     const result = resolveExtraParams({
       cfg: {
@@ -413,6 +427,8 @@ describe("resolveExtraParams", () => {
     });
 
     expect(result).toEqual({
+      openaiWsWarmup: true,
+      parallel_tool_calls: true,
       text_verbosity: "low",
     });
   });
@@ -760,8 +776,10 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).toEqual({
       context_management: [{ type: "compaction", compact_threshold: 80000 }],
+      parallel_tool_calls: true,
       reasoning: { effort: "none", summary: "auto" },
       store: true,
+      text: { verbosity: "low" },
     });
   });
 
@@ -1272,14 +1290,66 @@ describe("applyExtraParamsToAgent", () => {
     };
     const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "kimi", "kimi-code", undefined, "low");
+    applyExtraParamsToAgent(agent, undefined, "kimi", "kimi-coding", undefined, "low");
 
     const model = {
       api: "anthropic-messages",
       provider: "kimi",
-      id: "kimi-code",
+      id: "kimi-coding",
       baseUrl: "https://api.kimi.com/coding/",
     } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.tools).toEqual([
+      {
+        name: "read",
+        description: "Read file",
+        input_schema: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+    ]);
+    expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
+  });
+
+it("ignores legacy compat override for kimi-coding tool payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            input_schema: {
+              type: "object",
+              properties: { path: { type: "string" } },
+              required: ["path"],
+            },
+          },
+        ],
+        tool_choice: { type: "tool", name: "read" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "kimi", "kimi-coding", undefined, "low");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "kimi",
+      id: "kimi-coding",
+      compat: {
+        requiresOpenAiAnthropicToolPayload: true,
+      },
+      baseUrl: "https://api.kimi.com/coding/",
+    } as unknown as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -1618,6 +1688,22 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
     expect(calls[0]?.openaiWsWarmup).toBe(true);
+  });
+
+  it("injects GPT-5 default parallel tool calls and low verbosity for OpenAI Responses payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as Model<"openai-responses">,
+      payload: {},
+    });
+
+    expect(payload.parallel_tool_calls).toBe(true);
+    expect(payload.text).toEqual({ verbosity: "low" });
   });
 
   it("injects native Codex web_search for direct openai-codex Responses models", () => {
@@ -2570,7 +2656,7 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
     expect(payload).not.toHaveProperty("reasoning");
-    expect(payload).not.toHaveProperty("text");
+    expect(payload.text).toEqual({ verbosity: "low" });
     expect(payload.service_tier).toBe("priority");
   });
 
@@ -2987,7 +3073,7 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
     expect(payload).not.toHaveProperty("reasoning");
-    expect(payload).not.toHaveProperty("text");
+    expect(payload.text).toEqual({ verbosity: "low" });
     expect(payload.service_tier).toBe("priority");
   });
 
