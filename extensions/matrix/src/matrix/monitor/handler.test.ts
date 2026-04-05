@@ -747,6 +747,73 @@ describe("matrix monitor handler pairing account scope", () => {
     }
   });
 
+  it("checks threaded DM collision notices against the parent DM session", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-thread-notice-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const sendNotice = vi.fn(async () => "$notice");
+
+    try {
+      await recordSessionMetaFromInbound({
+        storePath,
+        sessionKey: "agent:ops:main",
+        ctx: {
+          SessionKey: "agent:ops:main",
+          AccountId: "ops",
+          ChatType: "direct",
+          Provider: "matrix",
+          Surface: "matrix",
+          From: "matrix:@user:example.org",
+          To: "room:!other:example.org",
+          NativeChannelId: "!other:example.org",
+          OriginatingChannel: "matrix",
+          OriginatingTo: "room:!other:example.org",
+        },
+      });
+
+      const { handler } = createMatrixHandlerTestHarness({
+        isDirectMessage: true,
+        threadReplies: "always",
+        resolveStorePath: () => storePath,
+        client: {
+          sendMessage: sendNotice,
+          getEvent: async (_roomId, eventId) =>
+            eventId === "$root"
+              ? createMatrixTextMessageEvent({
+                  eventId: "$root",
+                  sender: "@alice:example.org",
+                  body: "Root topic",
+                })
+              : ({ sender: "@bot:example.org" } as never),
+        },
+        getMemberDisplayName: async (_roomId, userId) =>
+          userId === "@alice:example.org" ? "Alice" : "sender",
+      });
+
+      await handler(
+        "!dm:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$reply1",
+          body: "follow up",
+          relatesTo: {
+            rel_type: "m.thread",
+            event_id: "$root",
+            "m.in_reply_to": { event_id: "$root" },
+          },
+        }),
+      );
+
+      expect(sendNotice).toHaveBeenCalledWith(
+        "!dm:example.org",
+        expect.objectContaining({
+          msgtype: "m.notice",
+          body: expect.stringContaining("channels.matrix.dm.sessionScope"),
+        }),
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the shared-session notice after user-target outbound metadata overwrites latest room fields", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-shared-notice-stable-"));
     const storePath = path.join(tempDir, "sessions.json");

@@ -1104,12 +1104,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         storePath,
         sessionKey: _route.sessionKey,
       });
+      const sharedDmNoticeSessionKey = _route.mainSessionKey || _route.sessionKey;
       const sharedDmContextNotice = isDirectMessage
         ? hasExplicitSessionBinding
           ? null
           : resolveMatrixSharedDmContextNotice({
               storePath,
-              sessionKey: _route.sessionKey,
+              sessionKey: sharedDmNoticeSessionKey,
               roomId,
               accountId: _route.accountId,
               dmSessionScope,
