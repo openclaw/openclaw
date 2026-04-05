@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 
 const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
+const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
 const DEFAULT_MODEL = "image-01";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
@@ -36,14 +37,25 @@ type MinimaxImageApiResponse = {
   };
 };
 
-function resolveMinimaxImageBaseUrl(
-  _cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
-  _providerId: string,
-): string {
-  // MiniMax image generation uses a dedicated endpoint (api.minimax.io) that is
-  // separate from the text/chat API endpoint (api.minimax.io/anthropic).
-  // The provider's configured baseUrl is for the text API and should not be
-  // used for image generation, as they have different endpoints.
+function isMinimaxCnHost(value: string | undefined): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    return new URL(trimmed).hostname.endsWith("minimaxi.com");
+  } catch {
+    return trimmed.includes("minimaxi.com");
+  }
+}
+
+function resolveMinimaxImageBaseUrl(): string {
+  // MiniMax image generation uses dedicated endpoints that are separate from
+  // the text/chat API endpoints. Check MINIMAX_API_HOST to determine region.
+  const apiHost = process.env.MINIMAX_API_HOST;
+  if (isMinimaxCnHost(apiHost)) {
+    return CN_MINIMAX_IMAGE_BASE_URL;
+  }
   return DEFAULT_MINIMAX_IMAGE_BASE_URL;
 }
 
@@ -88,7 +100,7 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         throw new Error("MiniMax API key missing");
       }
 
-      const baseUrl = resolveMinimaxImageBaseUrl(req.cfg, providerId);
+      const baseUrl = resolveMinimaxImageBaseUrl();
       const {
         baseUrl: resolvedBaseUrl,
         allowPrivateNetwork,
