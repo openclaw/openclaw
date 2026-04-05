@@ -26,6 +26,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
+import { sanitizeChatHistoryMessages } from "./server-methods/chat.js";
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
 

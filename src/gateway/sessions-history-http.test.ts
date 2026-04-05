@@ -220,6 +220,67 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("applies chat.history sanitization to direct REST history", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const appended = await appendAssistantMessageToSessionTranscript({
+      sessionKey: "agent:main:main",
+      storePath,
+      text: "placeholder",
+    });
+    expect(appended.ok).toBe(true);
+    await fs.writeFile(
+      path.join(path.dirname(storePath), "sess-main.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text: "internal commentary",
+                textSignature: JSON.stringify({ v: 1, id: "c1", phase: "commentary" }),
+              },
+              {
+                type: "text",
+                text: "Visible REST answer",
+                textSignature: JSON.stringify({ v: 1, id: "f1", phase: "final_answer" }),
+              },
+            ],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+            timestamp: Date.now() + 1,
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main");
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        messages?: Array<{ content?: Array<{ text?: string }> }>;
+      };
+      expect(body.messages).toHaveLength(1);
+      expect(body.messages?.[0]?.content?.[0]?.text).toBe("Visible REST answer");
+    });
+  });
+
   test("returns 404 for unknown sessions", async () => {
     await createSessionStoreFile();
     await withGatewayHarness(async (harness) => {
