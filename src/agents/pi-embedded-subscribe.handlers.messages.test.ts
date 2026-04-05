@@ -417,4 +417,184 @@ describe("handleMessageEnd", () => {
     expect(emitBlockReply).not.toHaveBeenCalled();
     expect(finalizeAssistantTexts).not.toHaveBeenCalled();
   });
+
+  it("falls back to raw assistant text when nothing visible was emitted during streaming", () => {
+    const onAgentEvent = vi.fn();
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onAgentEvent,
+        onBlockReply: vi.fn(),
+      },
+      state: {
+        assistantTexts: [],
+        assistantTextBaseline: 0,
+        emittedAssistantUpdate: false,
+        deterministicApprovalPromptSent: false,
+        reasoningStreamOpen: false,
+        includeReasoning: false,
+        streamReasoning: false,
+        blockReplyBreak: "message_end",
+        deltaBuffer: "",
+        blockBuffer: "",
+        blockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        lastStreamedAssistant: undefined,
+        lastStreamedAssistantCleaned: undefined,
+      },
+      noteLastAssistant: vi.fn(),
+      recordAssistantUsage: vi.fn(),
+      log: { debug: vi.fn(), warn: vi.fn() },
+      stripBlockTags: vi.fn(() => ""),
+      finalizeAssistantTexts,
+      emitBlockReply: vi.fn(),
+      consumeReplyDirectives: vi.fn((text: string) => ({ text })),
+      emitReasoningStream: vi.fn(),
+      flushBlockReplyBuffer: vi.fn(),
+      blockChunker: null,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer only" }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "assistant",
+      data: {
+        text: "Final answer only",
+        delta: "Final answer only",
+        replace: undefined,
+        mediaUrls: undefined,
+      },
+    });
+    expect(finalizeAssistantTexts).toHaveBeenCalled();
+  });
+
+  it("does not emit an empty visible reply for commentary-only turns", () => {
+    const onAgentEvent = vi.fn();
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onAgentEvent,
+        onBlockReply: vi.fn(),
+      },
+      state: {
+        assistantTexts: [],
+        assistantTextBaseline: 0,
+        emittedAssistantUpdate: false,
+        deterministicApprovalPromptSent: false,
+        reasoningStreamOpen: false,
+        includeReasoning: false,
+        streamReasoning: false,
+        blockReplyBreak: "message_end",
+        deltaBuffer: "",
+        blockBuffer: "",
+        blockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        lastStreamedAssistant: undefined,
+        lastStreamedAssistantCleaned: undefined,
+      },
+      noteLastAssistant: vi.fn(),
+      recordAssistantUsage: vi.fn(),
+      log: { debug: vi.fn(), warn: vi.fn() },
+      stripBlockTags: vi.fn(() => ""),
+      finalizeAssistantTexts,
+      emitBlockReply: vi.fn(),
+      consumeReplyDirectives: vi.fn((text: string) => ({ text })),
+      emitReasoningStream: vi.fn(),
+      flushBlockReplyBuffer: vi.fn(),
+      blockChunker: null,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        phase: "commentary",
+        content: [{ type: "text", text: "Thinking only" }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(finalizeAssistantTexts).not.toHaveBeenCalled();
+  });
+
+  it("keeps final-answer-only turns emitting normally", () => {
+    const onAgentEvent = vi.fn();
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onAgentEvent,
+        onBlockReply: vi.fn(),
+      },
+      state: {
+        assistantTexts: [],
+        assistantTextBaseline: 0,
+        emittedAssistantUpdate: false,
+        deterministicApprovalPromptSent: false,
+        reasoningStreamOpen: false,
+        includeReasoning: false,
+        streamReasoning: false,
+        blockReplyBreak: "message_end",
+        deltaBuffer: "",
+        blockBuffer: "",
+        blockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        lastStreamedAssistant: undefined,
+        lastStreamedAssistantCleaned: undefined,
+      },
+      noteLastAssistant: vi.fn(),
+      recordAssistantUsage: vi.fn(),
+      log: { debug: vi.fn(), warn: vi.fn() },
+      stripBlockTags: (text: string) => text,
+      finalizeAssistantTexts,
+      emitBlockReply: vi.fn(),
+      consumeReplyDirectives: vi.fn((text: string) => ({ text })),
+      emitReasoningStream: vi.fn(),
+      flushBlockReplyBuffer: vi.fn(),
+      blockChunker: null,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        phase: "final_answer",
+        content: [{ type: "text", text: "Visible final answer" }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "assistant",
+      data: {
+        text: "Visible final answer",
+        delta: "Visible final answer",
+        replace: undefined,
+        mediaUrls: undefined,
+      },
+    });
+    expect(finalizeAssistantTexts).toHaveBeenCalled();
+  });
 });

@@ -954,14 +954,13 @@ export function createOpenAIWebSocketStreamFn(
                 partial: partialMsg,
               });
             };
-            const flushPendingUnknownPhaseText = (itemId: string) => {
-              const itemPhase = normalizeAssistantPhase(outputItemPhaseById.get(itemId));
+            const flushPendingUnknownPhaseText = (
+              itemId: string,
+              fallbackPhase?: OpenAIResponsesAssistantPhase,
+            ) => {
+              const itemPhase =
+                normalizeAssistantPhase(outputItemPhaseById.get(itemId)) ?? fallbackPhase;
               if (!itemPhase) {
-                pendingUnknownPhaseTextByPart.forEach((_, key) => {
-                  if (key.startsWith(`${itemId}:`)) {
-                    pendingUnknownPhaseTextByPart.delete(key);
-                  }
-                });
                 return;
               }
               const pendingEntries = [...pendingUnknownPhaseTextByPart.entries()]
@@ -1104,6 +1103,21 @@ export function createOpenAIWebSocketStreamFn(
                   provider: model.provider,
                   id: model.id,
                 });
+                if (Array.isArray(event.response.output)) {
+                  for (const item of event.response.output) {
+                    if (!item || item.type !== "message" || typeof item.id !== "string") {
+                      continue;
+                    }
+                    const resolvedPhase = normalizeAssistantPhase(
+                      (item as { phase?: unknown }).phase,
+                    );
+                    const fallbackPhase = resolvedPhase ?? "final_answer";
+                    if (resolvedPhase) {
+                      outputItemPhaseById.set(item.id, resolvedPhase);
+                    }
+                    flushPendingUnknownPhaseText(item.id, fallbackPhase);
+                  }
+                }
                 clearOutputTracking();
                 const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
                   assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";

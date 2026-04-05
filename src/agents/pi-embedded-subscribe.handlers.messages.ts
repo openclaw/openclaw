@@ -500,6 +500,20 @@ export function handleMessageEnd(
   if (
     !ctx.params.silentExpected &&
     !ctx.state.emittedAssistantUpdate &&
+    !cleanedText &&
+    !hasMedia
+  ) {
+    const rawAssistantText = coerceText(extractAssistantText(assistantMessage)).trim();
+    if (rawAssistantText) {
+      const parsedRawFallback = parseReplyDirectives(stripTrailingDirective(rawAssistantText));
+      cleanedText = parsedRawFallback.text ?? rawAssistantText;
+      ({ mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedRawFallback));
+    }
+  }
+
+  if (
+    !ctx.params.silentExpected &&
+    !ctx.state.emittedAssistantUpdate &&
     (cleanedText || hasMedia)
   ) {
     const data = buildAssistantStreamData({

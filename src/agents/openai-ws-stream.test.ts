@@ -1856,6 +1856,175 @@ describe("createOpenAIWebSocketStreamFn", () => {
     );
   });
 
+  it("buffers early text deltas until late final_answer phase metadata arrives and emits them", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-late-final");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: Array<{
+      type?: string;
+      delta?: string;
+      partial?: { phase?: string; content?: Array<{ text?: string; textSignature?: string }> };
+    }> = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev as (typeof events)[number]);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_final",
+      content_index: 0,
+      delta: "Done",
+      output_index: 0,
+      response_id: "resp_phase_late_final",
+    });
+
+    await new Promise((r) => setImmediate(r));
+    expect(events.filter((event) => event.type === "text_delta")).toHaveLength(0);
+
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      item: { type: "message", id: "item_final", phase: "final_answer" },
+      output_index: 0,
+      response_id: "resp_phase_late_final",
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_phase_late_final", "Done", undefined, "final_answer"),
+    });
+
+    await done;
+
+    const textDeltaEvents = events.filter((event) => event.type === "text_delta");
+    expect(textDeltaEvents).toHaveLength(1);
+    expect(textDeltaEvents[0]?.delta).toBe("Done");
+    expect(textDeltaEvents[0]?.partial?.phase).toBe("final_answer");
+  });
+
+  it("coalesces multiple unphased deltas before late final_answer mapping", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-coalesce");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: Array<{
+      type?: string;
+      delta?: string;
+      partial?: { phase?: string; content?: Array<{ text?: string; textSignature?: string }> };
+    }> = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev as (typeof events)[number]);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_final",
+      content_index: 0,
+      delta: "Hel",
+      output_index: 0,
+      response_id: "resp_phase_coalesce",
+    });
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_final",
+      content_index: 0,
+      delta: "lo",
+      output_index: 0,
+      response_id: "resp_phase_coalesce",
+    });
+
+    await new Promise((r) => setImmediate(r));
+    expect(events.filter((event) => event.type === "text_delta")).toHaveLength(0);
+
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      item: { type: "message", id: "item_final", phase: "final_answer" },
+      output_index: 0,
+      response_id: "resp_phase_coalesce",
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_phase_coalesce", "Hello", undefined, "final_answer"),
+    });
+
+    await done;
+
+    const textDeltaEvents = events.filter((event) => event.type === "text_delta");
+    expect(textDeltaEvents).toHaveLength(1);
+    expect(textDeltaEvents[0]?.delta).toBe("Hello");
+    expect(textDeltaEvents[0]?.partial?.content?.[0]?.text).toBe("Hello");
+  });
+
+  it("falls back to visible output when phase never arrives before response completion", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-missing");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: Array<{
+      type?: string;
+      delta?: string;
+      partial?: { phase?: string; content?: Array<{ text?: string; textSignature?: string }> };
+      message?: { content?: Array<{ text?: string }> };
+    }> = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev as (typeof events)[number]);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_unphased",
+      content_index: 0,
+      delta: "Visible answer",
+      output_index: 0,
+      response_id: "resp_phase_missing",
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        id: "resp_phase_missing",
+        object: "response",
+        created_at: Date.now(),
+        status: "completed",
+        model: "gpt-5.4",
+        output: [
+          {
+            type: "message",
+            id: "item_unphased",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Visible answer" }],
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      } as ResponseObject,
+    });
+
+    await done;
+
+    const textDeltaEvents = events.filter((event) => event.type === "text_delta");
+    expect(textDeltaEvents).toHaveLength(1);
+    expect(textDeltaEvents[0]?.delta).toBe("Visible answer");
+    expect(textDeltaEvents[0]?.partial?.phase).toBe("final_answer");
+    const doneEvent = events.find((event) => event.type === "done");
+    expect(doneEvent?.message?.content?.[0]?.text).toBe("Visible answer");
+  });
+
   it("falls back to HTTP when WebSocket connect fails (session pre-broken via flag)", async () => {
     // Set the class-level flag BEFORE calling streamFn so the new instance
     // fails on connect().  We patch the static default via MockManager directly.
