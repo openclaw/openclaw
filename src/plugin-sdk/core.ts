@@ -205,6 +205,14 @@ export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
 
+function resolvePluginConfigSchema(
+  configSchema:
+    | OpenClawPluginConfigSchema
+    | (() => OpenClawPluginConfigSchema) = emptyPluginConfigSchema,
+): OpenClawPluginConfigSchema {
+  return typeof configSchema === "function" ? configSchema() : configSchema;
+}
+
 /** Remove one of the known provider prefixes from a free-form target string. */
 export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
   const trimmed = raw.trim();
@@ -334,10 +342,9 @@ export function defineChannelPluginEntry<TPlugin>({
   registerCliMetadata,
   registerFull,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
-  let resolvedConfigSchema: ChannelPlugin<TResolvedAccount>["configSchema"] | undefined;
-  const getConfigSchema = (): ChannelPlugin<TResolvedAccount>["configSchema"] => {
-    resolvedConfigSchema ??=
-      typeof configSchema === "function" ? configSchema() : configSchema;
+  let resolvedConfigSchema: OpenClawPluginConfigSchema | undefined;
+  const getConfigSchema = (): OpenClawPluginConfigSchema => {
+    resolvedConfigSchema ??= resolvePluginConfigSchema(configSchema);
     return resolvedConfigSchema;
   };
   const entry = {

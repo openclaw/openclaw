@@ -7,7 +7,7 @@ const { loadSessionStoreMock, resolveStorePathMock, findTaskByRunIdForOwnerMock 
     resolveStorePathMock: vi.fn<(store?: string, opts?: { agentId?: string }) => string>(
       () => "/tmp/test-sessions.json",
     ),
-    findTaskByRunIdForOwnerMock: vi.fn<(params: unknown) => unknown | null>(() => null),
+    findTaskByRunIdForOwnerMock: vi.fn<(params: unknown) => unknown>(() => null),
   }),
 );
 
