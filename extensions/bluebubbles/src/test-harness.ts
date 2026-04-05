@@ -1,3 +1,4 @@
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
 import { _setFetchGuardForTesting } from "./types.js";
@@ -51,9 +52,63 @@ export function resolveBlueBubblesAccountFromConfig(params: {
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function resolveBlueBubblesPrivateNetworkConfigValueFromConfig(
+  config: Record<string, unknown> | undefined,
+): boolean | undefined {
+  const record = asRecord(config);
+  if (!record) {
+    return undefined;
+  }
+  const network = asRecord(record.network);
+  if (typeof network?.dangerouslyAllowPrivateNetwork === "boolean") {
+    return network.dangerouslyAllowPrivateNetwork;
+  }
+  if (typeof network?.allowPrivateNetwork === "boolean") {
+    return network.allowPrivateNetwork;
+  }
+  if (typeof record.dangerouslyAllowPrivateNetwork === "boolean") {
+    return record.dangerouslyAllowPrivateNetwork;
+  }
+  if (typeof record.allowPrivateNetwork === "boolean") {
+    return record.allowPrivateNetwork;
+  }
+  return undefined;
+}
+
+function resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig(params: {
+  baseUrl?: string;
+  config?: Record<string, unknown>;
+}) {
+  const configuredValue = resolveBlueBubblesPrivateNetworkConfigValueFromConfig(params.config);
+  if (configuredValue !== undefined) {
+    return configuredValue;
+  }
+  if (!params.baseUrl) {
+    return false;
+  }
+  try {
+    const hostname = new URL(params.baseUrl).hostname.trim();
+    return Boolean(hostname) && isBlockedHostnameOrIp(hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function createBlueBubblesAccountsMockModule() {
   return {
     resolveBlueBubblesAccount: vi.fn(resolveBlueBubblesAccountFromConfig),
+    resolveBlueBubblesEffectiveAllowPrivateNetwork: vi.fn(
+      resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig,
+    ),
+    resolveBlueBubblesPrivateNetworkConfigValue: vi.fn(
+      resolveBlueBubblesPrivateNetworkConfigValueFromConfig,
+    ),
   };
 }
 
