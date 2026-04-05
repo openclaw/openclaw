@@ -10,6 +10,7 @@ type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
 type LoadPluginManifestRegistry =
   typeof import("./manifest-registry.js").loadPluginManifestRegistry;
 type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable;
+type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
 const resolveRuntimePluginRegistryMock = vi.fn<ResolveRuntimePluginRegistry>();
 const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
@@ -20,6 +21,7 @@ let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOw
 let resolveOwningPluginIdsForModelRef: typeof import("./providers.js").resolveOwningPluginIdsForModelRef;
 let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
+let setActivePluginRegistry: SetActivePluginRegistry;
 
 function createManifestProviderPlugin(params: {
   id: string;
@@ -270,9 +272,11 @@ describe("resolvePluginProviders", () => {
       resolveEnabledProviderPluginIds,
     } = await import("./providers.js"));
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
+    ({ setActivePluginRegistry } = await import("./runtime.js"));
   });
 
   beforeEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
     resolveRuntimePluginRegistryMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     const provider: ProviderPlugin = {
@@ -549,6 +553,32 @@ describe("resolvePluginProviders", () => {
       },
       onlyPluginIds: ["google"],
       workspaceDir: "/workspace/runtime",
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/workspace/runtime",
+        cache: false,
+        activate: false,
+      }),
+    );
+  });
+
+  it("inherits workspaceDir from the active registry when provider resolution omits it", () => {
+    setActivePluginRegistry(
+      createEmptyPluginRegistry(),
+      undefined,
+      "default",
+      "/workspace/runtime",
+    );
+
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["google"],
+        },
+      },
+      onlyPluginIds: ["google"],
     });
 
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
