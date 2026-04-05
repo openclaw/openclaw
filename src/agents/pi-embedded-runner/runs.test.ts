@@ -6,10 +6,13 @@ import {
   clearActiveEmbeddedRun,
   consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
+  isEmbeddedPiRunActive,
+  moveActiveEmbeddedRun,
   requestEmbeddedRunModelSwitch,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
   waitForActiveEmbeddedRuns,
+  waitForEmbeddedPiRunEnd,
 } from "./runs.js";
 
 type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
@@ -171,5 +174,64 @@ describe("pi-embedded runner run registry", () => {
     clearActiveEmbeddedRun("session-clear-switch", handle);
 
     expect(consumeEmbeddedRunModelSwitch("session-clear-switch")).toBeUndefined();
+  });
+
+  it("moves active run state to a rotated session id without ending the run", async () => {
+    vi.useFakeTimers();
+    try {
+      const handle = createRunHandle();
+      setActiveEmbeddedRun("session-old", handle, "main");
+      updateActiveEmbeddedRunSnapshot("session-old", {
+        transcriptLeafId: "leaf-1",
+        messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
+        inFlightPrompt: "hello",
+      });
+      requestEmbeddedRunModelSwitch("session-old", {
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+
+      const oldWaitPromise = waitForEmbeddedPiRunEnd("session-old", 1_000);
+
+      expect(
+        moveActiveEmbeddedRun({
+          fromSessionId: "session-old",
+          toSessionId: "session-new",
+          handle,
+          fromSessionKey: "main",
+          toSessionKey: "main",
+        }),
+      ).toBe(true);
+
+      expect(isEmbeddedPiRunActive("session-old")).toBe(false);
+      expect(isEmbeddedPiRunActive("session-new")).toBe(true);
+      expect(getActiveEmbeddedRunSnapshot("session-old")).toBeUndefined();
+      expect(getActiveEmbeddedRunSnapshot("session-new")).toEqual({
+        transcriptLeafId: "leaf-1",
+        messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
+        inFlightPrompt: "hello",
+      });
+      expect(consumeEmbeddedRunModelSwitch("session-old")).toBeUndefined();
+      expect(consumeEmbeddedRunModelSwitch("session-new")).toEqual({
+        provider: "openai",
+        model: "gpt-5.4",
+        authProfileId: undefined,
+        authProfileIdSource: undefined,
+      });
+
+      let oldWaitResolved = false;
+      void oldWaitPromise.then(() => {
+        oldWaitResolved = true;
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(oldWaitResolved).toBe(false);
+
+      clearActiveEmbeddedRun("session-new", handle, "main");
+
+      await expect(oldWaitPromise).resolves.toBe(true);
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
   });
 });

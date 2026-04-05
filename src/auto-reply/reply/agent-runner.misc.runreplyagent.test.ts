@@ -5,7 +5,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as embeddedRunsTesting,
+  abortEmbeddedPiRun,
   getActiveEmbeddedRunCount,
+  isEmbeddedPiRunActive,
 } from "../../agents/pi-embedded-runner/runs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -456,6 +458,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   type EmbeddedRunParams = {
     prompt?: string;
     extraSystemPrompt?: string;
+    abortSignal?: AbortSignal;
     onAgentEvent?: (evt: {
       stream?: string;
       data?: { phase?: string; willRetry?: boolean; completed?: boolean };
@@ -660,6 +663,101 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     expect(getActiveEmbeddedRunCount()).toBe(0);
   });
+
+  it("rebinds the active run to the rotated session id after memory flush", async () => {
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 1_000,
+      forceFlushTranscriptBytes: Number.MAX_SAFE_INTEGER,
+      reserveTokensFloor: 20_000,
+      prompt: "Pre-compaction memory flush.",
+      systemPrompt: "Flush memory into the configured memory file.",
+      relativePath: "memory/active.md",
+    }));
+
+    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+      if (params.prompt?.includes("Pre-compaction memory flush.")) {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true },
+        });
+        return {
+          payloads: [],
+          meta: {
+            agentMeta: {
+              sessionId: "session-rotated",
+            },
+          },
+        };
+      }
+
+      await new Promise<never>((_, reject) => {
+        const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
+        const onAbort = () => reject(abortError);
+        if (params.abortSignal?.aborted) {
+          onAbort();
+          return;
+        }
+        params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+      });
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "/tmp/session-store.json",
+      sessionEntry: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 1_000_000,
+        compactionCount: 0,
+      },
+    });
+
+    const runPromise = runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 1_000_000,
+        compactionCount: 0,
+      },
+      sessionStore: {
+        main: {
+          sessionId: "session",
+          updatedAt: Date.now(),
+          totalTokens: 1_000_000,
+          compactionCount: 0,
+        },
+      },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    await vi.waitFor(() => {
+      expect(isEmbeddedPiRunActive("session-rotated")).toBe(true);
+    });
+    expect(isEmbeddedPiRunActive("session")).toBe(false);
+    expect(abortEmbeddedPiRun("session-rotated")).toBe(true);
+
+    await runPromise;
+
+    expect(isEmbeddedPiRunActive("session-rotated")).toBe(false);
+  });
+
   it("updates totalTokens after auto-compaction using lastCallUsage", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-tokens-"));
     const storePath = path.join(tmp, "sessions.json");

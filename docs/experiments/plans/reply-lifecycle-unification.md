@@ -119,6 +119,7 @@ type ReplyOperation = {
   readonly result: ReplyOperationResult | null;
   readonly registryHandle: EmbeddedPiQueueHandle;
   setPhase(next: "queued" | "preflight_compacting" | "memory_flushing" | "running"): void;
+  moveSession(nextSessionId: string, nextSessionKey?: string): void;
   attachEmbeddedHandle(handle: EmbeddedPiQueueHandle): void;
   detachEmbeddedHandle(handle: EmbeddedPiQueueHandle): void;
   complete(): void;
@@ -174,7 +175,7 @@ The embedded runner and command queue keep their generic responsibilities. They 
 
 `ReplyOperation` owns one stable registry handle for the entire lifetime of the turn.
 
-That handle is created in `reply-operation.ts`, registered once through `setActiveEmbeddedRun(sessionId, handle, sessionKey)`, and cleared once when the operation reaches a terminal state.
+That handle is created in `reply-operation.ts`, registered immediately through `setActiveEmbeddedRun(sessionId, handle, sessionKey)`, may be moved to a replacement `sessionId` through `moveActiveEmbeddedRun(...)` when memory flush rotates the backing session, and is cleared exactly once when the operation reaches a terminal state.
 
 `run/attempt.ts` does not become the registry owner for reply-driven turns. When a `ReplyOperation` is present, the embedded runner attaches its transient streaming handle to the already-registered operation handle instead of registering a second lifecycle in `runs.ts`.
 
@@ -192,6 +193,7 @@ The stable registry handle follows these exact rules:
 - `isStreaming()` returns `true` only when an embedded-run handle is attached and actively streaming
 - `isCompacting()` returns `true` in phases `preflight_compacting` and `memory_flushing`; during `running` it delegates to the attached embedded-run handle
 - `abort()` aborts the operation-owned `AbortController` and also aborts the attached embedded-run handle when one is present
+- `moveSession()` is called when memory flush changes the canonical session id; it moves the stable registry entry to the replacement id without notifying waiters or dropping snapshots and model-switch state
 
 This design means `abortEmbeddedPiRun(sessionId)` always targets the same registry entry for the full turn.
 
@@ -313,7 +315,7 @@ The refactor is not done until all of the following are true:
 - reply-producing `/new` does not emit a standalone success notice before execution
 - drain and lane-clear failures do not use the generic external failure message
 - only one stable registry handle exists per reply turn
-- the registry handle is registered once and cleared once
+- the registry handle is registered immediately, may move to a replacement session id during memory flush, and is cleared exactly once
 
 ## Tradeoffs
 

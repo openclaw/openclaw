@@ -1,5 +1,6 @@
 import {
   clearActiveEmbeddedRun,
+  moveActiveEmbeddedRun,
   setActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
 } from "../../agents/pi-embedded-runner/runs.js";
@@ -34,6 +35,7 @@ export type ReplyOperation = {
   readonly result: ReplyOperationResult | null;
   readonly registryHandle: EmbeddedPiQueueHandle;
   setPhase(next: "queued" | "preflight_compacting" | "memory_flushing" | "running"): void;
+  moveSession(nextSessionId: string, nextSessionKey?: string): void;
   attachEmbeddedHandle(handle: EmbeddedPiQueueHandle): void;
   detachEmbeddedHandle(handle: EmbeddedPiQueueHandle): void;
   complete(): void;
@@ -54,6 +56,8 @@ export function createReplyOperation(params: {
   upstreamAbortSignal?: AbortSignal;
 }): ReplyOperation {
   const controller = new AbortController();
+  let currentSessionId = params.sessionId;
+  let currentSessionKey = params.sessionKey;
   let phase: ReplyOperationPhase = "queued";
   let result: ReplyOperationResult | null = null;
   let attachedEmbeddedHandle: EmbeddedPiQueueHandle | undefined;
@@ -64,7 +68,7 @@ export function createReplyOperation(params: {
       return;
     }
     registryCleared = true;
-    clearActiveEmbeddedRun(params.sessionId, registryHandle, params.sessionKey);
+    clearActiveEmbeddedRun(currentSessionId, registryHandle, currentSessionKey);
   };
 
   const abortInternally = (reason?: unknown) => {
@@ -114,14 +118,14 @@ export function createReplyOperation(params: {
     }
   }
 
-  setActiveEmbeddedRun(params.sessionId, registryHandle, params.sessionKey);
+  setActiveEmbeddedRun(currentSessionId, registryHandle, currentSessionKey);
 
   const operation: ReplyOperation = {
     get sessionId() {
-      return params.sessionId;
+      return currentSessionId;
     },
     get sessionKey() {
-      return params.sessionKey;
+      return currentSessionKey;
     },
     get abortSignal() {
       return controller.signal;
@@ -143,6 +147,32 @@ export function createReplyOperation(params: {
         return;
       }
       phase = next;
+    },
+    moveSession(nextSessionId, nextSessionKey) {
+      if (result) {
+        return;
+      }
+      const cleanedSessionId = nextSessionId.trim();
+      if (!cleanedSessionId) {
+        return;
+      }
+      const cleanedSessionKey = nextSessionKey?.trim() || undefined;
+      if (cleanedSessionId === currentSessionId && cleanedSessionKey === currentSessionKey) {
+        return;
+      }
+      const moved = moveActiveEmbeddedRun({
+        fromSessionId: currentSessionId,
+        toSessionId: cleanedSessionId,
+        handle: registryHandle,
+        fromSessionKey: currentSessionKey,
+        toSessionKey: cleanedSessionKey,
+      });
+      currentSessionId = cleanedSessionId;
+      currentSessionKey = cleanedSessionKey;
+      if (!moved) {
+        registryCleared = false;
+        setActiveEmbeddedRun(currentSessionId, registryHandle, currentSessionKey);
+      }
     },
     attachEmbeddedHandle(handle) {
       if (result) {
