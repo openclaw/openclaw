@@ -43,27 +43,6 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
-type AssistantPhase = "commentary" | "final_answer";
-
-const normalizeAssistantPhase = (value: unknown): AssistantPhase | undefined => {
-  return value === "commentary" || value === "final_answer" ? value : undefined;
-};
-
-const getAssistantTextSignaturePhase = (value: unknown): AssistantPhase | undefined => {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return undefined;
-  }
-  if (!value.startsWith("{")) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(value) as { phase?: unknown; v?: unknown };
-    return parsed.v === 1 ? normalizeAssistantPhase(parsed.phase) : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
 const coerceText = (value: unknown): string => {
   if (typeof value === "string") {
     return value;
@@ -106,6 +85,7 @@ function resolveAssistantDeliveryPhase(
   if (!Array.isArray(message.content)) {
     return undefined;
   }
+  const explicitStructuredPhases = new Set<AssistantDeliveryPhase>();
   for (const part of message.content) {
     if (!part || typeof part !== "object") {
       continue;
@@ -118,13 +98,13 @@ function resolveAssistantDeliveryPhase(
       const parsed = JSON.parse(block.textSignature) as { phase?: unknown };
       const phase = normalizeAssistantDeliveryPhase(parsed.phase);
       if (phase) {
-        return phase;
+        explicitStructuredPhases.add(phase);
       }
     } catch {
       continue;
     }
   }
-  return undefined;
+  return explicitStructuredPhases.size === 1 ? [...explicitStructuredPhases][0] : undefined;
 }
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {

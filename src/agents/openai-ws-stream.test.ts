@@ -11,6 +11,7 @@
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResponseObject } from "./openai-ws-connection.js";
+import { buildOpenAIWebSocketResponseCreatePayload } from "./openai-ws-request.js";
 import {
   __testing as openAIWsStreamTesting,
   buildAssistantMessageFromResponse,
@@ -123,6 +124,12 @@ const { MockManager } = vi.hoisted(() => {
     close(): void {
       this.closeCallCount++;
       this._connected = false;
+      this._lastCloseInfo = {
+        code: 1000,
+        reason: "closed",
+        retryable: false,
+      };
+      this.emit("close", 1000, "closed");
     }
 
     // Test helper: simulate WebSocket connection drop mid-request
@@ -1470,19 +1477,35 @@ describe("createOpenAIWebSocketStreamFn", () => {
     });
     releaseWsSession("sess-1");
     releaseWsSession("sess-2");
+    releaseWsSession("sess-boundary");
     releaseWsSession("sess-fallback");
     releaseWsSession("sess-boundary-http-fallback");
+    releaseWsSession("sess-full-context-replay");
     releaseWsSession("sess-incremental");
     releaseWsSession("sess-full");
+    releaseWsSession("sess-onpayload");
+    releaseWsSession("sess-onpayload-async");
     releaseWsSession("sess-phase");
     releaseWsSession("sess-phase-stream");
     releaseWsSession("sess-phase-late-map");
+    releaseWsSession("sess-reason");
+    releaseWsSession("sess-reason-none");
     releaseWsSession("sess-tools");
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
+    releaseWsSession("sess-store-proxy");
     releaseWsSession("sess-max-tokens-zero");
+    releaseWsSession("sess-runtime-fallback-nested");
     releaseWsSession("sess-runtime-fallback");
+    releaseWsSession("sess-runtime-retry");
+    releaseWsSession("sess-send-fail-reset");
+    releaseWsSession("sess-temp");
+    releaseWsSession("sess-text-verbosity");
+    releaseWsSession("sess-text-verbosity-invalid");
+    releaseWsSession("sess-topp");
     releaseWsSession("sess-turn-metadata-retry");
+    releaseWsSession("sess-warmup-disabled");
+    releaseWsSession("sess-warmup-enabled");
     releaseWsSession("sess-degraded-cooldown");
     releaseWsSession("sess-drop");
     openAIWsStreamTesting.setWsDegradeCooldownMsForTest();
@@ -1501,8 +1524,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     const manager = MockManager.lastInstance;
     expect(manager?.connectCallCount).toBe(1);
-    // Consume stream to avoid dangling promise
-    void resolveStream(stream);
+    releaseWsSession("sess-1");
+    for await (const _ of await resolveStream(stream)) {
+      // consume
+    }
   });
 
   it("sends a response.create event on first turn (full context)", async () => {
@@ -1611,39 +1636,27 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent).not.toHaveProperty("store");
   });
 
-  it("keeps store=false for proxied openai-responses routes when store is still supported", async () => {
-    releaseWsSession("sess-store-proxy");
+  it("keeps store=false for proxied openai-responses routes when store is still supported", () => {
     const proxiedModel = {
       ...modelStub,
       baseUrl: "https://proxy.example.com/v1",
     };
-    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-store-proxy");
-    const stream = streamFn(
-      proxiedModel as Parameters<typeof streamFn>[0],
-      contextStub as Parameters<typeof streamFn>[1],
-    );
-
-    const completed = new Promise<void>((res, rej) => {
-      queueMicrotask(async () => {
-        try {
-          await new Promise((r) => setImmediate(r));
-          const manager = MockManager.lastInstance!;
-          manager.simulateEvent({
-            type: "response.completed",
-            response: makeResponseObject("resp_store_proxy", "ok"),
-          });
-          for await (const _ of await resolveStream(stream)) {
-            // consume
-          }
-          res();
-        } catch (e) {
-          rej(e);
-        }
-      });
+    const turnInput = planTurnInput({
+      context: contextStub as Parameters<typeof planTurnInput>[0]["context"],
+      model: proxiedModel as Parameters<typeof planTurnInput>[0]["model"],
+      previousResponseId: null,
+      lastContextLength: 0,
     });
-    await completed;
-
-    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    const sent = buildOpenAIWebSocketResponseCreatePayload({
+      model: proxiedModel as Parameters<
+        typeof buildOpenAIWebSocketResponseCreatePayload
+      >[0]["model"],
+      context: contextStub as Parameters<
+        typeof buildOpenAIWebSocketResponseCreatePayload
+      >[0]["context"],
+      turnInput,
+      tools: [],
+    }) as Record<string, unknown>;
     expect(sent.store).toBe(false);
   });
 
