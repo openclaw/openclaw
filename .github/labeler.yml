@@ -59,6 +59,11 @@
       - any-glob-to-any-file:
           - "extensions/nostr/**"
           - "docs/channels/nostr.md"
+"channel: qqbot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qqbot/**"
+          - "docs/channels/qqbot.md"
 "channel: signal":
   - changed-files:
       - any-glob-to-any-file:
@@ -221,14 +226,14 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/open-prose/**"
-"extensions: qwen-portal-auth":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/qwen-portal-auth/**"
 "extensions: device-pair":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/device-pair/**"
+"extensions: duckduckgo":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/duckduckgo/**"
 "extensions: acpx":
   - changed-files:
       - any-glob-to-any-file:
@@ -237,6 +242,14 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/byteplus/**"
+"extensions: deepseek":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deepseek/**"
+"extensions: stepfun":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/stepfun/**"
 "extensions: anthropic":
   - changed-files:
       - any-glob-to-any-file:

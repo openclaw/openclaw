@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
+import "./test-helpers/fast-openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/pi-tools-fs-helpers.js";
 
@@ -34,6 +35,37 @@ describe("createOpenClawCodingTools", () => {
         | undefined;
       const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
       expect(combinedText).toContain("hello universe");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts broader file/edit alias variants", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-alias-broad-"));
+    try {
+      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+      const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+      await writeTool?.execute("tool-alias-broad-1", {
+        file: "broad-alias.txt",
+        content: "hello old value",
+      });
+
+      await editTool?.execute("tool-alias-broad-2", {
+        filePath: "broad-alias.txt",
+        old_text: "old",
+        newString: "new",
+      });
+
+      const result = await readTool?.execute("tool-alias-broad-3", {
+        file: "broad-alias.txt",
+      });
+
+      const textBlocks = result?.content?.filter((block) => block.type === "text") as
+        | Array<{ text?: string }>
+        | undefined;
+      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
+      expect(combinedText).toContain("hello new value");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

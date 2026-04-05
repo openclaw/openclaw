@@ -12,6 +12,7 @@ vi.mock("../hooks/gmail-watcher.js", () => ({
 describe("createGatewayCloseHandler", () => {
   it("unsubscribes lifecycle listeners during shutdown", async () => {
     const lifecycleUnsub = vi.fn();
+    const stopTaskRegistryMaintenance = vi.fn();
     const close = createGatewayCloseHandler({
       bonjourStop: null,
       tailscaleCleanup: null,
@@ -22,6 +23,7 @@ describe("createGatewayCloseHandler", () => {
       cron: { stop: vi.fn() },
       heartbeatRunner: { stop: vi.fn() } as never,
       updateCheckStop: null,
+      stopTaskRegistryMaintenance,
       nodePresenceTimers: new Map(),
       broadcast: vi.fn(),
       tickInterval: setInterval(() => undefined, 60_000),
@@ -35,7 +37,6 @@ describe("createGatewayCloseHandler", () => {
       chatRunState: { clear: vi.fn() },
       clients: new Set(),
       configReloader: { stop: vi.fn(async () => undefined) },
-      browserControl: null,
       wss: { close: (cb: () => void) => cb() } as never,
       httpServer: {
         close: (cb: (err?: Error | null) => void) => cb(null),
@@ -46,5 +47,6 @@ describe("createGatewayCloseHandler", () => {
     await close({ reason: "test shutdown" });
 
     expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
+    expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
   });
 });

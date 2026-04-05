@@ -219,7 +219,11 @@ export async function handleMatrixAction(
     switch (action) {
       case "sendMessage": {
         const to = readStringParam(params, "to", { required: true });
-        const mediaUrl = readStringParam(params, "mediaUrl");
+        const mediaUrl =
+          readStringParam(params, "mediaUrl", { trim: false }) ??
+          readStringParam(params, "media", { trim: false }) ??
+          readStringParam(params, "filePath", { trim: false }) ??
+          readStringParam(params, "path", { trim: false });
         const content = readStringParam(params, "content", {
           required: !mediaUrl,
           allowEmpty: true,
@@ -227,11 +231,18 @@ export async function handleMatrixAction(
         const replyToId =
           readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
         const threadId = readStringParam(params, "threadId");
+        const audioAsVoice =
+          typeof readRawParam(params, "audioAsVoice") === "boolean"
+            ? (readRawParam(params, "audioAsVoice") as boolean)
+            : typeof readRawParam(params, "asVoice") === "boolean"
+              ? (readRawParam(params, "asVoice") as boolean)
+              : undefined;
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
           mediaLocalRoots: opts.mediaLocalRoots,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
+          audioAsVoice,
           ...clientOpts,
         });
         return jsonResult({ ok: true, result });

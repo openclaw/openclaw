@@ -72,6 +72,17 @@ vi.mock("../../logging/subsystem.js", () => ({
 
 const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
 type LoopSignal = (typeof LOOP_SIGNALS)[number];
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+function setPlatform(platform: string) {
+  if (!originalPlatformDescriptor) {
+    return;
+  }
+  Object.defineProperty(process, "platform", {
+    ...originalPlatformDescriptor,
+    value: platform,
+  });
+}
 
 function removeNewSignalListeners(signal: LoopSignal, existing: Set<(...args: unknown[]) => void>) {
   for (const listener of process.listeners(signal)) {
@@ -356,6 +367,33 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("waits briefly before exiting on launchd supervised restart", async () => {
+    vi.clearAllMocks();
+    try {
+      setPlatform("darwin");
+      process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
+        mode: "supervised",
+      });
+
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { runtime, exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+        const startedAt = Date.now();
+
+        sigusr1();
+        await expect(exited).resolves.toBe(0);
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1400);
+      });
+    } finally {
+      delete process.env.LAUNCH_JOB_LABEL;
+      if (originalPlatformDescriptor) {
+        Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      }
+    }
+  });
+
   it("forwards lockPort to initial and restart lock acquisitions", async () => {
     vi.clearAllMocks();
 
@@ -428,6 +466,7 @@ describe("gateway discover routing helpers", () => {
     const beacon: GatewayBonjourBeacon = {
       instanceName: "Test",
       host: "10.0.0.2",
+      port: 18789,
       lanHost: "evil.example.com",
       tailnetDns: "evil.example.com",
     };
@@ -444,13 +483,13 @@ describe("gateway discover routing helpers", () => {
     expect(pickGatewayPort(beacon)).toBe(18789);
   });
 
-  it("falls back to TXT host/port when resolve data is missing", () => {
+  it("fails closed when resolve data is missing", () => {
     const beacon: GatewayBonjourBeacon = {
       instanceName: "Test",
       lanHost: "test-host.local",
       gatewayPort: 18789,
     };
-    expect(pickBeaconHost(beacon)).toBe("test-host.local");
-    expect(pickGatewayPort(beacon)).toBe(18789);
+    expect(pickBeaconHost(beacon)).toBeNull();
+    expect(pickGatewayPort(beacon)).toBeNull();
   });
 });

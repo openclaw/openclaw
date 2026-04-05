@@ -141,9 +141,37 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("suppresses JSON NO_REPLY action payloads", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: '{"action":"NO_REPLY"}' },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("does not suppress JSON NO_REPLY objects with extra fields", () => {
+    const result = normalizeReplyPayload({
+      text: '{"action":"NO_REPLY","note":"example"}',
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe('{"action":"NO_REPLY","note":"example"}');
+  });
+
   it("strips NO_REPLY but keeps media payload", () => {
     const result = normalizeReplyPayload({
       text: "NO_REPLY",
+      mediaUrl: "https://example.com/img.png",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("");
+    expect(result!.mediaUrl).toBe("https://example.com/img.png");
+  });
+
+  it("strips JSON NO_REPLY action text but keeps media payload", () => {
+    const result = normalizeReplyPayload({
+      text: '{"action":"NO_REPLY"}',
       mediaUrl: "https://example.com/img.png",
     });
     expect(result).not.toBeNull();
@@ -161,37 +189,51 @@ describe("normalizeReplyPayload", () => {
     expect(result!.interactive).toBeUndefined();
   });
 
-  it("applies responsePrefix before compiling Slack directives into shared interactive blocks", () => {
+  it("applies responsePrefix before channel-owned transforms run", () => {
     const result = normalizeReplyPayload(
       {
         text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
       },
-      { responsePrefix: "[bot]", enableSlackInteractiveReplies: true },
+      { responsePrefix: "[bot]" },
     );
 
     expect(result).not.toBeNull();
-    expect(result!.text).toBe("[bot] hello");
-    expect(result!.interactive).toEqual({
-      blocks: [
-        {
-          type: "text",
-          text: "[bot] hello",
-        },
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Retry",
-              value: "retry",
-            },
-            {
-              label: "Ignore",
-              value: "ignore",
-            },
-          ],
-        },
-      ],
+    expect(result!.text).toBe("[bot] hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
+    expect(result!.interactive).toBeUndefined();
+  });
+
+  it("leaves trailing Options lines for channel-owned transforms", () => {
+    const result = normalizeReplyPayload({
+      text: "Current verbose level: off.\nOptions: on, full, off.",
     });
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("Current verbose level: off.\nOptions: on, full, off.");
+    expect(result!.interactive).toBeUndefined();
+  });
+
+  it("leaves larger Options lists for channel-owned transforms", () => {
+    const result = normalizeReplyPayload({
+      text: "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe(
+      "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
+    );
+    expect(result!.interactive).toBeUndefined();
+  });
+
+  it("leaves complex Options lines as plain text", () => {
+    const result = normalizeReplyPayload({
+      text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe(
+      "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
+    );
+    expect(result!.interactive).toBeUndefined();
   });
 });
 
@@ -419,14 +461,14 @@ describe("resolveResponsePrefixTemplate", () => {
       {
         name: "model",
         template: "[{model}]",
-        values: { model: "gpt-5.2" },
-        expected: "[gpt-5.2]",
+        values: { model: "gpt-5.4" },
+        expected: "[gpt-5.4]",
       },
       {
         name: "modelFull",
         template: "[{modelFull}]",
-        values: { modelFull: "openai-codex/gpt-5.2" },
-        expected: "[openai-codex/gpt-5.2]",
+        values: { modelFull: "openai-codex/gpt-5.4" },
+        expected: "[openai-codex/gpt-5.4]",
       },
       {
         name: "provider",
@@ -461,8 +503,8 @@ describe("resolveResponsePrefixTemplate", () => {
       {
         name: "case-insensitive variables",
         template: "[{MODEL} | {ThinkingLevel}]",
-        values: { model: "gpt-5.2", thinkingLevel: "low" },
-        expected: "[gpt-5.2 | low]",
+        values: { model: "gpt-5.4", thinkingLevel: "low" },
+        expected: "[gpt-5.4 | low]",
       },
       {
         name: "all variables",
@@ -470,10 +512,10 @@ describe("resolveResponsePrefixTemplate", () => {
         values: {
           identityName: "OpenClaw",
           provider: "anthropic",
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-6",
           thinkingLevel: "high",
         },
-        expected: "[OpenClaw] anthropic/claude-opus-4-5 (think:high)",
+        expected: "[OpenClaw] anthropic/claude-opus-4-6 (think:high)",
       },
     ] as const;
     expectResolvedTemplateCases(cases);
@@ -492,14 +534,14 @@ describe("resolveResponsePrefixTemplate", () => {
       {
         name: "unrecognized variable",
         template: "[{unknownVar}]",
-        values: { model: "gpt-5.2" },
+        values: { model: "gpt-5.4" },
         expected: "[{unknownVar}]",
       },
       {
         name: "mixed resolved/unresolved",
         template: "[{model} | {provider}]",
-        values: { model: "gpt-5.2" },
-        expected: "[gpt-5.2 | {provider}]",
+        values: { model: "gpt-5.4" },
+        expected: "[gpt-5.4 | {provider}]",
       },
     ] as const;
     expectResolvedTemplateCases(cases);
@@ -557,6 +599,20 @@ describe("createTypingSignaler", () => {
     await signaler.signalTextDelta("hi");
     expect(typing.startTypingLoop).toHaveBeenCalled();
     expect(typing.refreshTypingTtl).toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+  });
+
+  it("does not start typing for media-only deltas", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalTextDelta(undefined);
+
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
@@ -705,6 +761,50 @@ describe("block reply coalescer", () => {
     await coalescer.flush({ force: true });
 
     expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
+    coalescer.stop();
+  });
+
+  it("does not coalesce reasoning blocks into visible reply text", async () => {
+    const flushes: Array<{ text?: string; isReasoning?: boolean }> = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push({
+          text: payload.text,
+          isReasoning: payload.isReasoning,
+        });
+      },
+    });
+
+    coalescer.enqueue({ text: "Reasoning:\n_hidden_", isReasoning: true });
+    coalescer.enqueue({ text: "Visible answer" });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      { text: "Reasoning:\n_hidden_", isReasoning: true },
+      { text: "Visible answer", isReasoning: undefined },
+    ]);
+    coalescer.stop();
+  });
+
+  it("preserves compaction notice markers across flushes", async () => {
+    const flushes: Array<{ text?: string; isCompactionNotice?: boolean }> = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push({
+          text: payload.text,
+          isCompactionNotice: payload.isCompactionNotice,
+        });
+      },
+    });
+
+    coalescer.enqueue({ text: "Compacting context...", isCompactionNotice: true });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([{ text: "Compacting context...", isCompactionNotice: true }]);
     coalescer.stop();
   });
 
@@ -857,9 +957,9 @@ describe("createStreamingDirectiveAccumulator", () => {
 describe("extractShortModelName", () => {
   it("normalizes provider/date/latest suffixes while preserving other IDs", () => {
     const cases = [
-      ["openai-codex/gpt-5.2-codex", "gpt-5.2-codex"],
-      ["claude-opus-4-5-20251101", "claude-opus-4-5"],
-      ["gpt-5.2-latest", "gpt-5.2"],
+      ["openai-codex/gpt-5.4", "gpt-5.4"],
+      ["claude-opus-4-6-20251101", "claude-opus-4-6"],
+      ["gpt-5.4-latest", "gpt-5.4"],
       // Date suffix must be exactly 8 digits at the end.
       ["model-123456789", "model-123456789"],
     ] as const;

@@ -1,37 +1,44 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { matrixPlugin } from "../../extensions/matrix/src/channel.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { agentsBindCommand } from "./agents.js";
-import { setDefaultChannelPluginRegistryForTests } from "./channel-test-helpers.js";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+import {
+  createBindingResolverTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
+import {
+  loadFreshAgentsCommandModuleForTest,
+  readConfigFileSnapshotMock,
+  resetAgentsBindTestHarness,
+  runtime,
+  writeConfigFileMock,
+} from "./agents.bind.test-support.js";
+import { baseConfigSnapshot } from "./test-runtime-config-helpers.js";
 
-const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
-const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const matrixBindingPlugin = createBindingResolverTestPlugin({
+  id: "matrix",
+  resolveBindingAccountId: ({ accountId, agentId }) => {
+    const explicit = accountId?.trim();
+    if (explicit) {
+      return explicit;
+    }
+    const agent = agentId?.trim();
+    return agent || "default";
+  },
+});
 
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  writeConfigFile: writeConfigFileMock,
-}));
+let agentsBindCommand: typeof import("./agents.js").agentsBindCommand;
 
 describe("agents bind matrix integration", () => {
-  const runtime = createTestRuntime();
-
-  beforeEach(() => {
-    readConfigFileSnapshotMock.mockClear();
-    writeConfigFileMock.mockClear();
-    runtime.log.mockClear();
-    runtime.error.mockClear();
-    runtime.exit.mockClear();
+  beforeEach(async () => {
+    ({ agentsBindCommand } = await loadFreshAgentsCommandModuleForTest());
+    resetAgentsBindTestHarness();
 
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "matrix", plugin: matrixPlugin, source: "test" }]),
+      createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
     );
   });
 
   afterEach(() => {
-    setDefaultChannelPluginRegistryForTests();
+    setActivePluginRegistry(createTestRegistry());
   });
 
   it("uses matrix plugin binding resolver when accountId is omitted", async () => {

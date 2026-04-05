@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { primeChannelOutboundSendMock } from "../../../src/channels/plugins/contracts/suites.js";
+import { primeChannelOutboundSendMock } from "../../../src/channels/plugins/contracts/test-helpers.js";
 import "./accounts.test-mocks.js";
 import "./zalo-js.test-mocks.js";
 import type { ReplyPayload } from "../runtime-api.js";
 import { zalouserPlugin } from "./channel.js";
 import { setZalouserRuntime } from "./runtime.js";
+import * as sendModule from "./send.js";
 
 vi.mock("./send.js", () => ({
   sendMessageZalouser: vi.fn().mockResolvedValue({ ok: true, messageId: "zlu-1" }),
@@ -23,7 +24,7 @@ function baseCtx(payload: ReplyPayload) {
 describe("zalouserPlugin outbound sendPayload", () => {
   let mockedSend: ReturnType<typeof vi.mocked<(typeof import("./send.js"))["sendMessageZalouser"]>>;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     setZalouserRuntime({
       channel: {
         text: {
@@ -32,8 +33,7 @@ describe("zalouserPlugin outbound sendPayload", () => {
         },
       },
     } as never);
-    const mod = await import("./send.js");
-    mockedSend = vi.mocked(mod.sendMessageZalouser);
+    mockedSend = vi.mocked(sendModule.sendMessageZalouser);
     primeChannelOutboundSendMock(mockedSend, { ok: true, messageId: "zlu-1" });
   });
 
@@ -112,9 +112,8 @@ describe("zalouserPlugin outbound sendPayload", () => {
 describe("zalouserPlugin messaging target normalization", () => {
   it("normalizes user/group aliases to canonical targets", () => {
     const normalize = zalouserPlugin.messaging?.normalizeTarget;
-    expect(normalize).toBeTypeOf("function");
     if (!normalize) {
-      return;
+      throw new Error("normalizeTarget unavailable");
     }
     expect(normalize("zlu:g:30003")).toBe("group:30003");
     expect(normalize("zalouser:u:20002")).toBe("user:20002");
@@ -125,9 +124,8 @@ describe("zalouserPlugin messaging target normalization", () => {
 
   it("treats canonical and provider-native user/group targets as ids", () => {
     const looksLikeId = zalouserPlugin.messaging?.targetResolver?.looksLikeId;
-    expect(looksLikeId).toBeTypeOf("function");
     if (!looksLikeId) {
-      return;
+      throw new Error("looksLikeId unavailable");
     }
     expect(looksLikeId("user:20002")).toBe(true);
     expect(looksLikeId("group:30003")).toBe(true);

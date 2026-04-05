@@ -5,30 +5,33 @@ import {
 } from "./exec-approval-command-display.js";
 
 describe("sanitizeExecApprovalDisplayText", () => {
-  it("escapes unicode format characters but leaves other text intact", () => {
-    expect(sanitizeExecApprovalDisplayText("echo hi\u200Bthere")).toBe("echo hi\\u{200B}there");
+  it.each([
+    ["echo hi\u200Bthere", "echo hi\\u{200B}there"],
+    ["date\u3164\uFFA0\u115F\u1160가", "date\\u{3164}\\u{FFA0}\\u{115F}\\u{1160}가"],
+  ])("sanitizes exec approval display text for %j", (input, expected) => {
+    expect(sanitizeExecApprovalDisplayText(input)).toBe(expected);
   });
 });
 
 describe("resolveExecApprovalCommandDisplay", () => {
-  it("prefers explicit command fields and drops identical previews after trimming", () => {
-    expect(
-      resolveExecApprovalCommandDisplay({
+  it.each([
+    {
+      name: "prefers explicit command fields and drops identical previews after trimming",
+      input: {
         command: "echo hi",
         commandPreview: "  echo hi  ",
-        host: "gateway",
-      }),
-    ).toEqual({
-      commandText: "echo hi",
-      commandPreview: null,
-    });
-  });
-
-  it("falls back to node systemRunPlan values and sanitizes preview text", () => {
-    expect(
-      resolveExecApprovalCommandDisplay({
+        host: "gateway" as const,
+      },
+      expected: {
+        commandText: "echo hi",
+        commandPreview: null,
+      },
+    },
+    {
+      name: "falls back to node systemRunPlan values and sanitizes preview text",
+      input: {
         command: "",
-        host: "node",
+        host: "node" as const,
         systemRunPlan: {
           argv: ["python3", "-c", "print(1)"],
           cwd: null,
@@ -37,18 +40,17 @@ describe("resolveExecApprovalCommandDisplay", () => {
           agentId: null,
           sessionKey: null,
         },
-      }),
-    ).toEqual({
-      commandText: 'python3 -c "print(1)"',
-      commandPreview: "print\\u{200B}(1)",
-    });
-  });
-
-  it("ignores systemRunPlan fallback for non-node hosts", () => {
-    expect(
-      resolveExecApprovalCommandDisplay({
+      },
+      expected: {
+        commandText: 'python3 -c "print(1)"',
+        commandPreview: "print\\u{200B}(1)",
+      },
+    },
+    {
+      name: "ignores systemRunPlan fallback for non-node hosts",
+      input: {
         command: "",
-        host: "sandbox",
+        host: "sandbox" as const,
         systemRunPlan: {
           argv: ["echo", "hi"],
           cwd: null,
@@ -57,10 +59,13 @@ describe("resolveExecApprovalCommandDisplay", () => {
           agentId: null,
           sessionKey: null,
         },
-      }),
-    ).toEqual({
-      commandText: "",
-      commandPreview: null,
-    });
+      },
+      expected: {
+        commandText: "",
+        commandPreview: null,
+      },
+    },
+  ])("$name", ({ input, expected }) => {
+    expect(resolveExecApprovalCommandDisplay(input)).toEqual(expected);
   });
 });

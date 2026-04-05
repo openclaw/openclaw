@@ -11,8 +11,8 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginInConfig } from "./enable.js";
 import {
+  applyProviderAuthConfigPatch,
   applyDefaultModel,
-  mergeConfigPatch,
   pickAuthMethod,
   resolveProviderMatch,
 } from "./provider-auth-choice-helpers.js";
@@ -24,6 +24,7 @@ import type { ProviderAuthMethod, ProviderAuthOptionBag } from "./types.js";
 export type ApplyProviderAuthChoiceParams = {
   authChoice: string;
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   agentDir?: string;
@@ -83,6 +84,7 @@ async function loadPluginProviderRuntime() {
 
 export async function runProviderPluginAuthMethod(params: {
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   method: ProviderAuthMethod;
@@ -108,6 +110,7 @@ export async function runProviderPluginAuthMethod(params: {
 
   const result = await params.method.run({
     config: params.config,
+    env: params.env,
     agentDir,
     workspaceDir,
     prompter: params.prompter,
@@ -126,7 +129,7 @@ export async function runProviderPluginAuthMethod(params: {
 
   let nextConfig = params.config;
   if (result.configPatch) {
-    nextConfig = mergeConfigPatch(nextConfig, result.configPatch);
+    nextConfig = applyProviderAuthConfigPatch(nextConfig, result.configPatch);
   }
 
   for (const profile of result.profiles) {
@@ -142,6 +145,9 @@ export async function runProviderPluginAuthMethod(params: {
       mode: profile.credential.type === "token" ? "token" : profile.credential.type,
       ...("email" in profile.credential && profile.credential.email
         ? { email: profile.credential.email }
+        : {}),
+      ...("displayName" in profile.credential && profile.credential.displayName
+        ? { displayName: profile.credential.displayName }
         : {}),
     });
   }
@@ -167,8 +173,8 @@ export async function applyAuthChoiceLoadedPluginProvider(
   const providers = resolvePluginProviders({
     config: params.config,
     workspaceDir,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    env: params.env,
+    mode: "setup",
   });
   const resolved = resolveProviderPluginChoice({
     providers,
@@ -180,6 +186,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
 
   const applied = await runProviderPluginAuthMethod({
     config: params.config,
+    env: params.env,
     runtime: params.runtime,
     prompter: params.prompter,
     method: resolved.method,
@@ -247,8 +254,8 @@ export async function applyAuthChoicePluginProvider(
   const providers = resolvePluginProviders({
     config: nextConfig,
     workspaceDir,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    env: params.env,
+    mode: "setup",
   });
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {
@@ -267,6 +274,7 @@ export async function applyAuthChoicePluginProvider(
 
   const applied = await runProviderPluginAuthMethod({
     config: nextConfig,
+    env: params.env,
     runtime: params.runtime,
     prompter: params.prompter,
     method,

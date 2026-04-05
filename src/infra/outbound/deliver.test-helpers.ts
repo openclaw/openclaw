@@ -1,15 +1,18 @@
 import { vi } from "vitest";
-import {
-  signalOutbound,
-  telegramOutbound,
-  whatsappOutbound,
-} from "../../../test/channel-outbounds.js";
+import { createIMessageTestPlugin } from "../../../test/helpers/channels/imessage-test-plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { DeliverOutboundPayloadsParams, OutboundDeliveryResult } from "./deliver.js";
+import {
+  imessageOutboundForTest,
+  signalOutbound,
+  whatsappOutbound,
+} from "./deliver.test-outbounds.js";
 
 type DeliverMockState = {
   sessions: {
@@ -100,10 +103,10 @@ export const internalHookMocks = _internalHookMocks;
 export const queueMocks = _queueMocks;
 export const logMocks = _logMocks;
 
-vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
-  );
+vi.mock("../../config/sessions/transcript.runtime.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/transcript.runtime.js")
+  >("../../config/sessions/transcript.runtime.js");
   return {
     ...actual,
     appendAssistantMessageToSessionTranscript: _mocks.appendAssistantMessageToSessionTranscript,
@@ -157,14 +160,6 @@ export const defaultRegistry = createTestRegistry([
     }),
   },
   {
-    pluginId: "telegram",
-    source: "test",
-    plugin: createOutboundTestPlugin({
-      id: "telegram",
-      outbound: telegramOutbound,
-    }),
-  },
-  {
     pluginId: "whatsapp",
     source: "test",
     plugin: createOutboundTestPlugin({
@@ -175,13 +170,14 @@ export const defaultRegistry = createTestRegistry([
   {
     pluginId: "imessage",
     source: "test",
-    plugin: createIMessageTestPlugin(),
+    plugin: createIMessageTestPlugin({ outbound: imessageOutboundForTest }),
   },
 ]);
 
 export const emptyRegistry = createTestRegistry([]);
 
 export function resetDeliverTestState() {
+  releasePinnedPluginChannelRegistry();
   setActivePluginRegistry(defaultRegistry);
   deliverMocks.hooks.runner.hasHooks = () => false;
   deliverMocks.hooks.runner.runMessageSent = async () => {};
@@ -198,6 +194,7 @@ export function resetDeliverTestState() {
 }
 
 export function clearDeliverTestRegistry() {
+  releasePinnedPluginChannelRegistry();
   setActivePluginRegistry(emptyRegistry);
 }
 
@@ -235,7 +232,7 @@ export async function runChunkedWhatsAppDelivery(params: {
     channel: "whatsapp",
     to: "+1555",
     payloads: [{ text: "abcd" }],
-    deps: { sendWhatsApp },
+    deps: { whatsapp: sendWhatsApp },
     ...(params.mirror ? { mirror: params.mirror } : {}),
   });
   return { sendWhatsApp, results };

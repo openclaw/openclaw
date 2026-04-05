@@ -1,11 +1,15 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
+import {
+  estimateTokens,
+  generateSummary as piGenerateSummary,
+} from "@mariozechner/pi-coding-agent";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
+import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const log = createSubsystemLogger("compaction");
 
@@ -36,6 +40,30 @@ export type CompactionSummarizationInstructions = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   identifierInstructions?: string;
 };
+
+type GenerateSummaryCompat = {
+  (
+    currentMessages: AgentMessage[],
+    model: NonNullable<ExtensionContext["model"]>,
+    reserveTokens: number,
+    apiKey: string,
+    signal?: AbortSignal,
+    customInstructions?: string,
+    previousSummary?: string,
+  ): Promise<string>;
+  (
+    currentMessages: AgentMessage[],
+    model: NonNullable<ExtensionContext["model"]>,
+    reserveTokens: number,
+    apiKey: string,
+    headers: Record<string, string> | undefined,
+    signal?: AbortSignal,
+    customInstructions?: string,
+    previousSummary?: string,
+  ): Promise<string>;
+};
+
+const generateSummaryCompat = piGenerateSummary as unknown as GenerateSummaryCompat;
 
 function resolveIdentifierPreservationInstructions(
   instructions?: CompactionSummarizationInstructions,
@@ -104,9 +132,29 @@ export function splitMessagesByTokenShare(
   let current: AgentMessage[] = [];
   let currentTokens = 0;
 
+  let pendingToolCallIds = new Set<string>();
+  let pendingChunkStartIndex: number | null = null;
+
+  const splitCurrentAtPendingBoundary = (): boolean => {
+    if (
+      pendingChunkStartIndex === null ||
+      pendingChunkStartIndex <= 0 ||
+      chunks.length >= normalizedParts - 1
+    ) {
+      return false;
+    }
+    chunks.push(current.slice(0, pendingChunkStartIndex));
+    current = current.slice(pendingChunkStartIndex);
+    currentTokens = current.reduce((sum, msg) => sum + estimateCompactionMessageTokens(msg), 0);
+    pendingChunkStartIndex = 0;
+    return true;
+  };
+
   for (const message of messages) {
     const messageTokens = estimateCompactionMessageTokens(message);
+
     if (
+      pendingToolCallIds.size === 0 &&
       chunks.length < normalizedParts - 1 &&
       current.length > 0 &&
       currentTokens + messageTokens > targetTokens
@@ -114,10 +162,40 @@ export function splitMessagesByTokenShare(
       chunks.push(current);
       current = [];
       currentTokens = 0;
+      pendingChunkStartIndex = null;
     }
 
     current.push(message);
     currentTokens += messageTokens;
+
+    if (message.role === "assistant") {
+      const toolCalls = extractToolCallsFromAssistant(message);
+      const stopReason = (message as { stopReason?: unknown }).stopReason;
+      const keepsPending =
+        stopReason !== "aborted" && stopReason !== "error" && toolCalls.length > 0;
+      pendingToolCallIds = keepsPending ? new Set(toolCalls.map((t) => t.id)) : new Set();
+      pendingChunkStartIndex = keepsPending ? current.length - 1 : null;
+    } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
+      const resultId = extractToolResultId(message);
+      if (!resultId) {
+        pendingToolCallIds = new Set();
+        pendingChunkStartIndex = null;
+      } else {
+        pendingToolCallIds.delete(resultId);
+      }
+      if (
+        pendingToolCallIds.size === 0 &&
+        chunks.length < normalizedParts - 1 &&
+        currentTokens > targetTokens
+      ) {
+        splitCurrentAtPendingBoundary();
+        pendingChunkStartIndex = null;
+      }
+    }
+  }
+
+  if (pendingToolCallIds.size > 0 && currentTokens > targetTokens) {
+    splitCurrentAtPendingBoundary();
   }
 
   if (current.length > 0) {
@@ -212,6 +290,7 @@ async function summarizeChunks(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
+  headers?: Record<string, string>;
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
@@ -239,6 +318,7 @@ async function summarizeChunks(params: {
           params.model,
           params.reserveTokens,
           params.apiKey,
+          params.headers,
           params.signal,
           effectiveInstructions,
           summary,
@@ -257,6 +337,39 @@ async function summarizeChunks(params: {
   return summary ?? DEFAULT_SUMMARY_FALLBACK;
 }
 
+function generateSummary(
+  currentMessages: AgentMessage[],
+  model: NonNullable<ExtensionContext["model"]>,
+  reserveTokens: number,
+  apiKey: string,
+  headers: Record<string, string> | undefined,
+  signal: AbortSignal,
+  customInstructions?: string,
+  previousSummary?: string,
+): Promise<string> {
+  if (piGenerateSummary.length >= 8) {
+    return generateSummaryCompat(
+      currentMessages,
+      model,
+      reserveTokens,
+      apiKey,
+      headers,
+      signal,
+      customInstructions,
+      previousSummary,
+    );
+  }
+  return generateSummaryCompat(
+    currentMessages,
+    model,
+    reserveTokens,
+    apiKey,
+    signal,
+    customInstructions,
+    previousSummary,
+  );
+}
+
 /**
  * Summarize with progressive fallback for handling oversized messages.
  * If full summarization fails, tries partial summarization excluding oversized messages.
@@ -265,6 +378,7 @@ export async function summarizeWithFallback(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
+  headers?: Record<string, string>;
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
@@ -334,6 +448,7 @@ export async function summarizeInStages(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
+  headers?: Record<string, string>;
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
@@ -460,5 +575,7 @@ export function pruneHistoryForContextShare(params: {
 }
 
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {
-  return Math.max(1, Math.floor(model?.contextWindow ?? DEFAULT_CONTEXT_TOKENS));
+  const effective =
+    (model as { contextTokens?: number } | undefined)?.contextTokens ?? model?.contextWindow;
+  return Math.max(1, Math.floor(effective ?? DEFAULT_CONTEXT_TOKENS));
 }

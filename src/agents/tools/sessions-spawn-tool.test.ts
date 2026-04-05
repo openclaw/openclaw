@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -17,12 +17,17 @@ vi.mock("../subagent-spawn.js", () => ({
 vi.mock("../acp-spawn.js", () => ({
   ACP_SPAWN_MODES: ["run", "session"],
   ACP_SPAWN_STREAM_TARGETS: ["parent"],
+  isSpawnAcpAcceptedResult: (result: { status?: string }) => result?.status === "accepted",
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
 }));
 
-const { createSessionsSpawnTool } = await import("./sessions-spawn-tool.js");
+let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
 
 describe("sessions_spawn tool", () => {
+  beforeAll(async () => {
+    ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
+  });
+
   beforeEach(() => {
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",

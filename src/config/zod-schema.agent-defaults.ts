@@ -9,16 +9,18 @@ import {
 import {
   BlockStreamingChunkSchema,
   BlockStreamingCoalesceSchema,
-  CliBackendSchema,
   HumanDelaySchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
 export const AgentDefaultsSchema = z
   .object({
+    /** Global default provider params applied to all models before per-model and per-agent overrides. */
+    params: z.record(z.string(), z.unknown()).optional(),
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
     imageGenerationModel: AgentModelSchema.optional(),
+    videoGenerationModel: AgentModelSchema.optional(),
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
@@ -37,6 +39,7 @@ export const AgentDefaultsSchema = z
       )
       .optional(),
     workspace: z.string().optional(),
+    skills: z.array(z.string()).optional(),
     repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
@@ -50,7 +53,6 @@ export const AgentDefaultsSchema = z
     envelopeTimestamp: z.union([z.literal("on"), z.literal("off")]).optional(),
     envelopeElapsed: z.union([z.literal("on"), z.literal("off")]).optional(),
     contextTokens: z.number().int().positive().optional(),
-    cliBackends: z.record(z.string(), CliBackendSchema).optional(),
     memorySearch: MemorySearchSchema,
     contextPruning: z
       .object({
@@ -82,6 +84,19 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+      })
+      .strict()
+      .optional(),
+    llm: z
+      .object({
+        idleTimeoutSeconds: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
+          ),
       })
       .strict()
       .optional(),
@@ -126,6 +141,7 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        notifyUser: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -166,6 +182,7 @@ export const AgentDefaultsSchema = z
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
+        allowAgents: z.array(z.string()).optional(),
         maxConcurrent: z.number().int().positive().optional(),
         maxSpawnDepth: z
           .number()
@@ -190,6 +207,7 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        requireAgentId: z.boolean().optional(),
       })
       .strict()
       .optional(),

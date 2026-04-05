@@ -11,11 +11,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
-import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
 import { buildImportUrl } from "./import-url.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import { registerInternalHook } from "./internal-hooks.js";
+import { getLegacyInternalHookHandlers } from "./legacy-config.js";
 import { resolveFunctionModuleExport } from "./module-loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
@@ -66,8 +66,8 @@ export async function loadInternalHooks(
     bundledHooksDir?: string;
   },
 ): Promise<number> {
-  // Check if hooks are enabled
-  if (!cfg.hooks?.internal?.enabled) {
+  // Hooks are on by default; only skip when explicitly disabled.
+  if (cfg.hooks?.internal?.enabled === false) {
     return 0;
   }
 
@@ -85,13 +85,6 @@ export async function loadInternalHooks(
     const eligible = hookEntries.filter((entry) => shouldIncludeHook({ entry, config: cfg }));
 
     for (const entry of eligible) {
-      const hookConfig = resolveHookConfig(cfg, entry.hook.name);
-
-      // Skip if explicitly disabled in config
-      if (hookConfig?.enabled === false) {
-        continue;
-      }
-
       try {
         const hookBaseDir = resolveExistingRealpath(entry.hook.baseDir);
         if (!hookBaseDir) {
@@ -144,7 +137,7 @@ export async function loadInternalHooks(
           registerInternalHook(event, handler);
         }
 
-        log.info(
+        log.debug(
           `Registered hook: ${safeLogValue(entry.hook.name)} -> ${events.map((event) => safeLogValue(event)).join(", ")}${exportName !== "default" ? ` (export: ${safeLogValue(exportName)})` : ""}`,
         );
         loadedCount++;
@@ -161,7 +154,7 @@ export async function loadInternalHooks(
   }
 
   // 2. Load legacy config handlers (backwards compatibility)
-  const handlers = cfg.hooks.internal.handlers ?? [];
+  const handlers = getLegacyInternalHookHandlers(cfg);
   for (const handlerConfig of handlers) {
     try {
       // Legacy handler paths: keep them workspace-relative.
@@ -233,7 +226,7 @@ export async function loadInternalHooks(
       }
 
       registerInternalHook(handlerConfig.event, handler);
-      log.info(
+      log.debug(
         `Registered hook (legacy): ${safeLogValue(handlerConfig.event)} -> ${safeLogValue(modulePath)}${exportName !== "default" ? `#${safeLogValue(exportName)}` : ""}`,
       );
       loadedCount++;

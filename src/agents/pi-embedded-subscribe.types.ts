@@ -32,6 +32,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   /** Called with every raw session event for trace/debug logging. */
   onTraceEvent?: (evt: Record<string, unknown>) => void;
   enforceFinalTag?: boolean;
+  silentExpected?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */

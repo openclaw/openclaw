@@ -32,9 +32,16 @@ export function applyImageGenerationModelConfigDefaults(
   return applyAgentDefaultModelConfig(cfg, "imageGenerationModel", imageGenerationModelConfig);
 }
 
+export function applyVideoGenerationModelConfigDefaults(
+  cfg: OpenClawConfig | undefined,
+  videoGenerationModelConfig: ToolModelConfig,
+): OpenClawConfig | undefined {
+  return applyAgentDefaultModelConfig(cfg, "videoGenerationModel", videoGenerationModelConfig);
+}
+
 function applyAgentDefaultModelConfig(
   cfg: OpenClawConfig | undefined,
-  key: "imageModel" | "imageGenerationModel",
+  key: "imageModel" | "imageGenerationModel" | "videoGenerationModel",
   modelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
   if (!cfg) {
@@ -55,16 +62,14 @@ function applyAgentDefaultModelConfig(
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: { workspaceOnly?: boolean },
+  _mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
   if (options?.workspaceOnly) {
     return workspaceDir ? [workspaceDir] : [];
   }
   const roots = getDefaultLocalRoots();
-  if (!workspaceDir) {
-    return [...roots];
-  }
-  return Array.from(new Set([...roots, workspaceDir]));
+  return workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
 }
 
 export function resolvePromptAndModelOverride(

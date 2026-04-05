@@ -128,6 +128,72 @@ type SelectedConnectAuth = {
   canFallbackToShared: boolean;
 };
 
+export const CONTROL_UI_OPERATOR_ROLE = "operator";
+
+export const CONTROL_UI_OPERATOR_SCOPES = [
+  "operator.admin",
+  "operator.read",
+  "operator.write",
+  "operator.approvals",
+  "operator.pairing",
+] as const;
+
+export type GatewayConnectAuth = {
+  token?: string;
+  deviceToken?: string;
+  password?: string;
+};
+
+export type GatewayConnectDevice = {
+  id: string;
+  publicKey: string;
+  signature: string;
+  signedAt: number;
+  nonce: string;
+};
+
+export type GatewayConnectClientInfo = {
+  id: GatewayClientName;
+  version: string;
+  platform: string;
+  mode: GatewayClientMode;
+  instanceId?: string;
+};
+
+export type GatewayConnectParams = {
+  minProtocol: 3;
+  maxProtocol: 3;
+  client: GatewayConnectClientInfo;
+  role: string;
+  scopes: string[];
+  device?: GatewayConnectDevice;
+  caps: string[];
+  auth?: GatewayConnectAuth;
+  userAgent: string;
+  locale: string;
+};
+
+type ConnectPlan = {
+  role: string;
+  scopes: string[];
+  client: GatewayConnectClientInfo;
+  explicitGatewayToken?: string;
+  selectedAuth: SelectedConnectAuth;
+  auth?: GatewayConnectAuth;
+  deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
+  device?: GatewayConnectDevice;
+};
+
+type DeviceTokenRetryDecision = {
+  deviceTokenRetryBudgetUsed: boolean;
+  authDeviceToken?: string;
+  explicitGatewayToken?: string;
+  deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
+  storedToken?: string;
+  canRetryWithDeviceTokenHint: boolean;
+  url: string;
+};
+
 export type GatewayBrowserClientOptions = {
   url: string;
   token?: string;
@@ -145,6 +211,66 @@ export type GatewayBrowserClientOptions = {
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
+
+function buildGatewayConnectAuth(
+  selectedAuth: SelectedConnectAuth,
+): GatewayConnectAuth | undefined {
+  const authToken = selectedAuth.authToken;
+  if (!(authToken || selectedAuth.authPassword)) {
+    return undefined;
+  }
+  return {
+    token: authToken,
+    deviceToken: selectedAuth.authDeviceToken ?? selectedAuth.resolvedDeviceToken,
+    password: selectedAuth.authPassword,
+  };
+}
+
+async function buildGatewayConnectDevice(params: {
+  deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
+  client: GatewayConnectClientInfo;
+  role: string;
+  scopes: string[];
+  authToken?: string;
+  connectNonce: string | null;
+}): Promise<GatewayConnectDevice | undefined> {
+  const { deviceIdentity } = params;
+  if (!deviceIdentity) {
+    return undefined;
+  }
+  const signedAtMs = Date.now();
+  const nonce = params.connectNonce ?? "";
+  const payload = buildDeviceAuthPayload({
+    deviceId: deviceIdentity.deviceId,
+    clientId: params.client.id,
+    clientMode: params.client.mode,
+    role: params.role,
+    scopes: params.scopes,
+    signedAtMs,
+    token: params.authToken ?? null,
+    nonce,
+  });
+  const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
+  return {
+    id: deviceIdentity.deviceId,
+    publicKey: deviceIdentity.publicKey,
+    signature,
+    signedAt: signedAtMs,
+    nonce,
+  };
+}
+
+export function shouldRetryWithDeviceToken(params: DeviceTokenRetryDecision): boolean {
+  return (
+    !params.deviceTokenRetryBudgetUsed &&
+    !params.authDeviceToken &&
+    Boolean(params.explicitGatewayToken) &&
+    Boolean(params.deviceIdentity) &&
+    Boolean(params.storedToken) &&
+    params.canRetryWithDeviceTokenHint &&
+    isTrustedRetryEndpoint(params.url)
+  );
+}
 
 export class GatewayBrowserClient {
   private ws: WebSocket | null = null;
@@ -168,6 +294,10 @@ export class GatewayBrowserClient {
 
   stop() {
     this.closed = true;
+    if (this.connectTimer !== null) {
+      window.clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
     this.ws?.close();
     this.ws = null;
     this.pendingConnectError = undefined;
@@ -227,25 +357,42 @@ export class GatewayBrowserClient {
     this.pending.clear();
   }
 
-  private async sendConnect() {
-    if (this.connectSent) {
-      return;
-    }
-    this.connectSent = true;
-    if (this.connectTimer !== null) {
-      window.clearTimeout(this.connectTimer);
-      this.connectTimer = null;
-    }
+  private buildConnectClient(): GatewayConnectClientInfo {
+    return {
+      id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
+      version: this.opts.clientVersion ?? "control-ui",
+      platform: this.opts.platform ?? navigator.platform ?? "web",
+      mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
+      instanceId: this.opts.instanceId,
+    };
+  }
+
+  private buildConnectParams(plan: ConnectPlan): GatewayConnectParams {
+    return {
+      minProtocol: 3,
+      maxProtocol: 3,
+      client: plan.client,
+      role: plan.role,
+      scopes: plan.scopes,
+      device: plan.device,
+      caps: ["tool-events"],
+      auth: plan.auth,
+      userAgent: navigator.userAgent,
+      locale: navigator.language,
+    };
+  }
+
+  private async buildConnectPlan(): Promise<ConnectPlan> {
+    const role = CONTROL_UI_OPERATOR_ROLE;
+    const scopes = [...CONTROL_UI_OPERATOR_SCOPES];
+    const client = this.buildConnectClient();
+    const explicitGatewayToken = this.opts.token?.trim() || undefined;
+    const explicitPassword = this.opts.password?.trim() || undefined;
 
     // crypto.subtle is only available in secure contexts (HTTPS, localhost).
     // Over plain HTTP, we skip device identity and fall back to token-only auth.
     // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
     const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
-
-    const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
-    const role = "operator";
-    const explicitGatewayToken = this.opts.token?.trim() || undefined;
-    const explicitPassword = this.opts.password?.trim() || undefined;
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let selectedAuth: SelectedConnectAuth = {
       authToken: explicitGatewayToken,
@@ -263,124 +410,100 @@ export class GatewayBrowserClient {
         this.pendingDeviceTokenRetry = false;
       }
     }
-    const authToken = selectedAuth.authToken;
-    const deviceToken = selectedAuth.authDeviceToken ?? selectedAuth.resolvedDeviceToken;
-    const auth =
-      authToken || selectedAuth.authPassword
-        ? {
-            token: authToken,
-            deviceToken,
-            password: selectedAuth.authPassword,
-          }
-        : undefined;
 
-    let device:
-      | {
-          id: string;
-          publicKey: string;
-          signature: string;
-          signedAt: number;
-          nonce: string;
-        }
-      | undefined;
-
-    if (isSecureContext && deviceIdentity) {
-      const signedAtMs = Date.now();
-      const nonce = this.connectNonce ?? "";
-      const payload = buildDeviceAuthPayload({
-        deviceId: deviceIdentity.deviceId,
-        clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
-        role,
-        scopes,
-        signedAtMs,
-        token: authToken ?? null,
-        nonce,
-      });
-      const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
-      device = {
-        id: deviceIdentity.deviceId,
-        publicKey: deviceIdentity.publicKey,
-        signature,
-        signedAt: signedAtMs,
-        nonce,
-      };
-    }
-    const params = {
-      minProtocol: 3,
-      maxProtocol: 3,
-      client: {
-        id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        version: this.opts.clientVersion ?? "control-ui",
-        platform: this.opts.platform ?? navigator.platform ?? "web",
-        mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
-        instanceId: this.opts.instanceId,
-      },
+    return {
       role,
       scopes,
-      device,
-      caps: ["tool-events"],
-      auth,
-      userAgent: navigator.userAgent,
-      locale: navigator.language,
+      client,
+      explicitGatewayToken,
+      selectedAuth,
+      auth: buildGatewayConnectAuth(selectedAuth),
+      deviceIdentity,
+      device: await buildGatewayConnectDevice({
+        deviceIdentity,
+        client,
+        role,
+        scopes,
+        authToken: selectedAuth.authToken,
+        connectNonce: this.connectNonce,
+      }),
     };
+  }
 
-    void this.request<GatewayHelloOk>("connect", params)
-      .then((hello) => {
-        this.pendingDeviceTokenRetry = false;
-        this.deviceTokenRetryBudgetUsed = false;
-        if (hello?.auth?.deviceToken && deviceIdentity) {
-          storeDeviceAuthToken({
-            deviceId: deviceIdentity.deviceId,
-            role: hello.auth.role ?? role,
-            token: hello.auth.deviceToken,
-            scopes: hello.auth.scopes ?? [],
-          });
-        }
-        this.backoffMs = 800;
-        this.opts.onHello?.(hello);
-      })
-      .catch((err: unknown) => {
-        const connectErrorCode =
-          err instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(err) : null;
-        const recoveryAdvice =
-          err instanceof GatewayRequestError ? readConnectErrorRecoveryAdvice(err.details) : {};
-        const retryWithDeviceTokenRecommended =
-          recoveryAdvice.recommendedNextStep === "retry_with_device_token";
-        const canRetryWithDeviceTokenHint =
-          recoveryAdvice.canRetryWithDeviceToken === true ||
-          retryWithDeviceTokenRecommended ||
-          connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH;
-        const shouldRetryWithDeviceToken =
-          !this.deviceTokenRetryBudgetUsed &&
-          !selectedAuth.authDeviceToken &&
-          Boolean(explicitGatewayToken) &&
-          Boolean(deviceIdentity) &&
-          Boolean(selectedAuth.storedToken) &&
-          canRetryWithDeviceTokenHint &&
-          isTrustedRetryEndpoint(this.opts.url);
-        if (shouldRetryWithDeviceToken) {
-          this.pendingDeviceTokenRetry = true;
-          this.deviceTokenRetryBudgetUsed = true;
-        }
-        if (err instanceof GatewayRequestError) {
-          this.pendingConnectError = {
-            code: err.gatewayCode,
-            message: err.message,
-            details: err.details,
-          };
-        } else {
-          this.pendingConnectError = undefined;
-        }
-        if (
-          selectedAuth.canFallbackToShared &&
-          deviceIdentity &&
-          connectErrorCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
-        ) {
-          clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
-        }
-        this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
+  private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
+    this.pendingDeviceTokenRetry = false;
+    this.deviceTokenRetryBudgetUsed = false;
+    if (hello?.auth?.deviceToken && plan.deviceIdentity) {
+      storeDeviceAuthToken({
+        deviceId: plan.deviceIdentity.deviceId,
+        role: hello.auth.role ?? plan.role,
+        token: hello.auth.deviceToken,
+        scopes: hello.auth.scopes ?? [],
       });
+    }
+    this.backoffMs = 800;
+    this.opts.onHello?.(hello);
+  }
+
+  private handleConnectFailure(err: unknown, plan: ConnectPlan) {
+    const connectErrorCode =
+      err instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(err) : null;
+    const recoveryAdvice =
+      err instanceof GatewayRequestError ? readConnectErrorRecoveryAdvice(err.details) : {};
+    const retryWithDeviceTokenRecommended =
+      recoveryAdvice.recommendedNextStep === "retry_with_device_token";
+    const canRetryWithDeviceTokenHint =
+      recoveryAdvice.canRetryWithDeviceToken === true ||
+      retryWithDeviceTokenRecommended ||
+      connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH;
+
+    if (
+      shouldRetryWithDeviceToken({
+        deviceTokenRetryBudgetUsed: this.deviceTokenRetryBudgetUsed,
+        authDeviceToken: plan.selectedAuth.authDeviceToken,
+        explicitGatewayToken: plan.explicitGatewayToken,
+        deviceIdentity: plan.deviceIdentity,
+        storedToken: plan.selectedAuth.storedToken,
+        canRetryWithDeviceTokenHint,
+        url: this.opts.url,
+      })
+    ) {
+      this.pendingDeviceTokenRetry = true;
+      this.deviceTokenRetryBudgetUsed = true;
+    }
+    if (err instanceof GatewayRequestError) {
+      this.pendingConnectError = {
+        code: err.gatewayCode,
+        message: err.message,
+        details: err.details,
+      };
+    } else {
+      this.pendingConnectError = undefined;
+    }
+    if (
+      plan.selectedAuth.canFallbackToShared &&
+      plan.deviceIdentity &&
+      connectErrorCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
+    ) {
+      clearDeviceAuthToken({ deviceId: plan.deviceIdentity.deviceId, role: plan.role });
+    }
+    this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
+  }
+
+  private async sendConnect() {
+    if (this.connectSent) {
+      return;
+    }
+    this.connectSent = true;
+    if (this.connectTimer !== null) {
+      window.clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
+
+    const plan = await this.buildConnectPlan();
+    void this.request<GatewayHelloOk>("connect", this.buildConnectParams(plan))
+      .then((hello) => this.handleConnectHello(hello, plan))
+      .catch((err: unknown) => this.handleConnectFailure(err, plan));
   }
 
   private handleMessage(raw: string) {
@@ -443,10 +566,17 @@ export class GatewayBrowserClient {
   private selectConnectAuth(params: { role: string; deviceId: string }): SelectedConnectAuth {
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const authPassword = this.opts.password?.trim() || undefined;
-    const storedToken = loadDeviceAuthToken({
+    const storedEntry = loadDeviceAuthToken({
       deviceId: params.deviceId,
       role: params.role,
-    })?.token;
+    });
+    const storedScopes = storedEntry?.scopes ?? [];
+    const storedTokenCanRead =
+      params.role !== CONTROL_UI_OPERATOR_ROLE ||
+      storedScopes.includes("operator.read") ||
+      storedScopes.includes("operator.write") ||
+      storedScopes.includes("operator.admin");
+    const storedToken = storedTokenCanRead ? storedEntry?.token : undefined;
     const shouldUseDeviceRetryToken =
       this.pendingDeviceTokenRetry &&
       Boolean(explicitGatewayToken) &&

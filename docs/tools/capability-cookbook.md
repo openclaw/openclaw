@@ -1,13 +1,20 @@
 ---
-summary: "Cookbook for adding a new shared capability to OpenClaw"
+summary: "Contributor guide for adding a new shared capability to the OpenClaw plugin system"
 read_when:
   - Adding a new core capability and plugin registration surface
   - Deciding whether code belongs in core, a vendor plugin, or a feature plugin
   - Wiring a new runtime helper for channels or tools
-title: "Capability Cookbook"
+title: "Adding Capabilities (Contributor Guide)"
+sidebarTitle: "Adding Capabilities"
 ---
 
-# Capability Cookbook
+# Adding Capabilities
+
+<Info>
+  This is a **contributor guide** for OpenClaw core developers. If you are
+  building an external plugin, see [Building Plugins](/plugins/building-plugins)
+  instead.
+</Info>
 
 Use this when OpenClaw needs a new domain such as image generation, video
 generation, or some future vendor-backed feature area.
@@ -49,7 +56,7 @@ Core:
 - request/response types
 - provider registry + resolution
 - fallback behavior
-- config schema and labels/help
+- config schema plus propagated `title` / `description` docs metadata on nested object, wildcard, array-item, and composition nodes
 - runtime helper surface
 
 Vendor plugin:
@@ -78,7 +85,7 @@ For a new capability, expect to touch these areas:
 - `src/plugins/runtime/index.ts`
 - `src/plugin-sdk/<capability>.ts`
 - `src/plugin-sdk/<capability>-runtime.ts`
-- one or more `extensions/<vendor>/...`
+- one or more bundled plugin packages
 - config/docs/tests
 
 ## Example: image generation
@@ -88,7 +95,7 @@ Image generation follows the standard shape:
 1. core defines `ImageGenerationProvider`
 2. core exposes `registerImageGenerationProvider(...)`
 3. core exposes `runtime.imageGeneration.generate(...)`
-4. the `openai` and `google` plugins register vendor-backed implementations
+4. the `openai`, `google`, `fal`, and `minimax` plugins register vendor-backed implementations
 5. future vendors can register the same contract without changing channels/tools
 
 The config key is separate from vision-analysis routing:

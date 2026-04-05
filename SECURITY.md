@@ -56,8 +56,12 @@ These are frequently reported but are typically closed with no code change:
 - Authorized user-triggered local actions presented as privilege escalation. Example: an allowlisted/owner sender running `/export-session /absolute/path.html` to write on the host. In this trust model, authorized user actions are trusted host actions unless you demonstrate an auth/sandbox/boundary bypass.
 - Reports that only show a malicious plugin executing privileged actions after a trusted operator installs/enables it.
 - Reports that assume per-user multi-tenant authorization on a shared gateway host/config.
+- Reports that only show quoted/replied/thread/forwarded supplemental context from non-allowlisted senders being visible to the model, without demonstrating an auth, policy, approval, or sandbox boundary bypass.
 - Reports that treat the Gateway HTTP compatibility endpoints (`POST /v1/chat/completions`, `POST /v1/responses`) as if they implemented scoped operator auth (`operator.write` vs `operator.admin`). These endpoints authenticate the shared Gateway bearer secret/password and are documented full operator-access surfaces, not per-user/per-scope boundaries.
+- Reports that assume `x-openclaw-scopes` can reduce or redefine shared-secret bearer auth on the OpenAI-compatible HTTP endpoints. For shared-secret auth (`gateway.auth.mode="token"` or `"password"`), those endpoints ignore narrower bearer-declared scopes and restore the full default operator scope set plus owner semantics.
+- Reports that treat `POST /tools/invoke` under shared-secret bearer auth (`gateway.auth.mode="token"` or `"password"`) as a narrower per-request/per-scope authorization surface. That endpoint is designed as the same trusted-operator HTTP boundary: shared-secret bearer auth is full operator access there, narrower `x-openclaw-scopes` values do not reduce that path, and owner-only tool policy follows the shared-secret operator contract.
 - Reports that only show differences in heuristic detection/parity (for example obfuscation-pattern detection on one exec path but not another, such as `node.invoke -> system.run` parity gaps) without demonstrating bypass of auth, approvals, allowlist enforcement, sandboxing, or other documented trust boundaries.
+- Reports that only show an ACP tool can indirectly execute, mutate, orchestrate sessions, or reach another tool/runtime without demonstrating bypass of ACP prompt/approval, allowlist enforcement, sandboxing, or another documented trust boundary. ACP silent approval is intentionally limited to narrow readonly classes; parity-only indirect-command findings are hardening, not vulnerabilities.
 - ReDoS/DoS claims that require trusted operator configuration input (for example catastrophic regex in `sessionFilter` or `logging.redactPatterns`) without a trust-boundary bypass.
 - Archive/install extraction claims that require pre-existing local filesystem priming in trusted state (for example planting symlink/hardlink aliases under destination directories such as skills/tools paths) without showing an untrusted path that can create/control that primitive.
 - Reports that depend on replacing or rewriting an already-approved executable path on a trusted host (same-path inode/content swap) without showing an untrusted path to perform that write.
@@ -93,7 +97,14 @@ When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (o
 OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boundary.
 
 - Authenticated Gateway callers are treated as trusted operators for that gateway instance.
-- The HTTP compatibility endpoints (`POST /v1/chat/completions`, `POST /v1/responses`) are in that same trusted-operator bucket. Passing Gateway bearer auth there is equivalent to operator access for that gateway; they do not implement a narrower `operator.write` vs `operator.admin` trust split.
+- The HTTP compatibility endpoints (`POST /v1/chat/completions`, `POST /v1/responses`) and direct tool endpoint (`POST /tools/invoke`) are in that same trusted-operator bucket. Passing Gateway bearer auth there is equivalent to operator access for that gateway; they do not implement a narrower `operator.write` vs `operator.admin` trust split.
+- Concretely, on the OpenAI-compatible HTTP surface:
+  - shared-secret bearer auth (`token` / `password`) authenticates possession of the gateway operator secret
+  - those requests receive the full default operator scope set (`operator.admin`, `operator.read`, `operator.write`, `operator.approvals`, `operator.pairing`)
+  - chat-turn endpoints (`/v1/chat/completions`, `/v1/responses`) also treat those shared-secret callers as owner senders for owner-only tool policy
+  - `POST /tools/invoke` follows that same shared-secret rule and also treats those callers as owner senders for owner-only tool policy
+  - narrower `x-openclaw-scopes` headers are ignored for that shared-secret path
+  - only identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"` on private ingress) honor declared per-request operator scopes
 - Session identifiers (`sessionKey`, session IDs, labels) are routing controls, not per-user authorization boundaries.
 - If one operator can view data from another operator on the same gateway, that is expected in this trust model.
 - OpenClaw can technically run multiple gateway instances on one machine, but recommended operations are clean separation by trust boundary.
@@ -101,7 +112,7 @@ OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boun
 - If multiple users need OpenClaw, use one VPS (or host/OS user boundary) per user.
 - For advanced setups, multiple gateways on one machine are possible, but only with strict isolation and are not the recommended default.
 - Exec behavior is host-first by default: `agents.defaults.sandbox.mode` defaults to `off`.
-- `tools.exec.host` defaults to `sandbox` as a routing preference, but if sandbox runtime is not active for the session, exec runs on the gateway host.
+- `tools.exec.host` defaults to `auto`: sandbox when sandbox runtime is active for the session, otherwise gateway.
 - Implicit exec calls (no explicit host in the tool call) follow the same behavior.
 - This is expected in OpenClaw's one-user trusted-operator model. If you need isolation, enable sandbox mode (`non-main`/`all`) and keep strict tool policy.
 
@@ -129,6 +140,7 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 - Any report whose only claim is that an operator-enabled `dangerous*`/`dangerously*` config option weakens defaults (these are explicit break-glass tradeoffs by design)
 - Reports that depend on trusted operator-supplied configuration values to trigger availability impact (for example custom regex patterns). These may still be fixed as defense-in-depth hardening, but are not security-boundary bypasses.
 - Reports whose only claim is heuristic/parity drift in command-risk detection (for example obfuscation-pattern checks) across exec surfaces, without a demonstrated trust-boundary bypass. These are hardening-only findings and are not vulnerabilities; triage may close them as `invalid`/`no-action` or track them separately as low/informational hardening.
+- Reports whose only claim is that an ACP-exposed tool can indirectly execute commands, mutate host state, or reach another privileged tool/runtime without demonstrating a bypass of ACP prompt/approval, allowlist enforcement, sandboxing, or another documented trust boundary. These are hardening-only findings, not vulnerabilities.
 - Reports whose only claim is that exec approvals do not semantically model every interpreter/runtime loader form, subcommand, flag combination, package script, or transitive module/config import. Exec approvals bind exact request context and best-effort direct local file operands; they are not a complete semantic model of everything a runtime may load.
 - Exposed secrets that are third-party/user-controlled credentials (not OpenClaw-owned and not granting access to OpenClaw-operated infrastructure/services) without demonstrated OpenClaw impact
 - Reports whose only claim is host-side exec when sandbox runtime is disabled/unavailable (documented default behavior in the trusted-operator model), without a boundary bypass.
@@ -155,6 +167,24 @@ OpenClaw's security model is "personal assistant" (one trusted operator, potenti
 - A company-shared agent can be a valid setup when users are in the same trust boundary and the agent is strictly business-only.
 - For company-shared setups, use a dedicated machine/VM/container and dedicated accounts; avoid mixing personal data on that runtime.
 - If that host/browser profile is logged into personal accounts (for example Apple/Google/personal password manager), you have collapsed the boundary and increased personal-data exposure risk.
+
+## Context Visibility and Allowlists
+
+OpenClaw distinguishes:
+
+- **Trigger authorization**: who can trigger the agent (`dmPolicy`, `groupPolicy`, allowlists, mention gates)
+- **Context visibility**: what supplemental context is provided to the model (reply body, quoted text, thread history, forwarded metadata)
+
+In current releases, allowlists primarily gate triggering and owner-style command access. They do not guarantee universal supplemental-context redaction across every channel/surface.
+
+Current channel behavior is not fully uniform:
+
+- some channels already filter parts of supplemental context by sender allowlist
+- other channels still pass supplemental context as received
+
+Reports that only show supplemental-context visibility differences are typically hardening/consistency findings unless they also demonstrate a documented boundary bypass (auth, policy, approvals, sandbox, or equivalent).
+
+Hardening roadmap may add explicit visibility modes (for example `all`, `allowlist`, `allowlist_quote`) so operators can opt into stricter context filtering with predictable tradeoffs.
 
 ## Agent and Model Assumptions
 

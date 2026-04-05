@@ -50,7 +50,7 @@ vi.mock("../../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir: mocks.resolveDefaultAgentWorkspaceDir,
 }));
 
-vi.mock("../../plugins/providers.js", () => ({
+vi.mock("../../plugins/providers.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
 }));
 
@@ -216,6 +216,9 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Default model available: openai-codex/gpt-5.4 (use --set-default to apply)",
     );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
+    );
   });
 
   it("applies openai-codex default model when --set-default is used", async () => {
@@ -315,6 +318,46 @@ describe("modelsAuthLoginCommand", () => {
     }
   });
 
+  it("writes pasted tokens to the resolved agent store", async () => {
+    const runtime = createRuntime();
+    mocks.clackText.mockResolvedValue("tok-fresh");
+
+    await modelsAuthPasteTokenCommand({ provider: "openai" }, runtime);
+
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "token",
+        provider: "openai",
+        token: "tok-fresh",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+  });
+
+  it("writes pasted Anthropic setup-tokens and logs the legacy warning", async () => {
+    const runtime = createRuntime();
+    mocks.clackText.mockResolvedValue(`sk-ant-oat01-${"a".repeat(80)}`);
+
+    await modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime);
+
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "anthropic:manual",
+      credential: {
+        type: "token",
+        provider: "anthropic",
+        token: `sk-ant-oat01-${"a".repeat(80)}`,
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Anthropic setup-token auth is a legacy/manual path in OpenClaw.",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Anthropic told OpenClaw users this path requires Extra Usage on the Claude account.",
+    );
+  });
+
   it("runs token auth for any token-capable provider plugin", async () => {
     const runtime = createRuntime();
     const runTokenAuth = vi.fn().mockResolvedValue({
@@ -353,6 +396,50 @@ describe("modelsAuthLoginCommand", () => {
         type: "token",
         provider: "moonshot",
         token: "moonshot-token",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+  });
+
+  it("runs setup-token for Anthropic when the provider exposes the method", async () => {
+    const runtime = createRuntime();
+    const runTokenAuth = vi.fn().mockResolvedValue({
+      profiles: [
+        {
+          profileId: "anthropic:default",
+          credential: {
+            type: "token",
+            provider: "anthropic",
+            token: `sk-ant-oat01-${"b".repeat(80)}`,
+          },
+        },
+      ],
+      defaultModel: "anthropic/claude-sonnet-4-6",
+    });
+    mocks.resolvePluginProviders.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [
+          {
+            id: "setup-token",
+            label: "setup-token",
+            kind: "token",
+            run: runTokenAuth,
+          },
+        ],
+      },
+    ]);
+
+    await modelsAuthSetupTokenCommand({ provider: "anthropic", yes: true }, runtime);
+
+    expect(runTokenAuth).toHaveBeenCalledOnce();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "anthropic:default",
+      credential: {
+        type: "token",
+        provider: "anthropic",
+        token: `sk-ant-oat01-${"b".repeat(80)}`,
       },
       agentDir: "/tmp/openclaw/agents/main",
     });

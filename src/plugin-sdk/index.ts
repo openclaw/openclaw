@@ -19,7 +19,11 @@ export type {
   ChannelConfiguredBindingMatch,
   ChannelConfiguredBindingProvider,
 } from "../channels/plugins/types.adapters.js";
-export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type {
+  ChannelConfigSchema,
+  ChannelConfigUiHint,
+  ChannelPlugin,
+} from "../channels/plugins/types.plugin.js";
 export type { ChannelSetupAdapter, ChannelSetupInput } from "../channels/plugins/types.js";
 export type {
   ConfiguredBindingConversation,
@@ -46,6 +50,7 @@ export type {
   ProviderAuthContext,
   ProviderAuthResult,
   ProviderRuntimeModel,
+  RealtimeTranscriptionProviderPlugin,
   SpeechProviderPlugin,
 } from "../plugins/types.js";
 export type {
@@ -54,6 +59,21 @@ export type {
   SubagentRunParams,
   SubagentRunResult,
 } from "../plugins/runtime/types.js";
+export type {
+  BoundTaskFlowsRuntime,
+  BoundTaskRunsRuntime,
+  PluginRuntimeTaskFlows,
+  PluginRuntimeTaskRuns,
+  PluginRuntimeTasks,
+} from "../plugins/runtime/runtime-tasks.js";
+export type {
+  TaskFlowDetail,
+  TaskFlowView,
+  TaskRunAggregateSummary,
+  TaskRunCancelResult,
+  TaskRunDetail,
+  TaskRunView,
+} from "../plugins/runtime/task-domain-types.js";
 export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
@@ -65,6 +85,22 @@ export type { ReplyPayload } from "../auto-reply/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export type { ContextEngineFactory } from "../context-engine/registry.js";
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
+export type {
+  AssembleResult,
+  BootstrapResult,
+  CompactResult,
+  ContextEngine,
+  ContextEngineInfo,
+  ContextEngineMaintenanceResult,
+  ContextEngineRuntimeContext,
+  IngestBatchResult,
+  IngestResult,
+  SubagentEndReason,
+  SubagentSpawnPreparation,
+  TranscriptRewriteReplacement,
+  TranscriptRewriteRequest,
+  TranscriptRewriteResult,
+} from "../context-engine/types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { registerContextEngine } from "../context-engine/registry.js";

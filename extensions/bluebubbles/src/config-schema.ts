@@ -1,12 +1,14 @@
 import {
   AllowFromListSchema,
+  buildChannelConfigSchema,
   buildCatchallMultiAccountChannelSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
+import { bluebubblesChannelConfigUiHints } from "./config-ui-hints.js";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
 const bluebubblesActionSchema = z
@@ -30,11 +32,20 @@ const bluebubblesGroupConfigSchema = z.object({
   tools: ToolPolicySchema,
 });
 
+const bluebubblesNetworkSchema = z
+  .object({
+    /** Dangerous opt-in for same-host or trusted private/internal BlueBubbles deployments. */
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const bluebubblesAccountSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     markdown: MarkdownConfigSchema,
+    actions: bluebubblesActionSchema,
     serverUrl: z.string().optional(),
     password: buildSecretInputSchema().optional(),
     webhookPath: z.string().optional(),
@@ -42,6 +53,7 @@ const bluebubblesAccountSchema = z
     allowFrom: AllowFromListSchema,
     groupAllowFrom: AllowFromListSchema,
     groupPolicy: GroupPolicySchema.optional(),
+    enrichGroupParticipantsFromContacts: z.boolean().optional().default(true),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     textChunkLimit: z.number().int().positive().optional(),
@@ -49,7 +61,7 @@ const bluebubblesAccountSchema = z
     mediaMaxMb: z.number().int().positive().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
     sendReadReceipts: z.boolean().optional(),
-    allowPrivateNetwork: z.boolean().optional(),
+    network: bluebubblesNetworkSchema,
     blockStreaming: z.boolean().optional(),
     groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
   })
@@ -67,6 +79,10 @@ const bluebubblesAccountSchema = z
 
 export const BlueBubblesConfigSchema = buildCatchallMultiAccountChannelSchema(
   bluebubblesAccountSchema,
-).extend({
+).safeExtend({
   actions: bluebubblesActionSchema,
+});
+
+export const BlueBubblesChannelConfigSchema = buildChannelConfigSchema(BlueBubblesConfigSchema, {
+  uiHints: bluebubblesChannelConfigUiHints,
 });

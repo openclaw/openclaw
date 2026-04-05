@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   applyResolvedTheme,
   applySettings,
@@ -64,31 +65,11 @@ type SettingsHost = {
   debugPollInterval: number | null;
   pendingGatewayUrl?: string | null;
   pendingGatewayToken?: string | null;
+  dreamingStatusLoading: boolean;
+  dreamingStatusError: string | null;
+  dreamingStatus: null;
+  dreamingModeSaving: boolean;
 };
-
-function createStorageMock(): Storage {
-  const store = new Map<string, string>();
-  return {
-    get length() {
-      return store.size;
-    },
-    clear() {
-      store.clear();
-    },
-    getItem(key: string) {
-      return store.get(key) ?? null;
-    },
-    key(index: number) {
-      return Array.from(store.keys())[index] ?? null;
-    },
-    removeItem(key: string) {
-      store.delete(key);
-    },
-    setItem(key: string, value: string) {
-      store.set(key, String(value));
-    },
-  };
-}
 
 function setTestWindowUrl(urlString: string) {
   const current = new URL(urlString);
@@ -168,6 +149,10 @@ const createHost = (tab: Tab): SettingsHost => ({
   debugPollInterval: null,
   pendingGatewayUrl: null,
   pendingGatewayToken: null,
+  dreamingStatusLoading: false,
+  dreamingStatusError: null,
+  dreamingStatus: null,
+  dreamingModeSaving: false,
 });
 
 describe("setTabFromRoute", () => {

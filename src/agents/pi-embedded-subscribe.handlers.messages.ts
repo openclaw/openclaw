@@ -1,14 +1,19 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
+import type {
+  EmbeddedPiSubscribeContext,
+  EmbeddedPiSubscribeState,
+} from "./pi-embedded-subscribe.handlers.types.js";
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
   extractAssistantText,
@@ -18,6 +23,8 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+
+type AssistantDeliveryPhase = "commentary" | "final_answer";
 
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
@@ -34,6 +41,82 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
+const coerceText = (value: unknown): string => {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value == null) {
+    return "";
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol"
+  ) {
+    return String(value);
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value) ?? "";
+    } catch {
+      return "";
+    }
+  }
+  return "";
+};
+
+function normalizeAssistantDeliveryPhase(value: unknown): AssistantDeliveryPhase | undefined {
+  return value === "commentary" || value === "final_answer" ? value : undefined;
+}
+
+function resolveAssistantDeliveryPhase(
+  message: AgentMessage | undefined,
+): AssistantDeliveryPhase | undefined {
+  if (!message || message.role !== "assistant") {
+    return undefined;
+  }
+  const directPhase = normalizeAssistantDeliveryPhase((message as { phase?: unknown }).phase);
+  if (directPhase) {
+    return directPhase;
+  }
+  if (!Array.isArray(message.content)) {
+    return undefined;
+  }
+  for (const part of message.content) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const block = part as { type?: unknown; textSignature?: unknown };
+    if (block.type !== "text" || typeof block.textSignature !== "string") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(block.textSignature) as { phase?: unknown };
+      const phase = normalizeAssistantDeliveryPhase(parsed.phase);
+      if (phase) {
+        return phase;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
+  return resolveAssistantDeliveryPhase(message) === "commentary";
+}
+
+function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const provider = typeof message.provider === "string" ? message.provider.trim() : "";
+  const model = typeof message.model === "string" ? message.model.trim() : "";
+  return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
+}
+
 function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
@@ -43,18 +126,64 @@ function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
 }
 
 export function resolveSilentReplyFallbackText(params: {
-  text: string;
+  text: unknown;
   messagingToolSentTexts: string[];
 }): string {
-  const trimmed = params.text.trim();
+  const text = coerceText(params.text);
+  const trimmed = text.trim();
   if (trimmed !== SILENT_REPLY_TOKEN) {
-    return params.text;
+    return text;
   }
-  const fallback = params.messagingToolSentTexts.at(-1)?.trim();
+  const fallback = coerceText(params.messagingToolSentTexts.at(-1)).trim();
   if (!fallback) {
-    return params.text;
+    return text;
   }
   return fallback;
+}
+
+function clearPendingToolMedia(
+  state: Pick<EmbeddedPiSubscribeState, "pendingToolMediaUrls" | "pendingToolAudioAsVoice">,
+) {
+  state.pendingToolMediaUrls = [];
+  state.pendingToolAudioAsVoice = false;
+}
+
+export function consumePendingToolMediaIntoReply(
+  state: Pick<EmbeddedPiSubscribeState, "pendingToolMediaUrls" | "pendingToolAudioAsVoice">,
+  payload: BlockReplyPayload,
+): BlockReplyPayload {
+  if (payload.isReasoning) {
+    return payload;
+  }
+  if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
+    return payload;
+  }
+  const mergedMediaUrls = Array.from(
+    new Set([...(payload.mediaUrls ?? []), ...state.pendingToolMediaUrls]),
+  );
+  const mergedPayload: BlockReplyPayload = {
+    ...payload,
+    mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
+    audioAsVoice: payload.audioAsVoice || state.pendingToolAudioAsVoice || undefined,
+  };
+  clearPendingToolMedia(state);
+  return mergedPayload;
+}
+
+export function consumePendingToolMediaReply(
+  state: Pick<EmbeddedPiSubscribeState, "pendingToolMediaUrls" | "pendingToolAudioAsVoice">,
+): BlockReplyPayload | null {
+  if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
+    return null;
+  }
+  const payload: BlockReplyPayload = {
+    mediaUrls: state.pendingToolMediaUrls.length
+      ? Array.from(new Set(state.pendingToolMediaUrls))
+      : undefined,
+    audioAsVoice: state.pendingToolAudioAsVoice || undefined,
+  };
+  clearPendingToolMedia(state);
+  return payload;
 }
 
 export function hasAssistantVisibleReply(params: {
@@ -69,13 +198,15 @@ export function hasAssistantVisibleReply(params: {
 export function buildAssistantStreamData(params: {
   text?: string;
   delta?: string;
+  replace?: boolean;
   mediaUrls?: string[];
   mediaUrl?: string;
-}): { text: string; delta: string; mediaUrls?: string[] } {
+}): { text: string; delta: string; replace?: true; mediaUrls?: string[] } {
   const mediaUrls = resolveSendableOutboundReplyParts(params).mediaUrls;
   return {
     text: params.text ?? "",
     delta: params.delta ?? "",
+    replace: params.replace ? true : undefined,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
   };
 }
@@ -85,7 +216,7 @@ export function handleMessageStart(
   evt: AgentEvent & { message: AgentMessage },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") {
+  if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }
 
@@ -104,11 +235,12 @@ export function handleMessageUpdate(
   evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") {
+  if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }
 
   ctx.noteLastAssistant(msg);
+  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }
@@ -166,6 +298,10 @@ export function handleMessageUpdate(
     delta,
     content,
   });
+
+  if (suppressVisibleAssistantOutput) {
+    return;
+  }
 
   let chunk = "";
   if (evtType === "text_delta") {
@@ -226,22 +362,29 @@ export function handleMessageUpdate(
 
     let shouldEmit = false;
     let deltaText = "";
+    let replace = false;
     if (!hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice: hasAudio })) {
       shouldEmit = false;
-    } else if (previousCleaned && !cleanedText.startsWith(previousCleaned)) {
-      shouldEmit = false;
     } else {
-      deltaText = cleanedText.slice(previousCleaned.length);
-      shouldEmit = Boolean(deltaText || hasMedia || hasAudio);
+      replace = Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
+      deltaText = replace ? "" : cleanedText.slice(previousCleaned.length);
+      shouldEmit = replace
+        ? cleanedText !== previousCleaned || hasMedia || hasAudio
+        : Boolean(deltaText || hasMedia || hasAudio);
     }
 
     ctx.state.lastStreamedAssistant = next;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
+    if (ctx.params.silentExpected) {
+      shouldEmit = false;
+    }
+
     if (shouldEmit) {
       const data = buildAssistantStreamData({
         text: cleanedText,
         delta: deltaText,
+        replace,
         mediaUrls,
       });
       emitAgentEvent({
@@ -260,12 +403,26 @@ export function handleMessageUpdate(
     }
   }
 
-  if (ctx.params.onBlockReply && ctx.blockChunking && ctx.state.blockReplyBreak === "text_end") {
+  if (
+    !ctx.params.silentExpected &&
+    ctx.params.onBlockReply &&
+    ctx.blockChunking &&
+    ctx.state.blockReplyBreak === "text_end"
+  ) {
     ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
   }
 
-  if (evtType === "text_end" && ctx.state.blockReplyBreak === "text_end") {
-    ctx.flushBlockReplyBuffer();
+  if (
+    !ctx.params.silentExpected &&
+    evtType === "text_end" &&
+    ctx.state.blockReplyBreak === "text_end"
+  ) {
+    const assistantMessageIndex = ctx.state.assistantMessageIndex;
+    void Promise.resolve()
+      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex }))
+      .catch((err) => {
+        ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
+      });
   }
 }
 
@@ -274,11 +431,12 @@ export function handleMessageEnd(
   evt: AgentEvent & { message: AgentMessage },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") {
+  if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }
 
   const assistantMessage = msg;
+  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   if (ctx.state.deterministicApprovalPromptSent) {
@@ -286,7 +444,7 @@ export function handleMessageEnd(
   }
   promoteThinkingTagsToBlocks(assistantMessage);
 
-  const rawText = extractAssistantText(assistantMessage);
+  const rawText = coerceText(extractAssistantText(assistantMessage));
   appendRawStream({
     ts: Date.now(),
     event: "assistant_message_end",
@@ -310,8 +468,26 @@ export function handleMessageEnd(
   let cleanedText = parsedText?.text ?? "";
   let { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
 
+  const finalizeMessageEnd = () => {
+    ctx.state.deltaBuffer = "";
+    ctx.state.blockBuffer = "";
+    ctx.blockChunker?.reset();
+    ctx.state.blockState.thinking = false;
+    ctx.state.blockState.final = false;
+    ctx.state.blockState.inlineCode = createInlineCodeState();
+    ctx.state.lastStreamedAssistant = undefined;
+    ctx.state.lastStreamedAssistantCleaned = undefined;
+    ctx.state.reasoningStreamOpen = false;
+  };
+
+  if (suppressVisibleAssistantOutput) {
+    emitReasoningEnd(ctx);
+    finalizeMessageEnd();
+    return;
+  }
+
   if (!cleanedText && !hasMedia && !ctx.params.enforceFinalTag) {
-    const rawTrimmed = rawText.trim();
+    const rawTrimmed = coerceText(rawText).trim();
     const rawStrippedFinal = rawTrimmed.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
     const rawCandidate = rawStrippedFinal || rawTrimmed;
     if (rawCandidate) {
@@ -321,7 +497,11 @@ export function handleMessageEnd(
     }
   }
 
-  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+  if (
+    !ctx.params.silentExpected &&
+    !ctx.state.emittedAssistantUpdate &&
+    (cleanedText || hasMedia)
+  ) {
     const data = buildAssistantStreamData({
       text: cleanedText,
       delta: cleanedText,
@@ -339,22 +519,20 @@ export function handleMessageEnd(
     ctx.state.emittedAssistantUpdate = true;
   }
 
+  const silentExpectedWithoutSentinel =
+    ctx.params.silentExpected && !isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN);
+  const finalAssistantText = silentExpectedWithoutSentinel ? "" : text;
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
-  ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
+  ctx.finalizeAssistantTexts({
+    text: finalAssistantText,
+    addedDuringMessage,
+    chunkerHasBuffered,
+  });
 
   const onBlockReply = ctx.params.onBlockReply;
-  const emitBlockReplySafely = (payload: Parameters<NonNullable<typeof onBlockReply>>[0]) => {
-    if (!onBlockReply) {
-      return;
-    }
-    void Promise.resolve()
-      .then(() => onBlockReply(payload))
-      .catch((err) => {
-        ctx.log.warn(`block reply callback failed: ${String(err)}`);
-      });
-  };
   const shouldEmitReasoning = Boolean(
+    !ctx.params.silentExpected &&
     ctx.state.includeReasoning &&
     formattedReasoning &&
     onBlockReply &&
@@ -367,7 +545,7 @@ export function handleMessageEnd(
       return;
     }
     ctx.state.lastReasoningSent = formattedReasoning;
-    emitBlockReplySafely({ text: formattedReasoning, isReasoning: true });
+    ctx.emitBlockReply({ text: formattedReasoning, isReasoning: true });
   };
 
   if (shouldEmitReasoningBeforeAnswer) {
@@ -390,7 +568,7 @@ export function handleMessageEnd(
     } = splitResult;
     // Emit if there's content OR audioAsVoice flag (to propagate the flag).
     if (hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice })) {
-      emitBlockReplySafely({
+      ctx.emitBlockReply({
         text: cleanedText,
         mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
         audioAsVoice,
@@ -402,6 +580,7 @@ export function handleMessageEnd(
   };
 
   if (
+    !ctx.params.silentExpected &&
     (ctx.state.blockReplyBreak === "message_end" ||
       (ctx.blockChunker ? ctx.blockChunker.hasBuffered() : ctx.state.blockBuffer.length > 0)) &&
     text &&
@@ -432,21 +611,39 @@ export function handleMessageEnd(
   if (!shouldEmitReasoningBeforeAnswer) {
     maybeEmitReasoning();
   }
-  if (ctx.state.streamReasoning && rawThinking) {
+  if (!ctx.params.silentExpected && ctx.state.streamReasoning && rawThinking) {
     ctx.emitReasoningStream(rawThinking);
   }
 
-  if (ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
+  if (!ctx.params.silentExpected && ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
 
-  ctx.state.deltaBuffer = "";
-  ctx.state.blockBuffer = "";
-  ctx.blockChunker?.reset();
-  ctx.state.blockState.thinking = false;
-  ctx.state.blockState.final = false;
-  ctx.state.blockState.inlineCode = createInlineCodeState();
-  ctx.state.lastStreamedAssistant = undefined;
-  ctx.state.lastStreamedAssistantCleaned = undefined;
-  ctx.state.reasoningStreamOpen = false;
+  if (
+    !ctx.params.silentExpected &&
+    ctx.state.blockReplyBreak === "message_end" &&
+    ctx.params.onBlockReplyFlush
+  ) {
+    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+    if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
+      return flushBlockReplyBufferResult
+        .then(() => {
+          const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+          if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+            return onBlockReplyFlushResult;
+          }
+        })
+        .finally(() => {
+          finalizeMessageEnd();
+        });
+    }
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush();
+    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+      return onBlockReplyFlushResult.finally(() => {
+        finalizeMessageEnd();
+      });
+    }
+  }
+
+  finalizeMessageEnd();
 }

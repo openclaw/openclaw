@@ -21,22 +21,41 @@ not an API key.
 
 ## Automatic model discovery
 
-If AWS credentials are detected, OpenClaw can automatically discover Bedrock
-models that support **streaming** and **text output**. Discovery uses
-`bedrock:ListFoundationModels` and is cached (default: 1 hour).
+OpenClaw can automatically discover Bedrock models that support **streaming**
+and **text output**. Discovery uses `bedrock:ListFoundationModels` and
+`bedrock:ListInferenceProfiles`, and results are cached (default: 1 hour).
 
-Config options live under `models.bedrockDiscovery`:
+How the implicit provider is enabled:
+
+- If `plugins.entries.amazon-bedrock.config.discovery.enabled` is `true`,
+  OpenClaw will try discovery even when no AWS env marker is present.
+- If `plugins.entries.amazon-bedrock.config.discovery.enabled` is unset,
+  OpenClaw only auto-adds the
+  implicit Bedrock provider when it sees one of these AWS auth markers:
+  `AWS_BEARER_TOKEN_BEDROCK`, `AWS_ACCESS_KEY_ID` +
+  `AWS_SECRET_ACCESS_KEY`, or `AWS_PROFILE`.
+- The actual Bedrock runtime auth path still uses the AWS SDK default chain, so
+  shared config, SSO, and IMDS instance-role auth can work even when discovery
+  needed `enabled: true` to opt in.
+
+Config options live under `plugins.entries.amazon-bedrock.config.discovery`:
 
 ```json5
 {
-  models: {
-    bedrockDiscovery: {
-      enabled: true,
-      region: "us-east-1",
-      providerFilter: ["anthropic", "amazon"],
-      refreshInterval: 3600,
-      defaultContextWindow: 32000,
-      defaultMaxTokens: 4096,
+  plugins: {
+    entries: {
+      "amazon-bedrock": {
+        config: {
+          discovery: {
+            enabled: true,
+            region: "us-east-1",
+            providerFilter: ["anthropic", "amazon"],
+            refreshInterval: 3600,
+            defaultContextWindow: 32000,
+            defaultMaxTokens: 4096,
+          },
+        },
+      },
     },
   },
 }
@@ -44,12 +63,17 @@ Config options live under `models.bedrockDiscovery`:
 
 Notes:
 
-- `enabled` defaults to `true` when AWS credentials are present.
+- `enabled` defaults to auto mode. In auto mode, OpenClaw only enables the
+  implicit Bedrock provider when it sees a supported AWS env marker.
 - `region` defaults to `AWS_REGION` or `AWS_DEFAULT_REGION`, then `us-east-1`.
 - `providerFilter` matches Bedrock provider names (for example `anthropic`).
 - `refreshInterval` is seconds; set to `0` to disable caching.
 - `defaultContextWindow` (default: `32000`) and `defaultMaxTokens` (default: `4096`)
   are used for discovered models (override if you know your model limits).
+- For explicit `models.providers["amazon-bedrock"]` entries, OpenClaw can still
+  resolve Bedrock env-marker auth early from AWS env markers such as
+  `AWS_BEARER_TOKEN_BEDROCK` without forcing full runtime auth loading. The
+  actual model-call auth path still uses the AWS SDK default chain.
 
 ## Onboarding
 
@@ -101,15 +125,25 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 ## EC2 Instance Roles
 
 When running OpenClaw on an EC2 instance with an IAM role attached, the AWS SDK
-will automatically use the instance metadata service (IMDS) for authentication.
-However, OpenClaw's credential detection currently only checks for environment
-variables, not IMDS credentials.
+can use the instance metadata service (IMDS) for authentication. For Bedrock
+model discovery, OpenClaw only auto-enables the implicit provider from AWS env
+markers unless you explicitly set
+`plugins.entries.amazon-bedrock.config.discovery.enabled: true`.
 
-**Workaround:** Set `AWS_PROFILE=default` to signal that AWS credentials are
-available. The actual authentication still uses the instance role via IMDS.
+Recommended setup for IMDS-backed hosts:
+
+- Set `plugins.entries.amazon-bedrock.config.discovery.enabled` to `true`.
+- Set `plugins.entries.amazon-bedrock.config.discovery.region` (or export `AWS_REGION`).
+- You do **not** need a fake API key.
+- You only need `AWS_PROFILE=default` if you specifically want an env marker
+  for auto mode or status surfaces.
 
 ```bash
-# Add to ~/.bashrc or your shell profile
+# Recommended: explicit discovery enable + region
+openclaw config set plugins.entries.amazon-bedrock.config.discovery.enabled true
+openclaw config set plugins.entries.amazon-bedrock.config.discovery.region us-east-1
+
+# Optional: add an env marker if you want auto mode without explicit enable
 export AWS_PROFILE=default
 export AWS_REGION=us-east-1
 ```
@@ -119,6 +153,7 @@ export AWS_REGION=us-east-1
 - `bedrock:InvokeModel`
 - `bedrock:InvokeModelWithResponseStream`
 - `bedrock:ListFoundationModels` (for automatic discovery)
+- `bedrock:ListInferenceProfiles` (for inference profile discovery)
 
 Or attach the managed policy `AmazonBedrockFullAccess`.
 
@@ -149,11 +184,11 @@ aws ec2 associate-iam-instance-profile \
   --instance-id i-xxxxx \
   --iam-instance-profile Name=EC2-Bedrock-Access
 
-# 3. On the EC2 instance, enable discovery
-openclaw config set models.bedrockDiscovery.enabled true
-openclaw config set models.bedrockDiscovery.region us-east-1
+# 3. On the EC2 instance, enable discovery explicitly
+openclaw config set plugins.entries.amazon-bedrock.config.discovery.enabled true
+openclaw config set plugins.entries.amazon-bedrock.config.discovery.region us-east-1
 
-# 4. Set the workaround env vars
+# 4. Optional: add an env marker if you want auto mode without explicit enable
 echo 'export AWS_PROFILE=default' >> ~/.bashrc
 echo 'export AWS_REGION=us-east-1' >> ~/.bashrc
 source ~/.bashrc
@@ -162,11 +197,32 @@ source ~/.bashrc
 openclaw models list
 ```
 
+## Inference profiles
+
+OpenClaw discovers **regional and global inference profiles** alongside
+foundation models. When a profile maps to a known foundation model, the
+profile inherits that model's capabilities (context window, max tokens,
+reasoning, vision) and the correct Bedrock request region is injected
+automatically. This means cross-region Claude profiles work without manual
+provider overrides.
+
+Inference profile IDs look like `us.anthropic.claude-opus-4-6-v1:0` (regional)
+or `anthropic.claude-opus-4-6-v1:0` (global). If the backing model is already
+in the discovery results, the profile inherits its full capability set;
+otherwise safe defaults apply.
+
+No extra configuration is needed. As long as discovery is enabled and the IAM
+principal has `bedrock:ListInferenceProfiles`, profiles appear alongside
+foundation models in `openclaw models list`.
+
 ## Notes
 
 - Bedrock requires **model access** enabled in your AWS account/region.
-- Automatic discovery needs the `bedrock:ListFoundationModels` permission.
-- If you use profiles, set `AWS_PROFILE` on the gateway host.
+- Automatic discovery needs the `bedrock:ListFoundationModels` and
+  `bedrock:ListInferenceProfiles` permissions.
+- If you rely on auto mode, set one of the supported AWS auth env markers on the
+  gateway host. If you prefer IMDS/shared-config auth without env markers, set
+  `plugins.entries.amazon-bedrock.config.discovery.enabled: true`.
 - OpenClaw surfaces the credential source in this order: `AWS_BEARER_TOKEN_BEDROCK`,
   then `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, then `AWS_PROFILE`, then the
   default AWS SDK chain.
@@ -174,3 +230,44 @@ openclaw models list
   current capabilities.
 - If you prefer a managed key flow, you can also place an OpenAI‑compatible
   proxy in front of Bedrock and configure it as an OpenAI provider instead.
+
+## Guardrails
+
+You can apply [Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html)
+to all Bedrock model invocations by adding a `guardrail` object to the
+`amazon-bedrock` plugin config. Guardrails let you enforce content filtering,
+topic denial, word filters, sensitive information filters, and contextual
+grounding checks.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "amazon-bedrock": {
+        config: {
+          guardrail: {
+            guardrailIdentifier: "abc123", // guardrail ID or full ARN
+            guardrailVersion: "1", // version number or "DRAFT"
+            streamProcessingMode: "sync", // optional: "sync" or "async"
+            trace: "enabled", // optional: "enabled", "disabled", or "enabled_full"
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+- `guardrailIdentifier` (required) accepts a guardrail ID (e.g. `abc123`) or a
+  full ARN (e.g. `arn:aws:bedrock:us-east-1:123456789012:guardrail/abc123`).
+- `guardrailVersion` (required) specifies which published version to use, or
+  `"DRAFT"` for the working draft.
+- `streamProcessingMode` (optional) controls whether guardrail evaluation runs
+  synchronously (`"sync"`) or asynchronously (`"async"`) during streaming. If
+  omitted, Bedrock uses its default behavior.
+- `trace` (optional) enables guardrail trace output in the API response. Set to
+  `"enabled"` or `"enabled_full"` for debugging; omit or set `"disabled"` for
+  production.
+
+The IAM principal used by the gateway must have the `bedrock:ApplyGuardrail`
+permission in addition to the standard invoke permissions.

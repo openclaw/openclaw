@@ -52,6 +52,7 @@ describe("matrixSetupAdapter", () => {
             ops: {
               name: "Ops",
               homeserver: "https://matrix.example.org",
+              proxy: "http://127.0.0.1:7890",
               userId: "@ops:example.org",
               accessToken: "ops-token",
               password: "secret",
@@ -77,10 +78,92 @@ describe("matrixSetupAdapter", () => {
       enabled: true,
     });
     expect(next.channels?.matrix?.accounts?.ops?.homeserver).toBeUndefined();
+    expect(next.channels?.matrix?.accounts?.ops?.proxy).toBeUndefined();
     expect(next.channels?.matrix?.accounts?.ops?.userId).toBeUndefined();
     expect(next.channels?.matrix?.accounts?.ops?.accessToken).toBeUndefined();
     expect(next.channels?.matrix?.accounts?.ops?.password).toBeUndefined();
     expect(next.channels?.matrix?.accounts?.ops?.deviceId).toBeUndefined();
     expect(next.channels?.matrix?.accounts?.ops?.deviceName).toBeUndefined();
+  });
+
+  it("stores proxy in account setup updates", () => {
+    const next = matrixSetupAdapter.applyAccountConfig({
+      cfg: {} as CoreConfig,
+      accountId: "ops",
+      input: {
+        homeserver: "https://matrix.example.org",
+        accessToken: "ops-token",
+        proxy: "http://127.0.0.1:7890",
+      },
+    }) as CoreConfig;
+
+    expect(next.channels?.matrix?.accounts?.ops).toMatchObject({
+      enabled: true,
+      homeserver: "https://matrix.example.org",
+      accessToken: "ops-token",
+      proxy: "http://127.0.0.1:7890",
+    });
+  });
+
+  it("stores canonical dangerous private-network opt-in from setup input", () => {
+    const next = matrixSetupAdapter.applyAccountConfig({
+      cfg: {} as CoreConfig,
+      accountId: "ops",
+      input: {
+        homeserver: "http://matrix.internal:8008",
+        accessToken: "ops-token",
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    }) as CoreConfig;
+
+    expect(next.channels?.matrix?.accounts?.ops).toMatchObject({
+      enabled: true,
+      homeserver: "http://matrix.internal:8008",
+      accessToken: "ops-token",
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
+  });
+
+  it("keeps top-level block streaming as a shared default when named accounts already exist", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@default:example.org",
+          accessToken: "default-token",
+          blockStreaming: true,
+          accounts: {
+            support: {
+              homeserver: "https://matrix.example.org",
+              userId: "@support:example.org",
+              accessToken: "support-token",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    const next = matrixSetupAdapter.applyAccountConfig({
+      cfg,
+      accountId: "ops",
+      input: {
+        name: "Ops",
+        homeserver: "https://matrix.example.org",
+        userId: "@ops:example.org",
+        accessToken: "ops-token",
+      },
+    }) as CoreConfig;
+
+    expect(next.channels?.matrix?.blockStreaming).toBe(true);
+    expect(next.channels?.matrix?.accounts?.ops).toMatchObject({
+      name: "Ops",
+      enabled: true,
+      homeserver: "https://matrix.example.org",
+      userId: "@ops:example.org",
+      accessToken: "ops-token",
+    });
+    expect(next.channels?.matrix?.accounts?.ops?.blockStreaming).toBeUndefined();
   });
 });

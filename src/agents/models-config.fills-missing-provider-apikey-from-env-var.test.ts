@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -328,9 +329,54 @@ describe("models-config", () => {
           providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
         }>();
         expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY"); // pragma: allowlist secret
-        const ids = parsed.providers.minimax?.models?.map((model) => model.id);
-        expect(ids).toContain("MiniMax-VL-01");
       });
+    });
+  });
+
+  it("fills anthropic-vertex apiKey with the ADC sentinel when models exist", async () => {
+    await withTempHome(async () => {
+      const adcDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-adc-"));
+      const credentialsPath = path.join(adcDir, "application_default_credentials.json");
+      await fs.writeFile(credentialsPath, JSON.stringify({ project_id: "vertex-project" }), "utf8");
+      const previousCredentials = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+      try {
+        process.env.GOOGLE_APPLICATION_CREDENTIALS = credentialsPath;
+
+        await ensureOpenClawModelsJson({
+          models: {
+            providers: {
+              "anthropic-vertex": {
+                baseUrl: "https://us-central1-aiplatform.googleapis.com",
+                api: "anthropic-messages",
+                models: [
+                  {
+                    id: "claude-sonnet-4-6",
+                    name: "Claude Sonnet 4.6",
+                    reasoning: true,
+                    input: ["text", "image"],
+                    cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+                    contextWindow: 200000,
+                    maxTokens: 64000,
+                  },
+                ],
+              },
+            },
+          },
+        });
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { apiKey?: string }>;
+        }>();
+        expect(parsed.providers["anthropic-vertex"]?.apiKey).toBe("gcp-vertex-credentials");
+      } finally {
+        if (previousCredentials === undefined) {
+          delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+        } else {
+          process.env.GOOGLE_APPLICATION_CREDENTIALS = previousCredentials;
+        }
+        await fs.rm(adcDir, { recursive: true, force: true });
+      }
     });
   });
   it("merges providers by default", async () => {
@@ -496,7 +542,7 @@ describe("models-config", () => {
     });
   });
 
-  it("refreshes moonshot capabilities while preserving explicit token limits", async () => {
+  it("preserves explicit moonshot model capabilities when config already defines the model", async () => {
     await withTempHome(async () => {
       await withEnvVar("MOONSHOT_API_KEY", "sk-moonshot-test", async () => {
         const cfg = createMoonshotConfig({ contextWindow: 1024, maxTokens: 256 });
@@ -519,7 +565,7 @@ describe("models-config", () => {
           >;
         }>();
         const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
-        expect(kimi?.input).toEqual(["text", "image"]);
+        expect(kimi?.input).toEqual(["text"]);
         expect(kimi?.reasoning).toBe(false);
         expect(kimi?.contextWindow).toBe(1024);
         expect(kimi?.maxTokens).toBe(256);
@@ -547,12 +593,12 @@ describe("models-config", () => {
     });
   });
 
-  it("falls back to implicit token limits when explicit values are invalid", async () => {
+  it("preserves explicit moonshot token limits even when they are invalid", async () => {
     await expectMoonshotTokenLimits({
       contextWindow: 0,
       maxTokens: -1,
-      expectedContextWindow: 256000,
-      expectedMaxTokens: 8192,
+      expectedContextWindow: 0,
+      expectedMaxTokens: -1,
     });
   });
 });

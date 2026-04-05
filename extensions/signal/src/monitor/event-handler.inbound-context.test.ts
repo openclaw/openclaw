@@ -1,11 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { MsgContext } from "../../../../src/auto-reply/templating.js";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/suites.js";
-import { createSignalEventHandler } from "./event-handler.js";
-import {
-  createBaseSignalEventHandlerDeps,
-  createSignalReceiveEvent,
-} from "./event-handler.test-harness.js";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/test-helpers.js";
+let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
+let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
 
 const { sendTypingMock, sendReadReceiptMock, dispatchInboundMessageMock, capture } = vi.hoisted(
   () => {
@@ -34,8 +31,10 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: sendReadReceiptMock,
 }));
 
-vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
+vi.mock("../../../../src/auto-reply/dispatch.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../../src/auto-reply/dispatch.js")>(
+    "../../../../src/auto-reply/dispatch.js",
+  );
   return {
     ...actual,
     dispatchInboundMessage: dispatchInboundMessageMock,
@@ -49,7 +48,16 @@ vi.mock("../../../../src/pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn(),
 }));
 
+let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
+
 describe("signal createSignalEventHandler inbound context", () => {
+  beforeAll(async () => {
+    vi.useRealTimers();
+    ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
+      await import("./event-handler.test-harness.js"));
+    ({ createSignalEventHandler } = await import("./event-handler.js"));
+  });
+
   beforeEach(() => {
     capture.ctx = undefined;
     sendTypingMock.mockReset().mockResolvedValue(true);
@@ -171,6 +179,77 @@ describe("signal createSignalEventHandler inbound context", () => {
 
     expect(capture.ctx).toBeTruthy();
     expect(capture.ctx?.CommandAuthorized).toBe(false);
+  });
+
+  it("drops quote-only group context from non-allowlisted quoted senders in allowlist mode", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: {
+            signal: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+15550001111"],
+              contextVisibility: "allowlist",
+            },
+          },
+        },
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15550001111"],
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "",
+          quote: { text: "blocked quote", author: "+15550002222" },
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps quote-only group context in allowlist_quote mode", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: {
+            signal: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+15550001111"],
+              contextVisibility: "allowlist_quote",
+            },
+          },
+        },
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15550001111"],
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "",
+          quote: { text: "quoted context", author: "+15550002222" },
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.BodyForAgent).toBe("quoted context");
+    expect(capture.ctx?.ReplyToBody).toBe("quoted context");
+    expect(capture.ctx?.ReplyToSender).toBe("+15550002222");
+    expect(capture.ctx?.ReplyToIsQuote).toBe(true);
   });
 
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {

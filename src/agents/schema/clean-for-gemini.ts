@@ -27,6 +27,11 @@ export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "uniqueItems",
   "minProperties",
   "maxProperties",
+
+  // JSON Schema composition keywords not supported by OpenAPI 3.0 subset.
+  // `const` is handled separately (converted to enum) in the cleaning loop,
+  // but `not` has no safe equivalent and must be stripped.
+  "not",
 ]);
 
 const SCHEMA_META_KEYS = ["description", "title", "default"] as const;
@@ -288,6 +293,11 @@ function cleanSchemaForGeminiWithDefs(
 
     if (key === "const") {
       cleaned.enum = [value];
+      continue;
+    }
+
+    // Google's schema validator rejects `"required": []` — omit empty arrays.
+    if (key === "required" && Array.isArray(value) && value.length === 0) {
       continue;
     }
 

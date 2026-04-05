@@ -1,7 +1,9 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { enqueueCommand } from "../../../process/command-queue.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
@@ -17,8 +19,12 @@ export type ClientToolDefinition = {
     name: string;
     description?: string;
     parameters?: Record<string, unknown>;
+    /** Strict argument enforcement (Responses API). Propagated from the request. */
+    strict?: boolean;
   };
 };
+
+export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
@@ -27,8 +33,8 @@ export type RunEmbeddedPiAgentParams = {
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
-  /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
-  trigger?: string;
+  /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
+  trigger?: EmbeddedRunTrigger;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
   /** Delivery target (e.g. telegram:group:123:topic:456) for topic/thread routing. */
@@ -72,6 +78,7 @@ export type RunEmbeddedPiAgentParams = {
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
   images?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
@@ -91,6 +98,8 @@ export type RunEmbeddedPiAgentParams = {
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for context mode behavior. */
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  /** Optional tool allow-list; when set, only these tools are sent to the model. */
+  toolsAllow?: string[];
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
@@ -100,6 +109,7 @@ export type RunEmbeddedPiAgentParams = {
   timeoutMs: number;
   runId: string;
   abortSignal?: AbortSignal;
+  replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
@@ -119,6 +129,7 @@ export type RunEmbeddedPiAgentParams = {
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
+  silentExpected?: boolean;
   /**
    * Allow a single run attempt even when all auth profiles are in cooldown,
    * but only for inferred transient cooldowns like `rate_limit` or `overloaded`.
@@ -127,4 +138,10 @@ export type RunEmbeddedPiAgentParams = {
    * where transient service pressure is often model-scoped.
    */
   allowTransientCooldownProbe?: boolean;
+  /**
+   * Dispose bundled MCP runtimes when the overall run ends instead of preserving
+   * the session-scoped cache. Intended for one-shot local CLI runs that must
+   * exit promptly after emitting the final JSON result.
+   */
+  cleanupBundleMcpOnRunEnd?: boolean;
 };

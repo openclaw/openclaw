@@ -10,9 +10,6 @@ import {
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 
-// Avoid pulling optional runtime deps during isolated runs.
-vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
-
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
 });
@@ -73,7 +70,10 @@ describe("heartbeat transcript pruning", () => {
           agentId: undefined,
           reason: "test",
           cfg,
-          deps: { sendTelegram: vi.fn() },
+          deps: {
+            sendTelegram: vi.fn(),
+            getReplyFromConfig: replySpy,
+          },
         });
 
         const finalSize = (await fs.stat(transcriptPath)).size;

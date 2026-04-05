@@ -1,10 +1,3 @@
-import {
-  buildModelsKeyboard,
-  buildProviderKeyboard,
-  calculateTotalPages,
-  getModelsPageSize,
-  type ProviderInfo,
-} from "openclaw/plugin-sdk/telegram";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -15,6 +8,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ReplyPayload } from "../types.js";
@@ -28,6 +22,8 @@ export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
   providers: string[];
   resolvedDefault: { provider: string; model: string };
+  /** Map from provider/model to human-readable display name (when different from model ID). */
+  modelNames: Map<string, string>;
 };
 
 /**
@@ -119,7 +115,16 @@ export async function buildModelsProviderData(
 
   const providers = [...byProvider.keys()].toSorted();
 
-  return { byProvider, providers, resolvedDefault };
+  // Build a provider-scoped model display-name map so surfaces can show
+  // human-readable names without colliding across providers that share IDs.
+  const modelNames = new Map<string, string>();
+  for (const entry of catalog) {
+    if (entry.name && entry.name !== entry.id) {
+      modelNames.set(`${normalizeProviderId(entry.provider)}/${entry.id}`, entry.name);
+    }
+  }
+
+  return { byProvider, providers, resolvedDefault, modelNames };
 }
 
 function formatProviderLine(params: { provider: string; count: number }): string {
@@ -234,26 +239,28 @@ export async function resolveModelsCommandReply(params: {
   const argText = body.replace(/^\/models\b/i, "").trim();
   const { provider, page, pageSize, all } = parseModelsArgs(argText);
 
-  const { byProvider, providers } = await buildModelsProviderData(params.cfg, params.agentId);
-  const isTelegram = params.surface === "telegram";
+  const { byProvider, providers, modelNames } = await buildModelsProviderData(
+    params.cfg,
+    params.agentId,
+  );
+  const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
 
   // Provider list (no provider specified)
   if (!provider) {
-    // For Telegram: show buttons if there are providers
-    if (isTelegram && providers.length > 0) {
-      const providerInfos: ProviderInfo[] = providers.map((p) => ({
-        id: p,
-        count: byProvider.get(p)?.size ?? 0,
-      }));
-      const buttons = buildProviderKeyboard(providerInfos);
-      const text = "Select a provider:";
+    const providerInfos = providers.map((p) => ({
+      id: p,
+      count: byProvider.get(p)?.size ?? 0,
+    }));
+    const channelData = commandPlugin?.commands?.buildModelsProviderChannelData?.({
+      providers: providerInfos,
+    });
+    if (channelData) {
       return {
-        text,
-        channelData: { telegram: { buttons } },
+        text: "Select a provider:",
+        channelData,
       };
     }
 
-    // Text fallback for non-Telegram surfaces
     const lines: string[] = [
       "Providers:",
       ...providers.map((p) =>
@@ -297,21 +304,19 @@ export async function resolveModelsCommandReply(params: {
     return { text: lines.join("\n") };
   }
 
-  // For Telegram: use button-based model list with inline keyboard pagination
-  if (isTelegram) {
-    const telegramPageSize = getModelsPageSize();
-    const totalPages = calculateTotalPages(total, telegramPageSize);
-    const safePage = Math.max(1, Math.min(page, totalPages));
-
-    const buttons = buildModelsKeyboard({
-      provider,
-      models,
-      currentModel: params.currentModel,
-      currentPage: safePage,
-      totalPages,
-      pageSize: telegramPageSize,
-    });
-
+  const interactivePageSize = 8;
+  const interactiveTotalPages = Math.max(1, Math.ceil(total / interactivePageSize));
+  const interactivePage = Math.max(1, Math.min(page, interactiveTotalPages));
+  const interactiveChannelData = commandPlugin?.commands?.buildModelsListChannelData?.({
+    provider,
+    models,
+    currentModel: params.currentModel,
+    currentPage: interactivePage,
+    totalPages: interactiveTotalPages,
+    pageSize: interactivePageSize,
+    modelNames,
+  });
+  if (interactiveChannelData) {
     const text = formatModelsAvailableHeader({
       provider,
       total,
@@ -321,11 +326,10 @@ export async function resolveModelsCommandReply(params: {
     });
     return {
       text,
-      channelData: { telegram: { buttons } },
+      channelData: interactiveChannelData,
     };
   }
 
-  // Text fallback for non-Telegram surfaces
   const effectivePageSize = all ? total : pageSize;
   const pageCount = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
   const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));

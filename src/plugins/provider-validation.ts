@@ -27,6 +27,42 @@ function normalizeTextList(values: string[] | undefined): string[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeOnboardingScopes(
+  values: Array<"text-inference" | "image-generation"> | undefined,
+): Array<"text-inference" | "image-generation"> | undefined {
+  const normalized = Array.from(
+    new Set(
+      (values ?? []).filter(
+        (value): value is "text-inference" | "image-generation" =>
+          value === "text-inference" || value === "image-generation",
+      ),
+    ),
+  );
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeProviderOAuthProfileIdRepairs(
+  values: ProviderPlugin["oauthProfileIdRepairs"],
+): ProviderPlugin["oauthProfileIdRepairs"] {
+  if (!Array.isArray(values)) {
+    return undefined;
+  }
+  const normalized = values
+    .map((value) => {
+      const legacyProfileId = normalizeText(value?.legacyProfileId);
+      const promptLabel = normalizeText(value?.promptLabel);
+      if (!legacyProfileId && !promptLabel) {
+        return null;
+      }
+      return {
+        ...(legacyProfileId ? { legacyProfileId } : {}),
+        ...(promptLabel ? { promptLabel } : {}),
+      };
+    })
+    .filter((value): value is NonNullable<typeof value> => value !== null);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function normalizeProviderWizardSetup(params: {
   providerId: string;
   pluginId: string;
@@ -69,6 +105,14 @@ function normalizeProviderWizardSetup(params: {
     ...(normalizeText(params.setup.choiceHint)
       ? { choiceHint: normalizeText(params.setup.choiceHint) }
       : {}),
+    ...(typeof params.setup.assistantPriority === "number" &&
+    Number.isFinite(params.setup.assistantPriority)
+      ? { assistantPriority: params.setup.assistantPriority }
+      : {}),
+    ...(params.setup.assistantVisibility === "manual-only" ||
+    params.setup.assistantVisibility === "visible"
+      ? { assistantVisibility: params.setup.assistantVisibility }
+      : {}),
     ...(normalizeText(params.setup.groupId)
       ? { groupId: normalizeText(params.setup.groupId) }
       : {}),
@@ -79,6 +123,9 @@ function normalizeProviderWizardSetup(params: {
       ? { groupHint: normalizeText(params.setup.groupHint) }
       : {}),
     ...(methodId && params.auth.some((method) => method.id === methodId) ? { methodId } : {}),
+    ...(normalizeOnboardingScopes(params.setup.onboardingScopes)
+      ? { onboardingScopes: normalizeOnboardingScopes(params.setup.onboardingScopes) }
+      : {}),
     ...(params.setup.modelAllowlist
       ? {
           modelAllowlist: {
@@ -256,6 +303,9 @@ export function normalizeRegisteredProvider(params: {
   const docsPath = normalizeText(params.provider.docsPath);
   const aliases = normalizeTextList(params.provider.aliases);
   const deprecatedProfileIds = normalizeTextList(params.provider.deprecatedProfileIds);
+  const oauthProfileIdRepairs = normalizeProviderOAuthProfileIdRepairs(
+    params.provider.oauthProfileIdRepairs,
+  );
   const envVars = normalizeTextList(params.provider.envVars);
   const wizard = normalizeProviderWizard({
     providerId: id,
@@ -292,6 +342,7 @@ export function normalizeRegisteredProvider(params: {
     ...(docsPath ? { docsPath } : {}),
     ...(aliases ? { aliases } : {}),
     ...(deprecatedProfileIds ? { deprecatedProfileIds } : {}),
+    ...(oauthProfileIdRepairs ? { oauthProfileIdRepairs } : {}),
     ...(envVars ? { envVars } : {}),
     auth,
     ...(catalog ? { catalog } : {}),

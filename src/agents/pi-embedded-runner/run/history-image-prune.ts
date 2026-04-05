@@ -3,23 +3,62 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 export const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
 
 /**
- * Idempotent cleanup for legacy sessions that persisted image blocks in history.
- * Called each run; mutates only user turns that already have an assistant reply.
+ * Number of most-recent completed turns whose preceding user/toolResult image
+ * blocks are kept intact. Counts all completed turns, not just image-bearing
+ * ones, so text-only turns consume the window.
  */
-export function pruneProcessedHistoryImages(messages: AgentMessage[]): boolean {
-  let lastAssistantIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "assistant") {
-      lastAssistantIndex = i;
-      break;
+const PRESERVE_RECENT_COMPLETED_TURNS = 3;
+
+function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
+  const completedTurnStarts: number[] = [];
+  let currentTurnStart = -1;
+  let currentTurnHasAssistantReply = false;
+
+  for (let i = 0; i < messages.length; i++) {
+    const role = messages[i]?.role;
+    if (role === "user") {
+      if (currentTurnStart >= 0 && currentTurnHasAssistantReply) {
+        completedTurnStarts.push(currentTurnStart);
+      }
+      currentTurnStart = i;
+      currentTurnHasAssistantReply = false;
+      continue;
+    }
+    if (role === "toolResult") {
+      if (currentTurnStart < 0) {
+        currentTurnStart = i;
+      }
+      continue;
+    }
+    if (role === "assistant" && currentTurnStart >= 0) {
+      currentTurnHasAssistantReply = true;
     }
   }
-  if (lastAssistantIndex < 0) {
+
+  if (currentTurnStart >= 0 && currentTurnHasAssistantReply) {
+    completedTurnStarts.push(currentTurnStart);
+  }
+
+  if (completedTurnStarts.length <= PRESERVE_RECENT_COMPLETED_TURNS) {
+    return -1;
+  }
+  return completedTurnStarts[completedTurnStarts.length - PRESERVE_RECENT_COMPLETED_TURNS];
+}
+
+/**
+ * Idempotent cleanup: prune persisted image blocks from completed turns older
+ * than {@link PRESERVE_RECENT_COMPLETED_TURNS}. The delay also reduces
+ * prompt-cache churn, though prefix stability additionally depends on the
+ * replay sanitizer being idempotent.
+ */
+export function pruneProcessedHistoryImages(messages: AgentMessage[]): boolean {
+  const pruneBeforeIndex = resolvePruneBeforeIndex(messages);
+  if (pruneBeforeIndex < 0) {
     return false;
   }
 
   let didMutate = false;
-  for (let i = 0; i < lastAssistantIndex; i++) {
+  for (let i = 0; i < pruneBeforeIndex; i++) {
     const message = messages[i];
     if (
       !message ||

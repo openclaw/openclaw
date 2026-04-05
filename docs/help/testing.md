@@ -23,6 +23,9 @@ This doc is a “how we test” guide:
 Most days:
 
 - Full gate (expected before push): `pnpm build && pnpm check && pnpm test`
+- Faster local full-suite run on a roomy machine: `pnpm test:max`
+- Direct Vitest watch loop (modern projects config): `pnpm test:watch`
+- Direct file targeting now routes extension/channel paths too: `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts`
 
 When you touch tests or want extra confidence:
 
@@ -32,6 +35,7 @@ When you touch tests or want extra confidence:
 When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
+- Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
 
 Tip: when you only need one failing case, prefer narrowing live tests via the allowlist env vars described below.
 
@@ -42,8 +46,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 ### Unit / integration (default)
 
 - Command: `pnpm test`
-- Config: `scripts/test-parallel.mjs` (runs `vitest.unit.config.ts`, `vitest.extensions.config.ts`, `vitest.gateway.config.ts`)
-- Files: `src/**/*.test.ts`, `extensions/**/*.test.ts`
+- Config: native Vitest `projects` via `vitest.config.ts`
+- Files: core/unit inventories under `src/**/*.test.ts`, `packages/**/*.test.ts`, `test/**/*.test.ts`, and the whitelisted `ui` node tests covered by `vitest.unit.config.ts`
 - Scope:
   - Pure unit tests
   - In-process integration tests (gateway auth, routing, tooling, parsing, config)
@@ -52,10 +56,9 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI
   - No real keys required
   - Should be fast and stable
-- Scheduler note:
-  - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
-  - Shared unit coverage stays on, but the wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
-  - Refresh the timing snapshot with `pnpm test:perf:update-timings` after major suite shape changes.
+- Projects note:
+  - `pnpm test`, `pnpm test:watch`, and `pnpm test:changed` all use the same native Vitest root `projects` config now.
+  - Direct file filters route natively through the root project graph, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` works without a custom wrapper.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
     keep both levels of coverage.
@@ -68,9 +71,22 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     through the real `run.ts` / `compact.ts` paths; helper-only tests are not a
     sufficient substitute for those integration paths.
 - Pool note:
-  - OpenClaw uses Vitest `vmForks` on Node 22, 23, and 24 for faster unit shards.
-  - On Node 25+, OpenClaw automatically falls back to regular `forks` until the repo is re-validated there.
-  - Override manually with `OPENCLAW_TEST_VM_FORKS=0` (force `forks`) or `OPENCLAW_TEST_VM_FORKS=1` (force `vmForks`).
+  - Base Vitest config now defaults to `threads`.
+  - The shared Vitest config also fixes `isolate: false` and uses the non-isolated runner across the root projects, e2e, and live configs.
+  - The root UI lane keeps its `jsdom` setup and optimizer, but now runs on the shared non-isolated runner too.
+  - `pnpm test` inherits the same `threads` + `isolate: false` defaults from the root `vitest.config.ts` projects config.
+  - The shared `scripts/run-vitest.mjs` launcher now also adds `--no-maglev` for Vitest child Node processes by default to reduce V8 compile churn during big local runs. Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` if you need to compare against stock V8 behavior.
+- Fast-local iteration note:
+  - `pnpm test:changed` runs the native projects config with `--changed origin/main`.
+  - `pnpm test:max` and `pnpm test:changed:max` keep the same native projects config, just with a higher worker cap.
+  - Local worker auto-scaling is intentionally conservative now and also backs off when the host load average is already high, so multiple concurrent Vitest runs do less damage by default.
+  - The base Vitest config marks the projects/config files as `forceRerunTriggers` so changed-mode reruns stay correct when test wiring changes.
+  - The config keeps `OPENCLAW_VITEST_FS_MODULE_CACHE` enabled on supported hosts; set `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/abs/path` if you want one explicit cache location for direct profiling.
+- Perf-debug note:
+  - `pnpm test:perf:imports` enables Vitest import-duration reporting plus import-breakdown output.
+  - `pnpm test:perf:imports:changed` scopes the same profiling view to files changed since `origin/main`.
+  - `pnpm test:perf:profile:main` writes a main-thread CPU profile for Vitest/Vite startup and transform overhead.
+  - `pnpm test:perf:profile:runner` writes runner CPU+heap profiles for the unit suite with file parallelism disabled.
 
 ### E2E (gateway smoke)
 
@@ -78,8 +94,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - Config: `vitest.e2e.config.ts`
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`
 - Runtime defaults:
-  - Uses Vitest `vmForks` for faster file startup.
-  - Uses adaptive workers (CI: 2-4, local: 4-8).
+  - Uses Vitest `threads` with `isolate: false`, matching the rest of the repo.
+  - Uses adaptive workers (CI: up to 2, local: 1 by default).
   - Runs in silent mode by default to reduce console I/O overhead.
 - Useful overrides:
   - `OPENCLAW_E2E_WORKERS=<n>` to force worker count (capped at 16).
@@ -122,8 +138,16 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Not CI-stable by design (real networks, real provider policies, quotas, outages)
   - Costs money / uses rate limits
   - Prefer running narrowed subsets instead of “everything”
-  - Live runs will source `~/.profile` to pick up missing API keys
+- Live runs source `~/.profile` to pick up missing API keys.
+- By default, live runs still isolate `HOME` and copy config/auth material into a temp test home so unit fixtures cannot mutate your real `~/.openclaw`.
+- Set `OPENCLAW_LIVE_USE_REAL_HOME=1` only when you intentionally need live tests to use your real home directory.
+- `pnpm test:live` now defaults to a quieter mode: it keeps `[live] ...` progress output, but suppresses the extra `~/.profile` notice and mutes gateway bootstrap logs/Bonjour chatter. Set `OPENCLAW_LIVE_TEST_QUIET=0` if you want the full startup logs back.
 - API key rotation (provider-specific): set `*_API_KEYS` with comma/semicolon format or `*_API_KEY_1`, `*_API_KEY_2` (for example `OPENAI_API_KEYS`, `ANTHROPIC_API_KEYS`, `GEMINI_API_KEYS`) or per-live override via `OPENCLAW_LIVE_*_KEY`; tests retry on rate limit responses.
+- Progress/heartbeat output:
+  - Live suites now emit progress lines to stderr so long provider calls are visibly active even when Vitest console capture is quiet.
+  - `vitest.live.config.ts` disables Vitest console interception so provider/gateway progress lines stream immediately during live runs.
+  - Tune direct-model heartbeats with `OPENCLAW_LIVE_HEARTBEAT_MS`.
+  - Tune gateway/probe heartbeats with `OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS`.
 
 ## Which suite should I run?
 
@@ -168,11 +192,11 @@ Live tests are split into two layers so we can isolate failures:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - Set `OPENCLAW_LIVE_MODELS=modern` (or `all`, alias for modern) to actually run this suite; otherwise it skips to keep `pnpm test:live` focused on gateway smoke
 - How to select models:
-  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.5, Grok 4)
+  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
   - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
-  - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-6,..."` (comma allowlist)
+  - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.4,anthropic/claude-opus-4-6,..."` (comma allowlist)
 - How to select providers:
-  - `OPENCLAW_LIVE_PROVIDERS="google,google-antigravity,google-gemini-cli"` (comma allowlist)
+  - `OPENCLAW_LIVE_PROVIDERS="google,google-antigravity"` (comma allowlist)
 - Where keys come from:
   - By default: profile store and env fallbacks
   - Set `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to enforce **profile store** only
@@ -199,11 +223,11 @@ Live tests are split into two layers so we can isolate failures:
 - How to enable:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - How to select models:
-  - Default: modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.5, Grok 4)
+  - Default: modern allowlist (Opus/Sonnet 4.6+, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
   - `OPENCLAW_LIVE_GATEWAY_MODELS=all` is an alias for the modern allowlist
   - Or set `OPENCLAW_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
 - How to select providers (avoid “OpenRouter everything”):
-  - `OPENCLAW_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
+  - `OPENCLAW_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,openai,anthropic,zai,minimax"` (comma allowlist)
 - Tool + image probes are always on in this live test:
   - `read` probe + `exec+read` probe (tool stress)
   - image probe runs when the model advertises image input support
@@ -221,69 +245,61 @@ openclaw models list
 openclaw models list --json
 ```
 
-## Live: Anthropic setup-token smoke
+## Live: ACP bind smoke (`/acp spawn ... --bind here`)
 
-- Test: `src/agents/anthropic.setup-token.live.test.ts`
-- Goal: verify Claude Code CLI setup-token (or a pasted setup-token profile) can complete an Anthropic prompt.
+- Test: `src/gateway/gateway-acp-bind.live.test.ts`
+- Goal: validate the real ACP conversation-bind flow with a live ACP agent:
+  - send `/acp spawn <agent> --bind here`
+  - bind a synthetic message-channel conversation in place
+  - send a normal follow-up on that same conversation
+  - verify the follow-up lands in the bound ACP session transcript
 - Enable:
-  - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
-  - `OPENCLAW_LIVE_SETUP_TOKEN=1`
-- Token sources (pick one):
-  - Profile: `OPENCLAW_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test`
-  - Raw token: `OPENCLAW_LIVE_SETUP_TOKEN_VALUE=sk-ant-oat01-...`
-- Model override (optional):
-  - `OPENCLAW_LIVE_SETUP_TOKEN_MODEL=anthropic/claude-opus-4-6`
-
-Setup example:
-
-```bash
-openclaw models auth paste-token --provider anthropic --profile-id anthropic:setup-token-test
-OPENCLAW_LIVE_SETUP_TOKEN=1 OPENCLAW_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test pnpm test:live src/agents/anthropic.setup-token.live.test.ts
-```
-
-## Live: CLI backend smoke (Claude Code CLI or other local CLIs)
-
-- Test: `src/gateway/gateway-cli-backend.live.test.ts`
-- Goal: validate the Gateway + agent pipeline using a local CLI backend, without touching your default config.
-- Enable:
-  - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
-  - `OPENCLAW_LIVE_CLI_BACKEND=1`
+  - `pnpm test:live src/gateway/gateway-acp-bind.live.test.ts`
+  - `OPENCLAW_LIVE_ACP_BIND=1`
 - Defaults:
-  - Model: `claude-cli/claude-sonnet-4-6`
-  - Command: `claude`
-  - Args: `["-p","--output-format","json","--permission-mode","bypassPermissions"]`
-- Overrides (optional):
-  - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-opus-4-6"`
-  - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="codex-cli/gpt-5.4"`
-  - `OPENCLAW_LIVE_CLI_BACKEND_COMMAND="/full/path/to/claude"`
-  - `OPENCLAW_LIVE_CLI_BACKEND_ARGS='["-p","--output-format","json","--permission-mode","bypassPermissions"]'`
-  - `OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV='["ANTHROPIC_API_KEY","ANTHROPIC_API_KEY_OLD"]'`
-  - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE=1` to send a real image attachment (paths are injected into the prompt).
-  - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
-  - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
-  - `OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1` to send a second turn and validate resume flow.
-- `OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=0` to keep Claude Code CLI MCP config enabled (default disables MCP config with a temporary empty file).
+  - ACP agent: `claude`
+  - Synthetic channel: Slack DM-style conversation context
+  - ACP backend: `acpx`
+- Overrides:
+  - `OPENCLAW_LIVE_ACP_BIND_AGENT=claude`
+  - `OPENCLAW_LIVE_ACP_BIND_AGENT=codex`
+  - `OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND='npx -y @agentclientprotocol/claude-agent-acp@<version>'`
+- Notes:
+  - This lane uses the gateway `chat.send` surface with admin-only synthetic originating-route fields so tests can attach message-channel context without pretending to deliver externally.
+  - When `OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND` is unset, the test uses the embedded `acpx` plugin's built-in agent registry for the selected ACP harness agent.
 
 Example:
 
 ```bash
-OPENCLAW_LIVE_CLI_BACKEND=1 \
-  OPENCLAW_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-sonnet-4-6" \
-  pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
+OPENCLAW_LIVE_ACP_BIND=1 \
+  OPENCLAW_LIVE_ACP_BIND_AGENT=claude \
+  pnpm test:live src/gateway/gateway-acp-bind.live.test.ts
 ```
+
+Docker recipe:
+
+```bash
+pnpm test:docker:live-acp-bind
+```
+
+Docker notes:
+
+- The Docker runner lives at `scripts/test-live-acp-bind-docker.sh`.
+- It sources `~/.profile`, stages the matching CLI auth material into the container, installs `acpx` into a writable npm prefix, then installs the requested live CLI (`@anthropic-ai/claude-code` or `@openai/codex`) if missing.
+- Inside Docker, the runner sets `OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND=$HOME/.npm-global/bin/acpx` so acpx keeps provider env vars from the sourced profile available to the child harness CLI.
 
 ### Recommended live recipes
 
 Narrow, explicit allowlists are fastest and least flaky:
 
 - Single model, direct (no gateway):
-  - `OPENCLAW_LIVE_MODELS="openai/gpt-5.2" pnpm test:live src/agents/models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_MODELS="openai/gpt-5.4" pnpm test:live src/agents/models.profiles.live.test.ts`
 
 - Single model, gateway smoke:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.4" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Tool calling across several providers:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,zai/glm-4.7,minimax/minimax-m2.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.4,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,zai/glm-4.7,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google focus (Gemini API key + Antigravity):
   - Gemini (API key): `OPENCLAW_LIVE_GATEWAY_MODELS="google/gemini-3-flash-preview" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
@@ -293,10 +309,6 @@ Notes:
 
 - `google/...` uses the Gemini API (API key).
 - `google-antigravity/...` uses the Antigravity OAuth bridge (Cloud Code Assist-style agent endpoint).
-- `google-gemini-cli/...` uses the local Gemini CLI on your machine (separate auth + tooling quirks).
-- Gemini API vs Gemini CLI:
-  - API: OpenClaw calls Google’s hosted Gemini API over HTTP (API key / profile auth); this is what most users mean by “Gemini”.
-  - CLI: OpenClaw shells out to a local `gemini` binary; it has its own auth and can behave differently (streaming/tool support/version skew).
 
 ## Live: model matrix (what we cover)
 
@@ -306,26 +318,26 @@ There is no fixed “CI model list” (live is opt-in), but these are the **reco
 
 This is the “common models” run we expect to keep working:
 
-- OpenAI (non-Codex): `openai/gpt-5.2` (optional: `openai/gpt-5.1`)
+- OpenAI (non-Codex): `openai/gpt-5.4` (optional: `openai/gpt-5.4-mini`)
 - OpenAI Codex: `openai-codex/gpt-5.4`
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google (Gemini API): `google/gemini-3.1-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-6-thinking` and `google-antigravity/gemini-3-flash`
 - Z.AI (GLM): `zai/glm-4.7`
-- MiniMax: `minimax/minimax-m2.5`
+- MiniMax: `minimax/MiniMax-M2.7`
 
 Run gateway smoke with tools + image:
-`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.4,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.4,openai-codex/gpt-5.4,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 ### Baseline: tool calling (Read + optional Exec)
 
 Pick at least one per provider family:
 
-- OpenAI: `openai/gpt-5.2` (or `openai/gpt-5-mini`)
+- OpenAI: `openai/gpt-5.4` (or `openai/gpt-5.4-mini`)
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google: `google/gemini-3-flash-preview` (or `google/gemini-3.1-pro-preview`)
 - Z.AI (GLM): `zai/glm-4.7`
-- MiniMax: `minimax/minimax-m2.5`
+- MiniMax: `minimax/MiniMax-M2.7`
 
 Optional additional coverage (nice to have):
 
@@ -347,7 +359,7 @@ If you have keys enabled, we also support testing via:
 
 More providers you can include in the live matrix (if you have creds/config):
 
-- Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
+- Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `zai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
 Tip: don’t try to hardcode “all models” in docs. The authoritative list is whatever `discoverModels(...)` returns on your machine + whatever keys are available.
@@ -359,8 +371,10 @@ Live tests discover credentials the same way the CLI does. Practical implication
 - If the CLI works, live tests should find the same keys.
 - If a live test says “no creds”, debug the same way you’d debug `openclaw models list` / model selection.
 
-- Profile store: `~/.openclaw/credentials/` (preferred; what “profile keys” means in the tests)
+- Per-agent auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (this is what “profile keys” means in the live tests)
 - Config: `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)
+- Legacy state dir: `~/.openclaw/credentials/` (copied into the staged live home when present, but not the main profile-key store)
+- Live local runs copy the active config, per-agent `auth-profiles.json` files, legacy `credentials/`, and supported external CLI auth dirs into a temp test home by default; `agents.*.workspace` / `agentDir` path overrides are stripped in that staged config so probes stay off your real host workspace.
 
 If you want to rely on env keys (e.g. exported in your `~/.profile`), run local tests after `source ~/.profile`, or use the Docker runners below (they can mount `~/.profile` into the container).
 
@@ -401,20 +415,57 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 
 ## Docker runners (optional "works in Linux" checks)
 
-These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). They also bind-mount CLI auth homes like `~/.codex`, `~/.claude`, `~/.qwen`, and `~/.minimax` when present, then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
+These Docker runners split into two buckets:
+
+- Live-model runners: `test:docker:live-models` and `test:docker:live-gateway` run only their matching profile-key live file inside the repo Docker image (`src/agents/models.profiles.live.test.ts` and `src/gateway/gateway-models.profiles.live.test.ts`), mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). The matching local entrypoints are `test:live:models-profiles` and `test:live:gateway-profiles`.
+- Docker live runners default to a smaller smoke cap so a full Docker sweep stays practical:
+  `test:docker:live-models` defaults to `OPENCLAW_LIVE_MAX_MODELS=12`, and
+  `test:docker:live-gateway` defaults to `OPENCLAW_LIVE_GATEWAY_SMOKE=1`,
+  `OPENCLAW_LIVE_GATEWAY_MAX_MODELS=8`,
+  `OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=45000`, and
+  `OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=90000`. Override those env vars when you
+  explicitly want the larger exhaustive scan.
+- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, then reuses it for the two live Docker lanes.
+- Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:gateway-network`, `test:docker:mcp-channels`, and `test:docker:plugins` boot one or more real containers and verify higher-level integration paths.
+
+The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
+- ACP bind smoke: `pnpm test:docker:live-acp-bind` (script: `scripts/test-live-acp-bind-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
+- Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Gateway networking (two containers, WS auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
-- Plugins (custom extension load + registry smoke): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
+- MCP channel bridge (seeded Gateway + stdio bridge + raw Claude notification-frame smoke): `pnpm test:docker:mcp-channels` (script: `scripts/e2e/mcp-channels-docker.sh`)
+- Plugins (install smoke + `/plugin` alias + Claude-bundle restart semantics): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
 
 The live-model Docker runners also bind-mount the current checkout read-only and
 stage it into a temporary workdir inside the container. This keeps the runtime
 image slim while still running Vitest against your exact local source/config.
+They also set `OPENCLAW_SKIP_CHANNELS=1` so gateway live probes do not start
+real Telegram/Discord/etc. channel workers inside the container.
 `test:docker:live-models` still runs `pnpm test:live`, so pass through
 `OPENCLAW_LIVE_GATEWAY_*` as well when you need to narrow or exclude gateway
 live coverage from that Docker lane.
+`test:docker:openwebui` is a higher-level compatibility smoke: it starts an
+OpenClaw gateway container with the OpenAI-compatible HTTP endpoints enabled,
+starts a pinned Open WebUI container against that gateway, signs in through
+Open WebUI, verifies `/api/models` exposes `openclaw/default`, then sends a
+real chat request through Open WebUI's `/api/chat/completions` proxy.
+The first run can be noticeably slower because Docker may need to pull the
+Open WebUI image and Open WebUI may need to finish its own cold-start setup.
+This lane expects a usable live model key, and `OPENCLAW_PROFILE_FILE`
+(`~/.profile` by default) is the primary way to provide it in Dockerized runs.
+Successful runs print a small JSON payload like `{ "ok": true, "model":
+"openclaw/default", ... }`.
+`test:docker:mcp-channels` is intentionally deterministic and does not need a
+real Telegram, Discord, or iMessage account. It boots a seeded Gateway
+container, starts a second container that spawns `openclaw mcp serve`, then
+verifies routed conversation discovery, transcript reads, attachment metadata,
+live event queue behavior, outbound send routing, and Claude-style channel +
+permission notifications over the real stdio MCP bridge. The notification check
+inspects the raw stdio MCP frames directly so the smoke validates what the
+bridge actually emits, not just what a specific client SDK happens to surface.
 
 Manual ACP plain-language thread smoke (not CI):
 
@@ -426,14 +477,23 @@ Useful env vars:
 - `OPENCLAW_CONFIG_DIR=...` (default: `~/.openclaw`) mounted to `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (default: `~/.openclaw/workspace`) mounted to `/home/node/.openclaw/workspace`
 - `OPENCLAW_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
-- External CLI auth dirs under `$HOME` (`.codex`, `.claude`, `.qwen`, `.minimax`) are mounted read-only under `/host-auth/...`, then copied into `/home/node/...` before tests start
+- `OPENCLAW_DOCKER_CLI_TOOLS_DIR=...` (default: `~/.cache/openclaw/docker-cli-tools`) mounted to `/home/node/.npm-global` for cached CLI installs inside Docker
+- External CLI auth dirs/files under `$HOME` are mounted read-only under `/host-auth...`, then copied into `/home/node/...` before tests start
+  - Default dirs: `.codex`, `.minimax`
+  - Default files: `.claude.json`, `~/.claude/.credentials.json`, `~/.claude/settings.json`, `~/.claude/settings.local.json`
+  - Narrowed provider runs mount only the needed dirs/files inferred from `OPENCLAW_LIVE_PROVIDERS` / `OPENCLAW_LIVE_GATEWAY_PROVIDERS`
+  - Override manually with `OPENCLAW_DOCKER_AUTH_DIRS=all`, `OPENCLAW_DOCKER_AUTH_DIRS=none`, or a comma list like `OPENCLAW_DOCKER_AUTH_DIRS=.claude,.codex`
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run
 - `OPENCLAW_LIVE_GATEWAY_PROVIDERS=...` / `OPENCLAW_LIVE_PROVIDERS=...` to filter providers in-container
 - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)
+- `OPENCLAW_OPENWEBUI_MODEL=...` to choose the model exposed by the gateway for the Open WebUI smoke
+- `OPENCLAW_OPENWEBUI_PROMPT=...` to override the nonce-check prompt used by the Open WebUI smoke
+- `OPENWEBUI_IMAGE=...` to override the pinned Open WebUI image tag
 
 ## Docs sanity
 
-Run docs checks after doc edits: `pnpm docs:list`.
+Run docs checks after doc edits: `pnpm check:docs`.
+Run full Mintlify anchor validation when you need in-page heading checks too: `pnpm docs:check-links:anchors`.
 
 ## Offline regression (CI-safe)
 
@@ -465,7 +525,9 @@ Future evals should stay deterministic first:
 
 Contract tests verify that every registered plugin and channel conforms to its
 interface contract. They iterate over all discovered plugins and run a suite of
-shape and behavior assertions.
+shape and behavior assertions. The default `pnpm test` unit lane intentionally
+skips these shared seam and smoke files; run the contract commands explicitly
+when you touch shared channel or provider surfaces.
 
 ### Commands
 
@@ -486,6 +548,11 @@ Located in `src/channels/plugins/contracts/*.contract.test.ts`:
 - **threading** - Thread ID handling
 - **directory** - Directory/roster API
 - **group-policy** - Group policy enforcement
+
+### Provider status contracts
+
+Located in `src/plugins/contracts/*.contract.test.ts`.
+
 - **status** - Channel status probes
 - **registry** - Plugin registry shape
 

@@ -2,10 +2,47 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { resolveApiKeyForProfile } from "./oauth.js";
-import { ensureAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
+const { getOAuthApiKeyMock } = vi.hoisted(() => ({
+  getOAuthApiKeyMock: vi.fn(async () => {
+    throw new Error("invalid_grant");
+  }),
+}));
+
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
+  return {
+    ...actual,
+    getOAuthApiKey: getOAuthApiKeyMock,
+  };
+});
+
+vi.mock("../cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: () => null,
+  readMiniMaxCliCredentialsCached: () => null,
+  resetCliCredentialCachesForTest: () => undefined,
+}));
+
+vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
+  buildProviderAuthDoctorHintWithPlugin: async () => null,
+  formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
+    params.context?.access,
+  refreshProviderOAuthCredentialWithPlugin: async () => null,
+}));
+
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("./store.js").clearRuntimeAuthProfileStoreSnapshots;
+let ensureAuthProfileStore: typeof import("./store.js").ensureAuthProfileStore;
+let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
+
+async function loadFreshOAuthModuleForTest() {
+  vi.resetModules();
+  ({ clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } = await import("./store.js"));
+  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+}
 
 describe("resolveApiKeyForProfile fallback to main agent", () => {
   const envSnapshot = captureEnv([
@@ -18,6 +55,11 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   let secondaryAgentDir: string;
 
   beforeEach(async () => {
+    resetFileLockStateForTest();
+    getOAuthApiKeyMock.mockReset();
+    getOAuthApiKeyMock.mockImplementation(async () => {
+      throw new Error("invalid_grant");
+    });
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-fallback-test-"));
     mainAgentDir = path.join(tmpDir, "agents", "main", "agent");
     secondaryAgentDir = path.join(tmpDir, "agents", "kids", "agent");
@@ -28,6 +70,8 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
     process.env.PI_CODING_AGENT_DIR = mainAgentDir;
+    await loadFreshOAuthModuleForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
   });
 
   function createOauthStore(params: {
@@ -55,16 +99,6 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     await fs.writeFile(path.join(agentDir, "auth-profiles.json"), JSON.stringify(store));
   }
 
-  function stubOAuthRefreshFailure() {
-    const fetchSpy = vi.fn(async () => {
-      return new Response(JSON.stringify({ error: "invalid_grant" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-    vi.stubGlobal("fetch", fetchSpy);
-  }
-
   async function resolveFromSecondaryAgent(profileId: string) {
     const loadedSecondaryStore = ensureAuthProfileStore(secondaryAgentDir);
     return resolveApiKeyForProfile({
@@ -75,6 +109,8 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   }
 
   afterEach(async () => {
+    resetFileLockStateForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
     vi.unstubAllGlobals();
 
     envSnapshot.restore();
@@ -116,7 +152,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   }
 
   it("falls back to main agent credentials when secondary agent token is expired and refresh fails", async () => {
-    const profileId = "anthropic:claude-cli";
+    const profileId = "anthropic:default";
     const now = Date.now();
     const expiredTime = now - 60 * 60 * 1000; // 1 hour ago
     const freshTime = now + 60 * 60 * 1000; // 1 hour from now
@@ -143,9 +179,6 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
       }),
     );
 
-    // Mock fetch to simulate OAuth refresh failure
-    stubOAuthRefreshFailure();
-
     // Load the secondary agent's store (will merge with main agent's store)
     // Call resolveApiKeyForProfile with the secondary agent's expired credentials:
     // refresh fails, then fallback copies main credentials to secondary.
@@ -166,7 +199,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   });
 
   it("adopts newer OAuth token from main agent even when secondary token is still valid", async () => {
-    const profileId = "anthropic:claude-cli";
+    const profileId = "anthropic:default";
     const now = Date.now();
     const secondaryExpiry = now + 30 * 60 * 1000;
     const mainExpiry = now + 2 * 60 * 60 * 1000;
@@ -205,7 +238,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   });
 
   it("adopts main token when secondary expires is NaN/malformed", async () => {
-    const profileId = "anthropic:claude-cli";
+    const profileId = "anthropic:default";
     const now = Date.now();
     const mainExpiry = now + 2 * 60 * 60 * 1000;
 
@@ -279,7 +312,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   });
 
   it("throws error when both secondary and main agent credentials are expired", async () => {
-    const profileId = "anthropic:claude-cli";
+    const profileId = "anthropic:default";
     const now = Date.now();
     const expiredTime = now - 60 * 60 * 1000; // 1 hour ago
 
@@ -292,9 +325,6 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     });
     await writeAuthProfilesStore(secondaryAgentDir, expiredStore);
     await writeAuthProfilesStore(mainAgentDir, expiredStore);
-
-    // Mock fetch to simulate OAuth refresh failure
-    stubOAuthRefreshFailure();
 
     // Should throw because both agents have expired credentials
     await expect(resolveFromSecondaryAgent(profileId)).rejects.toThrow(

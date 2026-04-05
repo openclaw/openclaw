@@ -1,12 +1,11 @@
 import fs from "node:fs/promises";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
@@ -18,21 +17,17 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/infra-runtime";
+import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
-import {
-  isInboundPathAllowed,
-  resolveIMessageAttachmentRoots,
-  resolveIMessageRemoteAttachmentRoots,
-} from "openclaw/plugin-sdk/media-runtime";
-import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
+import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-history";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -40,6 +35,10 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
+import {
+  resolveIMessageAttachmentRoots,
+  resolveIMessageRemoteAttachmentRoots,
+} from "../media-contract.js";
 import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
@@ -536,3 +535,5 @@ export const __testing = {
   resolveIMessageRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 };
+
+export const resolveIMessageRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;

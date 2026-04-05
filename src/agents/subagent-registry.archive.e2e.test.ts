@@ -1,9 +1,13 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
-const loadConfigMock = vi.fn(() => ({
+let currentConfig = {
   agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
-}));
+};
+const loadConfigMock = vi.fn(() => currentConfig);
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (request: unknown) => {
@@ -20,8 +24,8 @@ vi.mock("../infra/agent-events.js", () => ({
   onAgentEvent: vi.fn((_handler: unknown) => noop),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: loadConfigMock,
@@ -44,16 +48,15 @@ vi.mock("./subagent-registry.store.js", () => ({
 describe("subagent registry archive behavior", () => {
   let mod: typeof import("./subagent-registry.js");
 
-  beforeAll(async () => {
-    mod = await import("./subagent-registry.js");
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-    loadConfigMock.mockReturnValue({
+    currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
-    });
+    };
+    loadConfigMock.mockClear();
+    mod = await import("./subagent-registry.js");
   });
 
   afterEach(() => {
@@ -78,9 +81,9 @@ describe("subagent registry archive behavior", () => {
   });
 
   it("sets archiveAtMs and sweeps delete-mode run subagents", async () => {
-    loadConfigMock.mockReturnValue({
+    currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
-    });
+    };
 
     mod.registerSubagentRun({
       runId: "run-delete-1",
@@ -140,9 +143,9 @@ describe("subagent registry archive behavior", () => {
   });
 
   it("recomputes archiveAtMs when replacing a delete-mode run after steer restart", async () => {
-    loadConfigMock.mockReturnValue({
+    currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
-    });
+    };
 
     mod.registerSubagentRun({
       runId: "run-delete-old",
@@ -167,10 +170,40 @@ describe("subagent registry archive behavior", () => {
     expect(run?.archiveAtMs).toBe(Date.now() + 60_000);
   });
 
-  it("treats archiveAfterMinutes=0 as never archive", () => {
-    loadConfigMock.mockReturnValue({
-      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+  it("removes attachments for the replaced run after steer restart", async () => {
+    const attachmentsRootDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-replace-attachments-"),
+    );
+    const attachmentsDir = path.join(attachmentsRootDir, "old");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
+
+    mod.registerSubagentRun({
+      runId: "run-delete-attachments-old",
+      childSessionKey: "agent:main:subagent:delete-attachments-old",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "replace attachments",
+      cleanup: "delete",
+      attachmentsRootDir,
+      attachmentsDir,
     });
+
+    const replaced = mod.replaceSubagentRunAfterSteer({
+      previousRunId: "run-delete-attachments-old",
+      nextRunId: "run-delete-attachments-new",
+    });
+
+    expect(replaced).toBe(true);
+    await vi.waitFor(async () => {
+      await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("treats archiveAfterMinutes=0 as never archive", () => {
+    currentConfig = {
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+    };
 
     mod.registerSubagentRun({
       runId: "run-no-archive",

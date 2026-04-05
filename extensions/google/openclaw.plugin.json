@@ -1,6 +1,7 @@
 {
   "id": "google",
-  "providers": ["google", "google-gemini-cli"],
+  "enabledByDefault": true,
+  "providers": ["google"],
   "providerAuthEnvVars": {
     "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
   },
@@ -17,16 +18,6 @@
       "cliFlag": "--gemini-api-key",
       "cliOption": "--gemini-api-key <key>",
       "cliDescription": "Gemini API key"
-    },
-    {
-      "provider": "google-gemini-cli",
-      "method": "oauth",
-      "choiceId": "google-gemini-cli",
-      "choiceLabel": "Gemini CLI OAuth",
-      "choiceHint": "Google OAuth with project-aware token payload",
-      "groupId": "google",
-      "groupLabel": "Google",
-      "groupHint": "Gemini API key + OAuth"
     }
   ],
   "uiHints": {
@@ -40,6 +31,11 @@
       "label": "Gemini Search Model",
       "help": "Gemini model override for web search grounding."
     }
+  },
+  "contracts": {
+    "mediaUnderstandingProviders": ["google"],
+    "imageGenerationProviders": ["google"],
+    "webSearchProviders": ["gemini"]
   },
   "configSchema": {
     "type": "object",

@@ -21,11 +21,34 @@ export type MatrixStoredCredentials = {
   lastUsedAt?: string;
 };
 
+type MatrixCredentialsSource = "current" | "legacy";
+
+type MatrixCredentialsFileLoadResult =
+  | {
+      kind: "loaded";
+      source: MatrixCredentialsSource;
+      credentials: MatrixStoredCredentials | null;
+    }
+  | {
+      kind: "missing";
+    };
+
 function resolveStateDir(env: NodeJS.ProcessEnv): string {
-  return getMatrixRuntime().state.resolveStateDir(env, os.homedir);
+  try {
+    return getMatrixRuntime().state.resolveStateDir(env, os.homedir);
+  } catch {
+    // Some config-only helpers read stored credentials before the Matrix plugin
+    // runtime is installed. Fall back to the standard state-dir env contract.
+    const override = env.OPENCLAW_STATE_DIR?.trim();
+    if (override) {
+      return path.resolve(override);
+    }
+    const homeDir = env.OPENCLAW_HOME?.trim() || env.HOME?.trim() || os.homedir();
+    return path.join(homeDir, ".openclaw");
+  }
 }
 
-function resolveLegacyMatrixCredentialsPath(env: NodeJS.ProcessEnv): string | null {
+function resolveLegacyMatrixCredentialsPath(env: NodeJS.ProcessEnv): string {
   return path.join(resolveMatrixCredentialsDir(env), "credentials.json");
 }
 
@@ -65,6 +88,35 @@ function parseMatrixCredentialsFile(filePath: string): MatrixStoredCredentials |
   return parsed as MatrixStoredCredentials;
 }
 
+function loadMatrixCredentialsFile(
+  filePath: string,
+  source: MatrixCredentialsSource,
+): MatrixCredentialsFileLoadResult {
+  try {
+    return {
+      kind: "loaded",
+      source,
+      credentials: parseMatrixCredentialsFile(filePath),
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { kind: "missing" };
+    }
+    throw error;
+  }
+}
+
+function loadLegacyMatrixCredentialsWithCurrentFallback(params: {
+  legacyPath: string;
+  currentPath: string;
+}): MatrixCredentialsFileLoadResult {
+  const legacy = loadMatrixCredentialsFile(params.legacyPath, "legacy");
+  if (legacy.kind === "loaded") {
+    return legacy;
+  }
+  return loadMatrixCredentialsFile(params.currentPath, "current");
+}
+
 export function resolveMatrixCredentialsDir(
   env: NodeJS.ProcessEnv = process.env,
   stateDir?: string,
@@ -85,30 +137,36 @@ export function loadMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
 ): MatrixStoredCredentials | null {
-  const credPath = resolveMatrixCredentialsPath(env, accountId);
+  const currentPath = resolveMatrixCredentialsPath(env, accountId);
   try {
-    if (fs.existsSync(credPath)) {
-      return parseMatrixCredentialsFile(credPath);
+    const current = loadMatrixCredentialsFile(currentPath, "current");
+    if (current.kind === "loaded") {
+      return current.credentials;
     }
 
     const legacyPath = resolveLegacyMigrationSourcePath(env, accountId);
-    if (!legacyPath || !fs.existsSync(legacyPath)) {
+    if (!legacyPath) {
       return null;
     }
 
-    const parsed = parseMatrixCredentialsFile(legacyPath);
-    if (!parsed) {
+    const loaded = loadLegacyMatrixCredentialsWithCurrentFallback({
+      legacyPath,
+      currentPath,
+    });
+    if (loaded.kind !== "loaded" || !loaded.credentials) {
       return null;
     }
 
-    try {
-      fs.mkdirSync(path.dirname(credPath), { recursive: true });
-      fs.renameSync(legacyPath, credPath);
-    } catch {
-      // Keep returning the legacy credentials even if migration fails.
+    if (loaded.source === "legacy") {
+      try {
+        fs.mkdirSync(path.dirname(currentPath), { recursive: true });
+        fs.renameSync(legacyPath, currentPath);
+      } catch {
+        // Keep returning the legacy credentials even if migration fails.
+      }
     }
 
-    return parsed;
+    return loaded.credentials;
   } catch {
     return null;
   }
@@ -127,9 +185,7 @@ export function clearMatrixCredentials(
       continue;
     }
     try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
+      fs.unlinkSync(filePath);
     } catch {
       // ignore
     }

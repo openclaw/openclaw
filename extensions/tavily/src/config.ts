@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeSecretInput } from "openclaw/plugin-sdk/provider-auth";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInput,
+} from "openclaw/plugin-sdk/secret-input";
 
 export const DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com";
 export const DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS = 30;

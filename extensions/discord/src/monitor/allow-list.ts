@@ -1,11 +1,11 @@
 import type { Guild, User } from "@buape/carbon";
-import type { AllowlistMatch } from "openclaw/plugin-sdk/channel-runtime";
+import type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelKeyCandidates,
   resolveChannelEntryMatchWithFallback,
   resolveChannelMatchConfig,
   type ChannelMatchSource,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-targets";
 import { evaluateGroupRouteAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import { formatDiscordUserTag } from "./format.js";
 
@@ -29,6 +29,7 @@ type DiscordChannelOverrideConfig = {
   systemPrompt?: string;
   includeThreadStarter?: boolean;
   autoThread?: boolean;
+  autoThreadName?: "message" | "generated";
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
 };
 
@@ -40,7 +41,7 @@ export type DiscordGuildEntryResolved = {
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: string[];
   roles?: string[];
-  channels?: Record<string, { allow?: boolean } & DiscordChannelOverrideConfig>;
+  channels?: Record<string, DiscordChannelOverrideConfig>;
 };
 
 export type DiscordChannelConfigResolved = DiscordChannelOverrideConfig & {
@@ -393,7 +394,7 @@ function resolveDiscordChannelConfigEntry(
   entry: DiscordChannelEntry,
 ): DiscordChannelConfigResolved {
   const resolved: DiscordChannelConfigResolved = {
-    allowed: entry.allow !== false,
+    allowed: entry.enabled !== false,
     requireMention: entry.requireMention,
     ignoreOtherMentions: entry.ignoreOtherMentions,
     skills: entry.skills,
@@ -403,6 +404,7 @@ function resolveDiscordChannelConfigEntry(
     systemPrompt: entry.systemPrompt,
     includeThreadStarter: entry.includeThreadStarter,
     autoThread: entry.autoThread,
+    autoThreadName: entry.autoThreadName,
     autoArchiveDuration: entry.autoArchiveDuration,
   };
   return resolved;

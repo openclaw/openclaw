@@ -19,19 +19,21 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
   resolveOriginMessageTo,
 } from "./origin-routing.js";
-import type { FollowupRun } from "./queue.js";
+import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
+import { createReplyOperation } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -133,6 +135,13 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    const replySessionKey = queued.run.sessionKey ?? sessionKey;
+    const replyOperation = createReplyOperation({
+      sessionId: queued.run.sessionId,
+      sessionKey: replySessionKey ?? "",
+      resetTriggered: false,
+      upstreamAbortSignal: opts?.abortSignal,
+    });
     try {
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
@@ -152,11 +161,25 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
-      const activeSessionEntry =
+      let activeSessionEntry =
         (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+      activeSessionEntry = await runPreflightCompactionIfNeeded({
+        cfg: queued.run.config,
+        followupRun: queued,
+        promptForEstimate: queued.prompt,
+        defaultModel,
+        agentCfgContextTokens,
+        sessionEntry: activeSessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        isHeartbeat: opts?.isHeartbeat === true,
+        replyOperation,
+      });
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+      replyOperation.setPhase("running");
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -175,6 +198,7 @@ export function createFollowupRunner(params: {
             try {
               const result = await runEmbeddedPiAgent({
                 allowGatewaySubagentBinding: true,
+                replyOperation,
                 sessionId: queued.run.sessionId,
                 sessionKey: queued.run.sessionKey,
                 agentId: queued.run.agentId,
@@ -254,6 +278,7 @@ export function createFollowupRunner(params: {
         fallbackModel = fallbackResult.model;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        replyOperation.fail("run_failed", err);
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
         return;
       }
@@ -279,6 +304,7 @@ export function createFollowupRunner(params: {
           providerUsed: fallbackProvider,
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
+          usageIsContextSnapshot: false,
           logLabel: "followup",
         });
       }
@@ -345,7 +371,9 @@ export function createFollowupRunner(params: {
       }
 
       if (autoCompactionCount > 0) {
+        const previousSessionId = queued.run.sessionId;
         const count = await incrementRunCompactionCount({
+          cfg: queued.run.config,
           sessionEntry,
           sessionStore,
           sessionKey,
@@ -353,7 +381,21 @@ export function createFollowupRunner(params: {
           amount: autoCompactionCount,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
+          newSessionId: runResult.meta?.agentMeta?.sessionId,
         });
+        const refreshedSessionEntry =
+          sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
+        if (refreshedSessionEntry) {
+          const queueKey = queued.run.sessionKey ?? sessionKey;
+          if (queueKey) {
+            refreshQueuedFollowupSession({
+              key: queueKey,
+              previousSessionId,
+              nextSessionId: refreshedSessionEntry.sessionId,
+              nextSessionFile: refreshedSessionEntry.sessionFile,
+            });
+          }
+        }
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           finalPayloads.unshift({
@@ -364,6 +406,7 @@ export function createFollowupRunner(params: {
 
       await sendFollowupPayloads(finalPayloads, queued);
     } finally {
+      replyOperation.complete();
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the
       // buffered dispatcher's finally block, but followup turns bypass the

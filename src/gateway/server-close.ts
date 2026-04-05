@@ -17,6 +17,7 @@ export function createGatewayCloseHandler(params: {
   cron: { stop: () => void };
   heartbeatRunner: HeartbeatRunner;
   updateCheckStop?: (() => void) | null;
+  stopTaskRegistryMaintenance?: (() => void) | null;
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   tickInterval: ReturnType<typeof setInterval>;
@@ -30,7 +31,6 @@ export function createGatewayCloseHandler(params: {
   chatRunState: { clear: () => void };
   clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
   configReloader: { stop: () => Promise<void> };
-  browserControl: { stop: () => Promise<void> } | null;
   wss: WebSocketServer;
   httpServer: HttpServer;
   httpServers?: HttpServer[];
@@ -76,6 +76,11 @@ export function createGatewayCloseHandler(params: {
       await stopGmailWatcher();
       params.cron.stop();
       params.heartbeatRunner.stop();
+      try {
+        params.stopTaskRegistryMaintenance?.();
+      } catch {
+        /* ignore */
+      }
       try {
         params.updateCheckStop?.();
       } catch {
@@ -133,9 +138,6 @@ export function createGatewayCloseHandler(params: {
       }
       params.clients.clear();
       await params.configReloader.stop().catch(() => {});
-      if (params.browserControl) {
-        await params.browserControl.stop().catch(() => {});
-      }
       await new Promise<void>((resolve) => params.wss.close(() => resolve()));
       const servers =
         params.httpServers && params.httpServers.length > 0

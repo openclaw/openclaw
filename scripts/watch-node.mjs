@@ -8,6 +8,8 @@ import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node.mj
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
+const WATCH_RESTARTABLE_CHILD_EXIT_CODES = new Set([143]);
+const WATCH_RESTARTABLE_CHILD_SIGNALS = new Set(["SIGTERM"]);
 
 const buildRunnerArgs = (args) => [WATCH_NODE_RUNNER, ...args];
 
@@ -27,6 +29,10 @@ const resolveRepoPath = (filePath, cwd) => {
 const isIgnoredWatchPath = (filePath, cwd) =>
   !isRestartRelevantRunNodePath(resolveRepoPath(filePath, cwd));
 
+const shouldRestartAfterChildExit = (exitCode, exitSignal) =>
+  (typeof exitCode === "number" && WATCH_RESTARTABLE_CHILD_EXIT_CODES.has(exitCode)) ||
+  (typeof exitSignal === "string" && WATCH_RESTARTABLE_CHILD_SIGNALS.has(exitSignal));
+
 export async function runWatchMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,
@@ -44,6 +50,9 @@ export async function runWatchMain(params = {}) {
   const watchSession = `${deps.now()}-${deps.process.pid}`;
   childEnv.OPENCLAW_WATCH_MODE = "1";
   childEnv.OPENCLAW_WATCH_SESSION = watchSession;
+  // The watcher owns process restarts; keep SIGUSR1/config reloads in-process
+  // so inherited launchd/systemd markers do not make the child exit and stall.
+  childEnv.OPENCLAW_NO_RESPAWN = "1";
   if (deps.args.length > 0) {
     childEnv.OPENCLAW_WATCH_COMMAND = deps.args.join(" ");
   }
@@ -82,15 +91,17 @@ export async function runWatchMain(params = {}) {
         env: childEnv,
         stdio: "inherit",
       });
-      watchProcess.on("exit", () => {
+      watchProcess.on("exit", (exitCode, exitSignal) => {
         watchProcess = null;
         if (shuttingDown) {
           return;
         }
-        if (restartRequested) {
+        if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal)) {
           restartRequested = false;
           startRunner();
+          return;
         }
+        settle(exitSignal ? 1 : (exitCode ?? 1));
       });
     };
 

@@ -81,7 +81,7 @@ Lark (global) tenants should use [https://open.larksuite.com/app](https://open.l
 2. Fill in the app name + description
 3. Choose an app icon
 
-![Create enterprise app](../images/feishu-step2-create-app.png)
+![Create enterprise app](/images/feishu-step2-create-app.png)
 
 ### 3. Copy credentials
 
@@ -92,7 +92,7 @@ From **Credentials & Basic Info**, copy:
 
 ❗ **Important:** keep the App Secret private.
 
-![Get credentials](../images/feishu-step3-credentials.png)
+![Get credentials](/images/feishu-step3-credentials.png)
 
 ### 4. Configure permissions
 
@@ -126,7 +126,7 @@ On **Permissions**, click **Batch import** and paste:
 }
 ```
 
-![Configure permissions](../images/feishu-step4-permissions.png)
+![Configure permissions](/images/feishu-step4-permissions.png)
 
 ### 5. Enable bot capability
 
@@ -135,7 +135,7 @@ In **App Capability** > **Bot**:
 1. Enable bot capability
 2. Set the bot name
 
-![Enable bot capability](../images/feishu-step5-bot-capability.png)
+![Enable bot capability](/images/feishu-step5-bot-capability.png)
 
 ### 6. Configure event subscription
 
@@ -148,10 +148,11 @@ In **Event Subscription**:
 
 1. Choose **Use long connection to receive events** (WebSocket)
 2. Add the event: `im.message.receive_v1`
+3. (Optional) For Drive comment workflows, also add: `drive.notice.comment_add_v1`
 
 ⚠️ If the gateway is not running, the long-connection setup may fail to save.
 
-![Configure event subscription](../images/feishu-step6-event-subscription.png)
+![Configure event subscription](/images/feishu-step6-event-subscription.png)
 
 ### 7. Publish the app
 
@@ -185,7 +186,7 @@ Edit `~/.openclaw/openclaw.json`:
         main: {
           appId: "cli_xxx",
           appSecret: "xxx",
-          botName: "My AI assistant",
+          name: "My AI assistant",
         },
       },
     },
@@ -206,7 +207,7 @@ When using webhook mode, set both `channels.feishu.verificationToken` and `chann
 
 The screenshot below shows where to find the **Verification Token**. The **Encrypt Key** is listed in the same **Encryption** section.
 
-![Verification Token location](../images/feishu-verification-token.png)
+![Verification Token location](/images/feishu-verification-token.png)
 
 ### Configure via environment variables
 
@@ -316,41 +317,43 @@ After approval, you can chat normally.
 
 **1. Group policy** (`channels.feishu.groupPolicy`):
 
-- `"open"` = allow everyone in groups (default)
+- `"open"` = allow everyone in groups
 - `"allowlist"` = only allow `groupAllowFrom`
 - `"disabled"` = disable group messages
 
-**2. Mention requirement** (`channels.feishu.groups.<chat_id>.requireMention`):
+Default: `allowlist`
 
-- `true` = require @mention (default)
-- `false` = respond without mentions
+**2. Mention requirement** (`channels.feishu.requireMention`, overridable via `channels.feishu.groups.<chat_id>.requireMention`):
+
+- explicit `true` = require @mention
+- explicit `false` = respond without mentions
+- when unset and `groupPolicy: "open"` = default to `false`
+- when unset and `groupPolicy` is not `"open"` = default to `true`
 
 ---
 
 ## Group configuration examples
 
-### Allow all groups, require @mention (default)
+### Allow all groups, no @mention required (default for open groups)
 
 ```json5
 {
   channels: {
     feishu: {
       groupPolicy: "open",
-      // Default requireMention: true
     },
   },
 }
 ```
 
-### Allow all groups, no @mention required
+### Allow all groups, but still require @mention
 
 ```json5
 {
   channels: {
     feishu: {
-      groups: {
-        oc_xxx: { requireMention: false },
-      },
+      groupPolicy: "open",
+      requireMention: true,
     },
   },
 }
@@ -392,6 +395,8 @@ In addition to allowing the group itself, **all messages** in that group are gat
 ```
 
 ---
+
+<a id="get-groupuser-ids"></a>
 
 ## Get group/user IDs
 
@@ -494,12 +499,12 @@ openclaw pairing list feishu
         main: {
           appId: "cli_xxx",
           appSecret: "xxx",
-          botName: "Primary bot",
+          name: "Primary bot",
         },
         backup: {
           appId: "cli_yyy",
           appSecret: "yyy",
-          botName: "Backup bot",
+          name: "Backup bot",
           enabled: false,
         },
       },
@@ -680,9 +685,10 @@ Key options:
 | `channels.feishu.accounts.<id>.domain`            | Per-account API domain override         | `feishu`         |
 | `channels.feishu.dmPolicy`                        | DM policy                               | `pairing`        |
 | `channels.feishu.allowFrom`                       | DM allowlist (open_id list)             | -                |
-| `channels.feishu.groupPolicy`                     | Group policy                            | `open`           |
+| `channels.feishu.groupPolicy`                     | Group policy                            | `allowlist`      |
 | `channels.feishu.groupAllowFrom`                  | Group allowlist                         | -                |
-| `channels.feishu.groups.<chat_id>.requireMention` | Require @mention                        | `true`           |
+| `channels.feishu.requireMention`                  | Default require @mention                | conditional      |
+| `channels.feishu.groups.<chat_id>.requireMention` | Per-group require @mention override     | inherited        |
 | `channels.feishu.groups.<chat_id>.enabled`        | Enable group                            | `true`           |
 | `channels.feishu.textChunkLimit`                  | Message chunk size                      | `2000`           |
 | `channels.feishu.mediaMaxMb`                      | Media size limit                        | `30`             |
@@ -730,6 +736,37 @@ Key options:
 - ✅ Topic-thread replies where Feishu exposes `reply_in_thread`
 - ✅ Media replies stay thread-aware when replying to a thread/topic message
 
+## Drive comments
+
+Feishu can trigger the agent when someone adds a comment on a Feishu Drive document (Docs, Sheets,
+etc.). The agent receives the comment text, document context, and the comment thread so it can
+respond in-thread or make document edits.
+
+Requirements:
+
+- Subscribe to `drive.notice.comment_add_v1` in your Feishu app event subscription settings
+  (alongside the existing `im.message.receive_v1`)
+- The Drive tool is enabled by default; disable with `channels.feishu.tools.drive: false`
+
+The `feishu_drive` tool exposes these comment actions:
+
+| Action                 | Description                         |
+| ---------------------- | ----------------------------------- |
+| `list_comments`        | List comments on a document         |
+| `list_comment_replies` | List replies in a comment thread    |
+| `add_comment`          | Add a new top-level comment         |
+| `reply_comment`        | Reply to an existing comment thread |
+
+When the agent handles a Drive comment event, it receives:
+
+- the comment text and sender
+- document metadata (title, type, URL)
+- the comment thread context for in-thread replies
+
+After making document edits, the agent is guided to use `feishu_drive.reply_comment` to notify the
+commenter and then output the exact silent token `NO_REPLY` / `no_reply` to
+avoid duplicate sends.
+
 ## Runtime action surface
 
 Feishu currently exposes these runtime actions:
@@ -745,3 +782,12 @@ Feishu currently exposes these runtime actions:
 - `channel-info`
 - `channel-list`
 - `react` and `reactions` when reactions are enabled in config
+- `feishu_drive` comment actions: `list_comments`, `list_comment_replies`, `add_comment`, `reply_comment`
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

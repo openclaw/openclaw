@@ -18,10 +18,8 @@ export type GoogleChatDmConfig = {
 };
 
 export type GoogleChatGroupConfig = {
-  /** If false, disable the bot in this space. (Alias for allow: false.) */
+  /** If false, disable the bot in this space. */
   enabled?: boolean;
-  /** Legacy allow toggle; prefer enabled. */
-  allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
   /** Allowlist of users that can invoke the bot in this space. */
@@ -123,3 +121,9 @@ export type GoogleChatConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & GoogleChatAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    googlechat?: GoogleChatConfig;
+  }
+}
