@@ -1,4 +1,7 @@
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromPrivateNetworkOptIn,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "openclaw/plugin-sdk/zod";
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -116,7 +119,7 @@ export function createMattermostClient(params: {
       url,
       init,
       auditContext: "mattermost-api",
-      policy: params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+      policy: ssrfPolicyFromPrivateNetworkOptIn(params.allowPrivateNetwork),
     });
     try {
       const bodyBytes = NULL_BODY_STATUSES.has(response.status)

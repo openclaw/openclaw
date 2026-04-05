@@ -1,3 +1,4 @@
+export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
 export {
   namedAccountPromotionKeys,
   resolveSingleAccountPromotionTarget,

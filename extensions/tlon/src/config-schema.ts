@@ -13,13 +13,20 @@ export const TlonAuthorizationSchema = z.object({
   channelRules: z.record(z.string(), TlonChannelRuleSchema).optional(),
 });
 
+const TlonNetworkSchema = z
+  .object({
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const tlonCommonConfigFields = {
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   ship: ShipSchema.optional(),
   url: z.string().optional(),
   code: z.string().optional(),
-  allowPrivateNetwork: z.boolean().optional(),
+  network: TlonNetworkSchema,
   groupChannels: z.array(ChannelNestSchema).optional(),
   dmAllowlist: z.array(ShipSchema).optional(),
   autoDiscoverChannels: z.boolean().optional(),

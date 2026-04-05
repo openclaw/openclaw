@@ -1,9 +1,7 @@
 import type {
-  ChannelDoctorAdapter,
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
-import { createDangerousNameMatchingMutableAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   hasLegacyFlatAllowPrivateNetworkAlias,
@@ -14,42 +12,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function isMattermostMutableAllowEntry(raw: string): boolean {
-  const text = raw.trim();
-  if (!text || text === "*") {
-    return false;
-  }
-
-  const normalized = text
-    .replace(/^(mattermost|user):/i, "")
-    .replace(/^@/, "")
-    .trim()
-    .toLowerCase();
-
-  if (/^[a-z0-9]{26}$/.test(normalized)) {
-    return false;
-  }
-
-  return true;
-}
-
-export const collectMattermostMutableAllowlistWarnings =
-  createDangerousNameMatchingMutableAllowlistWarningCollector({
-    channel: "mattermost",
-    detector: isMattermostMutableAllowEntry,
-    collectLists: (scope) => [
-      {
-        pathLabel: `${scope.prefix}.allowFrom`,
-        list: scope.account.allowFrom,
-      },
-      {
-        pathLabel: `${scope.prefix}.groupAllowFrom`,
-        list: scope.account.groupAllowFrom,
-      },
-    ],
-  });
-
-function hasLegacyMattermostAllowPrivateNetworkInAccounts(value: unknown): boolean {
+function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
   const accounts = isRecord(value) ? value : null;
   return Boolean(
     accounts &&
@@ -59,7 +22,7 @@ function hasLegacyMattermostAllowPrivateNetworkInAccounts(value: unknown): boole
   );
 }
 
-export const MATTERMOST_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
+export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "mattermost"],
     message:
@@ -70,11 +33,15 @@ export const MATTERMOST_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "mattermost", "accounts"],
     message:
       "channels.mattermost.accounts.<id>.allowPrivateNetwork is legacy; use channels.mattermost.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
-    match: hasLegacyMattermostAllowPrivateNetworkInAccounts,
+    match: hasLegacyAllowPrivateNetworkInAccounts,
   },
 ];
 
-export function normalizeMattermostCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   const mattermost = isRecord(channels?.mattermost) ? channels.mattermost : null;
   if (!mattermost) {
@@ -134,9 +101,3 @@ export function normalizeMattermostCompatibilityConfig(cfg: OpenClawConfig): Cha
     changes,
   };
 }
-
-export const mattermostDoctor: ChannelDoctorAdapter = {
-  legacyConfigRules: MATTERMOST_LEGACY_CONFIG_RULES,
-  normalizeCompatibilityConfig: ({ cfg }) => normalizeMattermostCompatibilityConfig(cfg),
-  collectMutableAllowlistWarnings: collectMattermostMutableAllowlistWarnings,
-};

@@ -33,6 +33,7 @@ import {
   type OpenClawConfig,
 } from "./channel-api.js";
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
+import { nextcloudTalkDoctor } from "./doctor.js";
 import { monitorNextcloudTalkProvider } from "./monitor.js";
 import {
   looksLikeNextcloudTalkTargetId,
@@ -141,6 +142,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           }),
       },
       auth: nextcloudTalkApprovalAuth,
+      doctor: nextcloudTalkDoctor,
       groups: {
         resolveRequireMention: ({ cfg, accountId, groupId }) => {
           const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });

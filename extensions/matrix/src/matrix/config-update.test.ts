@@ -80,7 +80,9 @@ describe("updateMatrixAccountConfig", () => {
           accounts: {
             default: {
               allowBots: true,
-              allowPrivateNetwork: true,
+              network: {
+                dangerouslyAllowPrivateNetwork: true,
+              },
               proxy: "http://127.0.0.1:7890",
             },
           },
@@ -97,7 +99,7 @@ describe("updateMatrixAccountConfig", () => {
     expect(updated.channels?.["matrix"]?.accounts?.default).toMatchObject({
       allowBots: "mentions",
     });
-    expect(updated.channels?.["matrix"]?.accounts?.default?.allowPrivateNetwork).toBeUndefined();
+    expect(updated.channels?.["matrix"]?.accounts?.default?.network).toBeUndefined();
     expect(updated.channels?.["matrix"]?.accounts?.default?.proxy).toBeUndefined();
   });
 

@@ -20,6 +20,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { mattermostApprovalAuth } from "./approval-auth.js";
 import {
   chunkTextForOutbound,
@@ -30,7 +31,7 @@ import {
   type ChannelPlugin,
 } from "./channel-api.js";
 import { MattermostChannelConfigSchema } from "./config-surface.js";
-import { collectMattermostMutableAllowlistWarnings } from "./doctor.js";
+import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
   listMattermostAccountIds,
@@ -330,9 +331,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         }),
     },
     auth: mattermostApprovalAuth,
-    doctor: {
-      collectMutableAllowlistWarnings: collectMattermostMutableAllowlistWarnings,
-    },
+    doctor: mattermostDoctor,
     groups: {
       resolveRequireMention: resolveMattermostGroupRequireMention,
     },
@@ -388,7 +387,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
           baseUrl,
           token,
           timeoutMs,
-          account.config.allowPrivateNetwork === true,
+          isPrivateNetworkOptInEnabled(account.config),
         );
       },
       resolveAccountSnapshot: ({ account, runtime }) => ({

@@ -122,7 +122,7 @@ describe("tlon core", () => {
     ]);
     expect(result.cfg.channels?.tlon?.dmAllowlist).toEqual(["~zod", "~nec"]);
     expect(result.cfg.channels?.tlon?.autoDiscoverChannels).toBe(true);
-    expect(result.cfg.channels?.tlon?.allowPrivateNetwork).toBe(false);
+    expect(result.cfg.channels?.tlon?.network?.dangerouslyAllowPrivateNetwork).toBe(false);
   });
 
   it("resolves dm targets to normalized ships", () => {

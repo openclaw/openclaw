@@ -10,6 +10,11 @@ import {
   removePluginFromConfig,
 } from "openclaw/plugin-sdk/runtime";
 import {
+  hasLegacyFlatAllowPrivateNetworkAlias,
+  isPrivateNetworkOptInEnabled,
+  migrateLegacyFlatAllowPrivateNetworkAlias,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import {
   autoMigrateLegacyMatrixState,
   autoPrepareLegacyMatrixCrypto,
   detectLegacyMatrixCrypto,
@@ -49,6 +54,16 @@ function hasLegacyMatrixAccountRoomAllowAliases(value: unknown): boolean {
   });
 }
 
+function hasLegacyMatrixAccountPrivateNetworkAliases(value: unknown): boolean {
+  const accounts = isRecord(value) ? value : null;
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) =>
+    hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
+  );
+}
+
 function normalizeMatrixRoomAllowAliases(params: {
   rooms: Record<string, unknown>;
   pathPrefix: string;
@@ -86,6 +101,14 @@ function normalizeMatrixCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorC
   let updatedMatrix: Record<string, unknown> = matrix;
   let changed = false;
 
+  const topLevelPrivateNetwork = migrateLegacyFlatAllowPrivateNetworkAlias({
+    entry: updatedMatrix,
+    pathPrefix: "channels.matrix",
+    changes,
+  });
+  updatedMatrix = topLevelPrivateNetwork.entry;
+  changed = changed || topLevelPrivateNetwork.changed;
+
   const normalizeTopLevelRoomScope = (key: "groups" | "rooms") => {
     const rooms = isRecord(updatedMatrix[key]) ? updatedMatrix[key] : null;
     if (!rooms) {
@@ -116,6 +139,17 @@ function normalizeMatrixCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorC
       }
       let nextAccount: Record<string, unknown> = account;
       let accountChanged = false;
+
+      const privateNetworkMigration = migrateLegacyFlatAllowPrivateNetworkAlias({
+        entry: nextAccount,
+        pathPrefix: `channels.matrix.accounts.${accountId}`,
+        changes,
+      });
+      if (privateNetworkMigration.changed) {
+        nextAccount = privateNetworkMigration.entry;
+        accountChanged = true;
+      }
+
       for (const key of ["groups", "rooms"] as const) {
         const rooms = isRecord(nextAccount[key]) ? nextAccount[key] : null;
         if (!rooms) {
@@ -158,6 +192,18 @@ function normalizeMatrixCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorC
 }
 
 const MATRIX_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
+  {
+    path: ["channels", "matrix"],
+    message:
+      "channels.matrix.allowPrivateNetwork is legacy; use channels.matrix.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+    match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(isRecord(value) ? value : {}),
+  },
+  {
+    path: ["channels", "matrix", "accounts"],
+    message:
+      "channels.matrix.accounts.<id>.allowPrivateNetwork is legacy; use channels.matrix.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+    match: hasLegacyMatrixAccountPrivateNetworkAliases,
+  },
   {
     path: ["channels", "matrix", "groups"],
     message:

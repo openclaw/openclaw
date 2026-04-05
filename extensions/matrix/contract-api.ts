@@ -3,6 +3,7 @@ export {
   resetMatrixThreadBindingsForTests,
 } from "./src/matrix/thread-bindings.js";
 export { setMatrixRuntime } from "./src/runtime.js";
+export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
 export {
   namedAccountPromotionKeys,
   resolveSingleAccountPromotionTarget,

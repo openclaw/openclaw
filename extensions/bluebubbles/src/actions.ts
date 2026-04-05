@@ -7,6 +7,7 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import {
@@ -173,7 +174,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         baseUrl,
         password,
         target,
-        allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+        allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
       });
       if (!resolved) {
         throw new Error(`BlueBubbles ${action} failed: chatGuid not found for target.`);

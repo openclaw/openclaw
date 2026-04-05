@@ -17,6 +17,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   listBlueBubblesAccountIds,
   type ResolvedBlueBubblesAccount,
@@ -34,6 +35,7 @@ import {
 } from "./channel-shared.js";
 import type { BlueBubblesProbe } from "./channel.runtime.js";
 import { createBlueBubblesConversationBindingManager } from "./conversation-bindings.js";
+import { bluebubblesDoctor } from "./doctor.js";
 import {
   matchBlueBubblesAcpConversation,
   normalizeBlueBubblesAcpConversationId,
@@ -100,6 +102,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
         isConfigured: (account) => account.configured,
         describeAccount: (account): ChannelAccountSnapshot => describeBlueBubblesAccount(account),
       },
+      doctor: bluebubblesDoctor,
       conversationBindings: {
         supportsCurrentConversationBinding: true,
         createManager: ({ cfg, accountId }) =>
@@ -226,7 +229,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
             baseUrl: account.baseUrl,
             password: account.config.password ?? null,
             timeoutMs,
-            allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+            allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
           }),
         resolveAccountSnapshot: ({ account, runtime, probe }) => {
           const running = runtime?.running ?? false;

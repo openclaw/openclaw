@@ -278,7 +278,9 @@ describe("downloadBlueBubblesAttachment", () => {
           bluebubbles: {
             serverUrl: "http://localhost:1234",
             password: "test",
-            allowPrivateNetwork: true,
+            network: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
           },
         },
       },

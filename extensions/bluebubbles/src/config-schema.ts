@@ -32,6 +32,14 @@ const bluebubblesGroupConfigSchema = z.object({
   tools: ToolPolicySchema,
 });
 
+const bluebubblesNetworkSchema = z
+  .object({
+    /** Dangerous opt-in for same-host or trusted private/internal BlueBubbles deployments. */
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const bluebubblesAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -53,7 +61,7 @@ const bluebubblesAccountSchema = z
     mediaMaxMb: z.number().int().positive().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
     sendReadReceipts: z.boolean().optional(),
-    allowPrivateNetwork: z.boolean().optional(),
+    network: bluebubblesNetworkSchema,
     blockStreaming: z.boolean().optional(),
     groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
   })

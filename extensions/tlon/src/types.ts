@@ -5,6 +5,7 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { hasLegacyFlatAllowPrivateNetworkAlias, isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 
 type TlonAccountConfig = {
   name?: string;
@@ -12,7 +13,9 @@ type TlonAccountConfig = {
   ship?: string;
   url?: string;
   code?: string;
-  allowPrivateNetwork?: boolean;
+  network?: {
+    dangerouslyAllowPrivateNetwork?: boolean;
+  };
   groupChannels?: string[];
   dmAllowlist?: string[];
   groupInviteAllowlist?: string[];
@@ -102,7 +105,15 @@ export function resolveTlonAccount(
   const ship = (merged.ship ?? null) as string | null;
   const url = (merged.url ?? null) as string | null;
   const code = (merged.code ?? null) as string | null;
-  const allowPrivateNetwork = (merged.allowPrivateNetwork ?? null) as boolean | null;
+  const allowPrivateNetwork =
+    isPrivateNetworkOptInEnabled(merged)
+      ? true
+      : typeof merged.network?.dangerouslyAllowPrivateNetwork === "boolean"
+        ? merged.network.dangerouslyAllowPrivateNetwork
+        : hasLegacyFlatAllowPrivateNetworkAlias(merged) &&
+            typeof merged.allowPrivateNetwork === "boolean"
+          ? merged.allowPrivateNetwork
+          : null;
   const groupChannels = (merged.groupChannels ?? []) as string[];
   const dmAllowlist = (merged.dmAllowlist ?? []) as string[];
   const groupInviteAllowlist = (merged.groupInviteAllowlist ?? []) as string[];

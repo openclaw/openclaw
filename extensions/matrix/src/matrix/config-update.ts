@@ -167,10 +167,19 @@ export function updateMatrixAccountConfig(
   applyNullableStringField(nextAccount, "avatarUrl", patch.avatarUrl);
 
   if (patch.allowPrivateNetwork !== undefined) {
+    const nextNetwork =
+      nextAccount.network && typeof nextAccount.network === "object"
+        ? { ...(nextAccount.network as Record<string, unknown>) }
+        : {};
     if (patch.allowPrivateNetwork === null) {
-      delete nextAccount.allowPrivateNetwork;
+      delete nextNetwork.dangerouslyAllowPrivateNetwork;
     } else {
-      nextAccount.allowPrivateNetwork = patch.allowPrivateNetwork;
+      nextNetwork.dangerouslyAllowPrivateNetwork = patch.allowPrivateNetwork;
+    }
+    if (Object.keys(nextNetwork).length > 0) {
+      nextAccount.network = nextNetwork;
+    } else {
+      delete nextAccount.network;
     }
   }
 

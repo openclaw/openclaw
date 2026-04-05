@@ -19,6 +19,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   assertHttpUrlTargetsPrivateNetwork,
   isPrivateOrLoopbackHost,
+  isPrivateNetworkOptInEnabled,
   type LookupFn,
   normalizeAccountId,
   normalizeOptionalAccountId,
@@ -545,7 +546,7 @@ export function resolveMatrixConfig(
   });
   const initialSyncLimit = clampMatrixInitialSyncLimit(matrix.initialSyncLimit);
   const encryption = matrix.encryption ?? false;
-  const allowPrivateNetwork = matrix.allowPrivateNetwork === true ? true : undefined;
+  const allowPrivateNetwork = isPrivateNetworkOptInEnabled(matrix) ? true : undefined;
   return {
     homeserver: resolvedStrings.homeserver,
     userId: resolvedStrings.userId,
@@ -614,7 +615,9 @@ export function resolveMatrixConfigForAccount(
   const encryption =
     typeof account.encryption === "boolean" ? account.encryption : (matrix.encryption ?? false);
   const allowPrivateNetwork =
-    account.allowPrivateNetwork === true || matrix.allowPrivateNetwork === true ? true : undefined;
+    isPrivateNetworkOptInEnabled(account) || isPrivateNetworkOptInEnabled(matrix)
+      ? true
+      : undefined;
 
   return {
     homeserver: resolvedStrings.homeserver,

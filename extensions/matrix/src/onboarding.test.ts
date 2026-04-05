@@ -187,7 +187,9 @@ describe("matrix onboarding", () => {
 
     expect(result.cfg.channels?.matrix).toMatchObject({
       homeserver: "http://localhost.localdomain:8008",
-      allowPrivateNetwork: true,
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
       accessToken: "ops-token",
     });
   });
