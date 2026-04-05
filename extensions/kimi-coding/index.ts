@@ -2,6 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
 import { buildKimiCodingProvider } from "./provider-catalog.js";
+import { KIMI_REPLAY_POLICY } from "./replay-policy.js";
 import { wrapKimiProviderStream } from "./stream.js";
 
 const PLUGIN_ID = "kimi";
@@ -9,12 +10,6 @@ const PROVIDER_ID = "kimi";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function buildKimiReplayPolicy() {
-  return {
-    preserveSignatures: false,
-  };
 }
 
 export default definePluginEntry({
@@ -86,7 +81,7 @@ export default definePluginEntry({
           };
         },
       },
-      buildReplayPolicy: () => buildKimiReplayPolicy(),
+      buildReplayPolicy: () => KIMI_REPLAY_POLICY,
       wrapStreamFn: wrapKimiProviderStream,
     });
   },
