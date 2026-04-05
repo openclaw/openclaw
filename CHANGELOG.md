@@ -76,7 +76,6 @@ Docs: https://docs.openclaw.ai
 - Auth/failover: persist selected fallback overrides before retrying, shorten `auth_permanent` lockouts, and refresh websocket/shared-auth sessions only when real auth changes occur so retries and secret rotations behave predictably. (#60404, #60323, #60387) Thanks @extrasmall0 and @mappel-nv.
 - CLI/Commander: preserve Commander-computed exit codes for argument and help-error paths, and cover the user-argv parse mode in the regression tests so invalid CLI invocations no longer report success when exits are intercepted. (#60923) Thanks @Linux2010.
 - CLI/skills JSON: route `skills list --json`, `skills info --json`, and `skills check --json` output to stdout instead of stderr so machine-readable consumers receive JSON on the expected stream again. (#60914; fixes #57599; landed from contributor PR #57611 by @Aftabbs) Thanks @Aftabbs.
-<<<<<<< HEAD
 - Config/All Settings: keep the raw config view intact when sensitive fields are blank instead of corrupting or dropping the rendered snapshot. (#28214) Thanks @solodmd.
 - Control UI/avatar: honor `ui.assistant.avatar` when serving `/avatar/:agentId` so Appearance UI avatar paths stop falling back to initials placeholders. (#60778) Thanks @hannasdev.
 - Control UI/chat: add a per-session thinking-level picker in the chat header and mobile chat settings, and keep the browser bundle on UI-local thinking/session-key helpers so Safari no longer crashes on Node-only imports before rendering chat controls.
