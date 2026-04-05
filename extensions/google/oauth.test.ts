@@ -156,6 +156,39 @@ describe("extractGeminiCliCredentials", () => {
     }
   }
 
+  function installBundledNpmLayout(params: { bundleContent: string }) {
+    const binDir = join(rootDir, "fake", "npm-bundle-bin");
+    const geminiPath = join(binDir, "gemini");
+    const resolvedPath = geminiPath;
+    const geminiCliDir = join(binDir, "node_modules", "@google", "gemini-cli");
+    const packageJsonPath = normalizePath(join(geminiCliDir, "package.json"));
+    const bundleDir = join(geminiCliDir, "bundle");
+    const chunkPath = join(bundleDir, "chunk-ABC123.js");
+
+    process.env.PATH = binDir;
+    mockExistsSync.mockImplementation((p: string) => {
+      const normalized = normalizePath(p);
+      return (
+        normalized === normalizePath(geminiPath) ||
+        normalized === packageJsonPath ||
+        normalized === normalizePath(bundleDir)
+      );
+    });
+    mockRealpathSync.mockReturnValue(resolvedPath);
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (normalizePath(String(p)) === normalizePath(bundleDir)) {
+        return [dirent("chunk-ABC123.js", false)];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (normalizePath(String(p)) === normalizePath(chunkPath)) {
+        return params.bundleContent;
+      }
+      throw new Error(`Unexpected read for ${p}`);
+    });
+  }
+
   function installHomebrewLibexecLayout(params: { oauth2Content: string }) {
     const brewPrefix = join(rootDir, "opt", "homebrew");
     const cellarRoot = join(brewPrefix, "Cellar", "gemini-cli", "1.2.3");
@@ -332,6 +365,20 @@ describe("extractGeminiCliCredentials", () => {
 
   it("extracts credentials when PATH entry is an npm global shim", async () => {
     installNpmShimLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
+
+    clearCredentialsCache();
+    const result = extractGeminiCliCredentials();
+
+    expectFakeCliCredentials(result);
+  });
+
+  it("extracts credentials from bundled npm installs", async () => {
+    installBundledNpmLayout({
+      bundleContent: `
+        const OAUTH_CLIENT_ID = "${FAKE_CLIENT_ID}";
+        const OAUTH_CLIENT_SECRET = "${FAKE_CLIENT_SECRET}";
+      `,
+    });
 
     clearCredentialsCache();
     const result = extractGeminiCliCredentials();
