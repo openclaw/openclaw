@@ -39,6 +39,8 @@ function resolveWithStoredEntry(params?: {
   entry?: MockSessionStoreEntry;
   forceNew?: boolean;
   fresh?: boolean;
+  payloadModel?: string;
+  isCronSession?: boolean;
 }) {
   const sessionKey = params?.sessionKey ?? "webhook:stable-key";
   const store: SessionStore = params?.entry
@@ -53,6 +55,8 @@ function resolveWithStoredEntry(params?: {
     agentId: "main",
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
+    payloadModel: params?.payloadModel,
+    isCronSession: params?.isCronSession,
   });
 }
 
@@ -267,6 +271,190 @@ describe("resolveCronSession", () => {
       expect(result.isNewSession).toBe(true);
       // Should still preserve other fields from entry
       expect(result.sessionEntry.modelOverride).toBe("some-model");
+    });
+  });
+
+  // Tests for stale model-selection override clearing (#57947, #47592)
+  describe("payloadModel override clearing", () => {
+    it("clears model-selection overrides when forceNew and payloadModel are both set", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "old-session-id",
+          updatedAt: NOW_MS - 86_400_000,
+          modelOverride: "claude-opus-4.5",
+          providerOverride: "github-copilot",
+          authProfileOverride: "github-copilot:github",
+          authProfileOverrideSource: "auto",
+          authProfileOverrideCompactionCount: 3,
+          fallbackNoticeActiveModel: "bailian/glm-5",
+          fallbackNoticeSelectedModel: "github-copilot/claude-opus-4.6",
+          fallbackNoticeReason: "rate limit",
+          sendPolicy: "allow",
+        },
+        forceNew: true,
+        payloadModel: "bailian/qwen3.5-plus",
+        isCronSession: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      // Model-selection overrides must be cleared
+      expect(result.sessionEntry.providerOverride).toBeUndefined();
+      expect(result.sessionEntry.modelOverride).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeReason).toBeUndefined();
+      // Auth profile overrides must be PRESERVED to maintain round-robin
+      // rotation across runs — resolveSessionAuthProfileOverride() uses the
+      // previous value to pickNextAvailable() instead of pickFirstAvailable()
+      expect(result.sessionEntry.authProfileOverride).toBe("github-copilot:github");
+      expect(result.sessionEntry.authProfileOverrideSource).toBe("auto");
+      expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(3);
+      // Non-override fields must be preserved
+      expect(result.sessionEntry.sendPolicy).toBe("allow");
+    });
+
+    it("preserves model-selection overrides on shared sessions even with payloadModel", () => {
+      // Shared session target (no forceNew): the session entry persists back
+      // to the interactive session store.  Clearing overrides here would
+      // destroy user-set model preferences on the next interactive use.
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "old-session-id",
+          updatedAt: NOW_MS - 86_400_000,
+          modelOverride: "claude-opus-4.5",
+          providerOverride: "github-copilot",
+          fallbackNoticeActiveModel: "bailian/glm-5",
+          fallbackNoticeSelectedModel: "github-copilot/claude-opus-4.6",
+          fallbackNoticeReason: "rate limit",
+        },
+        fresh: false,
+        payloadModel: "bailian/qwen3.5-plus",
+      });
+
+      expect(result.isNewSession).toBe(true);
+      // Overrides must be preserved — shared session, not forceNew
+      expect(result.sessionEntry.modelOverride).toBe("claude-opus-4.5");
+      expect(result.sessionEntry.providerOverride).toBe("github-copilot");
+      expect(result.sessionEntry.fallbackNoticeActiveModel).toBe("bailian/glm-5");
+      expect(result.sessionEntry.fallbackNoticeSelectedModel).toBe(
+        "github-copilot/claude-opus-4.6",
+      );
+      expect(result.sessionEntry.fallbackNoticeReason).toBe("rate limit");
+    });
+
+    it("preserves model-selection overrides when payloadModel is not set", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "old-session-id",
+          updatedAt: NOW_MS - 86_400_000,
+          modelOverride: "gpt-4.1-mini",
+          providerOverride: "openai",
+          authProfileOverride: "openai:default",
+          authProfileOverrideSource: "user",
+          authProfileOverrideCompactionCount: 1,
+        },
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      // Without payloadModel, overrides must be preserved (backward compatibility)
+      expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
+      expect(result.sessionEntry.providerOverride).toBe("openai");
+      expect(result.sessionEntry.authProfileOverride).toBe("openai:default");
+      expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
+      expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(1);
+    });
+
+    it("preserves model-selection overrides when payloadModel is empty string", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "old-session-id",
+          updatedAt: NOW_MS - 86_400_000,
+          modelOverride: "gpt-4.1-mini",
+          providerOverride: "openai",
+        },
+        forceNew: true,
+        payloadModel: "",
+      });
+
+      expect(result.isNewSession).toBe(true);
+      // Empty string is falsy — overrides must be preserved
+      expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
+      expect(result.sessionEntry.providerOverride).toBe("openai");
+    });
+
+    it("does not clear model-selection overrides on fresh session reuse even with payloadModel", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id",
+          updatedAt: NOW_MS - 1000,
+          modelOverride: "claude-opus-4.5",
+          providerOverride: "github-copilot",
+        },
+        fresh: true,
+        payloadModel: "bailian/qwen3.5-plus",
+      });
+
+      expect(result.isNewSession).toBe(false);
+      // Session is reused (not new), so overrides must NOT be cleared
+      expect(result.sessionEntry.modelOverride).toBe("claude-opus-4.5");
+      expect(result.sessionEntry.providerOverride).toBe("github-copilot");
+    });
+
+    it("clears model-selection overrides and delivery routing when forceNew and payloadModel set", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          modelOverride: "sonnet-4",
+          providerOverride: "anthropic",
+          lastChannel: "slack" as never,
+          lastTo: "channel:C0XXXXXXXXX",
+        },
+        fresh: true,
+        forceNew: true,
+        payloadModel: "bailian/glm-5",
+        isCronSession: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      // Model-selection overrides cleared
+      expect(result.sessionEntry.providerOverride).toBeUndefined();
+      expect(result.sessionEntry.modelOverride).toBeUndefined();
+      // Delivery routing also cleared (existing behavior)
+      expect(result.sessionEntry.lastChannel).toBeUndefined();
+      expect(result.sessionEntry.lastTo).toBeUndefined();
+    });
+
+    it("preserves model-selection overrides on hook-dispatched isolated sessions (non-cron key)", () => {
+      // Hook-dispatched jobs set forceNew (sessionTarget "isolated") but can
+      // target a shared interactive session via a non-cron session key.
+      // Clearing overrides here would silently wipe user-set /model state.
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "interactive-session-id",
+          updatedAt: NOW_MS - 1000,
+          modelOverride: "claude-opus-4.6",
+          providerOverride: "github-copilot",
+          fallbackNoticeActiveModel: "bailian/glm-5",
+          fallbackNoticeSelectedModel: "github-copilot/claude-opus-4.6",
+          fallbackNoticeReason: "rate limit",
+        },
+        forceNew: true,
+        payloadModel: "bailian/qwen3.5-plus",
+        isCronSession: false,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      // Overrides must be preserved — hook-dispatched, not a cron session
+      expect(result.sessionEntry.modelOverride).toBe("claude-opus-4.6");
+      expect(result.sessionEntry.providerOverride).toBe("github-copilot");
+      expect(result.sessionEntry.fallbackNoticeActiveModel).toBe("bailian/glm-5");
+      expect(result.sessionEntry.fallbackNoticeSelectedModel).toBe(
+        "github-copilot/claude-opus-4.6",
+      );
+      expect(result.sessionEntry.fallbackNoticeReason).toBe("rate limit");
     });
   });
 });

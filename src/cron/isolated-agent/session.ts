@@ -15,6 +15,8 @@ export function resolveCronSession(params: {
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
+  payloadModel?: string;
+  isCronSession?: boolean;
 }) {
   const sessionCfg = params.cfg.session;
   const storePath = resolveStorePath(sessionCfg?.store, {
@@ -84,6 +86,38 @@ export function resolveCronSession(params: {
       lastThreadId: undefined,
       deliveryContext: undefined,
     }),
+    // When an isolated cron session specifies its own payload model, clear
+    // model-selection overrides inherited from prior sessions.  Without
+    // this, stale providerOverride / modelOverride copied via the spread
+    // above forces the cron run to retry against a rate-limited provider
+    // before the payload model's fallback chain kicks in.
+    //
+    // The guard requires all three conditions:
+    //   - forceNew: scoped to isolated sessions so that shared session
+    //     targets — which persist back to the interactive session entry —
+    //     never lose user-set overrides.
+    //   - payloadModel: only clear when the cron job specifies its own
+    //     model (backward compatibility).
+    //   - isCronSession: hook-dispatched jobs also set forceNew (via
+    //     sessionTarget "isolated") but can target shared interactive
+    //     sessions through non-cron session keys.  Without this guard,
+    //     a hook call with a payload model would silently wipe user-set
+    //     /model state from the interactive session entry.
+    //
+    // Note: authProfileOverride and its companion fields are intentionally
+    // NOT cleared here — resolveSessionAuthProfileOverride() uses the
+    // previous value to rotate across profiles via pickNextAvailable(),
+    // and clearing it would regress round-robin failover for isolated
+    // cron jobs (which always create new sessions).
+    ...(params.forceNew &&
+      params.payloadModel &&
+      params.isCronSession && {
+        providerOverride: undefined,
+        modelOverride: undefined,
+        fallbackNoticeActiveModel: undefined,
+        fallbackNoticeSelectedModel: undefined,
+        fallbackNoticeReason: undefined,
+      }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };
 }

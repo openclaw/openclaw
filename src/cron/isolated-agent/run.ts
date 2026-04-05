@@ -281,6 +281,8 @@ async function prepareCronRunContext(params: {
     agentId,
     nowMs: now,
     forceNew: input.job.sessionTarget === "isolated",
+    payloadModel: input.job.payload.kind === "agentTurn" ? input.job.payload.model : undefined,
+    isCronSession: baseSessionKey.startsWith("cron:"),
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")
