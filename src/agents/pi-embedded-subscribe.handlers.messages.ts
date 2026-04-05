@@ -234,8 +234,9 @@ export function handleMessageUpdate(
       delta: thinkingDelta,
       content: thinkingContent,
     });
-    if (ctx.state.streamReasoning) {
-      // Prefer full partial-message thinking when available; fall back to event payloads.
+    {
+      // Always call emitReasoningStream — it handles WS broadcast unconditionally
+      // and gates the messaging callback internally.
       const partialThinking = extractAssistantThinking(msg);
       ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
     }
@@ -306,8 +307,9 @@ export function handleMessageUpdate(
     }
   }
 
-  if (ctx.state.streamReasoning) {
-    // Handle partial <think> tags: stream whatever reasoning is visible so far.
+  // Stream reasoning from <think> tags when reasoning output is expected.
+  // Gated to avoid O(n²) regex scans on every delta when nobody needs it.
+  if (ctx.state.streamReasoning || !ctx.params.silentExpected) {
     ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
   }
   const next =
@@ -638,7 +640,7 @@ export function handleMessageEnd(
   if (!shouldEmitReasoningBeforeAnswer) {
     maybeEmitReasoning();
   }
-  if (!ctx.params.silentExpected && ctx.state.streamReasoning && rawThinking) {
+  if (rawThinking) {
     ctx.emitReasoningStream(rawThinking);
   }
 
