@@ -3,7 +3,9 @@ type UnsupportedSecretRefConfigCandidate = {
   value: unknown;
 };
 
+export { normalizeCompatibilityConfig } from "./src/doctor-contract.js";
 import { hasAnyWhatsAppAuth } from "./src/accounts.js";
+export { canonicalizeLegacySessionKey, isLegacyGroupSessionKey } from "./src/session-contract.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
