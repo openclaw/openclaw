@@ -468,6 +468,8 @@ async function runAutoPinnedRotationCase(params: {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
+    const initialUsageStats = await readUsageStats(agentDir);
+    const initialP2LastUsed = initialUsageStats["openai:p2"]?.lastUsed;
     mockFailedThenSuccessfulAttempt(params.errorMessage);
     await runAutoPinnedOpenAiTurn({
       agentDir,
@@ -479,7 +481,7 @@ async function runAutoPinnedRotationCase(params: {
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
     const usageStats = await readUsageStats(agentDir);
-    return { usageStats };
+    return { usageStats, initialP2LastUsed };
   });
 }
 
@@ -814,21 +816,21 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   });
 
   it("rotates for auto-pinned profiles across retryable stream failures", async () => {
-    const { usageStats } = await runAutoPinnedRotationCase({
+    const { usageStats, initialP2LastUsed } = await runAutoPinnedRotationCase({
       errorMessage: "rate limit",
       sessionKey: "agent:test:auto",
       runId: "run:auto",
     });
-    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p2"]?.lastUsed).toBeGreaterThan(initialP2LastUsed);
   });
 
   it("rotates for overloaded assistant failures across auto-pinned profiles", async () => {
-    const { usageStats } = await runAutoPinnedRotationCase({
+    const { usageStats, initialP2LastUsed } = await runAutoPinnedRotationCase({
       errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       sessionKey: "agent:test:overloaded-rotation",
       runId: "run:overloaded-rotation",
     });
-    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p2"]?.lastUsed).toBeGreaterThan(initialP2LastUsed);
     expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
     expect(computeBackoffMock).not.toHaveBeenCalled();
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
@@ -914,37 +916,37 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   });
 
   it("uses configured overload backoff before rotating profiles", async () => {
-    const { usageStats } = await runAutoPinnedRotationCase({
+    const { usageStats, initialP2LastUsed } = await runAutoPinnedRotationCase({
       errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       sessionKey: "agent:test:overloaded-configured-backoff",
       runId: "run:overloaded-configured-backoff",
       config: makeConfig({ overloadedBackoffMs: 321 }),
     });
-    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p2"]?.lastUsed).toBeGreaterThan(initialP2LastUsed);
     expect(computeBackoffMock).not.toHaveBeenCalled();
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledWith(321, undefined);
   });
 
   it("rotates on timeout without cooling down the timed-out profile", async () => {
-    const { usageStats } = await runAutoPinnedRotationCase({
+    const { usageStats, initialP2LastUsed } = await runAutoPinnedRotationCase({
       errorMessage: "request ended without sending any chunks",
       sessionKey: "agent:test:timeout-no-cooldown",
       runId: "run:timeout-no-cooldown",
     });
-    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p2"]?.lastUsed).toBeGreaterThan(initialP2LastUsed);
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
     expect(computeBackoffMock).not.toHaveBeenCalled();
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
   });
 
   it("rotates on bare service unavailable without cooling down the profile", async () => {
-    const { usageStats } = await runAutoPinnedRotationCase({
+    const { usageStats, initialP2LastUsed } = await runAutoPinnedRotationCase({
       errorMessage: "LLM error: service unavailable",
       sessionKey: "agent:test:service-unavailable-no-cooldown",
       runId: "run:service-unavailable-no-cooldown",
     });
-    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p2"]?.lastUsed).toBeGreaterThan(initialP2LastUsed);
     expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
   });
 
