@@ -89,6 +89,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
+import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { startMcpLoopbackServer } from "./mcp-http.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
@@ -1203,8 +1204,10 @@ export async function startGatewayServer(
 
     const execApprovalManager = new ExecApprovalManager();
     const execApprovalForwarder = createExecApprovalForwarder();
+    const execApprovalIosPushDelivery = createExecApprovalIosPushDelivery({ log });
     const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
       forwarder: execApprovalForwarder,
+      iosPushDelivery: execApprovalIosPushDelivery,
     });
     const pluginApprovalManager = new ExecApprovalManager<
       import("../infra/plugin-approvals.js").PluginApprovalRequestPayload
