@@ -11,6 +11,7 @@ const hoisted = vi.hoisted(() => ({
   convertMarkdownTables: vi.fn((text: string) => text),
   record: vi.fn(),
   resolveNextcloudTalkAccount: vi.fn(),
+  ssrfPolicyFromPrivateNetworkOptIn: vi.fn(() => undefined),
   generateNextcloudTalkSignature: vi.fn(() => ({
     random: "r",
     signature: "s",
@@ -26,6 +27,7 @@ vi.mock("./send.runtime.js", () => {
     getNextcloudTalkRuntime: () => createSendCfgThreadingRuntime(hoisted),
     resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
     resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
+    ssrfPolicyFromPrivateNetworkOptIn: hoisted.ssrfPolicyFromPrivateNetworkOptIn,
   };
 });
 
@@ -50,6 +52,7 @@ describe("nextcloud-talk send cfg threading", () => {
     hoisted.resolveMarkdownTableMode.mockClear();
     hoisted.convertMarkdownTables.mockClear();
     hoisted.record.mockReset();
+    hoisted.ssrfPolicyFromPrivateNetworkOptIn.mockClear();
     hoisted.generateNextcloudTalkSignature.mockClear();
     hoisted.resolveNextcloudTalkAccount.mockReset();
     hoisted.resolveNextcloudTalkAccount.mockReturnValue(defaultAccount);
