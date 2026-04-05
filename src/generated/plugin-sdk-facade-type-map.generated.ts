@@ -166,6 +166,18 @@ export interface PluginSdkFacadeTypeMap {
       GenerateImageRuntimeResult: import("@openclaw/image-generation-core/runtime-api.js").GenerateImageRuntimeResult;
     };
   };
+  "video-generation-runtime": {
+    module: typeof import("@openclaw/video-generation-core/runtime-api.js");
+    sourceModules: {
+      source1: {
+        module: typeof import("@openclaw/video-generation-core/runtime-api.js");
+      };
+    };
+    types: {
+      GenerateVideoParams: import("@openclaw/video-generation-core/runtime-api.js").GenerateVideoParams;
+      GenerateVideoRuntimeResult: import("@openclaw/video-generation-core/runtime-api.js").GenerateVideoRuntimeResult;
+    };
+  };
   "kimi-coding": {
     module: typeof import("@openclaw/kimi-coding/api.js");
     sourceModules: {
@@ -337,20 +349,38 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {};
   };
-  modelstudio: {
-    module: typeof import("@openclaw/modelstudio/api.js");
+  qwen: {
+    module: typeof import("@openclaw/qwen/api.js");
     sourceModules: {
       source1: {
-        module: typeof import("@openclaw/modelstudio/api.js");
+        module: typeof import("@openclaw/qwen/api.js");
+      };
+    };
+    types: {};
+  };
+  "qwen-definitions": {
+    module: typeof import("@openclaw/qwen/api.js");
+    sourceModules: {
+      source1: {
+        module: typeof import("@openclaw/qwen/api.js");
+      };
+    };
+    types: {};
+  };
+  modelstudio: {
+    module: typeof import("@openclaw/qwen/api.js");
+    sourceModules: {
+      source1: {
+        module: typeof import("@openclaw/qwen/api.js");
       };
     };
     types: {};
   };
   "modelstudio-definitions": {
-    module: typeof import("@openclaw/modelstudio/api.js");
+    module: typeof import("@openclaw/qwen/api.js");
     sourceModules: {
       source1: {
-        module: typeof import("@openclaw/modelstudio/api.js");
+        module: typeof import("@openclaw/qwen/api.js");
       };
     };
     types: {};

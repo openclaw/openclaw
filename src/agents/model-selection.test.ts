@@ -419,7 +419,7 @@ describe("model-selection", () => {
             "qwen-dashscope": {
               models: [{ id: "qwen-max" }],
             },
-            modelstudio: {
+            qwen: {
               models: [{ id: "qwen-max" }],
             },
           },
@@ -779,6 +779,36 @@ describe("model-selection", () => {
         expect(warning).toContain('Falling back to "google/claude-3-5-sonnet"');
         expect(warning).not.toContain("\u001B");
         expect(warning).not.toContain("\n");
+      } finally {
+        warnSpy.mockRestore();
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    });
+
+    it("infers a unique configured provider for bare default model strings", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = {
+          agents: {
+            defaults: {
+              model: { primary: "claude-opus-4-6" },
+              models: {
+                "anthropic/claude-opus-4-6": {},
+              },
+            },
+          },
+        } as OpenClawConfig;
+
+        const result = resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+        });
+
+        expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+        expect(warnSpy).not.toHaveBeenCalled();
       } finally {
         warnSpy.mockRestore();
         setLoggerOverride(null);

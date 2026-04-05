@@ -68,6 +68,10 @@
     "target": "BytePlus（国际版）"
   },
   {
+    "source": "Anthropic (API + Claude CLI)",
+    "target": "Anthropic（API + Claude CLI）"
+  },
+  {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
   },
@@ -172,6 +176,10 @@
     "target": "网络模型"
   },
   {
+    "source": "Bridge protocol (legacy nodes, historical)",
+    "target": "Bridge protocol（旧版节点，历史参考）"
+  },
+  {
     "source": "Doctor",
     "target": "Doctor"
   },
@@ -230,6 +238,14 @@
   {
     "source": "CLI",
     "target": "CLI"
+  },
+  {
+    "source": "/cli/gateway",
+    "target": "/cli/gateway"
+  },
+  {
+    "source": "/gateway#multiple-gateways-same-host",
+    "target": "/gateway#multiple-gateways-same-host"
   },
   {
     "source": "install sanity",

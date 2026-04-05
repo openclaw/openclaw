@@ -67,6 +67,13 @@ Most channel plugins do not need approval-specific code.
 - If a channel can infer stable owner-like DM identities from existing config, use `createResolvedApproverActionAuthAdapter` from `openclaw/plugin-sdk/approval-runtime` to restrict same-chat `/approve` without adding approval-specific core logic.
 - If a channel needs native approval delivery, keep channel code focused on target normalization and transport hooks. Use `createChannelExecApprovalProfile`, `createChannelNativeOriginTargetResolver`, `createChannelApproverDmTargetResolver`, `createApproverRestrictedNativeApprovalCapability`, and `createChannelNativeApprovalRuntime` from `openclaw/plugin-sdk/approval-runtime` so core owns request filtering, routing, dedupe, expiry, and gateway subscription.
 - Native approval channels must route both `accountId` and `approvalKind` through those helpers. `accountId` keeps multi-account approval policy scoped to the right bot account, and `approvalKind` keeps exec vs plugin approval behavior available to the channel without hardcoded branches in core.
+- Preserve the delivered approval id kind end-to-end. Native clients should not
+  guess or rewrite exec vs plugin approval routing from channel-local state.
+- Different approval kinds can intentionally expose different native surfaces.
+  Current bundled examples:
+  - Slack keeps native approval routing available for both exec and plugin ids.
+  - Matrix keeps native DM/channel routing for exec approvals only and leaves
+    plugin approvals on the shared same-chat `/approve` path.
 - `createApproverRestrictedNativeApprovalAdapter` still exists as a compatibility wrapper, but new code should prefer the capability builder and expose `approvalCapability` on the plugin.
 
 For hot channel entrypoints, prefer the narrower runtime subpaths when you only
@@ -89,8 +96,11 @@ surface.
 For setup specifically:
 
 - `openclaw/plugin-sdk/setup-runtime` covers the runtime-safe setup helpers:
-  lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, and the
-  delegated setup-proxy builders
+  import-safe setup patch adapters (`createPatchedAccountSetupAdapter`,
+  `createEnvPatchedAccountSetupAdapter`,
+  `createSetupInputPresenceValidator`), lookup-note output,
+  `promptResolvedAllowFrom`, `splitSetupEntries`, and the delegated
+  setup-proxy builders
 - `openclaw/plugin-sdk/setup-adapter-runtime` is the narrow env-aware adapter
   seam for `createEnvPatchedAccountSetupAdapter`
 - `openclaw/plugin-sdk/channel-setup` covers the optional-install setup
@@ -482,6 +492,14 @@ Write colocated tests in `src/channel.test.ts`:
     TTS, STT, media, subagent via api.runtime
   </Card>
 </CardGroup>
+
+<Note>
+Reserved bundled-helper seams such as `plugin-sdk/whatsapp-surface` still
+exist for bundled-plugin maintenance and compatibility. They are not the
+recommended pattern for new channel plugins; prefer the generic channel/setup/
+reply/runtime subpaths from the common SDK surface unless you are maintaining
+that bundled plugin family directly.
+</Note>
 
 ## Next steps
 

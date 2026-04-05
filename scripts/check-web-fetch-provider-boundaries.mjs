@@ -21,7 +21,6 @@ const allowedFiles = new Set([
   "src/agents/tools/web-fetch.test-harness.ts",
   "src/config/legacy-web-fetch.ts",
   "src/config/zod-schema.agent-runtime.ts",
-  "src/plugins/bundled-provider-auth-env-vars.generated.ts",
   "src/secrets/target-registry-data.ts",
 ]);
 const suspiciousPatterns = [
