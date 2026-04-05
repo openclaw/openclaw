@@ -41,6 +41,17 @@ const NodeHostSchema = z
   .strict()
   .optional();
 
+const ClawConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxActiveMissions: z.number().int().positive().optional(),
+    loopMs: z.number().int().positive().optional(),
+    requiredVerifier: z.boolean().optional(),
+    autonomyDefault: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const MemoryQmdPathSchema = z
   .object({
     path: z.string(),
@@ -404,6 +415,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    claw: ClawConfigSchema,
     ui: z
       .object({
         seamColor: HexColorSchema.optional(),

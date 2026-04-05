@@ -1,13 +1,22 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.js";
 import type { TaskFlowRegistryStore } from "../tasks/task-flow-registry.store.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import { createClawMissionService } from "./service.js";
+
+function agentResult(text: string) {
+  return {
+    payloads: [{ text }],
+    meta: {
+      durationMs: 1,
+    },
+  };
+}
 
 function createMemoryTaskFlowStore(): TaskFlowRegistryStore {
   let flows = new Map<string, TaskFlowRecord>();
@@ -98,14 +107,14 @@ describe("createClawMissionService", () => {
     expect(missionId).toBeTruthy();
 
     const approved = await service.approveMissionStart(missionId!);
-    expect(approved.mission?.status).toBe("running");
-    expect(approved.mission?.startedAt).toBeTruthy();
+    expect(approved.mission?.status).toBe("queued");
+    expect(approved.mission?.startedAt).toBeNull();
 
     const paused = await service.pauseMission(missionId!, "Operator intervention");
     expect(paused.mission?.status).toBe("paused");
 
     const resumed = await service.resumeMission(missionId!);
-    expect(resumed.mission?.status).toBe("running");
+    expect(resumed.mission?.status).toBe("queued");
 
     const cancelled = await service.cancelMission(missionId!, "No longer needed");
     expect(cancelled.mission?.status).toBe("cancelled");
@@ -167,9 +176,9 @@ describe("createClawMissionService", () => {
     await service.pauseAll(false);
     const resumedDashboard = await service.buildDashboard();
     expect(resumedDashboard.control.pauseAll).toBe(false);
-    expect(resumedDashboard.missions[0]?.status).toBe("running");
+    expect(resumedDashboard.missions[0]?.status).toBe("queued");
     expect(resumedDashboard.missions[0]?.currentStep).toBe(
-      "Mission execution resumed after global control was cleared.",
+      "Queued after the global control was cleared.",
     );
   });
 
@@ -206,5 +215,99 @@ describe("createClawMissionService", () => {
     await expect(service.resumeMission(missionId)).rejects.toThrow(
       'Cannot resume mission from status "cancelled".',
     );
+  });
+
+  it("runs a queued mission through the runner and verifier cycle", async () => {
+    const runEmbeddedPiAgent = vi
+      .fn()
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "verify",
+            summary: "The runner believes the mission is complete.",
+            currentStep: "Ready for verification.",
+            nextStep: "Run the fresh verification pass.",
+            progress: true,
+            evidence: ["Implemented the requested changes."],
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "done",
+            summary: "All explicit done criteria are satisfied.",
+            evidence: ["Verified against PROJECT_DONE_CRITERIA.md."],
+          }),
+        ),
+      );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Execute a mission end to end with a fresh verifier pass.",
+    });
+    const missionId = created.mission!.id;
+    await service.approveMissionStart(missionId);
+
+    const firstCycle = await service.runNextMissionCycle();
+    expect(firstCycle?.mission?.status).toBe("verifying");
+
+    const secondCycle = await service.runNextMissionCycle();
+    expect(secondCycle?.mission?.status).toBe("done");
+    expect(secondCycle?.mission?.endedAt).toBeTruthy();
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+
+    const audit = await service.getAudit(missionId);
+    expect(audit.map((entry) => entry.type)).toEqual(
+      expect.arrayContaining([
+        "mission.started",
+        "mission.runnerCycle",
+        "mission.verifying",
+        "mission.verifierCycle",
+        "mission.done",
+      ]),
+    );
+  });
+
+  it("marks running missions as recovering and resumes them on the next cycle", async () => {
+    const runEmbeddedPiAgent = vi
+      .fn()
+      .mockResolvedValue(
+        agentResult(
+          JSON.stringify({
+            outcome: "continue",
+            summary: "The runner made progress and should keep going.",
+            currentStep: "Continue mission execution.",
+            nextStep: "Keep executing the next task.",
+            progress: true,
+            evidence: ["Recovered and continued execution."],
+          }),
+        ),
+      );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Resume an interrupted mission safely after startup recovery.",
+    });
+    const missionId = created.mission!.id;
+    await service.approveMissionStart(missionId);
+    await service.runNextMissionCycle();
+
+    const recovered = await service.recoverInterruptedMissions();
+    expect(recovered?.mission?.status).toBe("recovering");
+
+    const resumed = await service.runNextMissionCycle();
+    expect(resumed?.mission?.status).toBe("running");
+    expect(resumed?.mission?.currentStep).toBe("Keep executing the next task.");
   });
 });

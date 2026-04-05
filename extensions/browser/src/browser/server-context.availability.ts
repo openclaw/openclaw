@@ -47,7 +47,7 @@ type AvailabilityDeps = {
 type AvailabilityOps = {
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
   isReachable: (timeoutMs?: number) => Promise<boolean>;
-  ensureBrowserAvailable: () => Promise<void>;
+  ensureBrowserAvailable: (signal?: AbortSignal) => Promise<void>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
 };
 
@@ -59,6 +59,13 @@ export function createProfileAvailability({
   setProfileRunning,
 }: AvailabilityDeps): AvailabilityOps {
   const capabilities = getBrowserProfileCapabilities(profile);
+  const abortError = (signal?: AbortSignal) =>
+    signal?.reason instanceof Error ? signal.reason : new Error("browser operation aborted");
+  const throwIfAborted = (signal?: AbortSignal) => {
+    if (signal?.aborted) {
+      throw abortError(signal);
+    }
+  };
   const resolveTimeouts = (timeoutMs: number | undefined) =>
     resolveCdpReachabilityTimeouts({
       profileIsLoopback: profile.cdpIsLoopback,
@@ -127,11 +134,12 @@ export function createProfileAvailability({
     }
   };
 
-  const waitForCdpReadyAfterLaunch = async (): Promise<void> => {
+  const waitForCdpReadyAfterLaunch = async (signal?: AbortSignal): Promise<void> => {
     // launchOpenClawChrome() can return before Chrome is fully ready to serve /json/version + CDP WS.
     // If a follow-up call races ahead, we can hit PortInUseError trying to launch again on the same port.
     const deadlineMs = Date.now() + CDP_READY_AFTER_LAUNCH_WINDOW_MS;
     while (Date.now() < deadlineMs) {
+      throwIfAborted(signal);
       const remainingMs = Math.max(0, deadlineMs - Date.now());
       // Keep each attempt short; loopback profiles derive a WS timeout from this value.
       const attemptTimeoutMs = Math.max(
@@ -144,14 +152,15 @@ export function createProfileAvailability({
       await new Promise((r) => setTimeout(r, CDP_READY_AFTER_LAUNCH_POLL_MS));
     }
     throw new Error(
-      `Chrome CDP websocket for profile "${profile.name}" is not reachable after start.`,
+      `Chrome startup timed out waiting for CDP websocket readiness for profile "${profile.name}". The browser may still be launching.`,
     );
   };
 
-  const waitForChromeMcpReadyAfterAttach = async (): Promise<void> => {
+  const waitForChromeMcpReadyAfterAttach = async (signal?: AbortSignal): Promise<void> => {
     const deadlineMs = Date.now() + CHROME_MCP_ATTACH_READY_WINDOW_MS;
     let lastError: unknown;
     while (Date.now() < deadlineMs) {
+      throwIfAborted(signal);
       try {
         await listChromeMcpTabs(profile.name, profile.userDataDir);
         return;
@@ -167,7 +176,7 @@ export function createProfileAvailability({
     );
   };
 
-  const ensureBrowserAvailable = async (): Promise<void> => {
+  const ensureBrowserAvailable = async (signal?: AbortSignal): Promise<void> => {
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
       if (profile.userDataDir && !fs.existsSync(profile.userDataDir)) {
@@ -176,19 +185,20 @@ export function createProfileAvailability({
         );
       }
       await ensureChromeMcpAvailable(profile.name, profile.userDataDir);
-      await waitForChromeMcpReadyAfterAttach();
+      await waitForChromeMcpReadyAfterAttach(signal);
       return;
     }
     const current = state();
     const remoteCdp = capabilities.isRemote;
     const attachOnly = profile.attachOnly;
     const profileState = getProfileState();
+    throwIfAborted(signal);
     const httpReachable = await isHttpReachable();
 
     if (!httpReachable) {
       if ((attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
-        await opts.onEnsureAttachTarget(profile);
-        if (await isHttpReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS)) {
+        await opts.onEnsureAttachTarget(profile, signal);
+        if (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS)) {
           return;
         }
       }
@@ -210,10 +220,10 @@ export function createProfileAvailability({
             : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
         );
       }
-      const launched = await launchOpenClawChrome(current.resolved, profile);
+      const launched = await launchOpenClawChrome(current.resolved, profile, signal);
       attachRunning(launched);
       try {
-        await waitForCdpReadyAfterLaunch();
+        await waitForCdpReadyAfterLaunch(signal);
       } catch (err) {
         await stopOpenClawChrome(launched).catch(() => {});
         setProfileRunning(null);
@@ -231,7 +241,7 @@ export function createProfileAvailability({
     // local ownership/restart handling; just run attach retries and surface attach errors.
     if (attachOnly || remoteCdp) {
       if (opts.onEnsureAttachTarget) {
-        await opts.onEnsureAttachTarget(profile);
+        await opts.onEnsureAttachTarget(profile, signal);
         if (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS)) {
           return;
         }
@@ -254,7 +264,7 @@ export function createProfileAvailability({
     await stopOpenClawChrome(profileState.running);
     setProfileRunning(null);
 
-    const relaunched = await launchOpenClawChrome(current.resolved, profile);
+    const relaunched = await launchOpenClawChrome(current.resolved, profile, signal);
     attachRunning(relaunched);
 
     if (!(await isReachable(PROFILE_POST_RESTART_WS_TIMEOUT_MS))) {

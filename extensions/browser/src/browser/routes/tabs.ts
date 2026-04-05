@@ -1,4 +1,5 @@
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "../errors.js";
+import { PROFILE_HTTP_REACHABILITY_TIMEOUT_MS } from "../cdp-timeouts.js";
 import {
   assertBrowserNavigationAllowed,
   withBrowserNavigationPolicy,
@@ -54,7 +55,7 @@ async function withTabsProfileRoute(params: {
 }
 
 async function ensureBrowserRunning(profileCtx: ProfileContext, res: BrowserResponse) {
-  if (!(await profileCtx.isReachable(300))) {
+  if (!(await profileCtx.isReachable(PROFILE_HTTP_REACHABILITY_TIMEOUT_MS))) {
     jsonError(
       res,
       new BrowserProfileUnavailableError("browser not running").status,
@@ -110,7 +111,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       res,
       ctx,
       run: async (profileCtx) => {
-        const reachable = await profileCtx.isReachable(300);
+        const reachable = await profileCtx.isReachable(PROFILE_HTTP_REACHABILITY_TIMEOUT_MS);
         if (!reachable) {
           return res.json({ running: false, tabs: [] as unknown[] });
         }
@@ -186,7 +187,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       mapTabError: true,
       run: async (profileCtx) => {
         if (action === "list") {
-          const reachable = await profileCtx.isReachable(300);
+          const reachable = await profileCtx.isReachable(PROFILE_HTTP_REACHABILITY_TIMEOUT_MS);
           if (!reachable) {
             return res.json({ ok: true, tabs: [] as unknown[] });
           }

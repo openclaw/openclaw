@@ -7,6 +7,7 @@ import {
   formatGatewayPidList,
   signalVerifiedGatewayPidSync,
 } from "../../infra/gateway-processes.js";
+import { triggerOpenClawRestart } from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
@@ -88,7 +89,7 @@ async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void>
   }
   if (!isRestartEnabled(probe.configSnapshot as { commands?: unknown } | undefined)) {
     throw new Error(
-      "Gateway restart is disabled in the running gateway config (commands.restart=false); unmanaged SIGUSR1 restart would be ignored",
+      "Gateway restart is disabled in the running gateway config (commands.restart=false); unmanaged restart would be ignored",
     );
   }
 }
@@ -123,6 +124,18 @@ async function restartGatewayWithoutServiceManager(port: number) {
     throw new Error(
       `multiple gateway processes are listening on port ${port}: ${formatGatewayPidList(pids)}; use "openclaw gateway status --deep" before retrying restart`,
     );
+  }
+  if (process.platform === "win32") {
+    signalVerifiedGatewayPidSync(pids[0], "SIGTERM");
+    const restart = triggerOpenClawRestart();
+    if (!restart.ok) {
+      const detail = restart.detail ? ` ${restart.detail}` : "";
+      throw new Error(`Windows gateway restart failed via ${restart.method}.${detail}`);
+    }
+    return {
+      result: "restarted" as const,
+      message: `Gateway restart handed off to ${restart.method} for unmanaged process on port ${port}: ${pids[0]}.`,
+    };
   }
   signalVerifiedGatewayPidSync(pids[0], "SIGUSR1");
   return {
