@@ -8,6 +8,7 @@ import {
   readWindowsListeningPidsOnPortSync,
   readWindowsListeningPidsResultSync,
   readWindowsProcessArgsSync,
+  type WindowsListeningPidsResult,
 } from "./windows-port-pids.js";
 
 const SPAWN_TIMEOUT_MS = 2000;
@@ -97,6 +98,22 @@ function findVerifiedWindowsGatewayPidsOnPortSync(port: number): number[] {
       const args = readWindowsProcessArgsSync(pid);
       return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
     });
+}
+
+function findVerifiedWindowsGatewayPidsOnPortResultSync(port: number): WindowsListeningPidsResult {
+  const result = readWindowsListeningPidsResultSync(port);
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    pids: Array.from(new Set(result.pids))
+      .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== process.pid)
+      .filter((pid) => {
+        const args = readWindowsProcessArgsSync(pid);
+        return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
+      }),
+  };
 }
 
 /**
@@ -306,8 +323,8 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 
@@ -361,7 +378,17 @@ export function cleanStaleGatewayProcessesSync(portOverride?: number): number[] 
       typeof portOverride === "number" && Number.isFinite(portOverride) && portOverride > 0
         ? Math.floor(portOverride)
         : resolveGatewayPort(undefined, process.env);
-    const stalePids = findGatewayPidsOnPortSync(port);
+    const stalePids =
+      process.platform === "win32"
+        ? (() => {
+            const result = findVerifiedWindowsGatewayPidsOnPortResultSync(port);
+            if (result.ok) {
+              return result.pids;
+            }
+            waitForPortFreeSync(port);
+            return [];
+          })()
+        : findGatewayPidsOnPortSync(port);
     if (stalePids.length === 0) {
       return [];
     }

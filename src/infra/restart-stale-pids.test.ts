@@ -663,9 +663,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         });
         let fakeNow = 0;
         __testing.setDateNowOverride(() => fakeNow);
-        mockReadWindowsListeningPidsResult.mockImplementation(() => {
-          fakeNow += 2001;
-          return { ok: false, permanent: false };
+        mockReadWindowsListeningPidsResult.mockImplementation((_port, timeoutMs) => {
+          if (timeoutMs === 400) {
+            fakeNow += 2001;
+            return { ok: false, permanent: false };
+          }
+          return { ok: true, pids: [stalePid] };
         });
         let aliveChecks = 0;
         const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
@@ -685,6 +688,34 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           expect.stringContaining("port 18789 still in use after 2000ms"),
         );
         expect(killSpy).toHaveBeenCalledWith(stalePid, 0);
+      } finally {
+        __testing.setDateNowOverride(null);
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
+    });
+
+    it("waits for port release when the initial Windows stale-pid probe is inconclusive", () => {
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        let fakeNow = 0;
+        __testing.setDateNowOverride(() => fakeNow);
+        mockReadWindowsListeningPidsResult.mockImplementation((_port, timeoutMs) => {
+          if (timeoutMs === 400) {
+            fakeNow += 2001;
+          }
+          return { ok: false, permanent: false };
+        });
+        const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+        expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+        expect(mockReadWindowsListeningPidsResult).toHaveBeenCalledWith(18789, 400);
+        expect(mockRestartWarn).toHaveBeenCalledWith(
+          expect.stringContaining("port 18789 still in use after 2000ms"),
+        );
+        expect(killSpy).not.toHaveBeenCalled();
       } finally {
         __testing.setDateNowOverride(null);
         if (origDescriptor) {
@@ -718,6 +749,53 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         expect(mockSpawnSync).toHaveBeenCalledWith(
           expect.stringContaining("taskkill.exe"),
           ["/T", "/PID", String(stalePid)],
+          expect.objectContaining({ timeout: 5000 }),
+        );
+      } finally {
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
+    });
+
+    it("treats Windows EPERM liveness checks as alive and still forces taskkill", () => {
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const stalePid = process.pid + 912;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [stalePid] });
+        mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
+        mockSpawnSync
+          .mockReturnValueOnce({
+            error: null,
+            status: 1,
+            stdout: "",
+            stderr: "access denied",
+          })
+          .mockReturnValueOnce({
+            error: null,
+            status: 1,
+            stdout: "",
+            stderr: "still denied",
+          });
+        vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+          if (signal === 0 && pid === stalePid) {
+            throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+          }
+          return true;
+        });
+
+        expect(cleanStaleGatewayProcessesSync()).toEqual([]);
+        expect(mockSpawnSync).toHaveBeenNthCalledWith(
+          1,
+          expect.stringContaining("taskkill.exe"),
+          ["/T", "/PID", String(stalePid)],
+          expect.objectContaining({ timeout: 5000 }),
+        );
+        expect(mockSpawnSync).toHaveBeenNthCalledWith(
+          2,
+          expect.stringContaining("taskkill.exe"),
+          ["/F", "/T", "/PID", String(stalePid)],
           expect.objectContaining({ timeout: 5000 }),
         );
       } finally {
