@@ -1,7 +1,8 @@
 import { vi } from "vitest";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...original,
     getOAuthApiKey: () => undefined,
@@ -36,7 +37,7 @@ process.env.VITEST = "true";
 // Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
 // repeated filesystem discovery across suites/workers.
 process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ??= "60000";
-// Vitest vm forks can load transitive lockfile helpers many times per worker.
+// Vitest fork workers can load transitive lockfile helpers many times per worker.
 // Raise listener budget to avoid noisy MaxListeners warnings and warning-stack overhead.
 const TEST_PROCESS_MAX_LISTENERS = 128;
 if (process.getMaxListeners() > 0 && process.getMaxListeners() < TEST_PROCESS_MAX_LISTENERS) {

@@ -107,7 +107,16 @@ Set config under `plugins.entries.voice-call.config`:
 
           streaming: {
             enabled: true,
+            provider: "openai", // optional; first registered realtime transcription provider when unset
             streamPath: "/voice/stream",
+            providers: {
+              openai: {
+                apiKey: "sk-...", // optional if OPENAI_API_KEY is set
+                model: "gpt-4o-transcribe",
+                silenceDurationMs: 800,
+                vadThreshold: 0.5,
+              },
+            },
             preStartTimeoutMs: 5000,
             maxPendingConnections: 32,
             maxPendingConnectionsPerIp: 4,
@@ -125,6 +134,7 @@ Notes:
 - Twilio/Telnyx require a **publicly reachable** webhook URL.
 - Plivo requires a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
+- If older configs still use `provider: "log"`, `twilio.from`, or legacy `streaming.*` OpenAI keys, run `openclaw doctor --fix` to rewrite them.
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
 - `skipSignatureVerification` is for local testing only.
 - If you use ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
@@ -132,9 +142,68 @@ Notes:
 - Ngrok free tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures will fail. For production, prefer a stable domain or Tailscale funnel.
 - Streaming security defaults:
   - `streaming.preStartTimeoutMs` closes sockets that never send a valid `start` frame.
-  - `streaming.maxPendingConnections` caps total unauthenticated pre-start sockets.
-  - `streaming.maxPendingConnectionsPerIp` caps unauthenticated pre-start sockets per source IP.
-  - `streaming.maxConnections` caps total open media stream sockets (pending + active).
+- `streaming.maxPendingConnections` caps total unauthenticated pre-start sockets.
+- `streaming.maxPendingConnectionsPerIp` caps unauthenticated pre-start sockets per source IP.
+- `streaming.maxConnections` caps total open media stream sockets (pending + active).
+- Runtime fallback still accepts those old voice-call keys for now, but the rewrite path is `openclaw doctor --fix` and the compat shim is temporary.
+
+## Streaming transcription
+
+`streaming` selects a realtime transcription provider for live call audio.
+
+Current runtime behavior:
+
+- `streaming.provider` is optional. If unset, Voice Call uses the first
+  registered realtime transcription provider.
+- Today the bundled provider is OpenAI, registered by the bundled `openai`
+  plugin.
+- Provider-owned raw config lives under `streaming.providers.<providerId>`.
+- If `streaming.provider` points at an unregistered provider, or no realtime
+  transcription provider is registered at all, Voice Call logs a warning and
+  skips media streaming instead of failing the whole plugin.
+
+OpenAI streaming transcription defaults:
+
+- API key: `streaming.providers.openai.apiKey` or `OPENAI_API_KEY`
+- model: `gpt-4o-transcribe`
+- `silenceDurationMs`: `800`
+- `vadThreshold`: `0.5`
+
+Example:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          streaming: {
+            enabled: true,
+            provider: "openai",
+            streamPath: "/voice/stream",
+            providers: {
+              openai: {
+                apiKey: "sk-...", // optional if OPENAI_API_KEY is set
+                model: "gpt-4o-transcribe",
+                silenceDurationMs: 800,
+                vadThreshold: 0.5,
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Legacy keys are still auto-migrated by `openclaw doctor --fix`:
+
+- `streaming.sttProvider` → `streaming.provider`
+- `streaming.openaiApiKey` → `streaming.providers.openai.apiKey`
+- `streaming.sttModel` → `streaming.providers.openai.model`
+- `streaming.silenceDurationMs` → `streaming.providers.openai.silenceDurationMs`
+- `streaming.vadThreshold` → `streaming.providers.openai.vadThreshold`
 
 ## Stale call reaper
 

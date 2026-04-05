@@ -4,15 +4,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   jsonResult,
   readCache,
-  readConfiguredSecretString,
-  readProviderEnvValue,
   readStringArrayParam,
   readStringParam,
   resolveCacheTtlMs,
-  resolveProviderWebSearchPluginConfig,
   resolveTimeoutSeconds,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
 import {
   resolveEffectiveXSearchConfig,
   resolveLegacyXSearchConfig,
@@ -54,29 +52,6 @@ function getSharedXSearchCache(): Map<string, XSearchCacheEntry> {
 
 const X_SEARCH_CACHE = getSharedXSearchCache();
 
-function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
-  const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
-    return undefined;
-  }
-  const grok = (search as Record<string, unknown>).grok;
-  return readConfiguredSecretString(
-    grok && typeof grok === "object" ? (grok as Record<string, unknown>).apiKey : undefined,
-    "tools.web.search.grok.apiKey",
-  );
-}
-
-function readPluginXaiWebSearchApiKey(cfg?: OpenClawConfig): string | undefined {
-  return readConfiguredSecretString(
-    resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")?.apiKey,
-    "plugins.entries.xai.config.webSearch.apiKey",
-  );
-}
-
-function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
-  return readPluginXaiWebSearchApiKey(cfg) ?? readLegacyGrokApiKey(cfg);
-}
-
 function resolveXSearchConfig(cfg?: OpenClawConfig): Record<string, unknown> | undefined {
   return resolveEffectiveXSearchConfig(cfg);
 }
@@ -86,24 +61,18 @@ function resolveXSearchEnabled(params: {
   config?: Record<string, unknown>;
   runtimeConfig?: OpenClawConfig;
 }): boolean {
-  if (params.config?.enabled === false) {
-    return false;
-  }
-  if (resolveFallbackXaiApiKey(params.runtimeConfig)) {
-    return true;
-  }
-  return Boolean(resolveFallbackXaiApiKey(params.cfg) || readProviderEnvValue(["XAI_API_KEY"]));
+  return isXaiToolEnabled({
+    enabled: params.config?.enabled as boolean | undefined,
+    runtimeConfig: params.runtimeConfig,
+    sourceConfig: params.cfg,
+  });
 }
 
 function resolveXSearchApiKey(params: {
   sourceConfig?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
 }): string | undefined {
-  return (
-    resolveFallbackXaiApiKey(params.runtimeConfig) ??
-    resolveFallbackXaiApiKey(params.sourceConfig) ??
-    readProviderEnvValue(["XAI_API_KEY"])
-  );
+  return resolveXaiToolApiKey(params);
 }
 
 function normalizeOptionalIsoDate(value: string | undefined, label: string): string | undefined {

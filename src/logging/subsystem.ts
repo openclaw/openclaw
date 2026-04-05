@@ -3,6 +3,7 @@ import type { Logger as TsLogger } from "tslog";
 import { isVerbose } from "../global-state.js";
 import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
   formatConsoleTimestamp,
   getConsoleSettings,
@@ -97,17 +98,10 @@ const SUBSYSTEM_COLOR_OVERRIDES: Record<string, (typeof SUBSYSTEM_COLORS)[number
 };
 const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
-// Keep local to avoid importing channel registry into hot logging paths.
-const CHANNEL_SUBSYSTEM_PREFIXES = new Set<string>([
-  "telegram",
-  "whatsapp",
-  "discord",
-  "irc",
-  "googlechat",
-  "slack",
-  "signal",
-  "imessage",
-]);
+
+function isChannelSubsystemPrefix(value: string): boolean {
+  return normalizeMessageChannel(value) === value;
+}
 
 function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInstance {
   const override = SUBSYSTEM_COLOR_OVERRIDES[subsystem];
@@ -135,7 +129,7 @@ function formatSubsystemForConsole(subsystem: string): string {
   if (parts.length === 0) {
     return original;
   }
-  if (CHANNEL_SUBSYSTEM_PREFIXES.has(parts[0])) {
+  if (isChannelSubsystemPrefix(parts[0])) {
     return parts[0];
   }
   if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {

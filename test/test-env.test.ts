@@ -141,6 +141,25 @@ describe("installTestEnv", () => {
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
   });
 
+  it("does not load ~/.profile for normal isolated test runs", () => {
+    const realHome = createTempHome();
+    writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");
+
+    process.env.HOME = realHome;
+    process.env.USERPROFILE = realHome;
+    delete process.env.LIVE;
+    delete process.env.OPENCLAW_LIVE_TEST;
+    delete process.env.OPENCLAW_LIVE_GATEWAY;
+    delete process.env.OPENCLAW_LIVE_USE_REAL_HOME;
+    delete process.env.OPENCLAW_LIVE_TEST_QUIET;
+
+    const testEnv = installTestEnv();
+    cleanupFns.push(testEnv.cleanup);
+
+    expect(testEnv.tempHome).not.toBe(realHome);
+    expect(process.env.TEST_PROFILE_ONLY).toBeUndefined();
+  });
+
   it("falls back to parsing ~/.profile when bash is unavailable", async () => {
     const realHome = createTempHome();
     writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");

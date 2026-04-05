@@ -11,8 +11,8 @@ const abs = (p: string) => path.resolve(p);
 const setDir = (p: string) => state.dirs.add(abs(p));
 const setExe = (p: string) => state.executables.add(abs(p));
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const pathMod = await import("node:path");
   const absInMock = (p: string) => pathMod.resolve(p);
 

@@ -21,6 +21,25 @@ import {
   type NormalizedWebhookReaction,
 } from "./monitor-normalize.js";
 import {
+  DM_GROUP_ACCESS_REASON,
+  createChannelPairingController,
+  createChannelReplyPipeline,
+  evictOldHistoryKeys,
+  evaluateSupplementalContextVisibility,
+  logAckFailure,
+  logInboundDrop,
+  logTypingFailure,
+  mapAllowFromEntries,
+  readStoreAllowFromForDmPolicy,
+  recordPendingHistoryEntryIfEnabled,
+  resolveAckReaction,
+  resolveChannelContextVisibilityMode,
+  resolveDmGroupAccessWithLists,
+  resolveControlCommandGate,
+  stripMarkdown,
+  type HistoryEntry,
+} from "./monitor-processing-api.js";
+import {
   getShortIdForUuid,
   rememberBlueBubblesReplyCache,
   resolveBlueBubblesMessageId,
@@ -39,25 +58,6 @@ import { enrichBlueBubblesParticipantsWithContactNames } from "./participant-con
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import {
-  DM_GROUP_ACCESS_REASON,
-  createChannelPairingController,
-  createChannelReplyPipeline,
-  evictOldHistoryKeys,
-  evaluateSupplementalContextVisibility,
-  logAckFailure,
-  logInboundDrop,
-  logTypingFailure,
-  mapAllowFromEntries,
-  readStoreAllowFromForDmPolicy,
-  recordPendingHistoryEntryIfEnabled,
-  resolveAckReaction,
-  resolveChannelContextVisibilityMode,
-  resolveDmGroupAccessWithLists,
-  resolveControlCommandGate,
-  stripMarkdown,
-  type HistoryEntry,
-} from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import {

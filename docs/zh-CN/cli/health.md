@@ -5,7 +5,7 @@ summary: "`openclaw health` 的 CLI 参考（通过 RPC 获取 Gateway 网关健
 title: health
 x-i18n:
   generated_at: "2026-02-03T07:44:55Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 82a78a5a97123f7a5736699ae8d793592a736f336c5caced9eba06d14d973fd7
   source_path: cli/health.md

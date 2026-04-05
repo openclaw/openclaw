@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { isClaudeCliProvider } from "../../../extensions/anthropic/api.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
@@ -17,6 +18,7 @@ import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
+import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
@@ -25,6 +27,29 @@ export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./relia
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   return CLI_RUN_QUEUE.enqueue(key, task);
+}
+
+export function resolveCliRunQueueKey(params: {
+  backendId: string;
+  serialize?: boolean;
+  runId: string;
+  workspaceDir: string;
+  cliSessionId?: string;
+}): string {
+  if (params.serialize === false) {
+    return `${params.backendId}:${params.runId}`;
+  }
+  if (isClaudeCliProvider(params.backendId)) {
+    const sessionId = params.cliSessionId?.trim();
+    if (sessionId) {
+      return `${params.backendId}:session:${sessionId}`;
+    }
+    const workspaceDir = params.workspaceDir.trim();
+    if (workspaceDir) {
+      return `${params.backendId}:workspace:${workspaceDir}`;
+    }
+  }
+  return params.backendId;
 }
 
 export function buildSystemPrompt(params: {
@@ -253,7 +278,7 @@ export function buildCliArgs(params: {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
-    args.push(params.backend.systemPromptArg, params.systemPrompt);
+    args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {
     if (params.backend.sessionArgs && params.backend.sessionArgs.length > 0) {

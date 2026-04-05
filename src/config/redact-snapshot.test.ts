@@ -330,6 +330,56 @@ describe("redactConfigSnapshot", () => {
     expect(restored.models.providers.openai.request.auth.token).toBe("provider-secret-token");
   });
 
+  it("redacts model provider request proxy URLs from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [],
+        request: {
+          proxy: {
+            mode: "explicit-proxy",
+            url: "http://alice:secret@proxy.example.internal:8080",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              request: {
+                proxy: {
+                  mode: "explicit-proxy",
+                  url: "http://alice:secret@proxy.example.internal:8080",
+                },
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.models.providers.openai.request.proxy.url).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("alice:secret@");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.models.providers.openai.request.proxy.url).toBe(
+      "http://alice:secret@proxy.example.internal:8080",
+    );
+  });
+
   it("does not redact maxTokens-style fields", () => {
     const snapshot = makeSnapshot({
       maxTokens: 16384,
@@ -493,6 +543,19 @@ describe("redactConfigSnapshot", () => {
     expect(cfg.models?.providers?.default?.apiKey?.id).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config, mainSchemaHints);
     expect(restored).toEqual(snapshot.config);
+  });
+
+  it("does not mangle raw when a sensitive field value is empty string", () => {
+    const config = {
+      gateway: { auth: { token: "" } },
+      other: "",
+    };
+    const raw = '{ "gateway": { "auth": { "token": "" } }, "other": "" }';
+    const snapshot = makeSnapshot(config, raw);
+    const result = redactConfigSnapshot(snapshot);
+    expect(result.config.gateway?.auth?.token).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toBe(raw);
+    expect((result.raw ?? "").split(REDACTED_SENTINEL).length).toBe(1);
   });
 
   it("redacts parsed and resolved objects", () => {

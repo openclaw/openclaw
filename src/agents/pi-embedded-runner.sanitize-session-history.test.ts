@@ -25,20 +25,65 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderCapabilitiesWithPlugin: ({ provider }: { provider?: string }) =>
-    provider === "openrouter"
+  resolveProviderRuntimePlugin: ({ provider }: { provider?: string }) =>
+    provider === "openrouter" || provider === "github-copilot"
       ? {
-          openAiCompatTurnValidation: false,
-          geminiThoughtSignatureSanitization: true,
-          geminiThoughtSignatureModelHints: ["gemini"],
+          buildReplayPolicy: (context?: { modelId?: string | null }) => {
+            const modelId = String(context?.modelId ?? "").toLowerCase();
+            if (provider === "openrouter") {
+              return {
+                applyAssistantFirstOrderingFix: false,
+                validateGeminiTurns: false,
+                validateAnthropicTurns: false,
+                ...(modelId.includes("gemini")
+                  ? {
+                      sanitizeThoughtSignatures: {
+                        allowBase64Only: true,
+                        includeCamelCase: true,
+                      },
+                    }
+                  : {}),
+              };
+            }
+            if (provider === "github-copilot" && modelId.includes("claude")) {
+              return {
+                dropThinkingBlocks: true,
+              };
+            }
+            return undefined;
+          },
         }
-      : provider === "github-copilot"
-        ? {
-            dropThinkingBlockModelHints: ["claude"],
-          }
-        : undefined,
-  sanitizeProviderReplayHistoryWithPlugin: vi.fn(async ({ messages }) => messages),
-  resolveProviderReplayPolicyWithPlugin: vi.fn(() => undefined),
+      : undefined,
+  sanitizeProviderReplayHistoryWithPlugin: vi.fn(
+    async ({
+      provider,
+      context,
+    }: {
+      provider?: string;
+      context: {
+        messages: AgentMessage[];
+        sessionState?: {
+          appendCustomEntry(customType: string, data: unknown): void;
+        };
+      };
+    }) => {
+      if (
+        provider &&
+        provider.startsWith("google") &&
+        context.messages[0]?.role === "assistant" &&
+        context.sessionState
+      ) {
+        context.sessionState.appendCustomEntry("google-turn-ordering-bootstrap", {
+          timestamp: Date.now(),
+        });
+        return [
+          { role: "user", content: "(session bootstrap)" } as AgentMessage,
+          ...context.messages,
+        ];
+      }
+      return context.messages;
+    },
+  ),
   validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
 }));
 
@@ -114,7 +159,7 @@ describe("sanitizeSessionHistory", () => {
       ],
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: makeUsage(0, 0, 0),
       stopReason: "stop",
       timestamp: nextTimestamp(),
@@ -140,7 +185,7 @@ describe("sanitizeSessionHistory", () => {
     content: [{ type: "text", text: params.text }],
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     stopReason: "stop",
     timestamp: params.timestamp ?? nextTimestamp(),
     usage: params.usage,
@@ -164,7 +209,7 @@ describe("sanitizeSessionHistory", () => {
     content,
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: params.usage ?? makeUsage(0, 0, 0),
     stopReason: params.stopReason ?? "stop",
     timestamp: params.timestamp ?? nextTimestamp(),
@@ -224,6 +269,33 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(result).toEqual(mockMessages);
+  });
+
+  it("lets Google provider hooks prepend a bootstrap turn and persist a marker", async () => {
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(true);
+    const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+
+    const result = await sanitizeSessionHistory({
+      messages: castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "hello from previous turn" }],
+        },
+      ]),
+      modelApi: "google-generative-ai",
+      provider: "google-vertex",
+      sessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[0]).toMatchObject({
+      role: "user",
+      content: "(session bootstrap)",
+    });
+    expect(
+      sessionEntries.some((entry) => entry.customType === "google-turn-ordering-bootstrap"),
+    ).toBe(true);
   });
 
   it("passes simple user-only history through for Mistral models", async () => {
@@ -291,7 +363,7 @@ describe("sanitizeSessionHistory", () => {
       messages: mockMessages,
       modelApi: "openai-completions",
       provider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
       sessionManager: mockSessionManager,
       sessionId: TEST_SESSION_ID,
     });
@@ -697,7 +769,7 @@ describe("sanitizeSessionHistory", () => {
       makeModelSnapshotEntry({
         provider: "openai",
         modelApi: "openai-responses",
-        modelId: "gpt-5.2-codex",
+        modelId: "gpt-5.4",
       }),
     ];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
@@ -706,7 +778,7 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeWithOpenAIResponses({
       sanitizeSessionHistory,
       messages,
-      modelId: "gpt-5.2-codex",
+      modelId: "gpt-5.4",
       sessionManager,
     });
 
@@ -726,7 +798,7 @@ describe("sanitizeSessionHistory", () => {
       makeModelSnapshotEntry({
         provider: "openai",
         modelApi: "openai-responses",
-        modelId: "gpt-5.2",
+        modelId: "gpt-5.4",
       }),
     ];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
@@ -885,7 +957,7 @@ describe("sanitizeSessionHistory", () => {
 
     const messages = makeThinkingAndTextAssistantMessages();
 
-    const result = await sanitizeGithubCopilotHistory({ messages, modelId: "gpt-5.2" });
+    const result = await sanitizeGithubCopilotHistory({ messages, modelId: "gpt-5.4" });
     const types = getAssistantContentTypes(result);
     expect(types).toContain("thinking");
   });

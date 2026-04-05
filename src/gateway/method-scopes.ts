@@ -1,17 +1,24 @@
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
+import {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  READ_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+  type OperatorScope,
+} from "./operator-scopes.js";
 
-export const ADMIN_SCOPE = "operator.admin" as const;
-export const READ_SCOPE = "operator.read" as const;
-export const WRITE_SCOPE = "operator.write" as const;
-export const APPROVALS_SCOPE = "operator.approvals" as const;
-export const PAIRING_SCOPE = "operator.pairing" as const;
-
-export type OperatorScope =
-  | typeof ADMIN_SCOPE
-  | typeof READ_SCOPE
-  | typeof WRITE_SCOPE
-  | typeof APPROVALS_SCOPE
-  | typeof PAIRING_SCOPE;
+export {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  READ_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+  type OperatorScope,
+};
 
 export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   ADMIN_SCOPE,
@@ -19,6 +26,7 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   WRITE_SCOPE,
   APPROVALS_SCOPE,
   PAIRING_SCOPE,
+  TALK_SECRETS_SCOPE,
 ];
 
 const NODE_ROLE_METHODS = new Set([
@@ -45,6 +53,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.pair.list",
     "node.pair.reject",
     "node.pair.verify",
+    "node.pair.approve",
     "device.pair.list",
     "device.pair.approve",
     "device.pair.reject",
@@ -112,7 +121,6 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "tts.setProvider",
     "voicewake.set",
     "node.invoke",
-    "node.pair.approve",
     "chat.send",
     "chat.abort",
     "sessions.create",
@@ -147,9 +155,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "system-event",
     "agents.files.set",
   ],
+  [TALK_SECRETS_SCOPE]: [],
 };
-
-const ADMIN_METHOD_PREFIXES = ["exec.approvals.", "config.", "wizard.", "update."] as const;
 
 const METHOD_SCOPE_BY_NAME = new Map<string, OperatorScope>(
   Object.entries(METHOD_SCOPE_GROUPS).flatMap(([scope, methods]) =>
@@ -162,12 +169,13 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (explicitScope) {
     return explicitScope;
   }
+  const reservedScope = resolveReservedGatewayMethodScope(method);
+  if (reservedScope) {
+    return reservedScope;
+  }
   const pluginScope = getActivePluginRegistry()?.gatewayMethodScopes?.[method];
   if (pluginScope) {
     return pluginScope;
-  }
-  if (ADMIN_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
-    return ADMIN_SCOPE;
   }
   return undefined;
 }

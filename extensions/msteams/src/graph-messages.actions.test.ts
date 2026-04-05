@@ -16,15 +16,14 @@ const mockState = vi.hoisted(() => ({
   findPreferredDmByUserId: vi.fn(),
 }));
 
-vi.mock("./graph.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./graph.js")>();
+vi.mock("./graph.js", () => {
   return {
-    ...actual,
     resolveGraphToken: mockState.resolveGraphToken,
     fetchGraphJson: mockState.fetchGraphJson,
     postGraphJson: mockState.postGraphJson,
     postGraphBetaJson: mockState.postGraphBetaJson,
     deleteGraphRequest: mockState.deleteGraphRequest,
+    escapeOData: vi.fn((value: string) => value.replaceAll("'", "''")),
   };
 });
 

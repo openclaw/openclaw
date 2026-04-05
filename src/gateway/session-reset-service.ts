@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { closeTrackedBrowserTabsForSessions } from "../../extensions/browser/runtime-api.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
@@ -21,9 +22,8 @@ import {
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
-import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-maintenance.js";
+import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -44,12 +44,6 @@ import {
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
-let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | undefined;
-
-function getChannelRuntime() {
-  cachedChannelRuntime ??= createPluginRuntime().channel;
-  return cachedChannelRuntime;
-}
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
@@ -164,12 +158,9 @@ export async function emitSessionUnboundLifecycleEvent(params: {
   emitHooks?: boolean;
 }) {
   const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
-  const channelRuntime = getChannelRuntime();
-  channelRuntime.discord.threadBindings.unbindBySessionKey({
+  await getSessionBindingService().unbind({
     targetSessionKey: params.targetSessionKey,
-    targetKind,
     reason: params.reason,
-    sendFarewell: true,
   });
 
   if (params.emitHooks === false) {

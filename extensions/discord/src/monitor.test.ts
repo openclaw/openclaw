@@ -54,7 +54,7 @@ function createAutoThreadMentionContext() {
   const guildInfo: DiscordGuildEntryResolved = {
     requireMention: true,
     channels: {
-      general: { allow: true, autoThread: true },
+      general: { enabled: true, autoThread: true },
     },
   };
   const channelConfig = resolveDiscordChannelConfig({
@@ -301,12 +301,11 @@ describe("discord guild/channel resolution", () => {
   it("resolves channel config by slug", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
+        general: { enabled: true },
         help: {
-          allow: true,
+          enabled: true,
           requireMention: true,
           skills: ["search"],
-          enabled: false,
           users: ["123"],
           systemPrompt: "Use short answers.",
           autoThread: true,
@@ -331,7 +330,7 @@ describe("discord guild/channel resolution", () => {
     expect(help?.allowed).toBe(true);
     expect(help?.requireMention).toBe(true);
     expect(help?.skills).toEqual(["search"]);
-    expect(help?.enabled).toBe(false);
+    expect(help?.enabled).toBe(true);
     expect(help?.users).toEqual(["123"]);
     expect(help?.systemPrompt).toBe("Use short answers.");
     expect(help?.autoThread).toBe(true);
@@ -340,7 +339,7 @@ describe("discord guild/channel resolution", () => {
   it("denies channel when config present but no match", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
+        general: { enabled: true },
       },
     };
     const channel = resolveDiscordChannelConfig({
@@ -368,8 +367,8 @@ describe("discord guild/channel resolution", () => {
   it("inherits parent config for thread channels", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
-        random: { allow: false },
+        general: { enabled: true },
+        random: { enabled: false },
       },
     };
     const thread = resolveDiscordChannelConfigWithFallback({
@@ -388,8 +387,8 @@ describe("discord guild/channel resolution", () => {
   it("does not match thread name/slug when resolving allowlists", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
-        random: { allow: false },
+        general: { enabled: true },
+        random: { enabled: false },
       },
     };
     const thread = resolveDiscordChannelConfigWithFallback({
@@ -408,8 +407,8 @@ describe("discord guild/channel resolution", () => {
   it("applies wildcard channel config when no specific match", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true, requireMention: false },
-        "*": { allow: true, autoThread: true, requireMention: true },
+        general: { enabled: true, requireMention: false },
+        "*": { enabled: true, autoThread: true, requireMention: true },
       },
     };
     // Specific channel should NOT use wildcard
@@ -440,7 +439,7 @@ describe("discord guild/channel resolution", () => {
   it("falls back to wildcard when thread channel and parent are missing", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        "*": { allow: true, requireMention: false },
+        "*": { enabled: true, requireMention: false },
       },
     };
     const thread = resolveDiscordChannelConfigWithFallback({
@@ -481,7 +480,7 @@ describe("discord mention gating", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       requireMention: true,
       channels: {
-        general: { allow: true },
+        general: { enabled: true },
       },
     };
     const channelConfig = resolveDiscordChannelConfig({
@@ -527,7 +526,7 @@ describe("discord mention gating", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       requireMention: true,
       channels: {
-        "parent-1": { allow: true, requireMention: false },
+        "parent-1": { enabled: true, requireMention: false },
       },
     };
     const channelConfig = resolveDiscordChannelConfigWithFallback({
@@ -1174,7 +1173,7 @@ describe("discord DM reaction handling", () => {
             roles: ["role:blocked-role"],
             channels: {
               "channel-1": {
-                allow: true,
+                enabled: true,
                 roles: ["role:trusted-role"],
               },
             },

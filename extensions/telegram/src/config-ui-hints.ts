@@ -69,6 +69,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram API Root URL",
     help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
   },
+  trustedLocalFileRoots: {
+    label: "Telegram Trusted Local File Roots",
+    help: "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths inside these roots are read directly; all other absolute paths are rejected.",
+  },
   autoTopicLabel: {
     label: "Telegram Auto Topic Label",
     help: "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",

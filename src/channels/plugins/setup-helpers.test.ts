@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import {
   applySetupAccountConfigPatch,
+  clearSetupPromotionRuntimeModuleCache,
   createEnvPatchedAccountSetupAdapter,
   createPatchedAccountSetupAdapter,
   moveSingleAccountChannelSectionToDefaultAccount,
@@ -12,6 +13,10 @@ import {
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
+
+afterEach(() => {
+  clearSetupPromotionRuntimeModuleCache();
+});
 
 describe("applySetupAccountConfigPatch", () => {
   it("patches top-level config for default account and enables channel", () => {

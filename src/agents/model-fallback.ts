@@ -5,14 +5,13 @@ import {
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
+import { ensureAuthProfileStore, loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
 import {
-  ensureAuthProfileStore,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
-  loadAuthProfileStoreForRuntime,
   resolveProfilesUnavailableReason,
-  resolveAuthProfileOrder,
-} from "./auth-profiles.js";
+} from "./auth-profiles/usage.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   FailoverError,
@@ -26,7 +25,7 @@ import {
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
-import { LiveSessionModelSwitchError } from "./live-model-switch.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import {

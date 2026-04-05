@@ -1,8 +1,52 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createJiti } from "jiti";
 import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
+
+const SETUP_PROMOTION_SURFACE_MODULE_BASENAMES = [
+  "contract-surfaces.ts",
+  "contract-surfaces.js",
+] as const;
+
+type SetupPromotionRuntimeModule = Pick<
+  typeof import("./contract-surfaces.js"),
+  "getBundledChannelContractSurfaceEntries"
+>;
+
+let cachedSetupPromotionRuntimeModule: SetupPromotionRuntimeModule | null = null;
+
+export function clearSetupPromotionRuntimeModuleCache(): void {
+  cachedSetupPromotionRuntimeModule = null;
+}
+
+function resolveSetupPromotionRuntimeModulePath(): string {
+  for (const basename of SETUP_PROMOTION_SURFACE_MODULE_BASENAMES) {
+    const candidatePath = fileURLToPath(new URL(basename, import.meta.url));
+    const resolvedPath = candidatePath.replace(
+      `${path.sep}dist-runtime${path.sep}`,
+      `${path.sep}dist${path.sep}`,
+    );
+    if (fs.existsSync(resolvedPath)) {
+      return resolvedPath;
+    }
+    if (fs.existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+  throw new Error("missing setup promotion runtime module");
+}
+
+function loadSetupPromotionRuntimeModule(): SetupPromotionRuntimeModule {
+  cachedSetupPromotionRuntimeModule ??= createJiti(import.meta.url)(
+    resolveSetupPromotionRuntimeModulePath(),
+  ) as SetupPromotionRuntimeModule;
+  return cachedSetupPromotionRuntimeModule;
+}
 
 type ChannelSectionBase = {
   name?: string;
@@ -405,74 +449,23 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "defaultTo",
 ]);
 
-const SINGLE_ACCOUNT_KEYS_TO_MOVE_BY_CHANNEL: Record<string, ReadonlySet<string>> = {
-  matrix: new Set([
-    "deviceId",
-    "avatarUrl",
-    "initialSyncLimit",
-    "encryption",
-    "allowlistOnly",
-    "allowBots",
-    "replyToMode",
-    "threadReplies",
-    "textChunkLimit",
-    "chunkMode",
-    "responsePrefix",
-    "ackReaction",
-    "ackReactionScope",
-    "reactionNotifications",
-    "threadBindings",
-    "startupVerification",
-    "startupVerificationCooldownHours",
-    "mediaMaxMb",
-    "autoJoin",
-    "autoJoinAllowlist",
-    "dm",
-    "groups",
-    "rooms",
-    "actions",
-  ]),
-  telegram: new Set(["streaming"]),
+type ChannelSetupPromotionSurface = {
+  singleAccountKeysToMove?: readonly string[];
+  namedAccountPromotionKeys?: readonly string[];
+  resolveSingleAccountPromotionTarget?: (params: {
+    channel: ChannelSectionBase;
+  }) => string | undefined;
 };
 
-const MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS = new Set([
-  "name",
-  "homeserver",
-  "userId",
-  "accessToken",
-  "password",
-  "deviceId",
-  "deviceName",
-  "avatarUrl",
-  "initialSyncLimit",
-  "encryption",
-]);
-
-export const MATRIX_SHARED_MULTI_ACCOUNT_DEFAULT_KEYS = new Set([
-  "dmPolicy",
-  "allowFrom",
-  "groupPolicy",
-  "groupAllowFrom",
-  "allowlistOnly",
-  "replyToMode",
-  "threadReplies",
-  "textChunkLimit",
-  "chunkMode",
-  "responsePrefix",
-  "ackReaction",
-  "ackReactionScope",
-  "reactionNotifications",
-  "threadBindings",
-  "startupVerification",
-  "startupVerificationCooldownHours",
-  "mediaMaxMb",
-  "autoJoin",
-  "autoJoinAllowlist",
-  "dm",
-  "groups",
-  "rooms",
-  "actions",
-]);
+function getChannelSetupPromotionSurface(channelKey: string): ChannelSetupPromotionSurface | null {
+  const entry = loadSetupPromotionRuntimeModule()
+    .getBundledChannelContractSurfaceEntries()
+    .find((candidate) => candidate.pluginId === channelKey);
+  if (!entry || !entry.surface || typeof entry.surface !== "object") {
+    return null;
+  }
+  return entry.surface as ChannelSetupPromotionSurface;
+}
 
 export function shouldMoveSingleAccountChannelKey(params: {
   channelKey: string;
@@ -481,7 +474,11 @@ export function shouldMoveSingleAccountChannelKey(params: {
   if (COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(params.key)) {
     return true;
   }
-  return SINGLE_ACCOUNT_KEYS_TO_MOVE_BY_CHANNEL[params.channelKey]?.has(params.key) ?? false;
+  const contractKeys = getChannelSetupPromotionSurface(params.channelKey)?.singleAccountKeysToMove;
+  if (contractKeys?.includes(params.key)) {
+    return true;
+  }
+  return false;
 }
 
 export function resolveSingleAccountKeysToMove(params: {
@@ -491,6 +488,9 @@ export function resolveSingleAccountKeysToMove(params: {
   const hasNamedAccounts =
     Object.keys((params.channel.accounts as Record<string, unknown>) ?? {}).filter(Boolean).length >
     0;
+  const namedAccountPromotionKeys = getChannelSetupPromotionSurface(
+    params.channelKey,
+  )?.namedAccountPromotionKeys;
   return Object.entries(params.channel)
     .filter(([key, value]) => {
       if (key === "accounts" || key === "enabled" || value === undefined) {
@@ -500,9 +500,10 @@ export function resolveSingleAccountKeysToMove(params: {
         return false;
       }
       if (
-        params.channelKey === "matrix" &&
         hasNamedAccounts &&
-        !MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS.has(key)
+        namedAccountPromotionKeys &&
+        namedAccountPromotionKeys.length > 0 &&
+        !namedAccountPromotionKeys.includes(key)
       ) {
         return false;
       }
@@ -515,43 +516,22 @@ export function resolveSingleAccountPromotionTarget(params: {
   channelKey: string;
   channel: ChannelSectionBase;
 }): string {
-  if (params.channelKey !== "matrix") {
-    return DEFAULT_ACCOUNT_ID;
-  }
   const accounts = params.channel.accounts ?? {};
-  const normalizedDefaultAccount =
-    typeof params.channel.defaultAccount === "string" && params.channel.defaultAccount.trim()
-      ? normalizeAccountId(params.channel.defaultAccount)
-      : undefined;
-  if (normalizedDefaultAccount) {
-    if (normalizedDefaultAccount !== DEFAULT_ACCOUNT_ID) {
-      const matchedAccountId = Object.entries(accounts).find(
-        ([accountId, value]) =>
-          accountId &&
-          value &&
-          typeof value === "object" &&
-          normalizeAccountId(accountId) === normalizedDefaultAccount,
-      )?.[0];
-      if (matchedAccountId) {
-        return matchedAccountId;
-      }
-    }
-    return DEFAULT_ACCOUNT_ID;
+  const resolveExistingAccountId = (targetAccountId: string): string => {
+    const normalizedTargetAccountId = normalizeAccountId(targetAccountId);
+    const matchedAccountId = Object.keys(accounts).find(
+      (accountId) => normalizeAccountId(accountId) === normalizedTargetAccountId,
+    );
+    return matchedAccountId ?? normalizedTargetAccountId;
+  };
+  const surface = getChannelSetupPromotionSurface(params.channelKey);
+  const resolved = surface?.resolveSingleAccountPromotionTarget?.({
+    channel: params.channel,
+  });
+  if (typeof resolved === "string" && resolved.trim()) {
+    return resolveExistingAccountId(resolved);
   }
-  const namedAccounts = Object.entries(accounts).filter(
-    ([accountId, value]) => accountId && typeof value === "object" && value,
-  );
-  if (namedAccounts.length === 1) {
-    return namedAccounts[0][0];
-  }
-  if (
-    namedAccounts.length > 1 &&
-    accounts[DEFAULT_ACCOUNT_ID] &&
-    typeof accounts[DEFAULT_ACCOUNT_ID] === "object"
-  ) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  return DEFAULT_ACCOUNT_ID;
+  return resolveExistingAccountId(DEFAULT_ACCOUNT_ID);
 }
 
 function cloneIfObject<T>(value: T): T {
@@ -593,6 +573,18 @@ function moveSingleAccountKeysIntoAccount(params: {
   } as OpenClawConfig;
 }
 
+function resolveExistingAccountKey(
+  accounts: Record<string, Record<string, unknown>>,
+  targetAccountId: string,
+): string {
+  for (const existingKey of Object.keys(accounts)) {
+    if (normalizeAccountId(existingKey) === targetAccountId) {
+      return existingKey;
+    }
+  }
+  return targetAccountId;
+}
+
 // When promoting a single-account channel config to multi-account,
 // move top-level account settings into accounts.default so the original
 // account keeps working without duplicate account values at channel root.
@@ -610,9 +602,6 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
 
   const accounts = base.accounts ?? {};
   if (Object.keys(accounts).length > 0) {
-    if (params.channelKey !== "matrix") {
-      return params.cfg;
-    }
     const keysToMove = resolveSingleAccountKeysToMove({
       channelKey: params.channelKey,
       channel: base,
@@ -625,14 +614,15 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
       channelKey: params.channelKey,
       channel: base,
     });
+    const resolvedTargetAccountKey = resolveExistingAccountKey(accounts, targetAccountId);
     return moveSingleAccountKeysIntoAccount({
       cfg: params.cfg,
       channelKey: params.channelKey,
       channel: base,
       accounts,
       keysToMove,
-      targetAccountId,
-      baseAccount: accounts[targetAccountId],
+      targetAccountId: resolvedTargetAccountKey,
+      baseAccount: accounts[resolvedTargetAccountKey],
     });
   }
   const keysToMove = resolveSingleAccountKeysToMove({

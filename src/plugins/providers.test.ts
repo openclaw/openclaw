@@ -15,18 +15,24 @@ const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
 const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
+let resolveOwningPluginIdsForModelRef: typeof import("./providers.js").resolveOwningPluginIdsForModelRef;
+let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
 
 function createManifestProviderPlugin(params: {
   id: string;
   providerIds: string[];
   origin?: "bundled" | "workspace";
+  enabledByDefault?: boolean;
+  modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
 }): PluginManifestRecord {
   return {
     id: params.id,
+    enabledByDefault: params.enabledByDefault,
     channels: [],
     cliBackends: [],
     providers: params.providerIds,
+    modelSupport: params.modelSupport,
     skills: [],
     hooks: [],
     origin: params.origin ?? "bundled",
@@ -52,6 +58,47 @@ function setOwningProviderManifestPlugins() {
     createManifestProviderPlugin({
       id: "openai",
       providerIds: ["openai", "openai-codex"],
+      modelSupport: {
+        modelPrefixes: ["gpt-", "o1", "o3", "o4"],
+      },
+    }),
+    createManifestProviderPlugin({
+      id: "anthropic",
+      providerIds: ["anthropic"],
+      modelSupport: {
+        modelPrefixes: ["claude-"],
+      },
+    }),
+  ]);
+}
+
+function setOwningProviderManifestPluginsWithWorkspace() {
+  setManifestPlugins([
+    createManifestProviderPlugin({
+      id: "minimax",
+      providerIds: ["minimax", "minimax-portal"],
+    }),
+    createManifestProviderPlugin({
+      id: "openai",
+      providerIds: ["openai", "openai-codex"],
+      modelSupport: {
+        modelPrefixes: ["gpt-", "o1", "o3", "o4"],
+      },
+    }),
+    createManifestProviderPlugin({
+      id: "anthropic",
+      providerIds: ["anthropic"],
+      modelSupport: {
+        modelPrefixes: ["claude-"],
+      },
+    }),
+    createManifestProviderPlugin({
+      id: "workspace-provider",
+      providerIds: ["workspace-provider"],
+      origin: "workspace",
+      modelSupport: {
+        modelPrefixes: ["workspace-model-"],
+      },
     }),
   ]);
 }
@@ -158,6 +205,10 @@ function expectOwningPluginIds(provider: string, expectedPluginIds?: readonly st
   expect(resolveOwningPluginIdsForProvider({ provider })).toEqual(expectedPluginIds);
 }
 
+function expectModelOwningPluginIds(model: string, expectedPluginIds?: readonly string[]) {
+  expect(resolveOwningPluginIdsForModelRef({ model })).toEqual(expectedPluginIds);
+}
+
 function expectProviderRuntimeRegistryLoad(params?: { config?: unknown; env?: NodeJS.ProcessEnv }) {
   expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -182,7 +233,11 @@ describe("resolvePluginProviders", () => {
       loadPluginManifestRegistry: (...args: Parameters<LoadPluginManifestRegistry>) =>
         loadPluginManifestRegistryMock(...args),
     }));
-    ({ resolveOwningPluginIdsForProvider } = await import("./providers.js"));
+    ({
+      resolveOwningPluginIdsForProvider,
+      resolveOwningPluginIdsForModelRef,
+      resolveEnabledProviderPluginIds,
+    } = await import("./providers.js"));
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
   });
 
@@ -206,15 +261,30 @@ describe("resolvePluginProviders", () => {
       }),
     );
     setManifestPlugins([
-      createManifestProviderPlugin({ id: "google", providerIds: ["google"] }),
+      createManifestProviderPlugin({
+        id: "google",
+        providerIds: ["google"],
+        enabledByDefault: true,
+      }),
       createManifestProviderPlugin({ id: "browser", providerIds: [] }),
-      createManifestProviderPlugin({ id: "kilocode", providerIds: ["kilocode"] }),
-      createManifestProviderPlugin({ id: "moonshot", providerIds: ["moonshot"] }),
+      createManifestProviderPlugin({
+        id: "kilocode",
+        providerIds: ["kilocode"],
+        enabledByDefault: true,
+      }),
+      createManifestProviderPlugin({
+        id: "moonshot",
+        providerIds: ["moonshot"],
+        enabledByDefault: true,
+      }),
       createManifestProviderPlugin({ id: "google-gemini-cli-auth", providerIds: [] }),
       createManifestProviderPlugin({
         id: "workspace-provider",
         providerIds: ["workspace-provider"],
         origin: "workspace",
+        modelSupport: {
+          modelPrefixes: ["workspace-model-"],
+        },
       }),
     ]);
   });
@@ -238,6 +308,14 @@ describe("resolvePluginProviders", () => {
         activate: false,
       }),
     );
+  });
+
+  it("keeps bundled provider plugins enabled when they default on outside Vitest compat", () => {
+    expect(resolveEnabledProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv })).toEqual([
+      "google",
+      "kilocode",
+      "moonshot",
+    ]);
   });
 
   it.each([
@@ -433,4 +511,112 @@ describe("resolvePluginProviders", () => {
       expectOwningPluginIds(provider, expectedPluginIds);
     },
   );
+
+  it.each([
+    {
+      model: "gpt-5.4",
+      expectedPluginIds: ["openai"],
+    },
+    {
+      model: "claude-sonnet-4-6",
+      expectedPluginIds: ["anthropic"],
+    },
+    {
+      model: "openai/gpt-5.4",
+      expectedPluginIds: ["openai"],
+    },
+    {
+      model: "workspace-model-fast",
+      expectedPluginIds: ["workspace-provider"],
+    },
+    {
+      model: "unknown-model",
+      expectedPluginIds: undefined,
+    },
+  ] as const)(
+    "maps $model to owning plugin ids via modelSupport",
+    ({ model, expectedPluginIds }) => {
+      setOwningProviderManifestPluginsWithWorkspace();
+
+      expectModelOwningPluginIds(model, expectedPluginIds);
+    },
+  );
+
+  it("refuses ambiguous bundled shorthand model ownership", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "openai",
+        providerIds: ["openai"],
+        modelSupport: { modelPrefixes: ["gpt-"] },
+      }),
+      createManifestProviderPlugin({
+        id: "proxy-openai",
+        providerIds: ["proxy-openai"],
+        modelSupport: { modelPrefixes: ["gpt-"] },
+      }),
+    ]);
+
+    expectModelOwningPluginIds("gpt-5.4", undefined);
+  });
+
+  it("prefers non-bundled shorthand model ownership over bundled matches", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "openai",
+        providerIds: ["openai"],
+        modelSupport: { modelPrefixes: ["gpt-"] },
+      }),
+      createManifestProviderPlugin({
+        id: "workspace-openai",
+        providerIds: ["workspace-openai"],
+        origin: "workspace",
+        modelSupport: { modelPrefixes: ["gpt-"] },
+      }),
+    ]);
+
+    expectModelOwningPluginIds("gpt-5.4", ["workspace-openai"]);
+  });
+
+  it("auto-loads a model-owned provider plugin from shorthand model refs", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "openai",
+        providerIds: ["openai", "openai-codex"],
+        modelSupport: {
+          modelPrefixes: ["gpt-", "o1", "o3", "o4"],
+        },
+      }),
+    ]);
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({ pluginId: "openai", provider, source: "bundled" });
+    resolveRuntimePluginRegistryMock.mockReturnValue(registry);
+
+    const providers = resolvePluginProviders({
+      config: {},
+      modelRefs: ["gpt-5.4"],
+      bundledProviderAllowlistCompat: true,
+    });
+
+    expectResolvedProviders(providers, [
+      { id: "openai", label: "OpenAI", auth: [], pluginId: "openai" },
+    ]);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["openai"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["openai"],
+            entries: {
+              openai: { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
+  });
 });
