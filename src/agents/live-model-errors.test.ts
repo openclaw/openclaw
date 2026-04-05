@@ -6,6 +6,8 @@ import {
 
 describe("live model error helpers", () => {
   it("detects generic model-not-found messages", () => {
+    expect(isModelNotFoundErrorMessage("Model not found: openai/gpt-6")).toBe(true);
+    expect(isModelNotFoundErrorMessage("model_not_found")).toBe(true);
     expect(isModelNotFoundErrorMessage('{"code":404,"message":"model not found"}')).toBe(true);
     expect(isModelNotFoundErrorMessage("model: MiniMax-M2.7-highspeed not found")).toBe(true);
     expect(
