@@ -438,6 +438,10 @@ export type PluginPackageChannel = {
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
+  persistedAuthState?: {
+    specifier?: string;
+    exportName?: string;
+  };
 };
 
 export type PluginPackageInstall = {
