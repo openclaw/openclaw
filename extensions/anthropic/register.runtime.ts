@@ -23,6 +23,12 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
+import { probeClaudeCliStatus } from "./cli-delegation.probe.js";
+import {
+  CLI_DELEGATION_AUTH_METHOD_ID,
+  CLI_DELEGATION_PROFILE_ID,
+  CLI_DELEGATION_SENTINEL,
+} from "./cli-delegation.types.js";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfig,
@@ -328,6 +334,55 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
           groupHint: "API key + legacy token",
         },
       }),
+      {
+        id: CLI_DELEGATION_AUTH_METHOD_ID,
+        label: "Claude Code CLI (delegation)",
+        hint: "Delegates to your existing `claude` CLI login. No API key needed.",
+        kind: "token",
+        wizard: {
+          choiceId: CLI_DELEGATION_AUTH_METHOD_ID,
+          choiceLabel: "Claude Code CLI",
+          choiceHint: "Uses your existing `claude login` session",
+          assistantPriority: 10,
+          groupId: "anthropic",
+          groupLabel: "Anthropic",
+          groupHint: "CLI delegation + API key + legacy token",
+        },
+        run: async (_ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
+          const status = await probeClaudeCliStatus();
+
+          if (!status.installed) {
+            throw new Error(
+              "Claude CLI not found. Install it first: https://docs.anthropic.com/en/docs/claude-code",
+            );
+          }
+          if (!status.authenticated) {
+            throw new Error(
+              `Claude CLI is not authenticated (${status.reason}). Run \`claude login\` first.`,
+            );
+          }
+
+          return {
+            profiles: [
+              {
+                profileId: CLI_DELEGATION_PROFILE_ID,
+                credential: {
+                  type: "token" as const,
+                  provider: "anthropic",
+                  token: CLI_DELEGATION_SENTINEL,
+                  expires: undefined,
+                },
+              },
+            ],
+            defaultModel: defaultAnthropicModel,
+            notes: [
+              "Using Claude Code CLI delegation. Auth is managed by the `claude` binary.",
+              "Run `claude login` if you need to re-authenticate.",
+              ...(status.subscriptionType ? [`Subscription: ${status.subscriptionType}`] : []),
+            ],
+          };
+        },
+      },
     ],
     normalizeConfig: ({ providerConfig }) => normalizeAnthropicProviderConfig(providerConfig),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),

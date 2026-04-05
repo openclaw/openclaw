@@ -225,3 +225,10 @@ describe("adaptSdkMessage", () => {
     expect(adapted.kind).toBe("ignored");
   });
 });
+
+describe("claude-code-cli-delegation auth method registration", () => {
+  it("registers with correct ID and kind", async () => {
+    const { CLI_DELEGATION_AUTH_METHOD_ID } = await import("./cli-delegation.types.js");
+    expect(CLI_DELEGATION_AUTH_METHOD_ID).toBe("claude-code-cli-delegation");
+  });
+});
