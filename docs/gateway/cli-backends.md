@@ -1,9 +1,9 @@
 ---
-summary: "CLI backends: text-only fallback via local AI CLIs"
+summary: "CLI backends: local AI CLI fallback with optional MCP tool bridge"
 read_when:
   - You want a reliable fallback when API providers fail
   - You are running Claude CLI or other local AI CLIs and want to reuse them
-  - You need a text-only, tool-free path that still supports sessions and images
+  - You want to understand the MCP loopback bridge for CLI backend tool access
 title: "CLI Backends"
 ---
 
@@ -12,8 +12,10 @@ title: "CLI Backends"
 OpenClaw can run **local AI CLIs** as a **text-only fallback** when API providers are down,
 rate-limited, or temporarily misbehaving. This is intentionally conservative:
 
-- **Tools are disabled** (no tool calls).
-- **Text in → text out** (reliable, with Claude CLI partial text streaming when enabled).
+- **OpenClaw tools are not injected directly**, but backends with `bundleMcp: true`
+  (the Claude CLI default) can receive gateway tools via a loopback MCP bridge.
+- **JSONL streaming** (Claude CLI uses `--output-format stream-json` with
+  `--include-partial-messages`; prompts are sent via stdin).
 - **Sessions are supported** (so follow-up turns stay coherent).
 - **Images can be passed through** if the CLI accepts image paths.
 
@@ -263,33 +265,37 @@ CLI backend defaults are now part of the plugin surface:
 
 ## Bundle MCP overlays
 
-CLI backends still do **not** receive OpenClaw tool calls, but a backend can opt
-into a generated MCP config overlay with `bundleMcp: true`.
+CLI backends do **not** receive OpenClaw tool calls directly, but a backend can
+opt into a generated MCP config overlay with `bundleMcp: true`.
 
 Current bundled behavior:
 
-- `claude-cli`: `bundleMcp: true`
+- `claude-cli`: `bundleMcp: true` (default)
 - `codex-cli`: no bundle MCP overlay
 - `google-gemini-cli`: no bundle MCP overlay
 
 When bundle MCP is enabled, OpenClaw:
 
+- spawns a loopback HTTP MCP server that exposes gateway tools to the CLI process
+- authenticates the bridge with a per-session token (`OPENCLAW_MCP_TOKEN`)
+- scopes tool access to the current session, account, and channel context
 - loads enabled bundle-MCP servers for the current workspace
 - merges them with any existing backend `--mcp-config`
 - rewrites the CLI args to pass `--strict-mcp-config --mcp-config <generated-file>`
 
-If no MCP servers are enabled, OpenClaw still injects a strict empty config.
-That prevents background Claude CLI runs from inheriting ambient user/global MCP
-servers unexpectedly.
+The `--strict-mcp-config` flag prevents Claude CLI from inheriting ambient
+user-level or global MCP servers. If no MCP servers are enabled, OpenClaw still
+injects a strict empty config so background runs stay isolated.
 
 ## Limitations
 
-- **No OpenClaw tools** (the CLI backend never receives tool calls). Some CLIs
-  may still run their own agent tooling. Backends with `bundleMcp: true`
-  can still receive a generated MCP config overlay for their own CLI-native MCP
-  support.
-- **Streaming is backend-specific**. Claude CLI forwards partial text from
-  `stream-json`; other CLI backends may still be buffered until exit.
+- **No direct OpenClaw tool calls.** OpenClaw does not inject tool calls into
+  the CLI backend protocol. However, backends with `bundleMcp: true` (the
+  Claude CLI default) receive gateway tools through a loopback MCP bridge,
+  so Claude CLI can invoke OpenClaw tools via its native MCP support.
+- **Streaming is backend-specific.** Claude CLI uses JSONL streaming
+  (`stream-json` with `--include-partial-messages`); other CLI backends may
+  still be buffered until exit.
 - **Structured outputs** depend on the CLI’s JSON format.
 - **Codex CLI sessions** resume via text output (no JSONL), which is less
   structured than the initial `--json` run. OpenClaw sessions still work
