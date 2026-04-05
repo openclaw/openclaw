@@ -34,6 +34,8 @@ These commands work on channels that support persistent thread bindings. See **T
 - `/session max-age <duration|off>`
 
 `/subagents info` shows run metadata (status, timestamps, session id, transcript path, cleanup).
+Use `sessions_history` for a bounded, safety-filtered recall view; inspect the
+transcript path on disk when you need the raw full transcript.
 
 ### Spawn behavior
 
@@ -41,6 +43,9 @@ These commands work on channels that support persistent thread bindings. See **T
 
 - The spawn command is non-blocking; it returns a run id immediately.
 - On completion, the sub-agent announces a summary/result message back to the requester chat channel.
+- Completion is push-based. Once spawned, do not poll `/subagents list`,
+  `sessions_list`, or `sessions_history` in a loop just to wait for it to
+  finish; inspect status only on-demand for debugging or intervention.
 - On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
 - For manual spawns, delivery is resilient:
   - OpenClaw tries direct `agent` delivery first with a stable idempotency key.
@@ -50,7 +55,7 @@ These commands work on channels that support persistent thread bindings. See **T
   - thread-bound or conversation-bound completion routes win when available
   - if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works
 - The completion handoff to the requester session is runtime-generated internal context (not user-authored text) and includes:
-  - `Result` (`assistant` reply text, or latest `toolResult` if the assistant reply is empty)
+  - `Result` (latest visible `assistant` reply text, otherwise sanitized latest tool/toolResult text)
   - `Status` (`completed successfully` / `failed` / `timed out` / `unknown`)
   - compact runtime/token stats
   - a delivery instruction telling the requester agent to rewrite in normal assistant voice (not forward raw internal metadata)
@@ -187,6 +192,14 @@ Results flow back up the chain:
 
 Each level only sees announces from its direct children.
 
+Operational guidance:
+
+- Start child work once and wait for completion events instead of building poll
+  loops around `sessions_list`, `sessions_history`, `/subagents list`, or
+  `exec` sleep commands.
+- If a child completion event arrives after you already sent the final answer,
+  the correct follow-up is the exact silent token `NO_REPLY` / `no_reply`.
+
 ### Tool policy by depth
 
 - Role and control scope are written into session metadata at spawn time. That keeps flat or restored session keys from accidentally regaining orchestrator privileges.
@@ -222,6 +235,8 @@ Sub-agents report back via an announce step:
 
 - The announce step runs inside the sub-agent session (not the requester session).
 - If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
+- If the latest assistant text is the exact silent token `NO_REPLY` / `no_reply`,
+  announce output is suppressed even if earlier visible progress existed.
 - Otherwise delivery depends on requester depth:
   - top-level requester sessions use a follow-up `agent` call with external delivery (`deliver=true`)
   - nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session
@@ -234,9 +249,10 @@ Sub-agents report back via an announce step:
   - child session key/id
   - announce type + task label
   - status line derived from runtime outcome (`success`, `error`, `timeout`, or `unknown`)
-  - result content from the announce step (or `(no output)` if missing)
+  - result content selected from the latest visible assistant text, otherwise sanitized latest tool/toolResult text
   - a follow-up instruction describing when to reply vs. stay silent
 - `Status` is not inferred from model output; it comes from runtime outcome signals.
+- On timeout, if the child only got through tool calls, announce can collapse that history into a short partial-progress summary instead of replaying raw tool output.
 
 Announce payloads include a stats line at the end (even when wrapped):
 
@@ -246,6 +262,25 @@ Announce payloads include a stats line at the end (even when wrapped):
 - `sessionKey`, `sessionId`, and transcript path (so the main agent can fetch history via `sessions_history` or inspect the file on disk)
 - Internal metadata is meant for orchestration only; user-facing replies should be rewritten in normal assistant voice.
 
+`sessions_history` is the safer orchestration path:
+
+- assistant recall is normalized first:
+  - thinking tags are stripped
+  - `<relevant-memories>` / `<relevant_memories>` scaffolding blocks are stripped
+  - plain-text tool-call XML payload blocks such as `<tool_call>...</tool_call>`,
+    `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, and
+    `<function_calls>...</function_calls>` are stripped, including truncated
+    payloads that never close cleanly
+  - downgraded tool-call/result scaffolding and historical-context markers are stripped
+  - leaked model control tokens such as `<|assistant|>`, other ASCII
+    `<|...|>` tokens, and full-width `<｜...｜>` variants are stripped
+  - malformed MiniMax tool-call XML is stripped
+- credential/token-like text is redacted
+- long blocks can be truncated
+- very large histories can drop older rows or replace an oversized row with
+  `[sessions_history omitted: message too large]`
+- raw on-disk transcript inspection is the fallback when you need the full byte-for-byte transcript
+
 ## Tool Policy (sub-agent tools)
 
 By default, sub-agents get **all tools except session tools** and system tools:
@@ -254,6 +289,9 @@ By default, sub-agents get **all tools except session tools** and system tools:
 - `sessions_history`
 - `sessions_send`
 - `sessions_spawn`
+
+`sessions_history` remains a bounded, sanitized recall view here too; it is not
+a raw transcript dump.
 
 When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their children.
 

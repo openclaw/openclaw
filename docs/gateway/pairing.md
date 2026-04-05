@@ -22,7 +22,7 @@ Only clients that explicitly call `node.pair.*` use this flow.
 - **Pending request**: a node asked to join; requires approval.
 - **Paired node**: approved node with an issued auth token.
 - **Transport**: the Gateway WS endpoint forwards requests but does not decide
-  membership. (Legacy TCP bridge support is deprecated/removed.)
+  membership. (Legacy TCP bridge support has been removed.)
 
 ## How pairing works
 

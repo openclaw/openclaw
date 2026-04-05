@@ -48,7 +48,8 @@ is a small, self-contained module with a clear purpose and documented contract.
 
 Legacy provider convenience seams for bundled channels are also gone. Imports
 such as `openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
-`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`, and
+`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`,
+`openclaw/plugin-sdk/whatsapp-surface`, and
 `openclaw/plugin-sdk/telegram-core` were private mono-repo shortcuts, not
 stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
 bundled plugin workspace, keep provider-owned helpers in that plugin's own
@@ -161,7 +162,7 @@ Current bundled provider examples:
   | `plugin-sdk/provider-entry` | Single-provider entry helper | `defineSingleProviderPluginEntry` |
   | `plugin-sdk/channel-core` | Focused channel entry definitions and builders | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
   | `plugin-sdk/setup` | Shared setup wizard helpers | Allowlist prompts, setup status builders |
-  | `plugin-sdk/setup-runtime` | Setup-time runtime helpers | Lookup-note helpers, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
+  | `plugin-sdk/setup-runtime` | Setup-time runtime helpers | Import-safe setup patch adapters, lookup-note helpers, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
   | `plugin-sdk/setup-adapter-runtime` | Setup adapter helpers | `createEnvPatchedAccountSetupAdapter` |
   | `plugin-sdk/setup-tools` | Setup tooling helpers | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
   | `plugin-sdk/account-core` | Multi-account helpers | Account list/config/action-gate helpers |
@@ -207,7 +208,7 @@ Current bundled provider examples:
   | `plugin-sdk/ssrf-runtime` | SSRF runtime helpers | Pinned-dispatcher, guarded fetch, SSRF policy helpers |
   | `plugin-sdk/collection-runtime` | Bounded cache helpers | `pruneMapToMaxSize` |
   | `plugin-sdk/diagnostic-runtime` | Diagnostic gating helpers | `isDiagnosticFlagEnabled`, `isDiagnosticsEnabled` |
-  | `plugin-sdk/error-runtime` | Error formatting helpers | `formatUncaughtError`, error graph helpers |
+  | `plugin-sdk/error-runtime` | Error formatting helpers | `formatUncaughtError`, `isApprovalNotFoundError`, error graph helpers |
   | `plugin-sdk/fetch-runtime` | Wrapped fetch/proxy helpers | `resolveFetch`, proxy helpers |
   | `plugin-sdk/host-runtime` | Host normalization helpers | `normalizeHostname`, `normalizeScpRemoteHost` |
   | `plugin-sdk/retry-runtime` | Retry helpers | `RetryConfig`, `retryAsync`, policy runners |
@@ -255,13 +256,16 @@ Current bundled provider examples:
   | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |
   | `plugin-sdk/media-runtime` | Shared media helpers | Media fetch/transform/store helpers plus media payload builders |
   | `plugin-sdk/media-understanding-runtime` | Media-understanding runtime facade | Media-understanding runner facade and typed result helpers |
-  | `plugin-sdk/text-runtime` | Shared text helpers | Text, markdown, logging, and formatting helpers |
+  | `plugin-sdk/text-runtime` | Shared text helpers | Assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, safe-text utilities, and related text/logging helpers |
   | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
   | `plugin-sdk/speech-runtime` | Speech runtime facade | TTS resolution and synthesis helpers |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types and registry helpers |
   | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types and registry helpers |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
+  | `plugin-sdk/video-generation` | Video-generation provider types | Video-generation provider/request/result types for provider plugins |
+  | `plugin-sdk/video-generation-core` | Shared video-generation core | Video-generation types, failover helpers, provider lookup, and model-ref parsing |
+  | `plugin-sdk/video-generation-runtime` | Video-generation runtime facade | Shared runtime `generateVideo` / `listRuntimeVideoGenerationProviders` facade |
   | `plugin-sdk/interactive-runtime` | Interactive reply helpers | Interactive reply payload normalization/reduction |
   | `plugin-sdk/channel-config-primitives` | Channel config primitives | Narrow channel config-schema primitives |
   | `plugin-sdk/channel-config-writes` | Channel config-write helpers | Channel config-write authorization helpers |
@@ -310,11 +314,13 @@ The same rule applies to other generated bundled-helper families such as:
 - LINE: `plugin-sdk/line*`
 - IRC: `plugin-sdk/irc*`
 - bundled helper/plugin surfaces like `plugin-sdk/googlechat`,
-  `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles*`,
+  `plugin-sdk/whatsapp-surface`, `plugin-sdk/zalouser`,
+  `plugin-sdk/bluebubbles*`,
   `plugin-sdk/mattermost*`, `plugin-sdk/msteams`,
   `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`,
   `plugin-sdk/twitch`, `plugin-sdk/openai`, `plugin-sdk/moonshot`,
-  `plugin-sdk/modelstudio*`, `plugin-sdk/provider-moonshot`,
+  `plugin-sdk/qwen*`, `plugin-sdk/modelstudio*`,
+  `plugin-sdk/provider-moonshot`,
   `plugin-sdk/cloudflare-ai-gateway`, `plugin-sdk/byteplus`,
   `plugin-sdk/chutes`, `plugin-sdk/deepseek`, `plugin-sdk/google`,
   `plugin-sdk/huggingface`, `plugin-sdk/kimi-coding`,
@@ -326,6 +332,19 @@ The same rule applies to other generated bundled-helper families such as:
   `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`,
   `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`,
   `plugin-sdk/thread-ownership`, and `plugin-sdk/voice-call`
+
+`plugin-sdk/github-copilot-token` currently exposes the narrow token-helper
+surface `DEFAULT_COPILOT_API_BASE_URL`,
+`deriveCopilotApiBaseUrlFromToken`, and `resolveCopilotApiToken`.
+
+`plugin-sdk/whatsapp-surface` currently exposes `DEFAULT_WEB_MEDIA_BYTES`,
+WhatsApp auth/account helpers, directory-config helpers, group-policy helpers,
+outbound-target resolution, and the narrow `WebChannelStatus` /
+`WebInboundMessage` / `WebListenerCloseReason` / `WebMonitorTuning` types.
+
+For Qwen specifically, prefer the canonical `plugin-sdk/qwen` and
+`plugin-sdk/qwen-definitions` seams. `plugin-sdk/modelstudio*` remains
+exported as a compatibility alias for older plugin code.
 
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask in Discord.

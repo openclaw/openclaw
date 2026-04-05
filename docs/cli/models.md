@@ -36,6 +36,7 @@ Probes are real requests (may consume tokens and trigger rate limits).
 Use `--agent <id>` to inspect a configured agent’s model/auth state. When omitted,
 the command uses `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` if set, otherwise the
 configured default agent.
+Probe rows can come from auth profiles, env credentials, or `models.json`.
 
 Notes:
 
@@ -44,6 +45,9 @@ Notes:
 - If you omit the provider, OpenClaw resolves the input as an alias first, then
   as a unique configured-provider match for that exact model id, and only then
   falls back to the configured default provider with a deprecation warning.
+  If that provider no longer exposes the configured default model, OpenClaw
+  falls back to the first configured provider/model instead of surfacing a
+  stale removed-provider default.
 - `models status` may show `marker(<value>)` in auth output for non-secret placeholders (for example `OPENAI_API_KEY`, `secretref-managed`, `minimax-oauth`, `oauth:chutes`, `ollama-local`) instead of masking them as secrets.
 
 ### `models status`
@@ -60,6 +64,27 @@ Options:
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
 - `--agent <id>` (configured agent id; overrides `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR`)
+
+Probe status buckets:
+
+- `ok`
+- `auth`
+- `rate_limit`
+- `billing`
+- `timeout`
+- `format`
+- `unknown`
+- `no_model`
+
+Probe detail/reason-code cases to expect:
+
+- `excluded_by_auth_order`: a stored profile exists, but explicit
+  `auth.order.<provider>` omitted it, so probe reports the exclusion instead of
+  trying it.
+- `missing_credential`, `invalid_expires`, `expired`, `unresolved_ref`:
+  profile is present but not eligible/resolvable.
+- `no_model`: provider auth exists, but OpenClaw could not resolve a probeable
+  model candidate for that provider.
 
 ## Aliases + fallbacks
 
@@ -94,9 +119,18 @@ openclaw models auth login --provider openai-codex --set-default
 Notes:
 
 - `login --provider anthropic --method cli --set-default` reuses a local Claude
-  CLI login and rewrites the main Anthropic default-model path to `claude-cli/...`.
+  CLI login and rewrites the main Anthropic default-model path to a canonical
+  `claude-cli/claude-*` ref.
 - `setup-token` and `paste-token` remain generic token commands for providers
   that expose token auth methods.
+- `setup-token` requires an interactive TTY and runs the provider's token-auth
+  method (defaulting to that provider's `setup-token` method when it exposes
+  one).
 - `paste-token` accepts a token string generated elsewhere or from automation.
-- Anthropic billing note: Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover OpenClaw, and Claude CLI traffic in OpenClaw now requires **Extra Usage** billed separately from the subscription.
-- Existing legacy Anthropic token profiles still run if already configured, but Anthropic no longer supports `setup-token` or `paste-token` as a new OpenClaw auth path.
+- `paste-token` requires `--provider`, prompts for the token value, and writes
+  it to the default profile id `<provider>:manual` unless you pass
+  `--profile-id`.
+- `paste-token --expires-in <duration>` stores an absolute token expiry from a
+  relative duration such as `365d` or `12h`.
+- Anthropic billing note: Anthropic's public Claude Code docs still include direct Claude Code terminal usage in Claude plan limits. Separately, Anthropic notified OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription.
+- Anthropic `setup-token` / `paste-token` are available again as a legacy/manual OpenClaw path. Use them with the expectation that Anthropic told OpenClaw users this path requires **Extra Usage**.
