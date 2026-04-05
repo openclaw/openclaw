@@ -81,7 +81,12 @@ import {
 } from "./model-selection.js";
 import { buildWorkspaceSkillSnapshot } from "./skills.js";
 import { matchesSkillFilter } from "./skills/filter.js";
-import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./skills/refresh.js";
+import {
+  bumpSkillsSnapshotVersion,
+  ensureSkillsWatcher,
+  getSkillsSnapshotVersion,
+  shouldRefreshSnapshotForVersion,
+} from "./skills/refresh.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -328,7 +333,7 @@ async function prepareAgentCommandExecution(
 }
 
 async function agentCommandInternal(
-  opts: AgentCommandOpts & { senderIsOwner: boolean },
+  opts: AgentCommandOpts & { senderIsOwner: boolean; forceSkillsSnapshotRefresh?: boolean },
   runtime: RuntimeEnv = defaultRuntime,
   deps: CliDeps = createDefaultDeps(),
 ) {
@@ -498,6 +503,13 @@ async function agentCommandInternal(
       });
     }
 
+    ensureSkillsWatcher({ workspaceDir, config: cfg });
+    if (opts.forceSkillsSnapshotRefresh) {
+      // One-shot CLI runs do not keep a long-lived watcher process alive, so
+      // skill changes made between invocations would otherwise leave reused
+      // session snapshots stale. Force a snapshot version bump for this entrypoint.
+      bumpSkillsSnapshotVersion({ workspaceDir, reason: "manual" });
+    }
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
     const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
@@ -974,6 +986,7 @@ export async function agentCommand(
       senderIsOwner: opts.senderIsOwner ?? true,
       // Local/CLI callers are trusted by default for per-run model overrides.
       allowModelOverride: opts.allowModelOverride ?? true,
+      forceSkillsSnapshotRefresh: true,
     },
     runtime,
     deps,
@@ -998,6 +1011,7 @@ export async function agentCommandFromIngress(
       ...opts,
       senderIsOwner: opts.senderIsOwner,
       allowModelOverride: opts.allowModelOverride,
+      forceSkillsSnapshotRefresh: false,
     },
     runtime,
     deps,

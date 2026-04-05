@@ -81,7 +81,14 @@ vi.mock("../agents/skills.js", () => ({
 }));
 
 vi.mock("../agents/skills/refresh.js", () => ({
+  bumpSkillsSnapshotVersion: vi.fn(() => 1),
+  ensureSkillsWatcher: vi.fn(),
   getSkillsSnapshotVersion: vi.fn(() => 0),
+  shouldRefreshSnapshotForVersion: vi.fn((cached?: number, next?: number) => {
+    const cachedValue = typeof cached === "number" ? cached : 0;
+    const nextValue = typeof next === "number" ? next : 0;
+    return nextValue === 0 ? cachedValue > 0 : cachedValue < nextValue;
+  }),
 }));
 
 const runtime: RuntimeEnv = {
@@ -340,6 +347,7 @@ describe("agentCommand", () => {
         runEmbeddedPiAgentMock,
         loadModelCatalogMock,
       } = await loadFreshAgentCommandModulesForTest();
+      const skillsRefreshModuleFresh = await import("../agents/skills/refresh.js");
       const freshConfigSpy = vi.spyOn(configModuleFresh, "loadConfig");
       const freshReadConfigFileSnapshotForWriteSpy = vi.spyOn(
         configModuleFresh,
@@ -417,6 +425,14 @@ describe("agentCommand", () => {
         config: loadedConfig,
         commandName: "agent",
         targetIds: expect.any(Set),
+      });
+      expect(skillsRefreshModuleFresh.ensureSkillsWatcher).toHaveBeenCalledWith({
+        workspaceDir: path.join(home, "openclaw"),
+        config: resolvedConfig,
+      });
+      expect(skillsRefreshModuleFresh.bumpSkillsSnapshotVersion).toHaveBeenCalledWith({
+        workspaceDir: path.join(home, "openclaw"),
+        reason: "manual",
       });
       expect(freshSetRuntimeConfigSnapshotSpy).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
       expect(runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.config).toBe(resolvedConfig);
