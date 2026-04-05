@@ -6,11 +6,11 @@ import { describe, expect, it } from "vitest";
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const XAI_ROOT = resolve(REPO_ROOT, "extensions/xai");
 const TSC_BIN = resolve(REPO_ROOT, "node_modules/.bin/tsc");
-const PLUGIN_SDK_DTS_TSCONFIG = resolve(REPO_ROOT, "tsconfig.plugin-sdk.dts.json");
+const PLUGIN_SDK_PACKAGE_TSCONFIG = resolve(REPO_ROOT, "packages/plugin-sdk/tsconfig.json");
 
 describe("xai package TypeScript boundary", () => {
   it("typechecks cleanly through @openclaw/plugin-sdk", () => {
-    const prepareResult = spawnSync(TSC_BIN, ["-p", PLUGIN_SDK_DTS_TSCONFIG], {
+    const prepareResult = spawnSync(TSC_BIN, ["-p", PLUGIN_SDK_PACKAGE_TSCONFIG], {
       cwd: REPO_ROOT,
       encoding: "utf8",
     });

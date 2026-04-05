@@ -1,11 +1,19 @@
 {
+  "extends": "../../tsconfig.json",
   "compilerOptions": {
+    "declaration": true,
+    "declarationMap": false,
+    "emitDeclarationOnly": true,
     "ignoreDeprecations": "6.0",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "noEmit": true,
-    "strict": true,
-    "target": "es2023"
+    "noEmit": false,
+    "noEmitOnError": false,
+    "outDir": "dist",
+    "rootDir": "../.."
   },
-  "include": ["src/**/*.ts", "types/**/*.d.ts"]
+  "include": [
+    "src/**/*.ts",
+    "../../src/types/**/*.d.ts",
+    "../../packages/memory-host-sdk/src/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist", "../../src/**/*.test.ts"]
 }
