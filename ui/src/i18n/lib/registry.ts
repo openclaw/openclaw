@@ -22,7 +22,7 @@ const LAZY_LOCALES: readonly LazyLocale[] = [
   "tr",
   "id",
   "pl",
-  "uk",
+  "ua",
 ];
 
 const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
@@ -71,7 +71,7 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
     loader: () => import("../locales/pl.ts"),
   },
   uk: {
-    exportName: "uk",
+    exportName: "ua",
     loader: () => import("../locales/uk.ts"),
   },
 };
@@ -118,7 +118,7 @@ export function resolveNavigatorLocale(navLang: string): Locale {
     return "pl";
   }
   if (navLang.startsWith("uk")) {
-    return "uk";
+    return "ua";
   }
   return DEFAULT_LOCALE;
 }
