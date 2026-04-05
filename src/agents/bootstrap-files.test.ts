@@ -228,6 +228,20 @@ describe("hasCompletedBootstrapTurn", () => {
     expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
   });
 
+  it("finds a recent assistant turn even when the scan starts mid-file", async () => {
+    const sessionFile = path.join(tmpDir, "large-prefix.jsonl");
+    const hugePrefix = "x".repeat(300 * 1024);
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "message", message: { role: "user", content: hugePrefix } }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "tail reply" } }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
+  });
+
   it("returns false for symbolic links", async () => {
     const realFile = path.join(tmpDir, "real.jsonl");
     const linkFile = path.join(tmpDir, "link.jsonl");
