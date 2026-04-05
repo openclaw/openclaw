@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
+import { emitActivityEvent } from "../infra/activity-events.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import {
   isValidAgentId,
@@ -720,6 +721,16 @@ export async function spawnSubagentDirect(
 
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
+  const spawnStartTime = Date.now();
+  emitActivityEvent(
+    childIdem,
+    {
+      kind: "subagent.start",
+      agentId: targetAgentId,
+      depth: callerDepth + 1,
+    },
+    ctx.agentSessionKey,
+  );
   try {
     const {
       spawnedBy: _spawnedBy,
@@ -908,6 +919,16 @@ export async function spawnSubagentDirect(
         ? undefined
         : SUBAGENT_SPAWN_ACCEPTED_NOTE;
 
+  emitActivityEvent(
+    childRunId,
+    {
+      kind: "subagent.end",
+      agentId: targetAgentId,
+      depth: callerDepth + 1,
+      durationMs: Date.now() - spawnStartTime,
+    },
+    ctx.agentSessionKey,
+  );
   return {
     status: "accepted",
     childSessionKey,

@@ -74,6 +74,7 @@ export type AppViewState = {
   chatRunId: string | null;
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
+  activityController: import("./activity/activity-controller.ts").ActivityController;
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;

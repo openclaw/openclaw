@@ -1,4 +1,5 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import { emitActivityEvent } from "../infra/activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   buildExecApprovalPendingReplyPayload,
@@ -400,6 +401,16 @@ export function handleToolExecutionStart(
       stream: "tool",
       data: { phase: "start", name: toolName, toolCallId },
     });
+    emitActivityEvent(
+      ctx.params.runId,
+      {
+        kind: "tool.start",
+        toolName,
+        toolCallId,
+        agentId: ctx.params.agentId,
+      },
+      ctx.params.sessionKey,
+    );
 
     if (
       ctx.params.onToolResult &&
@@ -597,6 +608,21 @@ export async function handleToolExecutionEnd(
     },
   });
 
+  const toolDurationMs =
+    startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+  emitActivityEvent(
+    ctx.params.runId,
+    {
+      kind: "tool.end",
+      toolName,
+      toolCallId,
+      agentId: ctx.params.agentId,
+      durationMs: toolDurationMs,
+      isError: isToolError,
+      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+    },
+    ctx.params.sessionKey,
+  );
   ctx.log.debug(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );

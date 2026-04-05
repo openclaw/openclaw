@@ -100,6 +100,7 @@ import "./components/dashboard-header.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import { renderActivity } from "./views/activity.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -775,6 +776,12 @@ export function renderApp(state: AppViewState) {
               onRefresh: () => state.loadOverview(),
               onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
               onRefreshLogs: () => state.loadOverview(),
+            })
+          : nothing}
+        ${state.tab === "activity"
+          ? renderActivity({
+              connected: state.connected,
+              controller: state.activityController,
             })
           : nothing}
         ${state.tab === "channels"

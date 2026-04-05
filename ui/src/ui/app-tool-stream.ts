@@ -465,6 +465,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  // Activity events are handled by the ActivityController, not here.
+  if (payload.stream === "activity") {
+    return;
+  }
+
   if (payload.stream !== "tool") {
     return;
   }

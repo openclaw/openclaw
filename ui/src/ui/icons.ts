@@ -462,6 +462,11 @@ export const icons = {
       <line x1="3" x2="10" y1="21" y2="14" />
     </svg>
   `,
+  activity: html`
+    <svg viewBox="0 0 24 24">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+    </svg>
+  `,
 } as const;
 
 export type IconName = keyof typeof icons;

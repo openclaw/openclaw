@@ -1,3 +1,4 @@
+import { emitActivityEvent } from "../infra/activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
@@ -33,6 +34,14 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
     stream: "lifecycle",
     data: { phase: "start" },
   });
+  emitActivityEvent(
+    ctx.params.runId,
+    {
+      kind: "run.start",
+      agentId: ctx.params.agentId,
+    },
+    ctx.params.sessionKey,
+  );
 }
 
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
@@ -85,6 +94,16 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
         error: safeErrorText,
       },
     });
+    emitActivityEvent(
+      ctx.params.runId,
+      {
+        kind: "run.error",
+        agentId: ctx.params.agentId,
+        isError: true,
+        error: safeErrorText,
+      },
+      ctx.params.sessionKey,
+    );
   } else {
     ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
     emitAgentEvent({
@@ -99,6 +118,14 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       stream: "lifecycle",
       data: { phase: "end" },
     });
+    emitActivityEvent(
+      ctx.params.runId,
+      {
+        kind: "run.end",
+        agentId: ctx.params.agentId,
+      },
+      ctx.params.sessionKey,
+    );
   }
 
   const finalizeAgentEnd = () => {

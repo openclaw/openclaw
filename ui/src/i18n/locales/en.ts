@@ -29,6 +29,7 @@ export const en: TranslationMap = {
   tabs: {
     agents: "Agents",
     overview: "Overview",
+    activity: "Activity",
     channels: "Channels",
     instances: "Instances",
     sessions: "Sessions",
@@ -50,6 +51,7 @@ export const en: TranslationMap = {
   subtitles: {
     agents: "Workspaces, tools, identities.",
     overview: "Status, entry points, health.",
+    activity: "Live agent execution tree and timeline.",
     channels: "Channels and settings.",
     instances: "Connected clients and nodes.",
     sessions: "Active sessions and defaults.",

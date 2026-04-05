@@ -2,6 +2,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
+import type { ActivityController } from "./activity/activity-controller.ts";
 import {
   CHAT_SESSIONS_ACTIVE_MINUTES,
   clearPendingQueueItemsForRun,
@@ -88,6 +89,7 @@ type GatewayHost = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+  activityController?: ActivityController | null;
 };
 
 type SessionDefaultsSnapshot = {
@@ -371,10 +373,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     if (host.onboarding) {
       return;
     }
-    handleAgentEvent(
-      host as unknown as Parameters<typeof handleAgentEvent>[0],
-      evt.payload as AgentEventPayload | undefined,
-    );
+    const agentPayload = evt.payload as AgentEventPayload | undefined;
+    handleAgentEvent(host as unknown as Parameters<typeof handleAgentEvent>[0], agentPayload);
+    if (agentPayload?.stream === "activity" && host.activityController) {
+      host.activityController.handleEvent(agentPayload);
+    }
     return;
   }
 
