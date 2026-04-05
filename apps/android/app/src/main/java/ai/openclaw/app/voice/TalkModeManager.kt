@@ -266,7 +266,6 @@ class TalkModeManager(
     if (playbackEnabled == enabled) return
     playbackEnabled = enabled
     if (!enabled) {
-      playbackGeneration.incrementAndGet()
       stopSpeaking()
     }
   }
@@ -742,6 +741,7 @@ class TalkModeManager(
         ttsJob
       }
     activeJob?.cancel()
+    talkAudioPlayer.stop()
     stopTextToSpeechPlayback()
   }
 
@@ -829,17 +829,16 @@ class TalkModeManager(
   }
 
   private fun stopSpeaking(resetInterrupt: Boolean = true) {
+    playbackGeneration.incrementAndGet()
     if (!_isSpeaking.value) {
-      talkAudioPlayer.stop()
-      stopTextToSpeechPlayback()
+      cancelActivePlayback()
       abandonAudioFocus()
       return
     }
     if (resetInterrupt) {
       lastInterruptedAtSeconds = null
     }
-    talkAudioPlayer.stop()
-    stopTextToSpeechPlayback()
+    cancelActivePlayback()
     _isSpeaking.value = false
     abandonAudioFocus()
   }
