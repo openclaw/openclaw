@@ -330,6 +330,15 @@ export const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    // SSRF policy overrides for environments that use virtual IP ranges (e.g.
+    // Clash/mihomo fake-ip mode where DNS resolves to 198.18.0.0/15).
+    ssrfPolicy: z
+      .object({
+        allowRfc2544BenchmarkRange: z.boolean().optional(),
+        dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     // Keep the legacy Firecrawl fetch shape loadable so existing installs can
     // start and then migrate cleanly through doctor.
     firecrawl: z

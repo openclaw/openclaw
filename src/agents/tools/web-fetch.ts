@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { SsrFBlockedError, type LookupFn } from "../../infra/net/ssrf.js";
+import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -113,6 +113,22 @@ function resolveFetchMaxResponseBytes(fetch?: WebFetchConfig): number {
   }
   const value = Math.floor(raw);
   return Math.min(FETCH_MAX_RESPONSE_BYTES_MAX, Math.max(FETCH_MAX_RESPONSE_BYTES_MIN, value));
+}
+
+function resolveFetchSsrfPolicy(fetch?: WebFetchConfig): SsrFPolicy | undefined {
+  const raw = fetch && "ssrfPolicy" in fetch ? fetch.ssrfPolicy : undefined;
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const policy: SsrFPolicy = {};
+  const rec = raw as Record<string, unknown>;
+  if (rec.allowRfc2544BenchmarkRange === true) {
+    policy.allowRfc2544BenchmarkRange = true;
+  }
+  if (rec.dangerouslyAllowPrivateNetwork === true) {
+    policy.dangerouslyAllowPrivateNetwork = true;
+  }
+  return Object.keys(policy).length > 0 ? policy : undefined;
 }
 
 function resolveMaxChars(value: unknown, fallback: number, cap: number): number {
@@ -247,8 +263,13 @@ type WebFetchRuntimeParams = {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+<<<<<<< HEAD
   lookupFn?: LookupFn;
   resolveProviderFallback: () => ReturnType<typeof resolveWebFetchDefinition>;
+=======
+  ssrfPolicy?: SsrFPolicy;
+  providerFallback: ReturnType<typeof resolveWebFetchDefinition>;
+>>>>>>> a6fd98fe13 (fix(tools): add ssrfPolicy.allowRfc2544BenchmarkRange to web_fetch config)
 };
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
@@ -387,7 +408,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+<<<<<<< HEAD
       lookupFn: params.lookupFn,
+=======
+      policy: params.ssrfPolicy,
+>>>>>>> a6fd98fe13 (fix(tools): add ssrfPolicy.allowRfc2544BenchmarkRange to web_fetch config)
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -617,8 +642,13 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+<<<<<<< HEAD
         lookupFn: options?.lookupFn,
         resolveProviderFallback,
+=======
+        ssrfPolicy: resolveFetchSsrfPolicy(fetch),
+        providerFallback,
+>>>>>>> a6fd98fe13 (fix(tools): add ssrfPolicy.allowRfc2544BenchmarkRange to web_fetch config)
       });
       return jsonResult(result);
     },

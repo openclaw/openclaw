@@ -147,4 +147,34 @@ describe("web_fetch SSRF protection", () => {
       extractor: "raw",
     });
   });
+
+  it("blocks RFC2544 benchmark range by default (Clash fake-ip guard)", async () => {
+    setMockFetch().mockResolvedValue(textResponse("ok"));
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = createWebFetchTool({
+      config: {
+        tools: { web: { fetch: { cacheTtlMinutes: 0 } } },
+      },
+    });
+    await expectBlockedUrl(tool, "http://198.18.1.1/test", /private|internal|blocked|special-use/i);
+  });
+
+  it("allows RFC2544 benchmark range when ssrfPolicy.allowRfc2544BenchmarkRange is true", async () => {
+    setMockFetch().mockResolvedValue(textResponse("ok"));
+    const { createWebFetchTool } = await import("./web-tools.js");
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+            },
+          },
+        },
+      },
+    });
+    const result = await tool?.execute?.("call", { url: "http://198.18.1.1/test" });
+    expect(result?.details).toMatchObject({ status: 200 });
+  });
 });
