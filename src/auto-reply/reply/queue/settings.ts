@@ -4,7 +4,11 @@ import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import { DEFAULT_QUEUE_CAP, DEFAULT_QUEUE_DEBOUNCE_MS, DEFAULT_QUEUE_DROP } from "./state.js";
 import type { QueueMode, QueueSettings, ResolveQueueSettingsParams } from "./types.js";
 
-function defaultQueueModeForChannel(_channel?: string): QueueMode {
+function defaultQueueModeForChannel(channel?: string): QueueMode {
+  // Telegram supports real-time steer injection: deliver mid-turn instead of queuing.
+  if (channel === "telegram") {
+    return "steer";
+  }
   return "collect";
 }
 
@@ -59,6 +63,9 @@ export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueS
     params.sessionEntry?.queueDrop ??
     normalizeQueueDropPolicy(queueCfg?.drop) ??
     DEFAULT_QUEUE_DROP;
+  console.debug(
+    `[queue] channel=${channelKey} inlineMode=${params.inlineMode} sessionQueueMode=${params.sessionEntry?.queueMode} cfgMode=${queueCfg?.mode} resolvedMode=${resolvedMode}`,
+  );
   return {
     mode: resolvedMode,
     debounceMs: typeof debounceRaw === "number" ? Math.max(0, debounceRaw) : undefined,

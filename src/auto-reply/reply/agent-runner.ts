@@ -68,7 +68,6 @@ export async function runReplyAgent(params: {
   shouldSteer: boolean;
   shouldFollowup: boolean;
   isActive: boolean;
-  isStreaming: boolean;
   opts?: GetReplyOptions;
   typing: TypingController;
   sessionEntry?: SessionEntry;
@@ -99,7 +98,6 @@ export async function runReplyAgent(params: {
     shouldSteer,
     shouldFollowup,
     isActive,
-    isStreaming,
     opts,
     typing,
     sessionEntry,
@@ -194,8 +192,11 @@ export async function runReplyAgent(params: {
     }
   };
 
-  if (shouldSteer && isStreaming) {
+  if (shouldSteer && isActive) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
+    console.debug(
+      `[steer] sessionId=${followupRun.run.sessionId} steered=${steered} shouldFollowup=${shouldFollowup} isActive=${isActive}`,
+    );
     if (steered && !shouldFollowup) {
       await touchActiveSessionEntry();
       typing.cleanup();

@@ -26,18 +26,18 @@ const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
 const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedPiQueueHandle>(),
   waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
+  /** sessionKey → sessionId index for fast streaming checks by conversation key. */
+  sessionKeyIndex: new Map<string, string>(),
 }));
 const ACTIVE_EMBEDDED_RUNS = embeddedRunState.activeRuns;
 const EMBEDDED_RUN_WAITERS = embeddedRunState.waiters;
+const SESSION_KEY_INDEX = embeddedRunState.sessionKeyIndex;
 
 export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
-    return false;
-  }
-  if (!handle.isStreaming()) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
+    console.debug(`[steer] queue message failed: sessionId=${sessionId} reason=no_active_run`);
     return false;
   }
   if (handle.isCompacting()) {
@@ -45,6 +45,8 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
     return false;
   }
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+  diag.debug(`steer inject: sessionId=${sessionId} text=${text.slice(0, 80)}`);
+  console.debug(`[steer] inject ok: sessionId=${sessionId} text=${text.slice(0, 60)}`);
   void handle.queueMessage(text);
   return true;
 }
@@ -129,6 +131,21 @@ export function isEmbeddedPiRunStreaming(sessionId: string): boolean {
     return false;
   }
   return handle.isStreaming();
+}
+
+/**
+ * Check if there is an active embedded run for a given session key.
+ * Falls back to checking any active run (practical for single-user gateways).
+ * Used by inbound debouncers to bypass debouncing mid-turn.
+ */
+export function isEmbeddedRunStreamingForSessionKey(sessionKey: string): boolean {
+  // Exact match
+  const sessionId = SESSION_KEY_INDEX.get(sessionKey);
+  if (sessionId) {
+    return isEmbeddedPiRunActive(sessionId);
+  }
+  // Fallback: any active run (works for single-user gateways)
+  return ACTIVE_EMBEDDED_RUNS.size > 0;
 }
 
 export function getActiveEmbeddedRunCount(): number {
@@ -219,6 +236,12 @@ export function setActiveEmbeddedRun(
 ) {
   const wasActive = ACTIVE_EMBEDDED_RUNS.has(sessionId);
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
+  if (sessionKey) {
+    SESSION_KEY_INDEX.set(sessionKey, sessionId);
+  }
+  console.debug(
+    `[run-register] sessionId=${sessionId} sessionKey=${sessionKey ?? "undefined"} indexSize=${SESSION_KEY_INDEX.size}`,
+  );
   logSessionStateChange({
     sessionId,
     sessionKey,
@@ -237,6 +260,9 @@ export function clearActiveEmbeddedRun(
 ) {
   if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
+    if (sessionKey) {
+      SESSION_KEY_INDEX.delete(sessionKey);
+    }
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
@@ -257,6 +283,7 @@ export const __testing = {
     }
     EMBEDDED_RUN_WAITERS.clear();
     ACTIVE_EMBEDDED_RUNS.clear();
+    SESSION_KEY_INDEX.clear();
   },
 };
 

@@ -1,6 +1,7 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../../src/agents/agent-scope.js";
 import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
+import { isEmbeddedRunStreamingForSessionKey } from "../../../src/agents/pi-embedded.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -179,6 +180,8 @@ export const registerTelegramHandlers = ({
     debounceKey: string | null;
     debounceLane: TelegramDebounceLane;
     botUsername?: string;
+    /** Conversation key used to check for active streaming runs. */
+    conversationKey?: string;
   };
   const resolveTelegramDebounceLane = (msg: Message): TelegramDebounceLane => {
     const forwardMeta = msg as {
@@ -239,6 +242,17 @@ export const registerTelegramHandlers = ({
       }
       if (!hasDebounceableText) {
         return false;
+      }
+      // Skip debounce when a run is actively streaming for this conversation —
+      // so steer messages arrive immediately between tool calls.
+      if (entry.conversationKey) {
+        const streaming = isEmbeddedRunStreamingForSessionKey(entry.conversationKey);
+        console.debug(
+          `[steer-debounce] conversationKey=${entry.conversationKey} streaming=${streaming}`,
+        );
+        if (streaming) {
+          return false;
+        }
       }
       return entry.allMedia.length === 0;
     },
@@ -1059,6 +1073,7 @@ export const registerTelegramHandlers = ({
       debounceKey,
       debounceLane,
       botUsername: ctx.me?.username,
+      conversationKey,
     });
   };
   bot.on("callback_query", async (ctx) => {

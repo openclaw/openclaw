@@ -1,4 +1,5 @@
 import { type Message, type UserFromGetMe } from "@grammyjs/types";
+import { isEmbeddedRunStreamingForSessionKey } from "../../../src/agents/pi-embedded.js";
 import { isAbortRequestText } from "../../../src/auto-reply/reply/abort.js";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 
@@ -48,7 +49,16 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     ? resolveTelegramForumThreadId({ isForum, messageThreadId })
     : messageThreadId;
   if (typeof chatId === "number") {
-    return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
+    const baseKey =
+      threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
+    // If a run is actively streaming for this conversation, use a separate
+    // sequential key so this message isn't blocked behind the active handler.
+    // This allows steer injection to arrive mid-turn instead of queuing.
+    const conversationKey = threadId != null ? `${chatId}:topic:${threadId}` : String(chatId);
+    if (isEmbeddedRunStreamingForSessionKey(conversationKey)) {
+      return `${baseKey}:steer`;
+    }
+    return baseKey;
   }
   return "telegram:unknown";
 }

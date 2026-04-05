@@ -9,6 +9,7 @@ export {
   compactEmbeddedPiSession,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,
+  isEmbeddedRunStreamingForSessionKey,
   queueEmbeddedPiMessage,
   resolveEmbeddedSessionLane,
   runEmbeddedPiAgent,

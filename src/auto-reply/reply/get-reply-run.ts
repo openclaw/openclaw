@@ -5,7 +5,6 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
-  isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -452,7 +451,6 @@ export async function runPreparedReply(
   }
   const queueKey = sessionKey ?? sessionIdFinal;
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);
-  const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
     resolvedQueue.mode === "followup" ||
@@ -542,7 +540,6 @@ export async function runPreparedReply(
     shouldSteer,
     shouldFollowup,
     isActive,
-    isStreaming,
     opts,
     typing,
     sessionEntry,

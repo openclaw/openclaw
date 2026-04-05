@@ -26,6 +26,7 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
+import { getQueueSize } from "../../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
@@ -2294,6 +2295,21 @@ export async function runEmbeddedAttempt(
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
+
+      // Poll for pending user messages every 200ms. If a new message arrives while the
+      // agent is mid-turn (streaming), abort the run so the heartbeat runner picks it
+      // up immediately instead of waiting for the current turn to finish.
+      const interruptPoller = isProbeSession
+        ? undefined
+        : setInterval(() => {
+            if (getQueueSize() > 1 && activeSession.isStreaming) {
+              clearInterval(interruptPoller);
+              log.debug(
+                `user-interrupt: pending message detected mid-turn, aborting run runId=${params.runId}`,
+              );
+              abortRun(false, "user-interrupt");
+            }
+          }, 200);
       const abortTimer = setTimeout(
         () => {
           if (!isProbeSession) {
@@ -2756,6 +2772,9 @@ export async function runEmbeddedAttempt(
         clearTimeout(abortTimer);
         if (abortWarnTimer) {
           clearTimeout(abortWarnTimer);
+        }
+        if (interruptPoller) {
+          clearInterval(interruptPoller);
         }
         if (!isProbeSession && (aborted || timedOut) && !timedOutDuringCompaction) {
           log.debug(

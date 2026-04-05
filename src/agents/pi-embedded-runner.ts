@@ -14,6 +14,7 @@ export {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,
+  isEmbeddedRunStreamingForSessionKey,
   queueEmbeddedPiMessage,
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded-runner/runs.js";
