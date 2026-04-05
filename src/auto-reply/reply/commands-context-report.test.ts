@@ -8,6 +8,7 @@ function makeParams(commandBodyNormalized: string, truncated: boolean): HandleCo
       commandBodyNormalized,
       channel: "telegram",
       senderIsOwner: true,
+      senderIsAdmin: true,
     },
     sessionKey: "agent:default:main",
     workspaceDir: "/tmp/workspace",

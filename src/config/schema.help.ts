@@ -324,6 +324,8 @@ export const FIELD_HELP: Record<string, string> = {
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-only tools/commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
+  "commands.adminAllowFrom":
+    "Admin allowlist — admins get the same tool access as owners (cron, gateway, etc.). Managed via dashboard toggle. Use channel-native IDs.",
   "session.dmScope":
     'DM session scoping: "main" keeps continuity; "per-peer", "per-channel-peer", or "per-account-channel-peer" isolates DM history (recommended for shared inboxes/multi-account).',
   "session.identityLinks":

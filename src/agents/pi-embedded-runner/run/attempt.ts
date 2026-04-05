@@ -309,6 +309,7 @@ export async function runEmbeddedAttempt(
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
+          senderIsAdmin: params.senderIsAdmin,
           sessionKey: params.sessionKey ?? params.sessionId,
           agentDir,
           workspaceDir: effectiveWorkspace,

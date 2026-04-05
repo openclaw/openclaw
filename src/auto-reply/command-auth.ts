@@ -11,6 +11,7 @@ export type CommandAuthorization = {
   ownerList: string[];
   senderId?: string;
   senderIsOwner: boolean;
+  senderIsAdmin: boolean;
   isAuthorizedSender: boolean;
   from?: string;
   to?: string;
@@ -304,8 +305,22 @@ export function resolveCommandAuthorization(params: {
     : undefined;
   const senderId = matchedSender ?? senderCandidates[0];
 
+  // Resolve admin allowlist
+  const configAdminAllowFromList = resolveOwnerAllowFromList({
+    dock,
+    cfg,
+    accountId: ctx.AccountId,
+    providerId,
+    allowFrom: cfg.commands?.adminAllowFrom,
+  });
+  const matchedAdmin = configAdminAllowFromList.length
+    ? senderCandidates.find((candidate) => configAdminAllowFromList.includes(candidate))
+    : undefined;
+
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
   const senderIsOwner = Boolean(matchedSender);
+  // Owners are always admins; explicit admin list adds non-owner admins
+  const senderIsAdmin = senderIsOwner || Boolean(matchedAdmin);
   const ownerAllowlistConfigured = ownerAllowAll || explicitOwners.length > 0;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
@@ -336,6 +351,7 @@ export function resolveCommandAuthorization(params: {
     ownerList,
     senderId: senderId || undefined,
     senderIsOwner,
+    senderIsAdmin,
     isAuthorizedSender,
     from: from || undefined,
     to: to || undefined,
