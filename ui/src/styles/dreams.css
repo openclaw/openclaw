@@ -278,12 +278,11 @@
   padding: 14px;
   border: 1px solid color-mix(in oklab, var(--accent) 18%, var(--border));
   border-radius: 18px;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in oklab, var(--panel) 92%, transparent),
-      color-mix(in oklab, var(--panel) 82%, transparent)
-    );
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--panel) 92%, transparent),
+    color-mix(in oklab, var(--panel) 82%, transparent)
+  );
   backdrop-filter: blur(10px);
   box-shadow: 0 18px 48px rgba(3, 7, 18, 0.24);
   display: flex;

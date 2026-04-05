@@ -6,7 +6,8 @@ export {
   type BrowserConfig,
   type BrowserProfileConfig,
 } from "../config/config.js";
-export { resolveGatewayPort } from "../config/paths.js";
+export { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
+export { hasConfiguredSecretInput } from "../config/types.secrets.js";
 export {
   DEFAULT_BROWSER_CONTROL_PORT,
   deriveDefaultBrowserCdpPortRange,
@@ -46,6 +47,7 @@ export { wrapExternalContent } from "../security/external-content.js";
 export { safeEqualSecret } from "../security/secret-equal.js";
 export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 export { formatDocsLink } from "../terminal/links.js";
+export { note } from "../terminal/note.js";
 export { theme } from "../terminal/theme.js";
 export { CONFIG_DIR, escapeRegExp, resolveUserPath, shortenHomePath } from "../utils.js";
 export { parseBooleanValue } from "../utils/boolean.js";
@@ -77,6 +79,7 @@ export {
 export { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 export {
   SsrFBlockedError,
+  isBlockedHostnameOrIp,
   isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,

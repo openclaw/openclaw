@@ -1093,7 +1093,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     },
   });
 
-  const { registry, createApi } = createPluginRegistry({
+  const {
+    registry,
+    createApi,
+    registerReload,
+    registerNodeHostCommand,
+    registerSecurityAuditCollector,
+  } = createPluginRegistry({
     logger,
     runtime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
@@ -1533,6 +1539,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       if (memoryDecision.selected && hasKind(record.kind, "memory")) {
         selectedMemoryPluginId = record.id;
         record.memorySlotSelected = true;
+      }
+    }
+
+    if (registrationMode === "full") {
+      if (definition?.reload) {
+        registerReload(record, definition.reload);
+      }
+      for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
+        registerNodeHostCommand(record, nodeHostCommand);
+      }
+      for (const collector of definition?.securityAuditCollectors ?? []) {
+        registerSecurityAuditCollector(record, collector);
       }
     }
 

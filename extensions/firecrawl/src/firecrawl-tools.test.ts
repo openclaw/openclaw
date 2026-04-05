@@ -177,13 +177,14 @@ describe("firecrawl tools", () => {
   });
 
   it("normalizes Firecrawl authorization headers before requests", async () => {
-    const fetchSpy = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ success: true, data: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    let capturedInit: RequestInit | undefined;
+    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedInit = init;
+      return new Response(JSON.stringify({ success: true, data: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
     global.fetch = fetchSpy as typeof fetch;
 
     await firecrawlClientTesting.postFirecrawlJson(
@@ -197,8 +198,7 @@ describe("firecrawl tools", () => {
       async () => "ok",
     );
 
-    const init = fetchSpy.mock.calls[0]?.[1];
-    const authHeader = new Headers(init?.headers).get("Authorization");
+    const authHeader = new Headers(capturedInit?.headers).get("Authorization");
     expect(authHeader).toBe("Bearer firecrawl-test-key");
   });
 

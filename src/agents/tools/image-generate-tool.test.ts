@@ -69,6 +69,13 @@ function requireImageGenerateTool(tool: ReturnType<typeof createImageGenerateToo
   return tool;
 }
 
+function ensureDefaultImageGenerationProvidersStubbed() {
+  if (vi.isMockFunction(imageGenerationRuntime.listRuntimeImageGenerationProviders)) {
+    return;
+  }
+  stubImageGenerationProviders();
+}
+
 function createToolWithPrimaryImageModel(
   primary: string,
   extra?: {
@@ -76,6 +83,7 @@ function createToolWithPrimaryImageModel(
     workspaceDir?: string;
   },
 ) {
+  ensureDefaultImageGenerationProvidersStubbed();
   return requireImageGenerateTool(
     createImageGenerateTool({
       config: {
@@ -252,6 +260,31 @@ describe("createImageGenerateTool", () => {
   });
 
   it("generates images and returns details.media paths", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "gpt-image-1",
+        models: ["gpt-image-1"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsSize: true,
+            supportsAspectRatio: true,
+          },
+          edit: {
+            enabled: false,
+            maxInputImages: 0,
+          },
+          geometry: {
+            sizes: ["1024x1024", "1024x1536", "1536x1024"],
+            aspectRatios: ["1:1", "16:9"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
       model: "gpt-image-1",
@@ -370,6 +403,33 @@ describe("createImageGenerateTool", () => {
   });
 
   it("includes MEDIA paths in content text so follow-up replies use the real saved file", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "gemini-3.1-flash-image-preview",
+        models: ["gemini-3.1-flash-image-preview"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsAspectRatio: true,
+            supportsResolution: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 5,
+            supportsAspectRatio: true,
+            supportsResolution: true,
+          },
+          geometry: {
+            resolutions: ["1K", "2K", "4K"],
+            aspectRatios: ["1:1", "16:9"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
     vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "google",
       model: "gemini-3.1-flash-image-preview",
@@ -419,6 +479,33 @@ describe("createImageGenerateTool", () => {
   });
 
   it("rejects counts outside the supported range", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "gemini-3.1-flash-image-preview",
+        models: ["gemini-3.1-flash-image-preview"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsAspectRatio: true,
+            supportsResolution: true,
+          },
+          edit: {
+            enabled: true,
+            maxInputImages: 5,
+            supportsAspectRatio: true,
+            supportsResolution: true,
+          },
+          geometry: {
+            resolutions: ["1K", "2K", "4K"],
+            aspectRatios: ["1:1", "16:9"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
     const tool = createImageGenerateTool({
       config: {
         agents: {

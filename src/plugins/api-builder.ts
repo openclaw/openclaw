@@ -24,6 +24,9 @@ export type BuildPluginApiParams = {
       | "registerChannel"
       | "registerGatewayMethod"
       | "registerCli"
+      | "registerReload"
+      | "registerNodeHostCommand"
+      | "registerSecurityAuditCollector"
       | "registerService"
       | "registerConfigMigration"
       | "registerAutoEnableProbe"
@@ -55,6 +58,10 @@ const noopRegisterHttpRoute: OpenClawPluginApi["registerHttpRoute"] = () => {};
 const noopRegisterChannel: OpenClawPluginApi["registerChannel"] = () => {};
 const noopRegisterGatewayMethod: OpenClawPluginApi["registerGatewayMethod"] = () => {};
 const noopRegisterCli: OpenClawPluginApi["registerCli"] = () => {};
+const noopRegisterReload: OpenClawPluginApi["registerReload"] = () => {};
+const noopRegisterNodeHostCommand: OpenClawPluginApi["registerNodeHostCommand"] = () => {};
+const noopRegisterSecurityAuditCollector: OpenClawPluginApi["registerSecurityAuditCollector"] =
+  () => {};
 const noopRegisterService: OpenClawPluginApi["registerService"] = () => {};
 const noopRegisterConfigMigration: OpenClawPluginApi["registerConfigMigration"] = () => {};
 const noopRegisterAutoEnableProbe: OpenClawPluginApi["registerAutoEnableProbe"] = () => {};
@@ -104,6 +111,10 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerChannel: handlers.registerChannel ?? noopRegisterChannel,
     registerGatewayMethod: handlers.registerGatewayMethod ?? noopRegisterGatewayMethod,
     registerCli: handlers.registerCli ?? noopRegisterCli,
+    registerReload: handlers.registerReload ?? noopRegisterReload,
+    registerNodeHostCommand: handlers.registerNodeHostCommand ?? noopRegisterNodeHostCommand,
+    registerSecurityAuditCollector:
+      handlers.registerSecurityAuditCollector ?? noopRegisterSecurityAuditCollector,
     registerService: handlers.registerService ?? noopRegisterService,
     registerConfigMigration: handlers.registerConfigMigration ?? noopRegisterConfigMigration,
     registerAutoEnableProbe: handlers.registerAutoEnableProbe ?? noopRegisterAutoEnableProbe,

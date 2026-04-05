@@ -1,6 +1,6 @@
 import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as ssrf from "../../infra/net/ssrf.js";
+import type { LookupFn } from "../../infra/net/ssrf.js";
 import { resolveRequestUrl } from "../../plugin-sdk/request-url.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { makeFetchHeaders } from "./web-fetch.test-harness.js";
@@ -21,6 +21,8 @@ vi.mock("../../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: resolveWebFetchDefinitionMock,
 }));
 import { createWebFetchTool } from "./web-tools.js";
+
+const lookupMock = vi.fn();
 
 type MockResponse = {
   ok: boolean;
@@ -92,6 +94,7 @@ function createFetchTool(fetchOverrides: Record<string, unknown> = {}) {
       },
     },
     sandboxed: false,
+    lookupFn: lookupMock as unknown as LookupFn,
   });
 }
 
@@ -143,19 +146,18 @@ describe("web_fetch extraction fallbacks", () => {
     extractReadableContentMock.mockResolvedValue(null);
     resolveWebFetchDefinitionMock.mockReset();
     resolveWebFetchDefinitionMock.mockReturnValue(null);
-    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
-      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-      const addresses = ["93.184.216.34", "93.184.216.35"];
-      return {
-        hostname: normalized,
-        addresses,
-        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-      };
+    lookupMock.mockImplementation(async (hostname: string) => {
+      void hostname;
+      return [
+        { address: "93.184.216.34", family: 4 },
+        { address: "93.184.216.35", family: 4 },
+      ];
     });
   });
 
   afterEach(() => {
     global.fetch = priorFetch;
+    lookupMock.mockReset();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });

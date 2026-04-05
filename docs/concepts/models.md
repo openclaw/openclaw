@@ -175,7 +175,8 @@ resolved primary model.
 OAuth status is always shown (and included in `--json` output). If a configured
 provider has no credentials, `models status` prints a **Missing auth** section.
 JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
-(effective auth per provider).
+(effective auth per provider, including env-backed credentials). `auth.oauth`
+is auth-store profile health only; env-only providers do not appear there.
 Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
 Use `--probe` for live auth checks; probe rows can come from auth profiles, env
 credentials, or `models.json`.

@@ -38,6 +38,7 @@ describe("google video generation provider", () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
       source: "env",
+      mode: "api-key",
     });
     generateVideosMock.mockResolvedValue({
       done: false,
@@ -100,6 +101,7 @@ describe("google video generation provider", () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
       source: "env",
+      mode: "api-key",
     });
     const provider = buildGoogleVideoGenerationProvider();
 

@@ -134,6 +134,43 @@ const meta = {
 };
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
+const DISCORD_VIDEO_MEDIA_EXTENSIONS = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"]);
+
+function normalizeMediaPathForExtension(mediaUrl: string): string {
+  const trimmed = mediaUrl.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.pathname.toLowerCase();
+  } catch {
+    const withoutHash = trimmed.split("#", 1)[0] ?? trimmed;
+    const withoutQuery = withoutHash.split("?", 1)[0] ?? withoutHash;
+    return withoutQuery.toLowerCase();
+  }
+}
+
+function isLikelyDiscordVideoMedia(mediaUrl: string): boolean {
+  const normalized = normalizeMediaPathForExtension(mediaUrl);
+  for (const ext of DISCORD_VIDEO_MEDIA_EXTENSIONS) {
+    if (normalized.endsWith(ext)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveDiscordAttachedOutboundTarget(params: {
+  to: string;
+  threadId?: string | number | null;
+}): string {
+  if (params.threadId == null) {
+    return params.to;
+  }
+  const threadId = String(params.threadId).trim();
+  return threadId ? `channel:${threadId}` : params.to;
+}
 
 function resolveRuntimeDiscordMessageActions() {
   try {
@@ -823,9 +860,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       attachedResults: {
         channel: "discord",
-        sendText: async ({ cfg, to, text, accountId, deps, replyToId, silent }) => {
+        sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
           const send = await resolveDiscordSend(deps);
-          return await send(to, text, {
+          return await send(resolveDiscordAttachedOutboundTarget({ to, threadId }), text, {
             verbose: false,
             cfg,
             replyTo: replyToId ?? undefined,
@@ -839,26 +876,48 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           text,
           mediaUrl,
           mediaLocalRoots,
+          mediaReadFile,
           accountId,
           deps,
           replyToId,
+          threadId,
           silent,
         }) => {
           const send = await resolveDiscordSend(deps);
-          return await send(to, text, {
+          const target = resolveDiscordAttachedOutboundTarget({ to, threadId });
+          if (text.trim() && mediaUrl && isLikelyDiscordVideoMedia(mediaUrl)) {
+            await send(target, text, {
+              verbose: false,
+              cfg,
+              replyTo: replyToId ?? undefined,
+              accountId: accountId ?? undefined,
+              silent: silent ?? undefined,
+            });
+            return await send(target, "", {
+              verbose: false,
+              cfg,
+              mediaUrl,
+              mediaLocalRoots,
+              mediaReadFile,
+              accountId: accountId ?? undefined,
+              silent: silent ?? undefined,
+            });
+          }
+          return await send(target, text, {
             verbose: false,
             cfg,
             mediaUrl,
             mediaLocalRoots,
+            mediaReadFile,
             replyTo: replyToId ?? undefined,
             accountId: accountId ?? undefined,
             silent: silent ?? undefined,
           });
         },
-        sendPoll: async ({ cfg, to, poll, accountId, silent }) =>
+        sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) =>
           await (
             await loadDiscordSendModule()
-          ).sendPollDiscord(to, poll, {
+          ).sendPollDiscord(resolveDiscordAttachedOutboundTarget({ to, threadId }), poll, {
             cfg,
             accountId: accountId ?? undefined,
             silent: silent ?? undefined,

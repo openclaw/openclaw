@@ -53,6 +53,7 @@ import type {
   RuntimeWebFetchMetadata,
   RuntimeWebSearchMetadata,
 } from "../secrets/runtime-web-tools.types.js";
+import type { SecurityAuditFinding } from "../security/audit.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -1928,6 +1929,30 @@ export type OpenClawPluginCliCommandDescriptor = {
   hasSubcommands: boolean;
 };
 
+export type OpenClawPluginReloadRegistration = {
+  restartPrefixes?: string[];
+  hotPrefixes?: string[];
+  noopPrefixes?: string[];
+};
+
+export type OpenClawPluginNodeHostCommand = {
+  command: string;
+  cap?: string;
+  handle: (paramsJSON?: string | null) => Promise<string>;
+};
+
+export type OpenClawPluginSecurityAuditContext = {
+  config: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  configPath: string;
+};
+
+export type OpenClawPluginSecurityAuditCollector = (
+  ctx: OpenClawPluginSecurityAuditContext,
+) => SecurityAuditFinding[] | Promise<SecurityAuditFinding[]>;
+
 /** Context passed to long-lived plugin services. */
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
@@ -1955,6 +1980,9 @@ export type OpenClawPluginDefinition = {
   version?: string;
   kind?: PluginKind | PluginKind[];
   configSchema?: OpenClawPluginConfigSchema;
+  reload?: OpenClawPluginReloadRegistration;
+  nodeHostCommands?: OpenClawPluginNodeHostCommand[];
+  securityAuditCollectors?: OpenClawPluginSecurityAuditCollector[];
   register?: (api: OpenClawPluginApi) => void | Promise<void>;
   activate?: (api: OpenClawPluginApi) => void | Promise<void>;
 };
@@ -2040,6 +2068,9 @@ export type OpenClawPluginApi = {
       descriptors?: OpenClawPluginCliCommandDescriptor[];
     },
   ) => void;
+  registerReload: (registration: OpenClawPluginReloadRegistration) => void;
+  registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
+  registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
   registerService: (service: OpenClawPluginService) => void;
   /** Register a lightweight config migration that can run before plugin runtime loads. */
   registerConfigMigration: (migrate: PluginConfigMigration) => void;
