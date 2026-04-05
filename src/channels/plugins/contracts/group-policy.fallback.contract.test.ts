@@ -3,7 +3,7 @@ import { installChannelRuntimeGroupPolicyFallbackSuite } from "../../../../test/
 import {
   resolveZaloRuntimeGroupPolicy,
   resolveWhatsAppRuntimeGroupPolicy,
-} from "../../../../test/helpers/channels/policy-contract.js";
+} from "../../../../test/helpers/channels/group-policy-contract.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../../config/runtime-group-policy.js";
 
 describe("channel runtime group policy fallback contract", () => {
