@@ -35,7 +35,6 @@ import {
 } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
-import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatErrorMessage } from "../errors.js";
@@ -760,18 +759,7 @@ async function deliverOutboundPayloadsCore(
           requesterSenderName: params.session?.requesterSenderName,
           requesterSenderUsername: params.session?.requesterSenderUsername,
           requesterSenderE164: params.session?.requesterSenderE164,
-          ...(ignoreConfiguredRoots
-            ? {
-                mediaAccess: {
-                  localRoots: getAgentScopedMediaLocalRootsForSources({
-                    cfg,
-                    agentId: params.session?.agentId ?? params.mirror?.agentId,
-                    mediaSources,
-                    ignoreConfiguredRoots: true,
-                  }),
-                } satisfies OutboundMediaAccess,
-              }
-            : {}),
+          ignoreConfiguredRoots,
         })
       : {};
   const results: OutboundDeliveryResult[] = [];
