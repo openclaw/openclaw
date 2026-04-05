@@ -113,13 +113,20 @@ export function resolveOpenAIResponsesPayloadPolicy(
           : undefined;
   const isResponsesApi = typeof model.api === "string" && OPENAI_RESPONSES_APIS.has(model.api);
 
+  const provider =
+    typeof model.provider === "string" ? model.provider.trim().toLowerCase() : undefined;
+  /** Azure AI Foundry rejects `reasoning.effort: "none"` for o-series (requires low+); strip like proxies. */
+  const isAzureFoundryProvider =
+    provider === "azure-foundry" || provider === "azure-foundry-direct";
+
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
     compactThreshold:
       parsePositiveInteger(options.extraParams?.responsesCompactThreshold) ??
       resolveOpenAIResponsesCompactThreshold(model),
     explicitStore,
-    shouldStripDisabledReasoningPayload: isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute,
+    shouldStripDisabledReasoningPayload:
+      isResponsesApi && (!capabilities.usesKnownNativeOpenAIRoute || isAzureFoundryProvider),
     shouldStripPromptCache:
       options.enablePromptCacheStripping === true && capabilities.shouldStripResponsesPromptCache,
     shouldStripStore:

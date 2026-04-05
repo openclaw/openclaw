@@ -158,6 +158,40 @@ function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
 }
 
+/**
+ * Remove orphan `reasoning` input items that are not immediately followed by `message` or
+ * `function_call`. Context trimming can drop the paired item and Azure/OpenAI return 400:
+ * "reasoning was provided without its required following item."
+ */
+function stripOrphanOpenAIResponsesReasoningItems(input: ResponseInput): ResponseInput {
+  if (!Array.isArray(input) || input.length === 0) {
+    return input;
+  }
+  const allowedAfterReasoning = new Set(["message", "function_call"]);
+  const out: ResponseInput = [];
+  for (let i = 0; i < input.length; i++) {
+    const item = input[i];
+    const isReasoning =
+      item &&
+      typeof item === "object" &&
+      !Array.isArray(item) &&
+      (item as Record<string, unknown>).type === "reasoning";
+    if (isReasoning) {
+      const next = input[i + 1];
+      let nextType = "";
+      if (next && typeof next === "object" && !Array.isArray(next)) {
+        const raw = (next as Record<string, unknown>).type;
+        nextType = typeof raw === "string" ? raw : "";
+      }
+      if (!nextType || !allowedAfterReasoning.has(nextType)) {
+        continue;
+      }
+    }
+    out.push(item);
+  }
+  return out;
+}
+
 function parseTextSignature(
   signature: string | undefined,
 ): { id: string; phase?: "commentary" | "final_answer" } | undefined {
@@ -325,7 +359,7 @@ function convertResponsesMessages(
     }
     msgIndex += 1;
   }
-  return messages;
+  return stripOrphanOpenAIResponsesReasoningItems(messages);
 }
 
 function convertResponsesTools(

@@ -106,4 +106,26 @@ describe("openai responses payload policy", () => {
 
     expect(payload).not.toHaveProperty("reasoning");
   });
+
+  it("strips disabled reasoning payloads for Azure AI Foundry (o-series reject effort none)", () => {
+    const payload = {
+      reasoning: {
+        effort: "none",
+      },
+    } satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openai-responses",
+          provider: "azure-foundry",
+          baseUrl: "https://example.services.ai.azure.com/models",
+        },
+        { storeMode: "disable" },
+      ),
+    );
+
+    expect(payload).not.toHaveProperty("reasoning");
+  });
 });
