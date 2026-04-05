@@ -41,6 +41,7 @@ enum class InvokeCommandAvailability {
   MotionActivityAvailable,
   MotionPedometerAvailable,
   DebugBuild,
+  HttpEnabled,
 }
 
 enum class NodeCapabilityAvailability {
@@ -94,8 +95,6 @@ object InvokeCommandRegistry {
       NodeCapabilitySpec(
         name = OpenClawCapability.Motion.rawValue,
         availability = NodeCapabilityAvailability.MotionAvailable,
-  HttpEnabled,
-          NodeCapabilityAvailability.HttpEnabled,
       ),
       NodeCapabilitySpec(
         name = OpenClawCapability.CallLog.rawValue,
@@ -242,6 +241,7 @@ object InvokeCommandRegistry {
           NodeCapabilityAvailability.CallLogAvailable -> flags.callLogAvailable
           NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
           NodeCapabilityAvailability.MotionAvailable -> flags.motionActivityAvailable || flags.motionPedometerAvailable
+          NodeCapabilityAvailability.HttpEnabled -> flags.httpEnabled
         }
       }
       .map { it.name }

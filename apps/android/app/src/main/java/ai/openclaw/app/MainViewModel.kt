@@ -288,6 +288,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ensureRuntime().setSpeakerEnabled(enabled)
   }
 
+  fun setHttpAccessEnabled(enabled: Boolean) {
+    ensureRuntime().setHttpAccessEnabled(enabled)
+  }
+
   fun refreshGatewayConnection() {
     ensureRuntime().refreshGatewayConnection()
   }
