@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
 import type {
   SkillStatusEntry,
@@ -52,12 +53,16 @@ function renderEffectiveToolBadge(tool: {
   channelId?: string;
 }) {
   if (tool.source === "plugin") {
-    return tool.pluginId ? `Connected: ${tool.pluginId}` : "Connected";
+    return tool.pluginId
+      ? t("agentTools.connectedWithPlugin", { value: tool.pluginId })
+      : t("agentTools.connected");
   }
   if (tool.source === "channel") {
-    return tool.channelId ? `Channel: ${tool.channelId}` : "Channel";
+    return tool.channelId
+      ? t("agentTools.channelWithId", { value: tool.channelId })
+      : t("agentTools.channel");
   }
-  return "Built-in";
+  return t("agentTools.builtIn");
 }
 
 export function renderAgentTools(params: {
@@ -170,32 +175,34 @@ export function renderAgentTools(params: {
     <section class="card">
       <div class="row" style="justify-content: space-between; flex-wrap: wrap;">
         <div style="min-width: 0;">
-          <div class="card-title">Tool Access</div>
+          <div class="card-title">${t("agentTools.toolAccessTitle")}</div>
           <div class="card-sub">
-            Profile + per-tool overrides for this agent.
-            <span class="mono">${enabledCount}/${toolIds.length}</span> enabled.
+            ${t("agentTools.toolAccessSubtitle", {
+              enabled: String(enabledCount),
+              total: String(toolIds.length),
+            })}
           </div>
         </div>
         <div class="row" style="gap: 8px; flex-wrap: wrap;">
           <button class="btn btn--sm" ?disabled=${!editable} @click=${() => updateAll(true)}>
-            Enable All
+            ${t("agentTools.enableAll")}
           </button>
           <button class="btn btn--sm" ?disabled=${!editable} @click=${() => updateAll(false)}>
-            Disable All
+            ${t("agentTools.disableAll")}
           </button>
           <button
             class="btn btn--sm"
             ?disabled=${params.configLoading}
             @click=${params.onConfigReload}
           >
-            Reload Config
+            ${t("agentTools.reloadConfig")}
           </button>
           <button
             class="btn btn--sm primary"
             ?disabled=${params.configSaving || !params.configDirty}
             @click=${params.onConfigSave}
           >
-            ${params.configSaving ? "Saving…" : "Save"}
+            ${params.configSaving ? t("agentTools.saving") : t("agentTools.save")}
           </button>
         </div>
       </div>
@@ -427,12 +434,14 @@ export function renderAgentSkills(params: {
     <section class="card">
       <div class="row" style="justify-content: space-between; flex-wrap: wrap;">
         <div style="min-width: 0;">
-          <div class="card-title">Skills</div>
+          <div class="card-title">${t("agentTools.skillsTitle")}</div>
           <div class="card-sub">
-            Per-agent skill allowlist and workspace skills.
             ${totalCount > 0
-              ? html`<span class="mono">${enabledCount}/${totalCount}</span>`
-              : nothing}
+              ? t("agentTools.skillsSubtitle", {
+                  enabled: String(enabledCount),
+                  total: String(totalCount),
+                })
+              : t("agentTools.skillsSubtitleNoCount")}
           </div>
         </div>
         <div class="row" style="gap: 8px; flex-wrap: wrap;">
@@ -445,22 +454,22 @@ export function renderAgentSkills(params: {
               ?disabled=${!editable}
               @click=${() => params.onClear(params.agentId)}
             >
-              Enable All
+              ${t("agentTools.enableAll")}
             </button>
             <button
               class="btn btn--sm"
               ?disabled=${!editable}
               @click=${() => params.onDisableAll(params.agentId)}
             >
-              Disable All
+              ${t("agentTools.disableAll")}
             </button>
             <button
               class="btn btn--sm"
               ?disabled=${!editable || !usingAllowlist}
               @click=${() => params.onClear(params.agentId)}
-              title="Remove per-agent allowlist and use all skills"
+              title=${t("agentTools.removeAllowlistTitle")}
             >
-              Reset
+              ${t("agentTools.reset")}
             </button>
           </div>
           <button
@@ -468,17 +477,17 @@ export function renderAgentSkills(params: {
             ?disabled=${params.configLoading}
             @click=${params.onConfigReload}
           >
-            Reload Config
+            ${t("agentTools.reloadConfig")}
           </button>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? "Loading…" : "Refresh"}
+            ${params.loading ? t("agentTools.loading") : t("common.refresh")}
           </button>
           <button
             class="btn btn--sm primary"
             ?disabled=${params.configSaving || !params.configDirty}
             @click=${params.onConfigSave}
           >
-            ${params.configSaving ? "Saving…" : "Save"}
+            ${params.configSaving ? t("agentTools.saving") : t("agentTools.save")}
           </button>
         </div>
       </div>
@@ -486,25 +495,25 @@ export function renderAgentSkills(params: {
       ${!params.configForm
         ? html`
             <div class="callout info" style="margin-top: 12px">
-              Load the gateway config to set per-agent skills.
+              ${t("agentTools.loadConfigInfo")}
             </div>
           `
         : nothing}
       ${usingAllowlist
         ? html`
             <div class="callout info" style="margin-top: 12px">
-              This agent uses a custom skill allowlist.
+              ${t("agentTools.customAllowlistInfo")}
             </div>
           `
         : html`
             <div class="callout info" style="margin-top: 12px">
-              All skills are enabled. Disabling any skill will create a per-agent allowlist.
+              ${t("agentTools.allSkillsInfo")}
             </div>
           `}
       ${!reportReady && !params.loading
         ? html`
             <div class="callout info" style="margin-top: 12px">
-              Load skills for this agent to view workspace-specific entries.
+              ${t("agentTools.loadSkillsInfo")}
             </div>
           `
         : nothing}
@@ -514,20 +523,20 @@ export function renderAgentSkills(params: {
 
       <div class="filters" style="margin-top: 14px;">
         <label class="field" style="flex: 1;">
-          <span>Filter</span>
+          <span>${t("agentTools.filter")}</span>
           <input
             .value=${params.filter}
             @input=${(e: Event) => params.onFilterChange((e.target as HTMLInputElement).value)}
-            placeholder="Search skills"
+            placeholder=${t("agentTools.searchSkillsPlaceholder")}
             autocomplete="off"
             name="agent-skills-filter"
           />
         </label>
-        <div class="muted">${filtered.length} shown</div>
+        <div class="muted">${t("agentTools.shownCount", { count: String(filtered.length) })}</div>
       </div>
 
       ${filtered.length === 0
-        ? html` <div class="muted" style="margin-top: 16px">No skills found.</div> `
+        ? html` <div class="muted" style="margin-top: 16px">${t("agentTools.noSkillsFound")}</div> `
         : html`
             <div class="agent-skills-groups" style="margin-top: 16px;">
               ${groups.map((group) =>
