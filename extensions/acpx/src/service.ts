@@ -6,8 +6,17 @@ import type {
   PluginLogger,
 } from "../runtime-api.js";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../runtime-api.js";
-import { resolveAcpxPluginConfig, type ResolvedAcpxPluginConfig } from "./config.js";
-import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
+import {
+  resolveAcpxPluginConfig,
+  toAcpMcpServers,
+  type ResolvedAcpxPluginConfig,
+} from "./config.js";
+import {
+  ACPX_BACKEND_ID,
+  AcpxRuntime,
+  createAgentRegistry,
+  createFileSessionStore,
+} from "./runtime.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -21,7 +30,6 @@ type AcpxRuntimeLike = AcpRuntime & {
 
 type AcpxRuntimeFactoryParams = {
   pluginConfig: ResolvedAcpxPluginConfig;
-  queueOwnerTtlSeconds: number;
   logger?: PluginLogger;
 };
 
@@ -31,8 +39,21 @@ type CreateAcpxRuntimeServiceParams = {
 };
 
 function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
-  return new AcpxRuntime(params.pluginConfig, {
-    logger: params.logger,
+  return new AcpxRuntime({
+    cwd: params.pluginConfig.cwd,
+    sessionStore: createFileSessionStore({
+      stateDir: params.pluginConfig.stateDir,
+    }),
+    agentRegistry: createAgentRegistry({
+      overrides: params.pluginConfig.agents,
+    }),
+    mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
+    permissionMode: params.pluginConfig.permissionMode,
+    nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
+    timeoutMs:
+      params.pluginConfig.timeoutSeconds != null
+        ? params.pluginConfig.timeoutSeconds * 1_000
+        : undefined,
   });
 }
 
@@ -59,7 +80,6 @@ export function createAcpxRuntimeService(
       const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
       runtime = runtimeFactory({
         pluginConfig,
-        queueOwnerTtlSeconds: pluginConfig.queueOwnerTtlSeconds,
         logger: ctx.logger,
       });
 
