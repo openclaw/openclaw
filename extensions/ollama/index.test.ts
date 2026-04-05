@@ -34,6 +34,10 @@ beforeEach(() => {
 });
 
 function registerProvider() {
+  return registerProviderWithPluginConfig({});
+}
+
+function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>) {
   const registerProviderMock = vi.fn();
 
   plugin.register(
@@ -42,6 +46,7 @@ function registerProvider() {
       name: "Ollama",
       source: "test",
       config: {},
+      pluginConfig,
       runtime: {} as never,
       registerProvider: registerProviderMock,
     }),
@@ -109,11 +114,11 @@ describe("ollama plugin", () => {
     });
   });
 
-  it("skips ambient discovery when models.ollamaDiscovery.enabled is false", async () => {
-    const provider = registerProvider();
+  it("skips ambient discovery when plugin discovery is disabled", async () => {
+    const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
 
     const result = await provider.discovery.run({
-      config: { models: { ollamaDiscovery: { enabled: false } } },
+      config: {},
       env: {},
       resolveProviderApiKey: () => ({ apiKey: "", discoveryApiKey: "" }),
     } as never);

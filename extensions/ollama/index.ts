@@ -31,6 +31,12 @@ const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "openai-compatible",
 });
 
+type OllamaPluginConfig = {
+  discovery?: {
+    enabled?: boolean;
+  };
+};
+
 function resolveOllamaDiscoveryApiKey(params: {
   env: NodeJS.ProcessEnv;
   explicitApiKey?: string;
@@ -51,6 +57,7 @@ export default definePluginEntry({
   name: "Ollama Provider",
   description: "Bundled Ollama provider plugin",
   register(api: OpenClawPluginApi) {
+    const pluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
     api.registerWebSearchProvider(createOllamaWebSearchProvider());
     api.registerProvider({
       id: PROVIDER_ID,
@@ -102,7 +109,9 @@ export default definePluginEntry({
         run: async (ctx: ProviderDiscoveryContext) => {
           const explicit = ctx.config.models?.providers?.ollama;
           const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
-          if (!hasExplicitModels && ctx.config.models?.ollamaDiscovery?.enabled === false) {
+          const discoveryEnabled =
+            pluginConfig.discovery?.enabled ?? ctx.config.models?.ollamaDiscovery?.enabled;
+          if (!hasExplicitModels && discoveryEnabled === false) {
             return null;
           }
           const ollamaKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;

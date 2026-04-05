@@ -366,19 +366,6 @@ const TARGET_KEYS = [
   "models.providers.*.api",
   "models.providers.*.headers",
   "models.providers.*.models",
-  "models.bedrockDiscovery",
-  "models.bedrockDiscovery.enabled",
-  "models.bedrockDiscovery.region",
-  "models.bedrockDiscovery.providerFilter",
-  "models.bedrockDiscovery.refreshInterval",
-  "models.bedrockDiscovery.defaultContextWindow",
-  "models.bedrockDiscovery.defaultMaxTokens",
-  "models.copilotDiscovery",
-  "models.copilotDiscovery.enabled",
-  "models.huggingfaceDiscovery",
-  "models.huggingfaceDiscovery.enabled",
-  "models.ollamaDiscovery",
-  "models.ollamaDiscovery.enabled",
   "agents",
   "agents.defaults",
   "agents.list",
@@ -781,10 +768,6 @@ describe("config help copy quality", () => {
     const modelsMode = FIELD_HELP["models.mode"];
     expect(modelsMode.includes("SecretRef-managed")).toBe(true);
     expect(modelsMode.includes("preserve")).toBe(true);
-
-    const bedrockRefresh = FIELD_HELP["models.bedrockDiscovery.refreshInterval"];
-    expect(/refresh|seconds|interval/i.test(bedrockRefresh)).toBe(true);
-    expect(/cost|noise|api/i.test(bedrockRefresh)).toBe(true);
 
     const authCooldowns = FIELD_HELP["auth.cooldowns"];
     expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);

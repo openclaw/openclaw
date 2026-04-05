@@ -27,9 +27,10 @@ cached (default: 1 hour).
 
 How the implicit provider is enabled:
 
-- If `models.bedrockDiscovery.enabled` is `true`, OpenClaw will try discovery
-  even when no AWS env marker is present.
-- If `models.bedrockDiscovery.enabled` is unset, OpenClaw only auto-adds the
+- If `plugins.entries.amazon-bedrock.config.discovery.enabled` is `true`,
+  OpenClaw will try discovery even when no AWS env marker is present.
+- If `plugins.entries.amazon-bedrock.config.discovery.enabled` is unset,
+  OpenClaw only auto-adds the
   implicit Bedrock provider when it sees one of these AWS auth markers:
   `AWS_BEARER_TOKEN_BEDROCK`, `AWS_ACCESS_KEY_ID` +
   `AWS_SECRET_ACCESS_KEY`, or `AWS_PROFILE`.
@@ -37,18 +38,24 @@ How the implicit provider is enabled:
   shared config, SSO, and IMDS instance-role auth can work even when discovery
   needed `enabled: true` to opt in.
 
-Config options live under `models.bedrockDiscovery`:
+Config options live under `plugins.entries.amazon-bedrock.config.discovery`:
 
 ```json5
 {
-  models: {
-    bedrockDiscovery: {
-      enabled: true,
-      region: "us-east-1",
-      providerFilter: ["anthropic", "amazon"],
-      refreshInterval: 3600,
-      defaultContextWindow: 32000,
-      defaultMaxTokens: 4096,
+  plugins: {
+    entries: {
+      "amazon-bedrock": {
+        config: {
+          discovery: {
+            enabled: true,
+            region: "us-east-1",
+            providerFilter: ["anthropic", "amazon"],
+            refreshInterval: 3600,
+            defaultContextWindow: 32000,
+            defaultMaxTokens: 4096,
+          },
+        },
+      },
     },
   },
 }
@@ -120,20 +127,21 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 When running OpenClaw on an EC2 instance with an IAM role attached, the AWS SDK
 can use the instance metadata service (IMDS) for authentication. For Bedrock
 model discovery, OpenClaw only auto-enables the implicit provider from AWS env
-markers unless you explicitly set `models.bedrockDiscovery.enabled: true`.
+markers unless you explicitly set
+`plugins.entries.amazon-bedrock.config.discovery.enabled: true`.
 
 Recommended setup for IMDS-backed hosts:
 
-- Set `models.bedrockDiscovery.enabled` to `true`.
-- Set `models.bedrockDiscovery.region` (or export `AWS_REGION`).
+- Set `plugins.entries.amazon-bedrock.config.discovery.enabled` to `true`.
+- Set `plugins.entries.amazon-bedrock.config.discovery.region` (or export `AWS_REGION`).
 - You do **not** need a fake API key.
 - You only need `AWS_PROFILE=default` if you specifically want an env marker
   for auto mode or status surfaces.
 
 ```bash
 # Recommended: explicit discovery enable + region
-openclaw config set models.bedrockDiscovery.enabled true
-openclaw config set models.bedrockDiscovery.region us-east-1
+openclaw config set plugins.entries.amazon-bedrock.config.discovery.enabled true
+openclaw config set plugins.entries.amazon-bedrock.config.discovery.region us-east-1
 
 # Optional: add an env marker if you want auto mode without explicit enable
 export AWS_PROFILE=default
@@ -176,8 +184,8 @@ aws ec2 associate-iam-instance-profile \
   --iam-instance-profile Name=EC2-Bedrock-Access
 
 # 3. On the EC2 instance, enable discovery explicitly
-openclaw config set models.bedrockDiscovery.enabled true
-openclaw config set models.bedrockDiscovery.region us-east-1
+openclaw config set plugins.entries.amazon-bedrock.config.discovery.enabled true
+openclaw config set plugins.entries.amazon-bedrock.config.discovery.region us-east-1
 
 # 4. Optional: add an env marker if you want auto mode without explicit enable
 echo 'export AWS_PROFILE=default' >> ~/.bashrc
@@ -194,7 +202,7 @@ openclaw models list
 - Automatic discovery needs the `bedrock:ListFoundationModels` permission.
 - If you rely on auto mode, set one of the supported AWS auth env markers on the
   gateway host. If you prefer IMDS/shared-config auth without env markers, set
-  `models.bedrockDiscovery.enabled: true`.
+  `plugins.entries.amazon-bedrock.config.discovery.enabled: true`.
 - OpenClaw surfaces the credential source in this order: `AWS_BEARER_TOKEN_BEDROCK`,
   then `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, then `AWS_PROFILE`, then the
   default AWS SDK chain.

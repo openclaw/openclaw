@@ -99,6 +99,8 @@ export type DiscoveryToggleConfig = {
 export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
+  // Deprecated legacy compat aliases. Kept in the runtime type surface so
+  // doctor/runtime fallbacks can read older configs until migration completes.
   bedrockDiscovery?: BedrockDiscoveryConfig;
   copilotDiscovery?: DiscoveryToggleConfig;
   huggingfaceDiscovery?: DiscoveryToggleConfig;

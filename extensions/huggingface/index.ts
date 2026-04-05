@@ -5,11 +5,18 @@ import { buildHuggingfaceProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "huggingface";
 
+type HuggingFacePluginConfig = {
+  discovery?: {
+    enabled?: boolean;
+  };
+};
+
 export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Hugging Face Provider",
   description: "Bundled Hugging Face provider plugin",
   register(api) {
+    const pluginConfig = (api.pluginConfig ?? {}) as HuggingFacePluginConfig;
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Hugging Face",
@@ -41,7 +48,9 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          if (ctx.config?.models?.huggingfaceDiscovery?.enabled === false) {
+          const discoveryEnabled =
+            pluginConfig.discovery?.enabled ?? ctx.config?.models?.huggingfaceDiscovery?.enabled;
+          if (discoveryEnabled === false) {
             return null;
           }
           const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
