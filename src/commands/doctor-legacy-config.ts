@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { migrateAmazonBedrockLegacyConfig } from "../../extensions/amazon-bedrock/config-api.js";
 import { migrateVoiceCallLegacyConfigInput } from "../../extensions/voice-call/config-api.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
@@ -187,6 +188,11 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   seedMissingDefaultAccountsFromSingleAccountBase();
   normalizeLegacyBrowserProfiles();
   normalizeVoiceCallLegacyConfig();
+  const bedrockMigration = migrateAmazonBedrockLegacyConfig(next);
+  if (bedrockMigration.changes.length > 0) {
+    next = bedrockMigration.config;
+    changes.push(...bedrockMigration.changes);
+  }
   const webSearchMigration = migrateLegacyWebSearchConfig(next);
   if (webSearchMigration.changes.length > 0) {
     next = webSearchMigration.config;

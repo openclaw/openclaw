@@ -222,6 +222,37 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("migrates legacy Bedrock discovery config into plugin-owned discovery config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        mode: "merge",
+        bedrockDiscovery: {
+          enabled: true,
+          region: "us-east-1",
+          providerFilter: ["anthropic"],
+        },
+      },
+    });
+
+    expect(res.config.models).toEqual({
+      mode: "merge",
+    });
+    expect(res.config.plugins?.entries?.["amazon-bedrock"]).toEqual({
+      config: {
+        discovery: {
+          enabled: true,
+          region: "us-east-1",
+          providerFilter: ["anthropic"],
+        },
+      },
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved models.bedrockDiscovery → plugins.entries.amazon-bedrock.config.discovery.",
+      ]),
+    );
+  });
+
   it("migrates Discord account dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {
