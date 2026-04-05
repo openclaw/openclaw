@@ -4,8 +4,8 @@ import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionProviderId } from "./provider-types.js";
 
 function trimToUndefined(value: string | undefined): string | undefined {
-  const trimmed = value?.trim().toLowerCase();
-  return trimmed ? trimmed : undefined;
+  const trimmed = value?.trim()?.toLowerCase();
+  return trimmed || undefined;
 }
 
 export function normalizeRealtimeTranscriptionProviderId(

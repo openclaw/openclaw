@@ -4,8 +4,8 @@ import type { SpeechProviderPlugin } from "../plugins/types.js";
 import type { SpeechProviderId } from "./provider-types.js";
 
 function trimToUndefined(value: string | undefined): string | undefined {
-  const trimmed = value?.trim().toLowerCase();
-  return trimmed ? trimmed : undefined;
+  const trimmed = value?.trim()?.toLowerCase();
+  return trimmed || undefined;
 }
 
 export function normalizeSpeechProviderId(

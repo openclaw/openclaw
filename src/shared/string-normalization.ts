@@ -7,7 +7,7 @@ export function normalizeStringEntriesLower(list?: ReadonlyArray<unknown>) {
 }
 
 export function normalizeHyphenSlug(raw?: string | null) {
-  const trimmed = raw?.trim().toLowerCase() ?? "";
+  const trimmed = raw?.trim()?.toLowerCase() ?? "";
   if (!trimmed) {
     return "";
   }
@@ -17,7 +17,7 @@ export function normalizeHyphenSlug(raw?: string | null) {
 }
 
 export function normalizeAtHashSlug(raw?: string | null) {
-  const trimmed = raw?.trim().toLowerCase() ?? "";
+  const trimmed = raw?.trim()?.toLowerCase() ?? "";
   if (!trimmed) {
     return "";
   }
