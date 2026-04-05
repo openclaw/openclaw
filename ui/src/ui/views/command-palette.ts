@@ -100,8 +100,8 @@ function filteredItems(query: string): PaletteItem[] {
   const q = query.toLowerCase();
   return PALETTE_ITEMS.filter(
     (item) =>
-      item.label.toLowerCase().includes(q) ||
-      (item.description?.toLowerCase().includes(q) ?? false),
+      t(item.label).toLowerCase().includes(q) ||
+      (item.description ? t(item.description).toLowerCase().includes(q) : false),
   );
 }
 
