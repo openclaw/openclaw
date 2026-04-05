@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   colorize,
@@ -28,13 +29,17 @@ import {
 import type {
   MemoryCommandOptions,
   MemoryPromoteCommandOptions,
+  MemoryPromoteExplainOptions,
+  MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
+import { previewRemDreaming } from "./dreaming-phases.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
   repairShortTermPromotionArtifacts,
+  readShortTermRecallEntries,
   recordShortTermRecalls,
   rankShortTermPromotionCandidates,
   resolveShortTermRecallLockPath,
@@ -206,6 +211,26 @@ function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
 
 function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] {
   return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) => shortenHomePath(entry));
+}
+
+function matchesPromotionSelector(
+  candidate: {
+    key: string;
+    path: string;
+    snippet: string;
+  },
+  selector: string,
+): boolean {
+  const trimmed = selector.trim().toLowerCase();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    candidate.key.toLowerCase() === trimmed ||
+    candidate.key.toLowerCase().includes(trimmed) ||
+    candidate.path.toLowerCase().includes(trimmed) ||
+    candidate.snippet.toLowerCase().includes(trimmed)
+  );
 }
 
 async function withMemoryManagerForAgent(params: {
@@ -1000,6 +1025,8 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
           apply: applyResult
             ? {
                 applied: applyResult.applied,
+                appended: applyResult.appended,
+                reconciledExisting: applyResult.reconciledExisting,
                 memoryPath: applyResult.memoryPath,
                 appliedCandidates: applyResult.appliedCandidates,
               }
@@ -1068,7 +1095,14 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
             colorize(
               rich,
               theme.success,
-              `Promoted ${applyResult.applied} candidate(s) to ${shortenHomePath(applyResult.memoryPath)}.`,
+              `Processed ${applyResult.applied} candidate(s) for ${shortenHomePath(applyResult.memoryPath)}.`,
+            ),
+          );
+          lines.push(
+            colorize(
+              rich,
+              theme.muted,
+              `appended=${applyResult.appended} reconciledExisting=${applyResult.reconciledExisting}`,
             ),
           );
         } else {
@@ -1076,6 +1110,209 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
         }
       }
       defaultRuntime.log(lines.join("\n").trim());
+    },
+  });
+}
+
+export async function runMemoryPromoteExplain(
+  selectorArg: string | undefined,
+  opts: MemoryPromoteExplainOptions,
+) {
+  const selector = selectorArg?.trim();
+  if (!selector) {
+    defaultRuntime.error("Memory promote-explain requires a non-empty selector.");
+    process.exitCode = 1;
+    return;
+  }
+
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory promote-explain");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentId = resolveAgent(cfg, opts.agent);
+
+  await withMemoryManagerForAgent({
+    cfg,
+    agentId,
+    purpose: "status",
+    run: async (manager) => {
+      const status = manager.status();
+      const workspaceDir = status.workspaceDir?.trim();
+      const dreaming = resolveShortTermPromotionDreamingConfig({
+        pluginConfig: resolveMemoryPluginConfig(cfg),
+        cfg,
+      });
+      if (!workspaceDir) {
+        defaultRuntime.error("Memory promote-explain requires a resolvable workspace directory.");
+        process.exitCode = 1;
+        return;
+      }
+
+      let candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>;
+      try {
+        candidates = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          includePromoted: Boolean(opts.includePromoted),
+          recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
+          maxAgeDays: dreaming.maxAgeDays,
+        });
+      } catch (err) {
+        defaultRuntime.error(`Memory promote-explain failed: ${formatErrorMessage(err)}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const candidate = candidates.find((entry) => matchesPromotionSelector(entry, selector));
+      if (!candidate) {
+        defaultRuntime.error(`No promotion candidate matched "${selector}".`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const thresholds = {
+        minScore: dreaming.minScore,
+        minRecallCount: dreaming.minRecallCount,
+        minUniqueQueries: dreaming.minUniqueQueries,
+        maxAgeDays: dreaming.maxAgeDays ?? null,
+      };
+
+      if (opts.json) {
+        defaultRuntime.writeJson({
+          workspaceDir,
+          thresholds,
+          candidate,
+          passes: {
+            score: candidate.score >= thresholds.minScore,
+            recallCount: candidate.recallCount >= thresholds.minRecallCount,
+            uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
+            maxAge:
+              thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
+          },
+        });
+        return;
+      }
+
+      const rich = isRich();
+      const lines = [
+        `${colorize(rich, theme.heading, "Promotion Explain")} ${colorize(rich, theme.muted, `(${agentId})`)}`,
+        `${colorize(rich, theme.accent, candidate.key)}`,
+        `${colorize(rich, theme.muted, `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`)}`,
+        candidate.snippet,
+        colorize(
+          rich,
+          theme.muted,
+          `score=${candidate.score.toFixed(3)} recallCount=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
+        ),
+        colorize(
+          rich,
+          theme.muted,
+          `components: frequency=${candidate.components.frequency.toFixed(2)} relevance=${candidate.components.relevance.toFixed(2)} diversity=${candidate.components.diversity.toFixed(2)} recency=${candidate.components.recency.toFixed(2)} consolidation=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
+        ),
+        colorize(
+          rich,
+          theme.muted,
+          `thresholds: minScore=${thresholds.minScore} minRecallCount=${thresholds.minRecallCount} minUniqueQueries=${thresholds.minUniqueQueries} maxAgeDays=${thresholds.maxAgeDays ?? "none"}`,
+        ),
+      ];
+      if (candidate.conceptTags.length > 0) {
+        lines.push(colorize(rich, theme.muted, `concepts=${candidate.conceptTags.join(", ")}`));
+      }
+      defaultRuntime.log(lines.join("\n"));
+    },
+  });
+}
+
+export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rem-harness");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentId = resolveAgent(cfg, opts.agent);
+
+  await withMemoryManagerForAgent({
+    cfg,
+    agentId,
+    purpose: "status",
+    run: async (manager) => {
+      const status = manager.status();
+      const workspaceDir = status.workspaceDir?.trim();
+      const pluginConfig = resolveMemoryPluginConfig(cfg);
+      const deep = resolveShortTermPromotionDreamingConfig({
+        pluginConfig,
+        cfg,
+      });
+      if (!workspaceDir) {
+        defaultRuntime.error("Memory rem-harness requires a resolvable workspace directory.");
+        process.exitCode = 1;
+        return;
+      }
+      const remConfig = resolveMemoryRemDreamingConfig({
+        pluginConfig,
+        cfg,
+      });
+      const nowMs = Date.now();
+      const cutoffMs = nowMs - Math.max(0, remConfig.lookbackDays) * 24 * 60 * 60 * 1000;
+      const recallEntries = (await readShortTermRecallEntries({ workspaceDir, nowMs })).filter(
+        (entry) => Date.parse(entry.lastRecalledAt) >= cutoffMs,
+      );
+      const remPreview = previewRemDreaming({
+        entries: recallEntries,
+        limit: remConfig.limit,
+        minPatternStrength: remConfig.minPatternStrength,
+      });
+      const deepCandidates = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        includePromoted: Boolean(opts.includePromoted),
+        recencyHalfLifeDays: deep.recencyHalfLifeDays,
+        maxAgeDays: deep.maxAgeDays,
+      });
+
+      if (opts.json) {
+        defaultRuntime.writeJson({
+          workspaceDir,
+          remConfig,
+          deepConfig: {
+            minScore: deep.minScore,
+            minRecallCount: deep.minRecallCount,
+            minUniqueQueries: deep.minUniqueQueries,
+            recencyHalfLifeDays: deep.recencyHalfLifeDays,
+            maxAgeDays: deep.maxAgeDays ?? null,
+          },
+          rem: remPreview,
+          deep: {
+            candidateCount: deepCandidates.length,
+            candidates: deepCandidates,
+          },
+        });
+        return;
+      }
+
+      const rich = isRich();
+      const lines = [
+        `${colorize(rich, theme.heading, "REM Harness")} ${colorize(rich, theme.muted, `(${agentId})`)}`,
+        colorize(rich, theme.muted, `workspace=${shortenHomePath(workspaceDir)}`),
+        colorize(
+          rich,
+          theme.muted,
+          `recentRecallEntries=${recallEntries.length} deepCandidates=${deepCandidates.length}`,
+        ),
+        "",
+        colorize(rich, theme.heading, "REM Preview"),
+        ...remPreview.bodyLines,
+        "",
+        colorize(rich, theme.heading, "Deep Candidates"),
+        ...(deepCandidates.length > 0
+          ? deepCandidates
+              .slice(0, 10)
+              .map(
+                (candidate) =>
+                  `${candidate.score.toFixed(3)} ${candidate.snippet} [${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}]`,
+              )
+          : ["- No deep candidates."]),
+      ];
+      defaultRuntime.log(lines.join("\n"));
     },
   });
 }

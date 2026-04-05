@@ -17,6 +17,7 @@ const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
 export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = 3;
 export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = 2;
+const PROMOTION_MARKER_PREFIX = "openclaw-memory-promotion:";
 const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
@@ -168,6 +169,8 @@ export type ApplyShortTermPromotionsOptions = {
 export type ApplyShortTermPromotionsResult = {
   memoryPath: string;
   applied: number;
+  appended: number;
+  reconciledExisting: number;
   appliedCandidates: PromotionCandidate[];
 };
 
@@ -935,6 +938,7 @@ function buildPromotionSection(
   for (const candidate of candidates) {
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
     const snippet = candidate.snippet || "(no snippet captured)";
+    lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
     lines.push(
       `- ${snippet} [score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`,
     );
@@ -949,6 +953,18 @@ function withTrailingNewline(content: string): string {
     return "";
   }
   return content.endsWith("\n") ? content : `${content}\n`;
+}
+
+function extractPromotionMarkers(memoryText: string): Set<string> {
+  const markers = new Set<string>();
+  const matches = memoryText.matchAll(/<!--\s*openclaw-memory-promotion:([^\n]+?)\s*-->/gi);
+  for (const match of matches) {
+    const key = match[1]?.trim();
+    if (key) {
+      markers.add(key);
+    }
+  }
+  return markers;
 }
 
 export async function applyShortTermPromotions(
@@ -1011,6 +1027,8 @@ export async function applyShortTermPromotions(
       return {
         memoryPath,
         applied: 0,
+        appended: 0,
+        reconciledExisting: 0,
         appliedCandidates: [],
       };
     }
@@ -1021,14 +1039,21 @@ export async function applyShortTermPromotions(
       }
       throw err;
     });
-
-    const header = existingMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
-    const section = buildPromotionSection(rehydratedSelected, nowMs, options.timezone);
-    await fs.writeFile(
-      memoryPath,
-      `${header}${withTrailingNewline(existingMemory)}${section}`,
-      "utf-8",
+    const existingMarkers = extractPromotionMarkers(existingMemory);
+    const alreadyWritten = rehydratedSelected.filter((candidate) =>
+      existingMarkers.has(candidate.key),
     );
+    const toAppend = rehydratedSelected.filter((candidate) => !existingMarkers.has(candidate.key));
+
+    if (toAppend.length > 0) {
+      const header = existingMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
+      const section = buildPromotionSection(toAppend, nowMs, options.timezone);
+      await fs.writeFile(
+        memoryPath,
+        `${header}${withTrailingNewline(existingMemory)}${section}`,
+        "utf-8",
+      );
+    }
 
     for (const candidate of rehydratedSelected) {
       const entry = store.entries[candidate.key];
@@ -1046,6 +1071,8 @@ export async function applyShortTermPromotions(
     return {
       memoryPath,
       applied: rehydratedSelected.length,
+      appended: toAppend.length,
+      reconciledExisting: alreadyWritten.length,
       appliedCandidates: rehydratedSelected,
     };
   });

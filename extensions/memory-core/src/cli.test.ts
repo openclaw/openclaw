@@ -295,6 +295,12 @@ describe("memory cli", () => {
     expect(helpText).toContain("Limit results for focused troubleshooting.");
     expect(helpText).toContain("openclaw memory promote --apply");
     expect(helpText).toContain("Append top-ranked short-term candidates into MEMORY.md.");
+    expect(helpText).toContain('openclaw memory promote-explain "router vlan"');
+    expect(helpText).toContain("Explain why a specific candidate would or would not promote.");
+    expect(helpText).toContain("openclaw memory rem-harness --json");
+    expect(helpText).toContain(
+      "Preview REM reflections, candidate truths, and deep promotion output.",
+    );
   });
 
   it("prints vector error when unavailable", async () => {
@@ -881,6 +887,75 @@ describe("memory cli", () => {
     });
   });
 
+  it("explains a specific promote candidate as json", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router notes",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 4,
+            endLine: 8,
+            score: 0.86,
+            snippet: "Configured VLAN 10 for IoT on router",
+            source: "memory",
+          },
+        ],
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["promote-explain", "router", "--json", "--include-promoted"]);
+
+      const payload = firstWrittenJsonArg<{ candidate?: { snippet?: string } }>(writeJson);
+      expect(payload?.candidate?.snippet).toContain("Configured VLAN 10");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("previews rem harness output as json", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "weather plans",
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 2,
+            endLine: 3,
+            score: 0.92,
+            snippet: "Always check weather before suggesting outdoor plans.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rem-harness", "--json"]);
+
+      const payload = firstWrittenJsonArg<{
+        rem?: { candidateTruths?: Array<{ snippet?: string }> };
+        deep?: { candidates?: Array<{ snippet?: string }> };
+      }>(writeJson);
+      expect(payload?.rem?.candidateTruths?.[0]?.snippet).toContain("Always check weather");
+      expect(payload?.deep?.candidates?.[0]?.snippet).toContain("Always check weather");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("applies top promote candidates into MEMORY.md", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
@@ -935,8 +1010,10 @@ describe("memory cli", () => {
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       const memoryText = await fs.readFile(memoryPath, "utf-8");
       expect(memoryText).toContain("Promoted From Short-Term Memory");
+      expect(memoryText).toContain("openclaw-memory-promotion:");
       expect(memoryText).toContain("memory/2026-04-01.md:10-10");
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Promoted 1 candidate(s) to"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Processed 1 candidate(s) for"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("appended=1 reconciledExisting=0"));
       expect(close).toHaveBeenCalled();
     });
   });
