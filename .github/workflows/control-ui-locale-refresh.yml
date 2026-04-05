@@ -1,0 +1,66 @@
+name: Control UI Locale Refresh
+
+on:
+  release:
+    types:
+      - published
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: control-ui-locale-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: github.repository == 'openclaw/openclaw'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: true
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Ensure translation provider secrets exist
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_CONTROL_UI_I18N_OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.OPENCLAW_CONTROL_UI_I18N_ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "Missing control UI i18n provider secret."
+            exit 1
+          fi
+
+      - name: Refresh control UI locale files
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_CONTROL_UI_I18N_OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.OPENCLAW_CONTROL_UI_I18N_ANTHROPIC_API_KEY }}
+        run: pnpm ui:i18n:sync
+
+      - name: Commit and push locale updates
+        env:
+          TARGET_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "No control UI locale changes."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ui/src/i18n package.json scripts/control-ui-i18n.ts
+          git commit -m "chore(ui): refresh control UI locale files"
+          git push origin HEAD:"${TARGET_BRANCH}"
