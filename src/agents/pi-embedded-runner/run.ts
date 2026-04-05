@@ -82,6 +82,7 @@ import {
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
 import {
+  resolveAckExecutionFastPathInstruction,
   resolveIncompleteTurnPayloadText,
   extractPlanningOnlyPlanDetails,
   resolvePlanningOnlyRetryInstruction,
@@ -311,6 +312,11 @@ export async function runEmbeddedPiAgent(
       let planningOnlyRetryAttempts = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
+      const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
+        provider,
+        modelId,
+        prompt: params.prompt,
+      });
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
@@ -483,9 +489,16 @@ export async function runEmbeddedPiAgent(
 
           const basePrompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
-          const prompt = planningOnlyRetryInstruction
-            ? `${basePrompt}\n\n${planningOnlyRetryInstruction}`
-            : basePrompt;
+          const promptAdditions = [
+            ackExecutionFastPathInstruction,
+            planningOnlyRetryInstruction,
+          ].filter(
+            (value): value is string => typeof value === "string" && value.trim().length > 0,
+          );
+          const prompt =
+            promptAdditions.length > 0
+              ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
+              : basePrompt;
           let resolvedStreamApiKey: string | undefined;
           if (!runtimeAuthState && apiKeyInfo) {
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;

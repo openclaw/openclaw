@@ -277,6 +277,9 @@ describe("openai plugin", () => {
       "If the user asks you to do the work, start in the same turn instead of restating the plan.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      'If the latest user message is a short approval like "ok do it" or "go ahead", skip the recap and start acting.',
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       "Commentary-only turns are incomplete when the next action is clear.",
     );
   });

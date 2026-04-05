@@ -305,6 +305,117 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("trims chatty GPT ack-turn final prose", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.4"),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [
+        {
+          text: [
+            "I updated the prompt overlay and tightened the runtime guard.",
+            "I also added the ack-turn fast path so short approvals skip the recap.",
+            "The reply-side brevity cap now trims long prose-heavy GPT confirmations.",
+            "I updated tests for the overlay, retry guard, and reply normalization.",
+            "Everything is wired together and ready for verification.",
+          ].join(" "),
+        },
+      ],
+      meta: {},
+    }));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.4";
+    const result = await runAgentTurnWithFallback({
+      commandBody: "ok do it",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads?.[0]?.text).toBe(
+        "I updated the prompt overlay and tightened the runtime guard. I also added the ack-turn fast path so short approvals skip the recap. The reply-side brevity cap now trims long prose-heavy GPT confirmations...",
+      );
+    }
+  });
+
+  it("does not trim GPT replies when the user asked for depth", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.4"),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    const longDetailedReply = [
+      "Here is the detailed breakdown.",
+      "First, the runner now detects short approval turns and skips the recap path.",
+      "Second, the reply layer scores long prose-heavy GPT confirmations and trims them only in chat-style turns.",
+      "Third, code fences and richer structured outputs are left untouched so technical answers stay intact.",
+      "Finally, the overlay reinforces that this is a live chat and nudges the model toward short natural replies.",
+    ].join(" ");
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [{ text: longDetailedReply }],
+      meta: {},
+    }));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.4";
+    const result = await runAgentTurnWithFallback({
+      commandBody: "explain in detail what changed",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.runResult.payloads?.[0]?.text).toBe(longDetailedReply);
+    }
+  });
+
   it("forwards plan, approval, command output, and patch events", async () => {
     const onPlanUpdate = vi.fn();
     const onApprovalEvent = vi.fn();

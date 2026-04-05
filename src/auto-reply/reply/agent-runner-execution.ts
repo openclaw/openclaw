@@ -21,6 +21,7 @@ import {
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
+import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   resolveGroupSessionKey,
@@ -63,6 +64,10 @@ import type { TypingSignaler } from "./typing-mode.js";
 // selection keeps conflicting with fallback model choices.
 // See: https://github.com/openclaw/openclaw/issues/58348
 export const MAX_LIVE_SWITCH_RETRIES = 2;
+const GPT_CHAT_BREVITY_ACK_MAX_CHARS = 420;
+const GPT_CHAT_BREVITY_ACK_MAX_SENTENCES = 3;
+const GPT_CHAT_BREVITY_SOFT_MAX_CHARS = 900;
+const GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES = 6;
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -271,6 +276,136 @@ function buildExternalRunFailureText(message: string): string {
     return "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.";
   }
   return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+}
+
+function shouldApplyOpenAIGptChatGuard(params: { provider?: string; model?: string }): boolean {
+  if (params.provider !== "openai" && params.provider !== "openai-codex") {
+    return false;
+  }
+  return /^gpt-5(?:[.-]|$)/i.test(params.model ?? "");
+}
+
+function countChatReplySentences(text: string): number {
+  return text
+    .trim()
+    .split(/(?<=[.!?])\s+/u)
+    .map((part) => part.trim())
+    .filter(Boolean).length;
+}
+
+function scoreChattyFinalReplyText(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  let score = 0;
+  const sentenceCount = countChatReplySentences(trimmed);
+  if (trimmed.length > 900) {
+    score += 1;
+  }
+  if (trimmed.length > 1_500) {
+    score += 1;
+  }
+  if (sentenceCount > 6) {
+    score += 1;
+  }
+  if (sentenceCount > 10) {
+    score += 1;
+  }
+  if (trimmed.split(/\n{2,}/u).filter(Boolean).length >= 3) {
+    score += 1;
+  }
+  if (
+    /\b(?:in summary|to summarize|here(?:'s| is) what|what changed|what I verified)\b/i.test(
+      trimmed,
+    )
+  ) {
+    score += 1;
+  }
+  return score;
+}
+
+function shortenChattyFinalReplyText(
+  text: string,
+  params: { maxChars: number; maxSentences: number },
+): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const sentences = trimmed
+    .split(/(?<=[.!?])\s+/u)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  let shortened = sentences.slice(0, params.maxSentences).join(" ");
+  if (!shortened) {
+    shortened = trimmed.slice(0, params.maxChars).trimEnd();
+  }
+  if (shortened.length > params.maxChars) {
+    shortened = shortened.slice(0, params.maxChars).trimEnd();
+  }
+  if (shortened.length >= trimmed.length) {
+    return trimmed;
+  }
+  return shortened.replace(/[.,;:!?-]*$/u, "").trimEnd() + "...";
+}
+
+function applyOpenAIGptChatReplyGuard(params: {
+  provider?: string;
+  model?: string;
+  commandBody: string;
+  isHeartbeat: boolean;
+  payloads?: ReplyPayload[];
+}): void {
+  if (
+    params.isHeartbeat ||
+    !shouldApplyOpenAIGptChatGuard({
+      provider: params.provider,
+      model: params.model,
+    }) ||
+    !params.payloads?.length
+  ) {
+    return;
+  }
+
+  const trimmedCommand = params.commandBody.trim();
+  const isAckTurn = isLikelyExecutionAckPrompt(trimmedCommand);
+  const allowSoftCap =
+    !isAckTurn &&
+    trimmedCommand.length > 0 &&
+    trimmedCommand.length <= 120 &&
+    !/\b(?:detail|detailed|depth|deep dive|explain|compare|walk me through|why|how)\b/i.test(
+      trimmedCommand,
+    );
+
+  for (const payload of params.payloads) {
+    if (
+      !payload.text?.trim() ||
+      payload.isError ||
+      payload.isReasoning ||
+      payload.mediaUrl ||
+      (payload.mediaUrls?.length ?? 0) > 0 ||
+      payload.interactive ||
+      payload.text.includes("```")
+    ) {
+      continue;
+    }
+
+    if (isAckTurn) {
+      payload.text = shortenChattyFinalReplyText(payload.text, {
+        maxChars: GPT_CHAT_BREVITY_ACK_MAX_CHARS,
+        maxSentences: GPT_CHAT_BREVITY_ACK_MAX_SENTENCES,
+      });
+      continue;
+    }
+
+    if (allowSoftCap && scoreChattyFinalReplyText(payload.text) >= 4) {
+      payload.text = shortenChattyFinalReplyText(payload.text, {
+        maxChars: GPT_CHAT_BREVITY_SOFT_MAX_CHARS,
+        maxSentences: GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES,
+      });
+    }
+  }
 }
 
 export async function runAgentTurnWithFallback(params: {
@@ -1199,6 +1334,14 @@ export async function runAgentTurnWithFallback(params: {
         ];
       }
     }
+
+    applyOpenAIGptChatReplyGuard({
+      provider: fallbackProvider,
+      model: fallbackModel,
+      commandBody: params.commandBody,
+      isHeartbeat: params.isHeartbeat,
+      payloads: runResult.payloads,
+    });
   }
 
   return {
