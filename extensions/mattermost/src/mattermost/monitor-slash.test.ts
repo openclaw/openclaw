@@ -10,10 +10,15 @@ const resolveCallbackUrl = vi.hoisted(() => vi.fn());
 const resolveSlashCommandConfig = vi.hoisted(() => vi.fn());
 const activateSlashCommands = vi.hoisted(() => vi.fn());
 
-vi.mock("./runtime-api.js", () => ({
-  listSkillCommandsForAgents,
-  parseStrictPositiveInteger,
-}));
+vi.mock("./runtime-api.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../runtime-api.js")>("../../runtime-api.js");
+  return {
+    ...actual,
+    listSkillCommandsForAgents,
+    parseStrictPositiveInteger,
+  };
+});
 
 vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");

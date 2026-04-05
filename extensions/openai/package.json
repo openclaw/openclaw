@@ -7,6 +7,9 @@
   "dependencies": {
     "ws": "^8.20.0"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

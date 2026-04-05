@@ -6,6 +6,9 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "0.18.0"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

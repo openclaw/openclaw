@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw Google plugin",
   "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

@@ -260,18 +260,38 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 0.18.0
         version: 0.18.0(zod@4.3.6)
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/amazon-bedrock:
     dependencies:
       '@aws-sdk/client-bedrock':
         specifier: 3.1023.0
         version: 3.1023.0
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/amazon-bedrock-mantle: {}
+  extensions/amazon-bedrock-mantle:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/anthropic: {}
+  extensions/anthropic:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/anthropic-vertex: {}
+  extensions/anthropic-vertex:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/bluebubbles:
     devDependencies:
@@ -279,21 +299,53 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/brave: {}
+  extensions/brave:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/browser: {}
+  extensions/browser:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/byteplus: {}
+  extensions/byteplus:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/chutes: {}
+  extensions/chutes:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/cloudflare-ai-gateway: {}
+  extensions/cloudflare-ai-gateway:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/copilot-proxy: {}
+  extensions/copilot-proxy:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/deepgram: {}
+  extensions/deepgram:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/deepseek: {}
+  extensions/deepseek:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/diagnostics-otel:
     dependencies:
@@ -330,6 +382,10 @@ importers:
       '@opentelemetry/semantic-conventions':
         specifier: ^1.40.0
         version: 1.40.0
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/diffs:
     dependencies:
@@ -345,6 +401,10 @@ importers:
       playwright-core:
         specifier: 1.59.1
         version: 1.59.1
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/discord:
     dependencies:
@@ -368,13 +428,29 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/duckduckgo: {}
+  extensions/duckduckgo:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/elevenlabs: {}
+  extensions/elevenlabs:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/exa: {}
+  extensions/exa:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/fal: {}
+  extensions/fal:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/feishu:
     dependencies:
@@ -392,13 +468,29 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/firecrawl: {}
+  extensions/firecrawl:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/fireworks: {}
+  extensions/fireworks:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/github-copilot: {}
+  extensions/github-copilot:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/google: {}
+  extensions/google:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/googlechat:
     dependencies:
@@ -410,19 +502,47 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/groq: {}
+  extensions/groq:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/huggingface: {}
+  extensions/huggingface:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/image-generation-core: {}
+  extensions/image-generation-core:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/imessage: {}
+  extensions/imessage:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/irc: {}
+  extensions/irc:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/kilocode: {}
+  extensions/kilocode:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/kimi-coding: {}
+  extensions/kimi-coding:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/line:
     devDependencies:
@@ -430,7 +550,11 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/litellm: {}
+  extensions/litellm:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/llm-task:
     dependencies:
@@ -440,12 +564,20 @@ importers:
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/lobster:
     dependencies:
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/matrix:
     dependencies:
@@ -485,7 +617,11 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/media-understanding-core: {}
+  extensions/media-understanding-core:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/memory-core:
     devDependencies:
@@ -504,20 +640,44 @@ importers:
       openai:
         specifier: ^6.33.0
         version: 6.33.0(ws@8.20.0)(zod@4.3.6)
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/microsoft:
     dependencies:
       node-edge-tts:
         specifier: ^1.2.10
         version: 1.2.10
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/microsoft-foundry: {}
+  extensions/microsoft-foundry:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/minimax: {}
+  extensions/minimax:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/mistral: {}
+  extensions/mistral:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/moonshot: {}
+  extensions/moonshot:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/msteams:
     dependencies:
@@ -551,29 +711,69 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/nvidia: {}
+  extensions/nvidia:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/ollama: {}
+  extensions/ollama:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/open-prose: {}
+  extensions/open-prose:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/openai:
     dependencies:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/opencode: {}
+  extensions/opencode:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/opencode-go: {}
+  extensions/opencode-go:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/openrouter: {}
+  extensions/openrouter:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/openshell: {}
+  extensions/openshell:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/perplexity: {}
+  extensions/perplexity:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/qianfan: {}
+  extensions/qianfan:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/qqbot:
     dependencies:
@@ -594,13 +794,29 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/qwen: {}
+  extensions/qwen:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/searxng: {}
+  extensions/searxng:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/sglang: {}
+  extensions/sglang:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/signal: {}
+  extensions/signal:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/slack:
     dependencies:
@@ -610,16 +826,40 @@ importers:
       '@slack/web-api':
         specifier: ^7.15.0
         version: 7.15.0
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/speech-core: {}
+  extensions/speech-core:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/stepfun: {}
+  extensions/stepfun:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/synology-chat: {}
+  extensions/synology-chat:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/synthetic: {}
+  extensions/synthetic:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/tavily: {}
+  extensions/tavily:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/telegram:
     dependencies:
@@ -632,6 +872,10 @@ importers:
       grammy:
         specifier: ^1.41.1
         version: 1.41.1
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/tlon:
     dependencies:
@@ -652,7 +896,11 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/together: {}
+  extensions/together:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/twitch:
     dependencies:
@@ -665,14 +913,34 @@ importers:
       '@twurple/chat':
         specifier: ^8.1.3
         version: 8.1.3(@twurple/auth@8.1.3)
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/venice: {}
+  extensions/venice:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/vercel-ai-gateway: {}
+  extensions/vercel-ai-gateway:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/video-generation-core: {}
+  extensions/video-generation-core:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/vllm: {}
+  extensions/vllm:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/voice-call:
     dependencies:
@@ -690,7 +958,11 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/volcengine: {}
+  extensions/volcengine:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/whatsapp:
     dependencies:
@@ -705,11 +977,23 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/xai: {}
+  extensions/xai:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/xiaomi: {}
+  extensions/xiaomi:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/zai: {}
+  extensions/zai:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/zalo:
     dependencies:

@@ -13,6 +13,9 @@
     "@sinclair/typebox": "0.34.49",
     "playwright-core": "1.59.1"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
     "bundle": {
       "stageRuntimeDependencies": true

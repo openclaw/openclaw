@@ -3,5 +3,8 @@
   "version": "2026.4.5",
   "private": true,
   "description": "OpenClaw image generation runtime package",
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  }
 }

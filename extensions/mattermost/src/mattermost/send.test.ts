@@ -37,6 +37,30 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock("../../runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
+  normalizeProviderId: vi.fn((value: string | undefined) => value?.trim().toLowerCase() ?? ""),
+  getAgentScopedMediaLocalRoots: vi.fn(() => []),
+  createDedupeCache: vi.fn(() => ({
+    check: () => false,
+    add: () => undefined,
+    has: () => false,
+    delete: () => undefined,
+    clear: () => undefined,
+  })),
+  rawDataToString: vi.fn((value: unknown) =>
+    Buffer.isBuffer(value) ? value.toString("utf8") : String(value ?? ""),
+  ),
+  resolveClientIp: vi.fn((params: { remoteAddr?: string; forwardedFor?: string }) => {
+    const forwarded = params.forwardedFor?.split(",")[0]?.trim();
+    return forwarded || params.remoteAddr || undefined;
+  }),
+  isRequestBodyLimitError: vi.fn((error: unknown, code?: string) =>
+    Boolean(
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (code === undefined || (error as { code?: unknown }).code === code),
+    ),
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/config-runtime", () => ({

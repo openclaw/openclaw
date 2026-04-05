@@ -6,6 +6,7 @@ import {
   createNestedNpmInstallEnv,
   discoverBundledPluginRuntimeDeps,
   runBundledPluginPostinstall,
+  runPluginSdkDtsPostinstall,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
 
 const cleanupDirs: string[] = [];
@@ -379,6 +380,73 @@ describe("bundled plugin postinstall", () => {
         stdio: "pipe",
         windowsVerbatimArguments: undefined,
       },
+    );
+  });
+
+  it("builds plugin-sdk declarations for source checkouts after install", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-dts-"));
+    cleanupDirs.push(root);
+    await fs.mkdir(path.join(root, ".git"), { recursive: true });
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.mkdir(path.join(root, "extensions"), { recursive: true });
+    await fs.writeFile(path.join(root, "package.json"), "{}\n");
+    await fs.writeFile(path.join(root, "tsconfig.plugin-sdk.dts.json"), "{}\n");
+
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
+    const log = { log: vi.fn(), warn: vi.fn() };
+
+    runPluginSdkDtsPostinstall({
+      env: { HOME: "/tmp/home" },
+      packageRoot: root,
+      spawnSync,
+      resolveTypeScriptCli: () => "/tmp/node_modules/typescript/lib/tsc.js",
+      log,
+    });
+
+    expect(spawnSync).toHaveBeenCalledWith(
+      process.execPath,
+      [
+        "/tmp/node_modules/typescript/lib/tsc.js",
+        "-p",
+        path.join(root, "tsconfig.plugin-sdk.dts.json"),
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          HOME: "/tmp/home",
+        },
+        stdio: "pipe",
+      },
+    );
+    expect(log.log).toHaveBeenCalledWith(
+      "[postinstall] built plugin-sdk declarations for extension package projects",
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("warns without failing when source-checkout plugin-sdk declaration build fails", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-dts-fail-"));
+    cleanupDirs.push(root);
+    await fs.mkdir(path.join(root, ".git"), { recursive: true });
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.mkdir(path.join(root, "extensions"), { recursive: true });
+    await fs.writeFile(path.join(root, "package.json"), "{}\n");
+    await fs.writeFile(path.join(root, "tsconfig.plugin-sdk.dts.json"), "{}\n");
+
+    const spawnSync = vi.fn(() => ({ status: 1, stderr: "tsc failed", stdout: "" }));
+    const log = { log: vi.fn(), warn: vi.fn() };
+
+    runPluginSdkDtsPostinstall({
+      env: { HOME: "/tmp/home" },
+      packageRoot: root,
+      spawnSync,
+      resolveTypeScriptCli: () => "/tmp/node_modules/typescript/lib/tsc.js",
+      log,
+    });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "[postinstall] could not build plugin-sdk declarations for extension projects: tsc failed",
     );
   });
 });

@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw Ollama provider plugin",
   "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

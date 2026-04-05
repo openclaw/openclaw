@@ -5,6 +5,7 @@
 // resolve from the package root node_modules. Skip source checkouts.
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveNpmRunner } from "./npm-runner.mjs";
@@ -15,6 +16,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
+const DISABLE_PLUGIN_SDK_DTS_ENV = "OPENCLAW_DISABLE_PLUGIN_SDK_DTS_POSTINSTALL";
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
@@ -124,6 +126,59 @@ function shouldRunBundledPluginPostinstall(params) {
   return true;
 }
 
+function resolveLocalTypeScriptCli(packageRoot) {
+  try {
+    const rootRequire = createRequire(pathToFileURL(join(packageRoot, "package.json")).href);
+    return rootRequire.resolve("typescript/lib/tsc");
+  } catch {
+    return null;
+  }
+}
+
+export function runPluginSdkDtsPostinstall(params = {}) {
+  const env = params.env ?? process.env;
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const pathExists = params.existsSync ?? existsSync;
+  const spawn = params.spawnSync ?? spawnSync;
+  const log = params.log ?? console;
+
+  if (env?.[DISABLE_PLUGIN_SDK_DTS_ENV]?.trim()) {
+    return;
+  }
+
+  if (!isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
+    return;
+  }
+
+  const tsconfigPath = join(packageRoot, "tsconfig.plugin-sdk.dts.json");
+  if (!pathExists(tsconfigPath)) {
+    return;
+  }
+
+  const tscCliPath = (params.resolveTypeScriptCli ?? resolveLocalTypeScriptCli)(packageRoot);
+  if (!tscCliPath) {
+    log.warn("[postinstall] could not build plugin-sdk declarations: TypeScript CLI not found");
+    return;
+  }
+
+  const result = spawn(process.execPath, [tscCliPath, "-p", tsconfigPath], {
+    cwd: packageRoot,
+    encoding: "utf8",
+    env,
+    stdio: "pipe",
+  });
+
+  if (result.status !== 0) {
+    const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+    log.warn(
+      `[postinstall] could not build plugin-sdk declarations for extension projects: ${output || "tsc failed"}`,
+    );
+    return;
+  }
+
+  log.log("[postinstall] built plugin-sdk declarations for extension package projects");
+}
+
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
   const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
@@ -184,5 +239,6 @@ export function runBundledPluginPostinstall(params = {}) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  runPluginSdkDtsPostinstall();
   runBundledPluginPostinstall();
 }

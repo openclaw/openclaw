@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw Amazon Bedrock Mantle (OpenAI-compatible) provider plugin",
   "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
     "bundle": {
       "stageRuntimeDependencies": true

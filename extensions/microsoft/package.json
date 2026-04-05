@@ -7,6 +7,9 @@
   "dependencies": {
     "node-edge-tts": "^1.2.10"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

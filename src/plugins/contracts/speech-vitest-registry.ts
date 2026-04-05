@@ -1,5 +1,5 @@
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
-import { resolveManifestContractPluginIds } from "../manifest-registry.js";
+import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -54,10 +54,28 @@ function loadVitestCapabilityContractEntries<T>(params: {
     provider: T;
   }>;
 }): Array<{ pluginId: string; provider: T }> {
-  const pluginIds = resolveManifestContractPluginIds({
-    contract: params.contract,
-    origin: "bundled",
-  });
+  const pluginIds = loadPluginManifestRegistry({})
+    .plugins.filter((plugin) => {
+      if (plugin.origin !== "bundled") {
+        return false;
+      }
+      switch (params.contract) {
+        case "speechProviders":
+          return (plugin.contracts?.speechProviders?.length ?? 0) > 0;
+        case "mediaUnderstandingProviders":
+          return (plugin.contracts?.mediaUnderstandingProviders?.length ?? 0) > 0;
+        case "realtimeVoiceProviders":
+          return (plugin.contracts?.realtimeVoiceProviders?.length ?? 0) > 0;
+        case "realtimeTranscriptionProviders":
+          return (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0;
+        case "imageGenerationProviders":
+          return (plugin.contracts?.imageGenerationProviders?.length ?? 0) > 0;
+        case "videoGenerationProviders":
+          return (plugin.contracts?.videoGenerationProviders?.length ?? 0) > 0;
+      }
+    })
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
   if (pluginIds.length === 0) {
     return [];
   }

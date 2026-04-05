@@ -83,15 +83,15 @@ describe("google provider plugin hooks", () => {
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
   });
 
-  it("owns Gemini CLI tool schema normalization", async () => {
+  it("does not add a plugin-local Gemini CLI tool schema normalization hook", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googlePlugin,
       id: "google",
       name: "Google Provider",
     });
-    const provider = requireRegisteredProvider(providers, "google-gemini-cli");
+    const provider = requireRegisteredProvider(providers, "google");
 
-    const [tool] =
+    expect(
       provider.normalizeToolSchemas?.({
         provider: "google-gemini-cli",
         tools: [
@@ -107,37 +107,23 @@ describe("google provider plugin hooks", () => {
             },
           },
         ],
-      } as never) ?? [];
-
-    expect(tool).toMatchObject({
-      name: "write_file",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string" },
-        },
-      },
-    });
-    expect(tool?.parameters).not.toHaveProperty("additionalProperties");
-    expect(
-      (tool?.parameters as { properties?: { path?: Record<string, unknown> } })?.properties?.path,
-    ).not.toHaveProperty("pattern");
+      } as never),
+    ).toBeUndefined();
     expect(
       provider.inspectToolSchemas?.({
         provider: "google-gemini-cli",
-        tools: [tool],
+        tools: [],
       } as never),
-    ).toEqual([]);
+    ).toBeUndefined();
   });
 
-  it("wires google-thinking stream hooks for direct and Gemini CLI providers", async () => {
+  it("wires google-thinking stream hooks for direct and aliased google providers", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googlePlugin,
       id: "google",
       name: "Google Provider",
     });
     const googleProvider = requireRegisteredProvider(providers, "google");
-    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
     let capturedPayload: Record<string, unknown> | undefined;
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
@@ -150,8 +136,8 @@ describe("google provider plugin hooks", () => {
       return {} as never;
     };
 
-    const runCase = (provider: typeof googleProvider, providerId: string) => {
-      const wrapped = provider.wrapStreamFn?.({
+    const runCase = (providerId: string) => {
+      const wrapped = googleProvider.wrapStreamFn?.({
         provider: providerId,
         modelId: "gemini-3.1-pro-preview",
         thinkingLevel: "high",
@@ -177,7 +163,7 @@ describe("google provider plugin hooks", () => {
       expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
     };
 
-    runCase(googleProvider, "google");
-    runCase(cliProvider, "google-gemini-cli");
+    runCase("google");
+    runCase("google-gemini-cli");
   });
 });

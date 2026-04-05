@@ -51,32 +51,32 @@ function createContext(params: {
 }
 
 describe("resolveGoogleGeminiForwardCompatModel", () => {
-  it("resolves stable gemini 2.5 flash-lite from direct google templates for Gemini CLI when available", () => {
+  it("resolves stable gemini 2.5 flash-lite from same-provider templates for Gemini CLI", () => {
     const model = resolveGoogleGeminiForwardCompatModel({
       providerId: "google-gemini-cli",
       ctx: createContext({
         provider: "google-gemini-cli",
         modelId: "gemini-2.5-flash-lite",
-        models: [createTemplateModel("google", "gemini-2.5-flash-lite")],
+        models: [createTemplateModel("google-gemini-cli", "gemini-2.5-flash-lite")],
       }),
     });
 
     expect(model).toMatchObject({
       provider: "google-gemini-cli",
       id: "gemini-2.5-flash-lite",
-      api: "google-generative-ai",
+      api: "google-gemini-cli",
       reasoning: false,
     });
   });
 
-  it("resolves stable gemini 2.5 flash-lite from Gemini CLI templates when direct google templates are unavailable", () => {
+  it("resolves stable gemini 2.5 flash-lite from Gemini CLI templates", () => {
     const model = resolveGoogleGeminiForwardCompatModel({
       providerId: "google-gemini-cli",
       ctx: createContext({
         provider: "google-gemini-cli",
         modelId: "gemini-2.5-flash-lite",
         models: [
-          createTemplateModel("google-gemini-cli", "gemini-3.1-flash-lite-preview", {
+          createTemplateModel("google-gemini-cli", "gemini-2.5-flash-lite", {
             contextWindow: 1_048_576,
             api: "google-gemini-cli",
             baseUrl: "https://cloudcode-pa.googleapis.com",
@@ -100,14 +100,14 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       ctx: createContext({
         provider: "google-vertex",
         modelId: "gemini-3.1-pro-preview",
-        models: [createTemplateModel("google-gemini-cli", "gemini-3-pro-preview")],
+        models: [createTemplateModel("google-vertex", "gemini-3-pro-preview")],
       }),
     });
 
     expect(model).toMatchObject({
       provider: "google-vertex",
       id: "gemini-3.1-pro-preview",
-      api: "google-gemini-cli",
+      api: "google-generative-ai",
       reasoning: false,
     });
   });
@@ -149,7 +149,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
         provider: "google",
         modelId: "gemini-3.1-flash-preview",
         models: [
-          createTemplateModel("google-gemini-cli", "gemini-3-flash-preview", {
+          createTemplateModel("google", "gemini-3-flash-preview", {
             reasoning: true,
           }),
         ],
@@ -159,7 +159,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     expect(model).toMatchObject({
       provider: "google",
       id: "gemini-3.1-flash-preview",
-      api: "google-gemini-cli",
+      api: "google-generative-ai",
       reasoning: true,
     });
   });
@@ -193,10 +193,10 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
         provider: "google-vertex",
         modelId: "gemini-3.1-flash-lite-preview",
         models: [
-          createTemplateModel("google-gemini-cli", "gemini-3-flash-preview", {
+          createTemplateModel("google-vertex", "gemini-3-flash-preview", {
             contextWindow: 128_000,
           }),
-          createTemplateModel("google-gemini-cli", "gemini-3.1-flash-lite-preview", {
+          createTemplateModel("google-vertex", "gemini-3.1-flash-lite-preview", {
             contextWindow: 1_048_576,
           }),
         ],

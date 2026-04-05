@@ -44,6 +44,11 @@ function createRuntimeEnv() {
   };
 }
 
+const FEISHU_TEST_CREDENTIALS = {
+  appId: "cli_test",
+  appSecret: "secret_test", // pragma: allowlist secret
+} as const;
+
 describe("broadcast dispatch", () => {
   const finalizeInboundContextCalls: Array<Record<string, unknown>> = [];
   const mockFinalizeInboundContext: PluginRuntime["channel"]["reply"]["finalizeInboundContext"] = (
@@ -102,6 +107,9 @@ describe("broadcast dispatch", () => {
         shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
       },
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/feishu-broadcast-test-sessions.json"),
+      },
       media: {
         saveMediaBuffer: mockSaveMediaBuffer,
       },
@@ -122,6 +130,7 @@ describe("broadcast dispatch", () => {
       agents: { list: [{ id: "main" }, { id: "susan" }] },
       channels: {
         feishu: {
+          ...FEISHU_TEST_CREDENTIALS,
           groups: {
             "oc-broadcast-group": {
               requireMention: true,
@@ -247,6 +256,7 @@ describe("broadcast dispatch", () => {
     const cfg: ClawdbotConfig = {
       channels: {
         feishu: {
+          ...FEISHU_TEST_CREDENTIALS,
           groups: {
             "oc-broadcast-group": {
               requireMention: false,
@@ -288,6 +298,7 @@ describe("broadcast dispatch", () => {
       agents: { list: [{ id: "main" }, { id: "susan" }] },
       channels: {
         feishu: {
+          ...FEISHU_TEST_CREDENTIALS,
           groups: {
             "oc-broadcast-group": {
               requireMention: false,
@@ -334,6 +345,7 @@ describe("broadcast dispatch", () => {
       agents: { list: [{ id: "main" }, { id: "susan" }] },
       channels: {
         feishu: {
+          ...FEISHU_TEST_CREDENTIALS,
           groups: {
             "oc-broadcast-group": {
               requireMention: false,

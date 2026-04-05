@@ -62,6 +62,26 @@ function readRootPackageJson(): {
   };
 }
 
+function listBundledPluginPackageJsonPaths(): string[] {
+  return readdirSync(resolve(REPO_ROOT, "extensions"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => `extensions/${entry.name}/package.json`)
+    .filter((filePath) => existsSync(resolve(REPO_ROOT, filePath)))
+    .toSorted();
+}
+
+function readBundledPluginPackageJson(relativePath: string): {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+} {
+  return JSON.parse(readFileSync(resolve(REPO_ROOT, relativePath), "utf8")) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+  };
+}
+
 function readMatrixPackageJson(): {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
@@ -389,5 +409,24 @@ describe("plugin-sdk package contract guardrails", () => {
 
   it("keeps extension sources on public sdk or local package seams", () => {
     expect(collectExtensionCoreImportLeaks()).toEqual([]);
+  });
+
+  it("keeps bundled plugins on an explicit local openclaw development contract", () => {
+    const failures: string[] = [];
+
+    for (const packageJsonPath of listBundledPluginPackageJsonPaths()) {
+      const packageJson = readBundledPluginPackageJson(packageJsonPath);
+      if (packageJson.devDependencies?.openclaw !== "workspace:*") {
+        failures.push(`${packageJsonPath} must declare devDependencies.openclaw = workspace:*`);
+      }
+      if (packageJson.dependencies?.openclaw) {
+        failures.push(`${packageJsonPath} must not place openclaw in dependencies`);
+      }
+      if (packageJson.optionalDependencies?.openclaw) {
+        failures.push(`${packageJsonPath} must not place openclaw in optionalDependencies`);
+      }
+    }
+
+    expect(failures).toEqual([]);
   });
 });

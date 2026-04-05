@@ -8,6 +8,9 @@
     "@twurple/auth": "^8.1.3",
     "@twurple/chat": "^8.1.3"
   },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

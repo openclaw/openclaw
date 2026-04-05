@@ -39,22 +39,21 @@ const mockState = vi.hoisted(() => ({
   normalizeMattermostAllowList: vi.fn((value: unknown) => value),
 }));
 
-vi.mock("./runtime-api.js", () => {
+vi.mock("./runtime-api.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../runtime-api.js")>("../../runtime-api.js");
   return {
+    ...actual,
     buildModelsProviderData: mockState.buildModelsProviderData,
     createChannelReplyPipeline: vi.fn(() => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
-    })),
-    createDedupeCache: vi.fn(() => ({
-      check: () => false,
     })),
     createReplyPrefixOptions: vi.fn(() => ({})),
     createTypingCallbacks: vi.fn(() => ({ onReplyStart: vi.fn() })),
     isRequestBodyLimitError: vi.fn(() => false),
     logTypingFailure: vi.fn(),
     formatInboundFromLabel: vi.fn(() => ""),
-    rawDataToString: vi.fn((value: unknown) => String(value ?? "")),
     readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
     resolveThreadSessionKeys: vi.fn((params: { baseSessionKey: string }) => ({
       sessionKey: params.baseSessionKey,
