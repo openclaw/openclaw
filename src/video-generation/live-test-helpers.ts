@@ -9,6 +9,7 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   minimax: "minimax/MiniMax-Hailuo-2.3",
   openai: "openai/sora-2",
   qwen: "qwen/wan2.6-t2v",
+  runway: "runway/gen4.5",
   together: "together/Wan-AI/Wan2.2-T2V-A14B",
   xai: "xai/grok-imagine-video",
 };
