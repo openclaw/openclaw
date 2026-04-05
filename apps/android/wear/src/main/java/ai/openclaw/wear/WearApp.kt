@@ -26,6 +26,23 @@ import kotlinx.coroutines.launch
 
 private const val TAG = "WearApp"
 
+internal fun activateWearGatewayClient(
+  currentClient: GatewayClientInterface,
+  nextClient: GatewayClientInterface,
+  setActiveClient: (GatewayClientInterface) -> Unit,
+  switchClient: (GatewayClientInterface) -> Unit,
+  onConnected: () -> Unit,
+) {
+  if (currentClient === nextClient) {
+    return
+  }
+  setActiveClient(nextClient)
+  switchClient(nextClient)
+  if (nextClient.connected.value) {
+    onConnected()
+  }
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class WearApp : Application() {
   private data class DirectConnectionSpec(
@@ -250,12 +267,16 @@ class WearApp : Application() {
   }
 
   private fun activateClient(client: GatewayClientInterface) {
-    if (activeClient === client) {
-      return
-    }
-    activeClient = client
-    _activeClientFlow.value = client
-    chatController.switchClient(client)
+    activateWearGatewayClient(
+      currentClient = activeClient,
+      nextClient = client,
+      setActiveClient = { nextClient ->
+        activeClient = nextClient
+        _activeClientFlow.value = nextClient
+      },
+      switchClient = chatController::switchClient,
+      onConnected = chatController::onConnected,
+    )
   }
 
   private fun startProxyClient(forceReconnect: Boolean) {

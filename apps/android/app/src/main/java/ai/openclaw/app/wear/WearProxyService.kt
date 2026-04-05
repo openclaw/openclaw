@@ -6,6 +6,7 @@ import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import ai.openclaw.app.NodeApp
+import ai.openclaw.app.gateway.parseInvokeErrorMessage
 import ai.openclaw.android.gateway.GatewayEvent
 import ai.openclaw.android.gateway.ProxyPaths
 import kotlinx.coroutines.CoroutineScope
@@ -24,6 +25,38 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 
 private const val TAG = "WearProxy"
+
+internal data class WearProxyRpcError(
+  val code: String,
+  val message: String,
+)
+
+internal fun classifyWearProxyRpcError(error: Throwable): WearProxyRpcError {
+  val message = error.message?.trim().orEmpty()
+  if (message.contains("not connected", ignoreCase = true)) {
+    return WearProxyRpcError(
+      code = "PROXY_ERROR",
+      message = "Gateway disconnected",
+    )
+  }
+
+  val parsed = parseInvokeErrorMessage(message)
+  if (parsed.hadExplicitCode) {
+    return WearProxyRpcError(code = parsed.code, message = parsed.message)
+  }
+
+  if (message.equals("request timeout", ignoreCase = true)) {
+    return WearProxyRpcError(
+      code = "REQUEST_TIMEOUT",
+      message = "Request timed out",
+    )
+  }
+
+  return WearProxyRpcError(
+    code = "REQUEST_ERROR",
+    message = message.ifEmpty { "Unknown error" },
+  )
+}
 
 /**
  * Runs on the PHONE. Receives RPC requests from the watch via Data Layer,
@@ -93,12 +126,13 @@ class WearProxyService : WearableListenerService() {
           Log.i(TAG, "RPC response sent for $method id=$id")
         } catch (e: Throwable) {
           Log.e(TAG, "RPC failed: method=$method error=${e.message}", e)
+          val proxyError = classifyWearProxyRpcError(e)
           val response = buildJsonObject {
             put("id", JsonPrimitive(id))
             put("ok", JsonPrimitive(false))
             put("error", buildJsonObject {
-              put("code", JsonPrimitive("PROXY_ERROR"))
-              put("message", JsonPrimitive(e.message ?: "Unknown error"))
+              put("code", JsonPrimitive(proxyError.code))
+              put("message", JsonPrimitive(proxyError.message))
             })
           }
           messageClient.sendMessage(sourceNodeId, ProxyPaths.RPC_RESPONSE, response.toString().toByteArray(Charsets.UTF_8)).await()
