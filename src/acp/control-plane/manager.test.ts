@@ -843,6 +843,51 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("prefers the persisted agent session id when reopening an ACP runtime after restart", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:gemini:acp:binding:discord:default:restart";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: {
+          ...readySessionMeta(),
+          agent: "gemini",
+          runtimeSessionName: key,
+          identity: {
+            state: "resolved",
+            source: "status",
+            acpxSessionId: "acpx-sid-1",
+            agentSessionId: "gemini-sid-1",
+            lastUpdatedAt: Date.now(),
+          },
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-binding-restart-gemini",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        agent: "gemini",
+        resumeSessionId: "gemini-sid-1",
+      }),
+    );
+  });
+
   it("does not resume persisted ACP identity for oneshot sessions after restart", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -890,7 +935,7 @@ describe("AcpSessionManager", () => {
     expect(ensureInput?.resumeSessionId).toBeUndefined();
   });
 
-  it("falls back to a fresh ensure when reopening a persisted ACP backend session id fails", async () => {
+  it("falls back to a fresh ensure without reusing stale agent session ids", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockImplementation(async (inputUnknown: unknown) => {
       const input = inputUnknown as {
@@ -929,6 +974,7 @@ describe("AcpSessionManager", () => {
         state: "resolved",
         source: "status",
         acpxSessionId: "acpx-sid-stale",
+        agentSessionId: "agent-sid-stale",
         lastUpdatedAt: Date.now(),
       },
     };
@@ -971,13 +1017,19 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.ensureSession.mock.calls[0]?.[0]).toMatchObject({
       sessionKey,
       agent: "codex",
-      resumeSessionId: "acpx-sid-stale",
+      resumeSessionId: "agent-sid-stale",
     });
     const retryInput = runtimeState.ensureSession.mock.calls[1]?.[0] as
       | { resumeSessionId?: string }
       | undefined;
     expect(retryInput?.resumeSessionId).toBeUndefined();
+    const runTurnInput = runtimeState.runTurn.mock.calls[0]?.[0] as
+      | { handle?: { agentSessionId?: string; backendSessionId?: string } }
+      | undefined;
+    expect(runTurnInput?.handle?.backendSessionId).toBe("acpx-sid-fresh");
+    expect(runTurnInput?.handle?.agentSessionId).toBeUndefined();
     expect(currentMeta.identity?.acpxSessionId).toBe("acpx-sid-fresh");
+    expect(currentMeta.identity?.agentSessionId).toBeUndefined();
   });
 
   it("enforces acp.maxConcurrentSessions when opening new runtime handles", async () => {
@@ -1810,6 +1862,83 @@ describe("AcpSessionManager", () => {
     expect(currentMeta.identity?.acpxRecordId).toBe("acpx-record-1");
     expect(currentMeta.identity?.acpxSessionId).toBe("acpx-session-1");
     expect(currentMeta.identity?.agentSessionId).toBe("agent-session-1");
+  });
+
+  it("reconciles prompt-learned agent session IDs even when runtime status omits them", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockResolvedValue({
+      sessionKey: "agent:gemini:acp:session-1",
+      backend: "acpx",
+      runtimeSessionName: "runtime-3",
+      backendSessionId: "acpx-stale",
+    });
+    runtimeState.runTurn.mockImplementation(async function* (inputUnknown: unknown) {
+      const input = inputUnknown as {
+        handle: {
+          agentSessionId?: string;
+        };
+      };
+      input.handle.agentSessionId = "gemini-session-1";
+      yield { type: "done" as const };
+    });
+    runtimeState.getStatus.mockResolvedValue({
+      summary: "status=alive",
+      details: { status: "alive" },
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    let currentMeta: SessionAcpMeta = {
+      ...readySessionMeta(),
+      agent: "gemini",
+      identity: {
+        state: "pending",
+        source: "ensure",
+        acpxSessionId: "acpx-stale",
+        lastUpdatedAt: Date.now(),
+      },
+    };
+    const sessionKey = "agent:gemini:acp:session-1";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "learn prompt session",
+      mode: "prompt",
+      requestId: "run-prompt-learned-agent-id",
+    });
+
+    expect(currentMeta.identity?.state).toBe("resolved");
+    expect(currentMeta.identity?.agentSessionId).toBe("gemini-session-1");
+    expect(currentMeta.identity?.acpxSessionId).toBe("acpx-stale");
   });
 
   it("skips startup identity reconciliation for already resolved sessions", async () => {

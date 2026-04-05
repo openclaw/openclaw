@@ -19,10 +19,14 @@ let logFileSequence = 0;
 
 const MOCK_CLI_SCRIPT = String.raw`#!/usr/bin/env node
 const fs = require("node:fs");
+const path = require("node:path");
 
 (async () => {
 const args = process.argv.slice(2);
 const logPath = process.env.MOCK_ACPX_LOG;
+const statePath =
+  process.env.MOCK_ACPX_STATE ||
+  path.join(path.dirname(logPath || process.cwd()), "mock-acpx-state.json");
 const openclawShell = process.env.OPENCLAW_SHELL || "";
 const writeLog = (entry) => {
   if (!logPath) return;
@@ -41,6 +45,95 @@ const emitUpdate = (sessionId, update) =>
     method: "session/update",
     params: { sessionId, update },
   });
+const readState = () => {
+  try {
+    const raw = fs.readFileSync(statePath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return {
+        byName:
+          parsed.byName && typeof parsed.byName === "object" && !Array.isArray(parsed.byName)
+            ? parsed.byName
+            : {},
+        byAgentSessionId:
+          parsed.byAgentSessionId &&
+          typeof parsed.byAgentSessionId === "object" &&
+          !Array.isArray(parsed.byAgentSessionId)
+            ? parsed.byAgentSessionId
+            : {},
+      };
+    }
+  } catch {}
+  return { byName: {}, byAgentSessionId: {} };
+};
+const writeState = (state) => {
+  fs.writeFileSync(statePath, JSON.stringify(state), "utf8");
+};
+const defaultAgentSessionIdForName = (name) => {
+  if (process.env.MOCK_ACPX_ENSURE_NO_AGENT_SESSION_ID === "1") {
+    return "";
+  }
+  const prefix = process.env.MOCK_ACPX_AGENT_SESSION_PREFIX || "inner-";
+  return prefix + name;
+};
+const cleanupAgentLookup = (state, name) => {
+  for (const [sessionId, mappedName] of Object.entries(state.byAgentSessionId)) {
+    if (mappedName === name) {
+      delete state.byAgentSessionId[sessionId];
+    }
+  }
+};
+const storeSessionByName = (name, overrides = {}) => {
+  const state = readState();
+  const existing = state.byName[name] && typeof state.byName[name] === "object" ? state.byName[name] : {};
+  const next = {
+    acpxRecordId: "rec-" + name,
+    acpxSessionId: "sid-" + name,
+    agentSessionId: defaultAgentSessionIdForName(name),
+    ...existing,
+    ...overrides,
+  };
+  if (!next.acpxRecordId) {
+    next.acpxRecordId = "rec-" + name;
+  }
+  if (!next.acpxSessionId) {
+    next.acpxSessionId = "sid-" + name;
+  }
+  cleanupAgentLookup(state, name);
+  state.byName[name] = next;
+  if (next.agentSessionId) {
+    state.byAgentSessionId[next.agentSessionId] = name;
+  }
+  writeState(state);
+  return { name, ...next };
+};
+const findSessionByReference = (reference) => {
+  if (!reference) {
+    return null;
+  }
+  const state = readState();
+  const byName = state.byName[reference];
+  if (byName && typeof byName === "object") {
+    return { name: reference, ...byName };
+  }
+  const mappedName = state.byAgentSessionId[reference];
+  if (mappedName) {
+    const mapped = state.byName[mappedName];
+    if (mapped && typeof mapped === "object") {
+      return { name: mappedName, ...mapped };
+    }
+  }
+  for (const [name, session] of Object.entries(state.byName)) {
+    if (!session || typeof session !== "object") {
+      continue;
+    }
+    if (session.acpxSessionId === reference) {
+      return { name, ...session };
+    }
+  }
+  return null;
+};
+const resolveSession = (reference) => findSessionByReference(reference) || storeSessionByName(reference);
 
 if (args.includes("--version")) {
   return emitTextAndExit("mock-acpx ${ACPX_PINNED_VERSION}\\n");
@@ -74,6 +167,7 @@ const readFlag = (flag) => {
 
 const sessionFromOption = readFlag("--session");
 const ensureName = readFlag("--name");
+const resumeSessionId = readFlag("--resume-session");
 const closeName =
   command === "sessions" && args[commandIndex + 1] === "close"
     ? String(args[commandIndex + 2] || "")
@@ -88,6 +182,7 @@ if (command === "sessions" && args[commandIndex + 1] === "ensure") {
     process.stderr.write(String(process.env.MOCK_ACPX_ENSURE_STDERR) + "\n");
   }
   if (process.env.MOCK_ACPX_ENSURE_EXIT_1 === "1") {
+    storeSessionByName(ensureName, resumeSessionId ? { agentSessionId: resumeSessionId } : {});
     return emitJsonAndExit({
       jsonrpc: "2.0",
       id: null,
@@ -100,11 +195,12 @@ if (command === "sessions" && args[commandIndex + 1] === "ensure") {
   if (process.env.MOCK_ACPX_ENSURE_EMPTY === "1") {
     emitJson({ action: "session_ensured", name: ensureName });
   } else {
+    const session = storeSessionByName(ensureName, resumeSessionId ? { agentSessionId: resumeSessionId } : {});
     emitJson({
       action: "session_ensured",
-      acpxRecordId: "rec-" + ensureName,
-      acpxSessionId: "sid-" + ensureName,
-      agentSessionId: "inner-" + ensureName,
+      acpxRecordId: session.acpxRecordId,
+      acpxSessionId: session.acpxSessionId,
+      ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),
       name: ensureName,
       created: true,
     });
@@ -131,11 +227,12 @@ if (command === "sessions" && args[commandIndex + 1] === "new") {
   if (process.env.MOCK_ACPX_NEW_EMPTY === "1") {
     emitJson({ action: "session_created", name: ensureName });
   } else {
+    const session = storeSessionByName(ensureName, resumeSessionId ? { agentSessionId: resumeSessionId } : {});
     emitJson({
       action: "session_created",
-      acpxRecordId: "rec-" + ensureName,
-      acpxSessionId: "sid-" + ensureName,
-      agentSessionId: "inner-" + ensureName,
+      acpxRecordId: session.acpxRecordId,
+      acpxSessionId: session.acpxSessionId,
+      ...(session.agentSessionId ? { agentSessionId: session.agentSessionId } : {}),
       name: ensureName,
       created: true,
     });
@@ -172,23 +269,26 @@ if (command === "config" && args[commandIndex + 1] === "show") {
 }
 
 if (command === "cancel") {
+  const session = findSessionByReference(sessionFromOption);
   writeLog({ kind: "cancel", agent, args, sessionName: sessionFromOption });
   return emitJsonAndExit({
-    acpxSessionId: "sid-" + sessionFromOption,
+    acpxSessionId: session ? session.acpxSessionId : "sid-" + sessionFromOption,
     cancelled: true,
   });
 }
 
 if (command === "set-mode") {
+  const session = findSessionByReference(sessionFromOption);
   writeLog({ kind: "set-mode", agent, args, sessionName: sessionFromOption, mode: setModeValue });
   return emitJsonAndExit({
     action: "mode_set",
-    acpxSessionId: "sid-" + sessionFromOption,
+    acpxSessionId: session ? session.acpxSessionId : "sid-" + sessionFromOption,
     mode: setModeValue,
   });
 }
 
 if (command === "set") {
+  const session = findSessionByReference(sessionFromOption);
   writeLog({
     kind: "set",
     agent,
@@ -199,7 +299,7 @@ if (command === "set") {
   });
   emitJson({
     action: "config_set",
-    acpxSessionId: "sid-" + sessionFromOption,
+    acpxSessionId: session ? session.acpxSessionId : "sid-" + sessionFromOption,
     key: setKey,
     value: setValue,
   });
@@ -208,6 +308,7 @@ if (command === "set") {
 }
 
 if (command === "status") {
+  const session = findSessionByReference(sessionFromOption);
   writeLog({ kind: "status", agent, args, sessionName: sessionFromOption });
   if (process.env.MOCK_ACPX_STATUS_SIGNAL) {
     process.kill(process.pid, process.env.MOCK_ACPX_STATUS_SIGNAL);
@@ -216,9 +317,9 @@ if (command === "status") {
   const summary = process.env.MOCK_ACPX_STATUS_SUMMARY || "";
   const omitStatusIds = process.env.MOCK_ACPX_STATUS_NO_IDS === "1";
   emitJson({
-    acpxRecordId: sessionFromOption && !omitStatusIds ? "rec-" + sessionFromOption : null,
-    acpxSessionId: sessionFromOption && !omitStatusIds ? "sid-" + sessionFromOption : null,
-    agentSessionId: sessionFromOption && !omitStatusIds ? "inner-" + sessionFromOption : null,
+    acpxRecordId: !omitStatusIds && session ? session.acpxRecordId : null,
+    acpxSessionId: !omitStatusIds && session ? session.acpxSessionId : null,
+    agentSessionId: !omitStatusIds && session ? session.agentSessionId || null : null,
     status,
     ...(summary ? { summary } : {}),
     pid: 4242,
@@ -229,17 +330,19 @@ if (command === "status") {
 }
 
 if (command === "sessions" && args[commandIndex + 1] === "close") {
+  const session = findSessionByReference(closeName) || storeSessionByName(closeName);
   writeLog({ kind: "close", agent, args, sessionName: closeName });
   return emitJsonAndExit({
     action: "session_closed",
-    acpxRecordId: "rec-" + closeName,
-    acpxSessionId: "sid-" + closeName,
+    acpxRecordId: session.acpxRecordId,
+    acpxSessionId: session.acpxSessionId,
     name: closeName,
   });
 }
 
 if (command === "prompt") {
   const stdinText = fs.readFileSync(0, "utf8");
+  const session = resolveSession(sessionFromOption);
   writeLog({
     kind: "prompt",
     agent,
@@ -251,6 +354,7 @@ if (command === "prompt") {
     githubToken: process.env.GITHUB_TOKEN || "",
   });
   const requestId = "req-1";
+  let activeSessionId = session.agentSessionId || sessionFromOption;
 
   emitJson({
     jsonrpc: "2.0",
@@ -262,21 +366,50 @@ if (command === "prompt") {
       mcpServers: [],
     },
   });
-  emitJson({
-    jsonrpc: "2.0",
-    id: 0,
-    error: {
-      code: -32002,
-      message: "Resource not found",
-    },
-  });
+
+  const shouldRejectLoad =
+    process.env.MOCK_ACPX_PROMPT_LOAD_INVALID === "1" &&
+    (!session.agentSessionId || sessionFromOption !== session.agentSessionId);
+  if (shouldRejectLoad) {
+    const nextAgentSessionId =
+      process.env.MOCK_ACPX_PROMPT_NEW_AGENT_SESSION_ID || "agent-fallback-" + session.name;
+    const refreshed = storeSessionByName(session.name, {
+      agentSessionId: nextAgentSessionId,
+    });
+    emitJson({
+      jsonrpc: "2.0",
+      id: 0,
+      error: {
+        code: -32002,
+        message: "Invalid session identifier",
+      },
+    });
+    emitJson({
+      jsonrpc: "2.0",
+      id: 0,
+      result: {
+        sessionId: nextAgentSessionId,
+      },
+    });
+    activeSessionId = refreshed.agentSessionId || nextAgentSessionId;
+  } else {
+    if (process.env.MOCK_ACPX_PROMPT_OMIT_LOAD_RESULT !== "1") {
+      emitJson({
+        jsonrpc: "2.0",
+        id: 0,
+        result: {
+          sessionId: activeSessionId,
+        },
+      });
+    }
+  }
 
   emitJson({
     jsonrpc: "2.0",
     id: requestId,
     method: "session/prompt",
     params: {
-      sessionId: sessionFromOption,
+      sessionId: activeSessionId,
       prompt: [
         {
           type: "text",
@@ -304,15 +437,15 @@ if (command === "prompt") {
   }
 
   if (stdinText.includes("split-spacing")) {
-    emitUpdate(sessionFromOption, {
+    emitUpdate(activeSessionId, {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "alpha" },
     });
-    emitUpdate(sessionFromOption, {
+    emitUpdate(activeSessionId, {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: " beta" },
     });
-    emitUpdate(sessionFromOption, {
+    emitUpdate(activeSessionId, {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: " gamma" },
     });
@@ -322,7 +455,7 @@ if (command === "prompt") {
   }
 
   if (stdinText.includes("double-done")) {
-    emitUpdate(sessionFromOption, {
+    emitUpdate(activeSessionId, {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "ok" },
     });
@@ -332,18 +465,18 @@ if (command === "prompt") {
     return;
   }
 
-  emitUpdate(sessionFromOption, {
+  emitUpdate(activeSessionId, {
     sessionUpdate: "agent_thought_chunk",
     content: { type: "text", text: "thinking" },
   });
-  emitUpdate(sessionFromOption, {
+  emitUpdate(activeSessionId, {
     sessionUpdate: "tool_call",
     toolCallId: "tool-1",
     title: "run-tests",
     status: "in_progress",
     kind: "command",
   });
-  emitUpdate(sessionFromOption, {
+  emitUpdate(activeSessionId, {
     sessionUpdate: "agent_message_chunk",
     content: { type: "text", text: "echo:" + stdinText.trim() },
   });
@@ -376,7 +509,9 @@ export async function createMockRuntimeFixture(params?: {
   const scriptPath = await ensureMockCliScriptPath();
   const dir = path.dirname(scriptPath);
   const logPath = path.join(dir, `calls-${logFileSequence++}.log`);
+  const statePath = path.join(dir, `state-${logFileSequence - 1}.json`);
   process.env.MOCK_ACPX_LOG = logPath;
+  process.env.MOCK_ACPX_STATE = statePath;
 
   const config: ResolvedAcpxPluginConfig = {
     command: scriptPath,
@@ -435,11 +570,18 @@ export async function readMockRuntimeLogEntries(
 
 export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_LOG;
+  delete process.env.MOCK_ACPX_STATE;
   delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
   delete process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE;
   delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
   delete process.env.MOCK_ACPX_ENSURE_STDERR;
   delete process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME;
+  delete process.env.MOCK_ACPX_ENSURE_EMPTY;
+  delete process.env.MOCK_ACPX_ENSURE_NO_AGENT_SESSION_ID;
+  delete process.env.MOCK_ACPX_NEW_EMPTY;
+  delete process.env.MOCK_ACPX_AGENT_SESSION_PREFIX;
+  delete process.env.MOCK_ACPX_PROMPT_LOAD_INVALID;
+  delete process.env.MOCK_ACPX_PROMPT_NEW_AGENT_SESSION_ID;
   delete process.env.MOCK_ACPX_STATUS_STATUS;
   delete process.env.MOCK_ACPX_STATUS_NO_IDS;
   delete process.env.MOCK_ACPX_STATUS_SUMMARY;

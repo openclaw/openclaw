@@ -52,6 +52,12 @@ const ACPX_CAPABILITIES: AcpRuntimeCapabilities = {
   controls: ["session/set_mode", "session/set_config_option", "session/status"],
 };
 
+type AcpxSessionIdentifiers = {
+  acpxRecordId?: string;
+  backendSessionId?: string;
+  agentSessionId?: string;
+};
+
 type AcpxHealthCheckResult =
   | {
       ok: true;
@@ -164,6 +170,111 @@ function findSessionIdentifierEvent(events: AcpxJsonObject[]): AcpxJsonObject | 
       asOptionalString(event.acpxSessionId) ||
       asOptionalString(event.acpxRecordId),
   );
+}
+
+function resolveSessionIdentifiersFromEvent(
+  event: AcpxJsonObject | undefined,
+): AcpxSessionIdentifiers {
+  if (!event) {
+    return {};
+  }
+  const acpxRecordId = asOptionalString(event.acpxRecordId);
+  const backendSessionId = asOptionalString(event.acpxSessionId);
+  const agentSessionId = asOptionalString(event.agentSessionId);
+  return {
+    ...(acpxRecordId ? { acpxRecordId } : {}),
+    ...(backendSessionId ? { backendSessionId } : {}),
+    ...(agentSessionId ? { agentSessionId } : {}),
+  };
+}
+
+function hasSessionIdentifiers(identifiers: AcpxSessionIdentifiers): boolean {
+  return Boolean(
+    identifiers.acpxRecordId || identifiers.backendSessionId || identifiers.agentSessionId,
+  );
+}
+
+function parsePromptProtocolEvent(line: string): AcpxJsonObject | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractPromptSessionIdentifiers(line: string): AcpxSessionIdentifiers {
+  const parsed = parsePromptProtocolEvent(line);
+  if (!parsed) {
+    return {};
+  }
+
+  const direct = resolveSessionIdentifiersFromEvent(parsed);
+  if (hasSessionIdentifiers(direct)) {
+    return direct;
+  }
+
+  if (isRecord(parsed.result)) {
+    // Prompt turns only emit result.sessionId from session/load and session/new responses today,
+    // so an unrestricted capture remains scoped to backend-issued session identifiers.
+    const agentSessionId = asOptionalString(parsed.result.sessionId);
+    if (agentSessionId) {
+      return { agentSessionId };
+    }
+  }
+
+  return {};
+}
+
+function mergeHandleStateWithIdentifiers(
+  state: AcpxHandleState,
+  identifiers: AcpxSessionIdentifiers,
+): AcpxHandleState {
+  const acpxRecordId = identifiers.acpxRecordId ?? state.acpxRecordId;
+  const backendSessionId = identifiers.backendSessionId ?? state.backendSessionId;
+  const agentSessionId = identifiers.agentSessionId ?? state.agentSessionId;
+  return {
+    ...state,
+    ...(acpxRecordId ? { acpxRecordId } : {}),
+    ...(backendSessionId ? { backendSessionId } : {}),
+    ...(agentSessionId ? { agentSessionId } : {}),
+  };
+}
+
+function mergeHandleStateWithFallbackIdentifiers(
+  state: AcpxHandleState,
+  identifiers: AcpxSessionIdentifiers,
+): AcpxHandleState {
+  const acpxRecordId = state.acpxRecordId ?? identifiers.acpxRecordId;
+  const backendSessionId = state.backendSessionId ?? identifiers.backendSessionId;
+  const agentSessionId = state.agentSessionId ?? identifiers.agentSessionId;
+  return {
+    ...state,
+    ...(acpxRecordId ? { acpxRecordId } : {}),
+    ...(backendSessionId ? { backendSessionId } : {}),
+    ...(agentSessionId ? { agentSessionId } : {}),
+  };
+}
+
+function writeHandleState(handle: AcpRuntimeHandle, state: AcpxHandleState): void {
+  handle.runtimeSessionName = encodeAcpxRuntimeHandleState(state);
+  if (state.acpxRecordId) {
+    handle.acpxRecordId = state.acpxRecordId;
+  }
+  if (state.backendSessionId) {
+    handle.backendSessionId = state.backendSessionId;
+  }
+  if (state.agentSessionId) {
+    handle.agentSessionId = state.agentSessionId;
+  }
+}
+
+function resolveInteractiveSessionReference(state: AcpxHandleState): string {
+  return state.agentSessionId ?? state.name;
 }
 
 export function encodeAcpxRuntimeHandleState(state: AcpxHandleState): string {
@@ -647,11 +758,10 @@ export class AcpxRuntime implements AcpRuntime {
       );
     }
 
-    const acpxRecordId = ensuredEvent ? asOptionalString(ensuredEvent.acpxRecordId) : undefined;
-    const agentSessionId = ensuredEvent ? asOptionalString(ensuredEvent.agentSessionId) : undefined;
-    const backendSessionId = ensuredEvent
-      ? asOptionalString(ensuredEvent.acpxSessionId)
-      : undefined;
+    const identifiers = resolveSessionIdentifiersFromEvent(ensuredEvent);
+    const acpxRecordId = identifiers.acpxRecordId;
+    const agentSessionId = identifiers.agentSessionId;
+    const backendSessionId = identifiers.backendSessionId;
 
     return {
       sessionKey: input.sessionKey,
@@ -673,10 +783,10 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async *runTurn(input: AcpRuntimeTurnInput): AsyncIterable<AcpRuntimeEvent> {
-    const state = this.resolveHandleState(input.handle);
+    let state = this.resolveHandleState(input.handle);
     const args = await this.buildPromptArgs({
       agent: state.agent,
-      sessionName: state.name,
+      sessionName: resolveInteractiveSessionReference(state),
       cwd: state.cwd,
     });
 
@@ -737,6 +847,11 @@ export class AcpxRuntime implements AcpRuntime {
     const lines = createInterface({ input: child.stdout });
     try {
       for await (const line of lines) {
+        const promptIdentifiers = extractPromptSessionIdentifiers(line);
+        if (hasSessionIdentifiers(promptIdentifiers)) {
+          state = mergeHandleStateWithIdentifiers(state, promptIdentifiers);
+          writeHandleState(input.handle, state);
+        }
         const parsed = parsePromptEventLine(line);
         if (!parsed) {
           continue;
@@ -813,7 +928,7 @@ export class AcpxRuntime implements AcpRuntime {
     const args = await this.buildVerbArgs({
       agent: state.agent,
       cwd: state.cwd,
-      command: ["status", "--session", state.name],
+      command: ["status", "--session", resolveInteractiveSessionReference(state)],
     });
     const events = await this.runControlCommand({
       args,
@@ -832,6 +947,14 @@ export class AcpxRuntime implements AcpRuntime {
     const acpxRecordId = asOptionalString(detail.acpxRecordId);
     const acpxSessionId = asOptionalString(detail.acpxSessionId);
     const agentSessionId = asOptionalString(detail.agentSessionId);
+    const refreshedIdentifiers: AcpxSessionIdentifiers = {
+      ...(acpxRecordId ? { acpxRecordId } : {}),
+      ...(acpxSessionId ? { backendSessionId: acpxSessionId } : {}),
+      ...(agentSessionId ? { agentSessionId } : {}),
+    };
+    if (hasSessionIdentifiers(refreshedIdentifiers)) {
+      writeHandleState(input.handle, mergeHandleStateWithIdentifiers(state, refreshedIdentifiers));
+    }
     const pid = typeof detail.pid === "number" && Number.isFinite(detail.pid) ? detail.pid : null;
     const summary = [
       `status=${status}`,
@@ -859,7 +982,7 @@ export class AcpxRuntime implements AcpRuntime {
     const args = await this.buildVerbArgs({
       agent: state.agent,
       cwd: state.cwd,
-      command: ["set-mode", mode, "--session", state.name],
+      command: ["set-mode", mode, "--session", resolveInteractiveSessionReference(state)],
     });
     await this.runControlCommand({
       args,
@@ -882,7 +1005,7 @@ export class AcpxRuntime implements AcpRuntime {
     const args = await this.buildVerbArgs({
       agent: state.agent,
       cwd: state.cwd,
-      command: ["set", key, value, "--session", state.name],
+      command: ["set", key, value, "--session", resolveInteractiveSessionReference(state)],
     });
     await this.runControlCommand({
       args,
@@ -971,7 +1094,7 @@ export class AcpxRuntime implements AcpRuntime {
     const args = await this.buildVerbArgs({
       agent: state.agent,
       cwd: state.cwd,
-      command: ["cancel", "--session", state.name],
+      command: ["cancel", "--session", resolveInteractiveSessionReference(state)],
     });
     await this.runControlCommand({
       args,
@@ -999,7 +1122,13 @@ export class AcpxRuntime implements AcpRuntime {
   private resolveHandleState(handle: AcpRuntimeHandle): AcpxHandleState {
     const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
     if (decoded) {
-      return decoded;
+      // Prefer the encoded runtime state over legacy handle fields so stale
+      // fallback metadata does not resurrect older session identifiers.
+      return mergeHandleStateWithFallbackIdentifiers(decoded, {
+        acpxRecordId: asOptionalString((handle as { acpxRecordId?: unknown }).acpxRecordId),
+        backendSessionId: asOptionalString(handle.backendSessionId),
+        agentSessionId: asOptionalString(handle.agentSessionId),
+      });
     }
 
     const legacyName = asTrimmedString(handle.runtimeSessionName);
@@ -1015,6 +1144,17 @@ export class AcpxRuntime implements AcpRuntime {
       agent: deriveAgentFromSessionKey(handle.sessionKey, DEFAULT_AGENT_FALLBACK),
       cwd: this.config.cwd,
       mode: "persistent",
+      ...(asOptionalString((handle as { acpxRecordId?: unknown }).acpxRecordId)
+        ? {
+            acpxRecordId: asOptionalString((handle as { acpxRecordId?: unknown }).acpxRecordId),
+          }
+        : {}),
+      ...(asOptionalString(handle.backendSessionId)
+        ? { backendSessionId: asOptionalString(handle.backendSessionId) }
+        : {}),
+      ...(asOptionalString(handle.agentSessionId)
+        ? { agentSessionId: asOptionalString(handle.agentSessionId) }
+        : {}),
     };
   }
 
