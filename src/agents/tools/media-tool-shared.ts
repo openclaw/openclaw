@@ -87,7 +87,42 @@ export function resolveMediaToolLocalRoots(
   // For allow/deny policies with glob semantics, root filtering alone is insufficient.
   // Exact policy enforcement is applied per resolved file path in image/pdf tools via PathGuard.
   const defaultRoots = getDefaultLocalRoots();
-  return uniqueNormalized(workspaceDir ? [...defaultRoots, workspaceDir] : defaultRoots);
+
+  // Include allowlist directory roots so loadWebMedia doesn't reject before PathGuard.
+  // Extract directory prefixes from allowedPaths glob patterns.
+  const allowlistRoots: string[] = [];
+  if (policy?.allowedPaths) {
+    for (const pattern of policy.allowedPaths) {
+      // For absolute paths, extract the directory prefix before any glob magic.
+      if (pattern.startsWith("/")) {
+        // Find first glob-magic character and take the directory prefix.
+        const magicChars = ["*", "?", "[", "{"];
+        let firstMagic = -1;
+        for (const ch of magicChars) {
+          const idx = pattern.indexOf(ch);
+          if (idx >= 0 && (firstMagic < 0 || idx < firstMagic)) {
+            firstMagic = idx;
+          }
+        }
+        if (firstMagic >= 0) {
+          // Take the directory prefix (last '/' before magic)
+          const lastSlash = pattern.lastIndexOf("/", firstMagic);
+          if (lastSlash > 0) {
+            allowlistRoots.push(pattern.slice(0, lastSlash));
+          }
+        } else {
+          // No glob magic - it's a literal path, use as-is
+          allowlistRoots.push(pattern);
+        }
+      }
+    }
+  }
+
+  return uniqueNormalized(
+    workspaceDir
+      ? [...defaultRoots, workspaceDir, ...allowlistRoots]
+      : [...defaultRoots, ...allowlistRoots],
+  );
 }
 
 export function resolvePromptAndModelOverride(

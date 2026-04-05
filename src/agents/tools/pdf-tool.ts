@@ -589,17 +589,13 @@ export function createPdfTool(options?: {
         );
 
         if (!isHttpUrl && !isDataUrl && options?.fsPolicy) {
-          // In sandbox flows, resolveSandboxedBridgeMediaPath may return a container-only path.
-          // Only enforce host-side PathGuard when we're in host path space.
-          if (!sandboxConfig) {
-            const policyRoot = options.workspaceDir;
-            if (policyRoot) {
-              await checkPathGuardStrict(
-                resolvedPathInfo.resolved,
-                options.fsPolicy,
-                policyRoot,
-              );
-            }
+          const policyRoot = sandboxConfig?.root ?? options.workspaceDir;
+          if (policyRoot) {
+            await checkPathGuardStrict(
+              resolvedPathInfo.resolved,
+              options.fsPolicy,
+              policyRoot,
+            );
           }
         }
 
