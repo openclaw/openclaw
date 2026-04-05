@@ -30,7 +30,8 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
         };
       },
     },
-    resolveConfigApiKey: ({ env }) => resolveMantleBearerToken(env) ? "AWS_BEARER_TOKEN_BEDROCK" : undefined,
+    resolveConfigApiKey: ({ env }) =>
+      resolveMantleBearerToken(env) ? "AWS_BEARER_TOKEN_BEDROCK" : undefined,
     matchesContextOverflowError: ({ errorMessage }) =>
       /context_length_exceeded|max.*tokens.*exceeded/i.test(errorMessage),
     classifyFailoverReason: ({ errorMessage }) => {

@@ -55,14 +55,11 @@ export type MantleBearerTokenProvider = () => Promise<string>;
  *
  * Returns the value of AWS_BEARER_TOKEN_BEDROCK if set, undefined otherwise.
  *
- * Note: SigV4-derived token generation from IAM credentials (instance roles,
- * SSO, access keys) would require `@aws/bedrock-token-generator` as a
- * dependency. This is not yet implemented — users on instance roles should
- * pre-generate a bearer token and set AWS_BEARER_TOKEN_BEDROCK.
+ * Mantle's OpenAI-compatible surface expects a bearer token today in OpenClaw.
+ * Plain IAM credentials (instance roles, SSO, access keys) are not enough
+ * until we wire in SigV4-derived token generation via `@aws/bedrock-token-generator`.
  */
-export function resolveMantleBearerToken(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
+export function resolveMantleBearerToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const explicitToken = env.AWS_BEARER_TOKEN_BEDROCK?.trim();
   if (explicitToken) {
     return explicitToken;
@@ -201,7 +198,7 @@ export async function discoverMantleModels(params: {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve an implicit Bedrock Mantle provider if credentials are available.
+ * Resolve an implicit Bedrock Mantle provider if bearer-token auth is available.
  *
  * Detection:
  * - AWS_BEARER_TOKEN_BEDROCK is set → Mantle is available

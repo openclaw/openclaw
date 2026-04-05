@@ -258,9 +258,7 @@ describe("bedrock mantle discovery", () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        data: [
-          { id: "anthropic.claude-sonnet-4-6", object: "model" },
-        ],
+        data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
       }),
     });
 
@@ -283,6 +281,17 @@ describe("bedrock mantle discovery", () => {
   it("returns null when no bearer token is available", async () => {
     const provider = await resolveImplicitMantleProvider({
       env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(provider).toBeNull();
+  });
+
+  it("does not infer Mantle auth from plain IAM env vars alone", async () => {
+    const provider = await resolveImplicitMantleProvider({
+      env: {
+        AWS_PROFILE: "default",
+        AWS_REGION: "us-east-1",
+      } as NodeJS.ProcessEnv,
     });
 
     expect(provider).toBeNull();
