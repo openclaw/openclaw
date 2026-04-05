@@ -38,6 +38,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI: move GPT-5 prompt tuning onto provider-owned system-prompt contributions so cache-stable guidance stays above the prompt cache boundary and embedded runner paths reuse the same provider-specific prompt behavior.
 - Providers/Anthropic: remove setup-token from new onboarding and auth-command setup paths, keep existing configured legacy token profiles runnable, and steer new Anthropic setup to Claude CLI or API keys.
 - Docs/IRC: replace public IRC hostname examples with `irc.example.com` and recommend private servers for bot coordination while listing common public networks for intentional use.
+- Memory/dreaming: add configurable aging controls (`recencyHalfLifeDays`, `maxAgeDays`) so operators can tune how quickly recency decays and optionally cap the maximum daily-note age eligible for promotion.
 
 ### Fixes
 
