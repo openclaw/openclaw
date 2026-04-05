@@ -1,4 +1,5 @@
 import type { OpenAICompletionsCompat } from "@mariozechner/pi-ai";
+import type { OutboundRetryConfig } from "./types.base.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
@@ -80,6 +81,7 @@ export type ModelProviderConfig = {
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   request?: ConfiguredModelProviderRequest;
+  retry?: OutboundRetryConfig;
   models: ModelDefinitionConfig[];
 };
 

@@ -290,6 +290,19 @@ const ConfiguredProviderRequestSchema = z
 
 const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
 
+// Defined here (before ModelProviderSchema) because ModelProviderSchema
+// references it. The canonical export is re-declared below for co-location
+// with other channel/retry schemas.
+const ModelProviderRetryConfigSchema = z
+  .object({
+    attempts: z.number().int().min(1).optional(),
+    minDelayMs: z.number().int().min(0).optional(),
+    maxDelayMs: z.number().int().min(0).optional(),
+    jitter: z.number().min(0).max(1).optional(),
+  })
+  .strict()
+  .optional();
+
 export const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -326,6 +339,7 @@ export const ModelProviderSchema = z
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
+    retry: ModelProviderRetryConfigSchema,
     models: z.array(ModelDefinitionSchema),
   })
   .strict();

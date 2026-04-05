@@ -81,6 +81,80 @@ export function createRateLimitRetryRunner(params: {
     });
 }
 
+// --- Provider (LLM) API retry ---
+
+export const PROVIDER_API_RETRY_DEFAULTS: Required<RetryConfig> = {
+  attempts: 3,
+  minDelayMs: 1_000,
+  maxDelayMs: 30_000,
+  jitter: 0.15,
+};
+
+const PROVIDER_API_RETRY_RE =
+  /429|timeout|connect|reset|closed|unavailable|temporarily|ECONNREFUSED|ETIMEDOUT|ENETUNREACH|502|503|504/i;
+
+function getProviderApiRetryAfterMs(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  // OpenAI SDK errors expose headers with retry-after
+  const headers =
+    "headers" in err && err.headers && typeof err.headers === "object"
+      ? (err.headers as Record<string, unknown>)
+      : undefined;
+  const retryAfter = headers?.["retry-after"];
+  if (typeof retryAfter === "string") {
+    const seconds = Number.parseFloat(retryAfter);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return seconds * 1000;
+    }
+  }
+  if (typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0) {
+    return retryAfter * 1000;
+  }
+  return undefined;
+}
+
+function isNonRetryableProviderError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const status = "status" in err ? (err.status as number) : undefined;
+  // Client errors that are never retryable
+  return status === 400 || status === 401 || status === 403 || status === 404 || status === 422;
+}
+
+export function createProviderApiRetryRunner(params: {
+  retry?: RetryConfig;
+  configRetry?: RetryConfig;
+}): RetryRunner {
+  const retryConfig = resolveRetryConfig(PROVIDER_API_RETRY_DEFAULTS, {
+    ...params.configRetry,
+    ...params.retry,
+  });
+
+  return <T>(fn: () => Promise<T>, label?: string) =>
+    retryAsync(fn, {
+      ...retryConfig,
+      label,
+      shouldRetry: (err: unknown) => {
+        if (isNonRetryableProviderError(err)) {
+          return false;
+        }
+        return PROVIDER_API_RETRY_RE.test(formatErrorMessage(err));
+      },
+      retryAfterMs: getProviderApiRetryAfterMs,
+      onRetry: (info) => {
+        const maxRetries = Math.max(1, info.maxAttempts - 1);
+        log.warn(
+          `provider retry ${info.attempt}/${maxRetries} for ${info.label ?? label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
+        );
+      },
+    });
+}
+
+// --- Channel API retry ---
+
 export function createChannelApiRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;

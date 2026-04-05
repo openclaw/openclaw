@@ -788,6 +788,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional SNI/server-name override used when establishing upstream TLS.",
   "models.providers.*.request.tls.insecureSkipVerify":
     "Skips upstream TLS certificate verification. Use only for controlled development environments.",
+  "models.providers.*.retry":
+    "Optional retry policy for transient LLM provider failures (connection errors, 429/502/503/504). Omit to disable provider-level retry. Configure higher attempts and longer delays for self-hosted backends with scheduled maintenance windows.",
+  "models.providers.*.retry.attempts":
+    "Max retry attempts for transient provider errors (default: 3). Use higher values for backends with known maintenance windows.",
+  "models.providers.*.retry.minDelayMs":
+    "Minimum delay in milliseconds between retry attempts (default: 1000). Exponential backoff starts from this value.",
+  "models.providers.*.retry.maxDelayMs":
+    "Maximum delay cap in milliseconds between retry attempts (default: 30000). Bounds exponential backoff growth.",
+  "models.providers.*.retry.jitter":
+    "Jitter factor (0-1) applied to retry delays to avoid thundering herd on shared backends (default: 0.15).",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
