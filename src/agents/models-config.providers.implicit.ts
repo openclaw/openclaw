@@ -64,7 +64,15 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
 }
 
-function resolveLiveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | undefined {
+function resolveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | undefined {
+  const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
+  if (testRaw) {
+    const ids = testRaw
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return ids.length > 0 ? [...new Set(ids)] : undefined;
+  }
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
   if (!live) {
@@ -150,15 +158,9 @@ function resolveExistingImplicitProviderFromContext(params: {
 
 async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
+  providers: import("../plugins/types.js").ProviderPlugin[],
   order: import("../plugins/types.js").ProviderDiscoveryOrder,
 ): Promise<Record<string, ProviderConfig> | undefined> {
-  const onlyPluginIds = resolveLiveProviderDiscoveryFilter(ctx.env);
-  const providers = await resolvePluginDiscoveryProviders({
-    config: ctx.config,
-    workspaceDir: ctx.workspaceDir,
-    env: ctx.env,
-    onlyPluginIds,
-  });
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
   const catalogConfig = buildPluginCatalogConfig(ctx);
@@ -309,9 +311,18 @@ export async function resolveImplicitProviders(
     resolveProviderApiKey: createProviderApiKeyResolver(env, authStore, params.config),
     resolveProviderAuth: createProviderAuthResolver(env, authStore, params.config),
   };
+  const discoveryProviders = await resolvePluginDiscoveryProviders({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+    onlyPluginIds: resolveProviderDiscoveryFilter(env),
+  });
 
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
-    mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, order));
+    mergeImplicitProviderSet(
+      providers,
+      await resolvePluginImplicitProviders(context, discoveryProviders, order),
+    );
   }
 
   return providers;
