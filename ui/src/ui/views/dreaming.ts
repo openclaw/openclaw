@@ -1,28 +1,25 @@
 import { html, nothing } from "lit";
-import type { DreamingPhaseId } from "../controllers/dreaming.ts";
+import type { DreamingMode } from "../controllers/dreaming.ts";
 
 export type DreamingProps = {
   active: boolean;
+  mode: DreamingMode;
   shortTermCount: number;
   longTermCount: number;
   promotedCount: number;
   dreamingOf: string | null;
   nextCycle: string | null;
   timezone: string | null;
-  phases: Array<{
-    id: DreamingPhaseId;
+  modes: Array<{
+    id: DreamingMode;
     label: string;
     detail: string;
-    enabled: boolean;
-    nextCycle: string | null;
-    managedCronPresent: boolean;
   }>;
   statusLoading: boolean;
   statusError: string | null;
   modeSaving: boolean;
   onRefresh: () => void;
-  onToggleEnabled: (enabled: boolean) => void;
-  onTogglePhase: (phase: DreamingPhaseId, enabled: boolean) => void;
+  onSelectMode: (mode: DreamingMode) => void;
 };
 
 const DREAM_PHRASES = [
@@ -163,13 +160,13 @@ export function renderDreaming(props: DreamingProps) {
 
       <div class="dreams__status">
         <span class="dreams__status-label"
-          >${props.active ? "Dreaming Active" : "Dreaming Idle"}</span
+          >${props.active ? "Dreaming Active" : "Dreaming Idle"} · ${props.mode.toUpperCase()}</span
         >
         <div class="dreams__status-detail">
           <div class="dreams__status-dot"></div>
           <span>
             ${props.promotedCount} promoted
-            ${props.nextCycle ? html`· next phase ${props.nextCycle}` : nothing}
+            ${props.nextCycle ? html`· next run ${props.nextCycle}` : nothing}
             ${props.timezone ? html`· ${props.timezone}` : nothing}
           </span>
         </div>
@@ -201,9 +198,9 @@ export function renderDreaming(props: DreamingProps) {
       <div class="dreams__controls">
         <div class="dreams__controls-head">
           <div>
-            <div class="dreams__controls-title">Dreaming Phases</div>
+            <div class="dreams__controls-title">Dreaming Modes</div>
             <div class="dreams__controls-subtitle">
-              Light sleep sorts, deep sleep keeps, REM reflects.
+              Pick a cadence and threshold profile for durable promotion.
             </div>
           </div>
           <div class="dreams__controls-actions">
@@ -214,36 +211,38 @@ export function renderDreaming(props: DreamingProps) {
             >
               ${props.statusLoading ? "Refreshing…" : "Refresh"}
             </button>
-            <button
-              class="btn btn--sm ${props.active ? "btn--subtle" : ""}"
-              ?disabled=${props.modeSaving}
-              @click=${() => props.onToggleEnabled(!props.active)}
-            >
-              ${props.active ? "Disable Dreaming" : "Enable Dreaming"}
-            </button>
           </div>
         </div>
         <div class="dreams__phase-grid">
-          ${props.phases.map(
-            (phase) => html`
-              <article class="dreams__phase ${phase.enabled ? "dreams__phase--active" : ""}">
+          ${props.modes.map(
+            (mode) => html`
+              <article
+                class="dreams__phase ${props.mode === mode.id ? "dreams__phase--active" : ""}"
+              >
                 <div class="dreams__phase-top">
                   <div>
-                    <div class="dreams__phase-label">${phase.label}</div>
-                    <div class="dreams__phase-detail">${phase.detail}</div>
+                    <div class="dreams__phase-label">${mode.label}</div>
+                    <div class="dreams__phase-detail">${mode.detail}</div>
                   </div>
                   <button
                     class="btn btn--subtle btn--sm"
-                    ?disabled=${props.modeSaving || !props.active}
-                    @click=${() => props.onTogglePhase(phase.id, !phase.enabled)}
+                    ?disabled=${props.modeSaving || props.mode === mode.id}
+                    @click=${() => props.onSelectMode(mode.id)}
                   >
-                    ${phase.enabled ? "Pause" : "Enable"}
+                    ${props.mode === mode.id ? "Active" : "Set"}
                   </button>
                 </div>
                 <div class="dreams__phase-meta">
-                  <span>${phase.enabled ? "scheduled" : "off"}</span>
-                  <span>${phase.nextCycle ? `next ${phase.nextCycle}` : "no next run"}</span>
-                  <span>${phase.managedCronPresent ? "managed cron" : "cron missing"}</span>
+                  <span>${props.mode === mode.id ? "selected" : "available"}</span>
+                  <span>
+                    ${mode.id === "off"
+                      ? "no background runs"
+                      : mode.id === "core"
+                        ? "nightly cadence"
+                        : mode.id === "deep"
+                          ? "every 12 hours"
+                          : "every 6 hours"}
+                  </span>
                 </div>
               </article>
             `,
