@@ -1,5 +1,13 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
 
+function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
+  return (
+    modelApi === "anthropic-messages" ||
+    modelApi === "bedrock-converse-stream" ||
+    modelApi === "google-generative-ai"
+  );
+}
+
 export function transformTransportMessages(
   messages: Context["messages"],
   model: Model<Api>,
@@ -8,7 +16,12 @@ export function transformTransportMessages(
     targetModel: Model<Api>,
     source: { provider: string; api: Api; model: string },
   ) => string,
+  options?: {
+    allowSyntheticToolResults?: boolean;
+  },
 ): Context["messages"] {
+  const allowSyntheticToolResults =
+    options?.allowSyntheticToolResults ?? defaultAllowSyntheticToolResults(model.api);
   const toolCallIdMap = new Map<string, string>();
   const transformed = messages.map((msg) => {
     if (msg.role === "user") {
@@ -75,16 +88,18 @@ export function transformTransportMessages(
   for (const msg of transformed) {
     if (msg.role === "assistant") {
       if (pendingToolCalls.length > 0) {
-        for (const toolCall of pendingToolCalls) {
-          if (!existingToolResultIds.has(toolCall.id)) {
-            result.push({
-              role: "toolResult",
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
-              content: [{ type: "text", text: "No result provided" }],
-              isError: true,
-              timestamp: Date.now(),
-            });
+        if (allowSyntheticToolResults) {
+          for (const toolCall of pendingToolCalls) {
+            if (!existingToolResultIds.has(toolCall.id)) {
+              result.push({
+                role: "toolResult",
+                toolCallId: toolCall.id,
+                toolName: toolCall.name,
+                content: [{ type: "text", text: "No result provided" }],
+                isError: true,
+                timestamp: Date.now(),
+              });
+            }
           }
         }
         pendingToolCalls = [];
@@ -110,16 +125,18 @@ export function transformTransportMessages(
       continue;
     }
     if (pendingToolCalls.length > 0) {
-      for (const toolCall of pendingToolCalls) {
-        if (!existingToolResultIds.has(toolCall.id)) {
-          result.push({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: "No result provided" }],
-            isError: true,
-            timestamp: Date.now(),
-          });
+      if (allowSyntheticToolResults) {
+        for (const toolCall of pendingToolCalls) {
+          if (!existingToolResultIds.has(toolCall.id)) {
+            result.push({
+              role: "toolResult",
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+              content: [{ type: "text", text: "No result provided" }],
+              isError: true,
+              timestamp: Date.now(),
+            });
+          }
         }
       }
       pendingToolCalls = [];
