@@ -7,44 +7,40 @@ import { renderDreaming, type DreamingProps } from "./dreaming.ts";
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   return {
     active: true,
+    mode: "core",
     shortTermCount: 47,
     longTermCount: 182,
     promotedCount: 12,
     dreamingOf: null,
     nextCycle: "4:00 AM",
     timezone: "America/Los_Angeles",
-    phases: [
+    modes: [
       {
-        id: "light",
-        label: "Light",
-        detail: "sort and stage the day",
-        enabled: true,
-        nextCycle: "1:00 AM",
-        managedCronPresent: true,
+        id: "off",
+        label: "Off",
+        detail: "no automatic promotion",
+      },
+      {
+        id: "core",
+        label: "Core",
+        detail: "nightly durable consolidation",
       },
       {
         id: "deep",
         label: "Deep",
-        detail: "promote durable memory",
-        enabled: true,
-        nextCycle: "3:00 AM",
-        managedCronPresent: true,
+        detail: "every 12 hours, conservative",
       },
       {
         id: "rem",
         label: "REM",
-        detail: "surface themes and reflections",
-        enabled: false,
-        nextCycle: null,
-        managedCronPresent: false,
+        detail: "every 6 hours, stricter",
       },
     ],
     statusLoading: false,
     statusError: null,
     modeSaving: false,
     onRefresh: () => {},
-    onToggleEnabled: () => {},
-    onTogglePhase: () => {},
+    onSelectMode: () => {},
     ...overrides,
   };
 }
@@ -107,13 +103,13 @@ describe("dreaming view", () => {
   it("shows active status label when active", () => {
     const container = renderInto(buildProps({ active: true }));
     const label = container.querySelector(".dreams__status-label");
-    expect(label?.textContent).toBe("Dreaming Active");
+    expect(label?.textContent).toContain("Dreaming Active");
   });
 
   it("shows idle status label when inactive", () => {
     const container = renderInto(buildProps({ active: false }));
     const label = container.querySelector(".dreams__status-label");
-    expect(label?.textContent).toBe("Dreaming Idle");
+    expect(label?.textContent).toContain("Dreaming Idle");
   });
 
   it("applies idle class when not active", () => {
@@ -127,10 +123,10 @@ describe("dreaming view", () => {
     expect(detail?.textContent).toContain("4:00 AM");
   });
 
-  it("renders phase controls", () => {
+  it("renders mode controls", () => {
     const container = renderInto(buildProps());
     expect(container.querySelector(".dreams__controls")).not.toBeNull();
-    expect(container.querySelectorAll(".dreams__phase").length).toBe(3);
+    expect(container.querySelectorAll(".dreams__phase").length).toBe(4);
   });
 
   it("renders control error when present", () => {
@@ -140,12 +136,12 @@ describe("dreaming view", () => {
     );
   });
 
-  it("wires phase toggle callbacks", () => {
-    const onTogglePhase = vi.fn();
-    const container = renderInto(buildProps({ onTogglePhase }));
+  it("wires mode selection callbacks", () => {
+    const onSelectMode = vi.fn();
+    const container = renderInto(buildProps({ onSelectMode }));
 
     container.querySelector<HTMLButtonElement>(".dreams__phase .btn")?.click();
 
-    expect(onTogglePhase).toHaveBeenCalled();
+    expect(onSelectMode).toHaveBeenCalled();
   });
 });

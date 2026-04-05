@@ -3,11 +3,13 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export const DEFAULT_MEMORY_DREAMING_ENABLED = true;
+export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
 export const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
 export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "inline";
 export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
+export const DEFAULT_MEMORY_DREAMING_MODE = "off";
+export const DEFAULT_MEMORY_DREAMING_PRESET = "core";
 
 export const DEFAULT_MEMORY_LIGHT_DREAMING_CRON_EXPR = "0 */6 * * *";
 export const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
@@ -16,9 +18,9 @@ export const DEFAULT_MEMORY_LIGHT_DREAMING_DEDUPE_SIMILARITY = 0.9;
 
 export const DEFAULT_MEMORY_DEEP_DREAMING_CRON_EXPR = "0 3 * * *";
 export const DEFAULT_MEMORY_DEEP_DREAMING_LIMIT = 10;
-export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.8;
+export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.75;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT = 3;
-export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES = 3;
+export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES = 2;
 export const DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS = 14;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS = 30;
 
@@ -42,6 +44,8 @@ export type MemoryDreamingSpeed = "fast" | "balanced" | "slow";
 export type MemoryDreamingThinking = "low" | "medium" | "high";
 export type MemoryDreamingBudget = "cheap" | "medium" | "expensive";
 export type MemoryDreamingStorageMode = "inline" | "separate" | "both";
+export type MemoryDreamingPreset = "core" | "deep" | "rem";
+export type MemoryDreamingMode = MemoryDreamingPreset | "off";
 
 export type MemoryLightDreamingSource = "daily" | "sessions" | "recall";
 export type MemoryDeepDreamingSource = "daily" | "memory" | "sessions" | "logs" | "recall";
@@ -108,6 +112,7 @@ export type MemoryRemDreamingConfig = {
 export type MemoryDreamingPhaseName = "light" | "deep" | "rem";
 
 export type MemoryDreamingConfig = {
+  mode: MemoryDreamingMode;
   enabled: boolean;
   timezone?: string;
   verboseLogging: boolean;
@@ -140,6 +145,47 @@ const DEFAULT_MEMORY_DEEP_DREAMING_SOURCES: MemoryDeepDreamingSource[] = [
   "recall",
 ];
 const DEFAULT_MEMORY_REM_DREAMING_SOURCES: MemoryRemDreamingSource[] = ["memory", "daily", "deep"];
+
+const MEMORY_DREAMING_PRESET_DEFAULTS: Record<
+  MemoryDreamingPreset,
+  {
+    cron: string;
+    limit: number;
+    minScore: number;
+    minRecallCount: number;
+    minUniqueQueries: number;
+    recencyHalfLifeDays: number;
+    maxAgeDays: number;
+  }
+> = {
+  core: {
+    cron: DEFAULT_MEMORY_DEEP_DREAMING_CRON_EXPR,
+    limit: DEFAULT_MEMORY_DEEP_DREAMING_LIMIT,
+    minScore: DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
+    minRecallCount: DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
+    minUniqueQueries: DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
+    recencyHalfLifeDays: DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS,
+    maxAgeDays: DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS,
+  },
+  deep: {
+    cron: "0 */12 * * *",
+    limit: DEFAULT_MEMORY_DEEP_DREAMING_LIMIT,
+    minScore: 0.8,
+    minRecallCount: 3,
+    minUniqueQueries: 3,
+    recencyHalfLifeDays: DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS,
+    maxAgeDays: DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS,
+  },
+  rem: {
+    cron: "0 */6 * * *",
+    limit: DEFAULT_MEMORY_DEEP_DREAMING_LIMIT,
+    minScore: 0.85,
+    minRecallCount: 4,
+    minUniqueQueries: 3,
+    recencyHalfLifeDays: DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS,
+    maxAgeDays: DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS,
+  },
+};
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -242,6 +288,23 @@ function normalizeStringArray<T extends string>(
   return normalized.length > 0 ? normalized : [...fallback];
 }
 
+function parseMemoryDreamingMode(value: unknown): MemoryDreamingMode | undefined {
+  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  if (
+    normalized === "off" ||
+    normalized === "core" ||
+    normalized === "deep" ||
+    normalized === "rem"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+export function normalizeMemoryDreamingMode(value: unknown): MemoryDreamingMode {
+  return parseMemoryDreamingMode(value) ?? DEFAULT_MEMORY_DREAMING_MODE;
+}
+
 function normalizeStorageMode(value: unknown): MemoryDreamingStorageMode {
   const normalized = normalizeTrimmedString(value)?.toLowerCase();
   if (normalized === "inline" || normalized === "separate" || normalized === "both") {
@@ -328,6 +391,13 @@ export function resolveMemoryDreamingConfig(params: {
   cfg?: OpenClawConfig;
 }): MemoryDreamingConfig {
   const dreaming = asRecord(params.pluginConfig?.dreaming);
+  const explicitMode = parseMemoryDreamingMode(dreaming?.mode);
+  const legacyEnabled = normalizeBoolean(dreaming?.enabled, DEFAULT_MEMORY_DREAMING_ENABLED);
+  const mode: MemoryDreamingMode =
+    explicitMode ?? (legacyEnabled ? DEFAULT_MEMORY_DREAMING_PRESET : DEFAULT_MEMORY_DREAMING_MODE);
+  const enabled = mode !== "off";
+  const preset: MemoryDreamingPreset = mode === "off" ? DEFAULT_MEMORY_DREAMING_PRESET : mode;
+  const presetDefaults = MEMORY_DREAMING_PRESET_DEFAULTS[preset];
   const timezone =
     normalizeTrimmedString(dreaming?.timezone) ??
     normalizeTrimmedString(params.cfg?.agents?.defaults?.userTimezone) ??
@@ -335,6 +405,7 @@ export function resolveMemoryDreamingConfig(params: {
   const storage = asRecord(dreaming?.storage);
   const execution = asRecord(dreaming?.execution);
   const phases = asRecord(dreaming?.phases);
+  const frequencyAlias = normalizeTrimmedString(dreaming?.frequency);
 
   const defaultExecution = resolveExecutionConfig(execution?.defaults, {
     speed: DEFAULT_MEMORY_DREAMING_SPEED,
@@ -346,10 +417,39 @@ export function resolveMemoryDreamingConfig(params: {
   const deep = asRecord(phases?.deep);
   const rem = asRecord(phases?.rem);
   const deepRecovery = asRecord(deep?.recovery);
-  const maxAgeDays = normalizeOptionalPositiveInt(deep?.maxAgeDays);
+  const maxAgeDays =
+    normalizeOptionalPositiveInt(dreaming?.maxAgeDays) ??
+    normalizeOptionalPositiveInt(deep?.maxAgeDays) ??
+    presetDefaults.maxAgeDays;
+  const deepCron =
+    normalizeTrimmedString(dreaming?.cron) ??
+    frequencyAlias ??
+    normalizeTrimmedString(deep?.cron) ??
+    presetDefaults.cron;
+  const deepLimit = normalizeNonNegativeInt(
+    dreaming?.limit,
+    normalizeNonNegativeInt(deep?.limit, presetDefaults.limit),
+  );
+  const deepMinScore = normalizeScore(
+    dreaming?.minScore,
+    normalizeScore(deep?.minScore, presetDefaults.minScore),
+  );
+  const deepMinRecallCount = normalizeNonNegativeInt(
+    dreaming?.minRecallCount,
+    normalizeNonNegativeInt(deep?.minRecallCount, presetDefaults.minRecallCount),
+  );
+  const deepMinUniqueQueries = normalizeNonNegativeInt(
+    dreaming?.minUniqueQueries,
+    normalizeNonNegativeInt(deep?.minUniqueQueries, presetDefaults.minUniqueQueries),
+  );
+  const deepRecencyHalfLifeDays = normalizeNonNegativeInt(
+    dreaming?.recencyHalfLifeDays,
+    normalizeNonNegativeInt(deep?.recencyHalfLifeDays, presetDefaults.recencyHalfLifeDays),
+  );
 
   return {
-    enabled: normalizeBoolean(dreaming?.enabled, DEFAULT_MEMORY_DREAMING_ENABLED),
+    mode,
+    enabled,
     ...(timezone ? { timezone } : {}),
     verboseLogging: normalizeBoolean(
       dreaming?.verboseLogging,
@@ -367,7 +467,9 @@ export function resolveMemoryDreamingConfig(params: {
     },
     phases: {
       light: {
-        enabled: normalizeBoolean(light?.enabled, true),
+        // Phased dreaming was experimental and too noisy. Keep light sleep off
+        // unless we intentionally bring it back behind a separate effort.
+        enabled: false,
         cron: normalizeTrimmedString(light?.cron) ?? DEFAULT_MEMORY_LIGHT_DREAMING_CRON_EXPR,
         lookbackDays: normalizeNonNegativeInt(
           light?.lookbackDays,
@@ -391,27 +493,14 @@ export function resolveMemoryDreamingConfig(params: {
         }),
       },
       deep: {
-        enabled: normalizeBoolean(deep?.enabled, true),
-        cron: normalizeTrimmedString(deep?.cron) ?? DEFAULT_MEMORY_DEEP_DREAMING_CRON_EXPR,
-        limit: normalizeNonNegativeInt(deep?.limit, DEFAULT_MEMORY_DEEP_DREAMING_LIMIT),
-        minScore: normalizeScore(deep?.minScore, DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE),
-        minRecallCount: normalizeNonNegativeInt(
-          deep?.minRecallCount,
-          DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
-        ),
-        minUniqueQueries: normalizeNonNegativeInt(
-          deep?.minUniqueQueries,
-          DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
-        ),
-        recencyHalfLifeDays: normalizeNonNegativeInt(
-          deep?.recencyHalfLifeDays,
-          DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS,
-        ),
-        ...(typeof maxAgeDays === "number"
-          ? { maxAgeDays }
-          : typeof DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS === "number"
-            ? { maxAgeDays: DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS }
-            : {}),
+        enabled,
+        cron: deepCron,
+        limit: deepLimit,
+        minScore: deepMinScore,
+        minRecallCount: deepMinRecallCount,
+        minUniqueQueries: deepMinUniqueQueries,
+        recencyHalfLifeDays: deepRecencyHalfLifeDays,
+        ...(typeof maxAgeDays === "number" ? { maxAgeDays } : {}),
         sources: normalizeStringArray(
           deep?.sources,
           ["daily", "memory", "sessions", "logs", "recall"] as const,
@@ -451,7 +540,9 @@ export function resolveMemoryDreamingConfig(params: {
         }),
       },
       rem: {
-        enabled: normalizeBoolean(rem?.enabled, true),
+        // REM reflections are currently disabled by default to keep dreaming
+        // predictable and focused on durable promotion modes.
+        enabled: false,
         cron: normalizeTrimmedString(rem?.cron) ?? DEFAULT_MEMORY_REM_DREAMING_CRON_EXPR,
         lookbackDays: normalizeNonNegativeInt(
           rem?.lookbackDays,

@@ -1,10 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  loadDreamingStatus,
-  updateDreamingEnabled,
-  updateDreamingPhaseEnabled,
-  type DreamingState,
-} from "./dreaming.ts";
+import { loadDreamingStatus, updateDreamingMode, type DreamingState } from "./dreaming.ts";
 
 function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn> } {
   const request = vi.fn();
@@ -29,6 +24,7 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     request.mockResolvedValue({
       dreaming: {
+        mode: "core",
         enabled: true,
         timezone: "America/Los_Angeles",
         verboseLogging: false,
@@ -76,6 +72,7 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
     expect(state.dreamingStatus).toEqual(
       expect.objectContaining({
+        mode: "core",
         enabled: true,
         shortTermCount: 8,
         promotedToday: 2,
@@ -91,17 +88,18 @@ describe("dreaming controller", () => {
     expect(state.dreamingStatusError).toBeNull();
   });
 
-  it("patches config to update global dreaming enablement", async () => {
+  it("patches config to update dreaming mode", async () => {
     const { state, request } = createState();
     request.mockResolvedValue({ ok: true });
 
-    const ok = await updateDreamingEnabled(state, false);
+    const ok = await updateDreamingMode(state, "deep");
 
     expect(ok).toBe(true);
     expect(request).toHaveBeenCalledWith(
       "config.patch",
       expect.objectContaining({
         baseHash: "hash-1",
+        raw: expect.stringContaining('"mode":"deep"'),
         sessionKey: "main",
       }),
     );
@@ -109,26 +107,11 @@ describe("dreaming controller", () => {
     expect(state.dreamingStatusError).toBeNull();
   });
 
-  it("patches config to update phase enablement", async () => {
-    const { state, request } = createState();
-    request.mockResolvedValue({ ok: true });
-
-    const ok = await updateDreamingPhaseEnabled(state, "rem", false);
-
-    expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith(
-      "config.patch",
-      expect.objectContaining({
-        raw: expect.stringContaining('"rem":{"enabled":false}'),
-      }),
-    );
-  });
-
   it("fails gracefully when config hash is missing", async () => {
     const { state, request } = createState();
     state.configSnapshot = {};
 
-    const ok = await updateDreamingEnabled(state, true);
+    const ok = await updateDreamingMode(state, "core");
 
     expect(ok).toBe(false);
     expect(request).not.toHaveBeenCalled();
