@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - Agents/cache: stabilize cache-relevant system prompt fingerprints by normalizing equivalent structured prompt whitespace, line endings, hook-added system context, and runtime capability ordering so semantically unchanged prompts reuse KV/cache more reliably. Thanks @vincentkoc.
 - Agents/tool prompts: remove the duplicate in-band tool inventory from agent system prompts so tool-calling models rely on the structured tool definitions as the single source of truth, improving prompt stability and reducing stale tool guidance.
 - Tools/video generation: add bundled xAI (`grok-imagine-video`) and Alibaba Model Studio Wan video providers, plus live-test/default model wiring for both.
+- Agents/video generation: register `video_generate` runs in the task ledger with task/run ids and lifecycle updates so long-running generations can be tracked more reliably.
 - Providers/CLI: remove bundled CLI text-provider backends and the `agents.defaults.cliBackends` surface, while keeping ACP harness sessions and Gemini media understanding on the native bundled providers.
 - Matrix/exec approvals: clarify unavailable-approval replies so Matrix no longer claims chat approvals are unsupported when native exec approvals are merely unconfigured. (#61424) Thanks @gumadeiras.
 - Docs/IRC: replace public IRC hostname examples with `irc.example.com` and recommend private servers for bot coordination while listing common public networks for intentional use.
@@ -108,6 +109,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals: remove heuristic command-obfuscation gating from host exec so gateway and node runs rely on explicit policy, allowlist, and strict inline-eval rules only.
 - Agents/tool results: cap live tool-result persistence and overflow-recovery truncation at 40k characters so oversized tool output stays bounded without discarding recent context entirely.
 - Discord/video replies: split text-plus-video deliveries into a text reply followed by a media-only send, and let live provider auth checks honor manifest-declared API key env vars like `MODELSTUDIO_API_KEY`.
+- Providers/fal video: switch long-running fal video generation to the queue-backed submit/status/result flow, and accept `FAL_API_KEY` as a compatibility alias for the canonical `FAL_KEY`.
 - Config/All Settings: keep the raw config view intact when sensitive fields are blank instead of corrupting or dropping the rendered snapshot. (#28214) Thanks @solodmd.
 - Plugin SDK/facades: back-fill bundled plugin facade sentinels before plugin-id tracking re-enters config loading, so CLI/provider startup no longer crashes with `shouldNormalizeGoogleProviderConfig is not a function` or other empty-facade reads during bundled plugin re-entry. Thanks @adam91holt.
 - Plugins/facades: back-fill facade sentinels before tracked-plugin resolution re-enters config loading, so facade exports stay defined during circular provider normalization. (#61180) Thanks @adam91holt.
