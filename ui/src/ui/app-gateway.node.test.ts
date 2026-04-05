@@ -563,6 +563,38 @@ describe("connectGateway", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
+  it("reloads chat history when another client finishes a run in the same session", () => {
+    const { client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "agent",
+      payload: {
+        runId: "remote-run-1",
+        sessionKey: "main",
+        stream: "lifecycle",
+        data: { phase: "end" },
+      },
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reload chat history for lifecycle events in other sessions", () => {
+    const { client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "agent",
+      payload: {
+        runId: "remote-run-1",
+        sessionKey: "agent:main:openresponses:abc",
+        stream: "lifecycle",
+        data: { phase: "end" },
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
   it("routes plugin.approval.requested into execApprovalQueue with kind plugin", () => {
     const host = createHost();
 
