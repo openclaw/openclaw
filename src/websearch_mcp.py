@@ -55,32 +55,36 @@ _RETRY_BASE_DELAY = 1.0  # seconds, doubles each retry
 
 # ---------------------------------------------------------------------------
 # LRU result cache — avoids redundant DuckDuckGo calls in multi-query research
-# Uses shared TTLCache from src.utils.cache (standalone, no heavy deps).
 # ---------------------------------------------------------------------------
-try:
-    # Normal import when running as part of the package
-    from src.utils.cache import TTLCache as _TTLCache
-except ImportError:
-    # MCP server is launched as a subprocess; src/ may not be on sys.path
-    import importlib.util as _ilu
-    import pathlib as _pl
-    _cache_path = _pl.Path(__file__).parent / "utils" / "cache.py"
-    _spec = _ilu.spec_from_file_location("src.utils.cache", _cache_path)
-    _mod = _ilu.module_from_spec(_spec)  # type: ignore[arg-type]
-    _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
-    _TTLCache = _mod.TTLCache
-
-_SEARCH_CACHE_TTL = 600   # 10 minutes for search/news results
-_FETCH_CACHE_TTL = 3600   # 1 hour for fetched page content
-
-_search_cache: _TTLCache = _TTLCache(maxsize=200, ttl=_SEARCH_CACHE_TTL)
-_fetch_cache: _TTLCache = _TTLCache(maxsize=100, ttl=_FETCH_CACHE_TTL)
+_CACHE_TTL_SECONDS = 300  # 5 minutes
+_CACHE_MAX_SIZE = 128
+_search_cache: dict[str, tuple[float, Any]] = {}
 
 
 def _cache_key(prefix: str, **kwargs: Any) -> str:
     """Build a deterministic cache key from call parameters."""
     raw = f"{prefix}:" + json.dumps(kwargs, sort_keys=True, default=str)
     return hashlib.md5(raw.encode()).hexdigest()  # noqa: S324 — non-security use
+
+
+def _cache_get(key: str) -> Any | None:
+    """Return cached value if still fresh, else None."""
+    entry = _search_cache.get(key)
+    if entry is None:
+        return None
+    ts, value = entry
+    if time.monotonic() - ts > _CACHE_TTL_SECONDS:
+        _search_cache.pop(key, None)
+        return None
+    return value
+
+
+def _cache_put(key: str, value: Any) -> None:
+    """Store value in cache, evicting oldest entries if over capacity."""
+    if len(_search_cache) >= _CACHE_MAX_SIZE:
+        oldest_key = min(_search_cache, key=lambda k: _search_cache[k][0])
+        _search_cache.pop(oldest_key, None)
+    _search_cache[key] = (time.monotonic(), value)
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +320,7 @@ def _sync_search(
     v5: enriched results with relevance indicators.
     """
     ck = _cache_key("search", q=query, n=max_results, r=region, t=timelimit)
-    cached = _search_cache.get(ck)
+    cached = _cache_get(ck)
     if cached is not None:
         return cached
 
@@ -346,7 +350,7 @@ def _sync_search(
     # v5: sort by relevance (stable sort preserves DuckDuckGo's ranking for ties)
     results.sort(key=lambda r: r.get("_relevance", 0), reverse=True)
 
-    _search_cache.put(ck, results)
+    _cache_put(ck, results)
     return results
 
 
@@ -355,7 +359,7 @@ def _sync_news(
 ) -> list[dict[str, Any]]:
     """Run DuckDuckGo news search synchronously with retry + caching."""
     ck = _cache_key("news", q=query, n=max_results, t=timelimit)
-    cached = _search_cache.get(ck)
+    cached = _cache_get(ck)
     if cached is not None:
         return cached
 
@@ -371,14 +375,14 @@ def _sync_news(
 
     results = _with_retry(_do)
     results = _dedup_results(results)
-    _search_cache.put(ck, results)
+    _cache_put(ck, results)
     return results
 
 
 def _sync_answers(query: str) -> list[dict[str, Any]]:
     """Get DuckDuckGo instant answers synchronously with retry + caching."""
     ck = _cache_key("answers", q=query)
-    cached = _search_cache.get(ck)
+    cached = _cache_get(ck)
     if cached is not None:
         return cached
 
@@ -387,7 +391,7 @@ def _sync_answers(query: str) -> list[dict[str, Any]]:
             return list(ddgs.answers(query))
 
     results = _with_retry(_do)
-    _search_cache.put(ck, results)
+    _cache_put(ck, results)
     return results
 
 

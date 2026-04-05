@@ -17,9 +17,13 @@ from typing import Dict, List, Optional
 import structlog
 
 from src.llm_gateway import route_llm
-from src.utils.token_counter import estimate_tokens
 
 logger = structlog.get_logger("MemoryGC")
+
+
+# Rough token estimation: ~4 chars ≈ 1 token (works for English/Russian mix)
+def estimate_tokens(text: str) -> int:
+    return max(1, len(text) // 4)
 
 
 class MemoryGarbageCollector:

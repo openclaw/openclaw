@@ -16,7 +16,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
@@ -31,9 +33,6 @@ logger = structlog.get_logger("LLMGateway")
 _gateway_config: Dict[str, Any] = {}
 _openrouter_config: Dict[str, Any] = {}
 
-# Async lock for circuit breaker state mutations
-_state_lock = asyncio.Lock()
-
 # Lazy-init inference components (singletons — initialized once by configure())
 _smart_router = None
 _token_budget = None
@@ -41,20 +40,111 @@ _metrics_collector = None
 _configured: bool = False
 
 # ---------------------------------------------------------------------------
-# HITL (Human-in-the-Loop) Approval Gate — extracted to src/hitl_approval.py
-# Re-exported here for backward compatibility.
+# HITL (Human-in-the-Loop) Approval Gate  — Phase 8
 # ---------------------------------------------------------------------------
-import src.hitl_approval as _hitl_mod
-from src.hitl_approval import (
-    ApprovalRequest,
-    assess_risk,
-    get_pending_approval,
-    resolve_approval,
-    set_approval_callback,
-    _approval_callback,
-    _approval_config,
-    _pending_approvals,
-)
+# Risk patterns that trigger approval
+_HIGH_RISK_PATTERNS: list[str] = [
+    r"\brm\s+-rf\b",
+    r"\bsudo\b",
+    r"\bshutil\.rmtree\b",
+    r"\bos\.remove\b",
+    r"\bos\.unlink\b",
+    r"\bdrop\s+table\b",
+    r"\bdelete\s+from\b",
+    r"\bformat\s+[a-z]:",
+    r"\bkill\s+-9\b",
+    r"\bshutdown\b",
+    r"\breboot\b",
+]
+_COMPILED_RISK_RE = [re.compile(p, re.IGNORECASE) for p in _HIGH_RISK_PATTERNS]
+
+# Budget threshold (USD) above which approval is needed
+_BUDGET_APPROVAL_THRESHOLD: float = 0.05
+
+# Approval callback — set by the Telegram/Discord handler at startup
+_approval_callback: Optional[Callable[..., Coroutine]] = None
+_approval_config: Dict[str, Any] = {}
+
+
+@dataclass
+class ApprovalRequest:
+    """Represents a paused pipeline awaiting human approval."""
+    request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    prompt_preview: str = ""
+    risk_reasons: List[str] = field(default_factory=list)
+    estimated_cost: float = 0.0
+    status: str = "PENDING_APPROVAL"  # PENDING_APPROVAL | APPROVED | REJECTED | EDITED
+    edited_prompt: Optional[str] = None
+
+    def approve(self) -> None:
+        self.status = "APPROVED"
+
+    def reject(self) -> None:
+        self.status = "REJECTED"
+
+    def edit(self, new_prompt: str) -> None:
+        self.status = "EDITED"
+        self.edited_prompt = new_prompt
+
+
+# Active approval requests keyed by request_id
+_pending_approvals: Dict[str, ApprovalRequest] = {}
+
+
+def set_approval_callback(callback: Callable[..., Coroutine]) -> None:
+    """Register the UI callback (Telegram/Discord) for sending approval buttons."""
+    global _approval_callback
+    _approval_callback = callback
+
+
+def get_pending_approval(request_id: str) -> Optional[ApprovalRequest]:
+    """Retrieve a pending approval request by ID."""
+    return _pending_approvals.get(request_id)
+
+
+def resolve_approval(request_id: str, action: str, edited_prompt: str = "") -> bool:
+    """Resolve a pending approval: 'approve', 'reject', or 'edit'."""
+    req = _pending_approvals.get(request_id)
+    if not req or req.status != "PENDING_APPROVAL":
+        return False
+    if action == "approve":
+        req.approve()
+    elif action == "reject":
+        req.reject()
+    elif action == "edit" and edited_prompt:
+        req.edit(edited_prompt)
+    else:
+        return False
+    return True
+
+
+def assess_risk(prompt: str, estimated_cost: float = 0.0) -> Optional[ApprovalRequest]:
+    """Check if a prompt requires human approval. Returns ApprovalRequest or None."""
+    if not _approval_config.get("enabled", False):
+        return None
+
+    reasons: list[str] = []
+    lower = prompt.lower()
+
+    for pat in _COMPILED_RISK_RE:
+        if pat.search(lower):
+            reasons.append(f"dangerous pattern: {pat.pattern}")
+
+    threshold = _approval_config.get("budget_threshold", _BUDGET_APPROVAL_THRESHOLD)
+    if estimated_cost > threshold:
+        reasons.append(f"estimated cost ${estimated_cost:.3f} > ${threshold:.3f}")
+
+    if not reasons:
+        return None
+
+    req = ApprovalRequest(
+        prompt_preview=prompt[:300],
+        risk_reasons=reasons,
+        estimated_cost=estimated_cost,
+    )
+    _pending_approvals[req.request_id] = req
+    logger.warning("HITL approval gate triggered", request_id=req.request_id, reasons=reasons)
+    return req
 
 
 # ---------------------------------------------------------------------------
@@ -97,9 +187,6 @@ def configure(config: Dict[str, Any]) -> None:
         router_cfg = config.get("system", {}).get("model_router", {})
         profiles: Dict[str, Any] = {}
         for task_type, model_name in router_cfg.items():
-            # Skip non-model entries such as inline notes / comments
-            if not isinstance(model_name, str) or "/" not in model_name:
-                continue
             if model_name not in profiles:
                 is_fast = "7b" in model_name.lower() or "mini" in model_name.lower()
                 profiles[model_name] = ModelProfile(
@@ -181,9 +268,9 @@ async def route_llm(
         approval = assess_risk(prompt)
         if approval is not None:
             # Notify via callback (Telegram/Discord buttons)
-            if _hitl_mod._approval_callback:
+            if _approval_callback:
                 try:
-                    await _hitl_mod._approval_callback(approval)
+                    await _approval_callback(approval)
                 except Exception as e:
                     logger.warning("HITL callback failed", error=str(e))
 
@@ -264,12 +351,10 @@ async def route_llm(
 
     # v14.4: Intent tasks get max 1 retry (fast-fail to keyword fallback)
     _retries = 1 if task_type == "intent" else 3
-    # Intent classification should fail fast (15s timeout) — keyword fallback is fine
-    _timeout_override = 15 if task_type == "intent" else None
 
     api_key = _openrouter_config.get("api_key", "")
     if api_key and _openrouter_config.get("enabled", False):
-        result = await _call_openrouter(messages, selected_model, max_tokens, temperature, retries=_retries, timeout_override=_timeout_override)
+        result = await _call_openrouter(messages, selected_model, max_tokens, temperature, retries=_retries)
         if result:
             used_provider = "openrouter"
 
@@ -295,12 +380,11 @@ async def route_llm(
     # --- Record metrics ---
     elapsed_ms = (time.monotonic() - t0) * 1000
     if _metrics_collector and result:
-        from src.utils.token_counter import estimate_tokens as _est_tok
         prompt_tokens_est = sum(
-            _est_tok(m.get("content", "") if isinstance(m.get("content"), str) else str(m.get("content", "")))
+            len(m.get("content", "") if isinstance(m.get("content"), str) else str(m.get("content", "")))
             for m in messages
-        )
-        completion_tokens_est = _est_tok(result)
+        ) // 4
+        completion_tokens_est = len(result) // 4
         _metrics_collector.record_inference(
             model=selected_model or "unknown",
             prompt_tokens=prompt_tokens_est,
@@ -383,7 +467,6 @@ async def _call_openrouter(
     max_tokens: int,
     temperature: float,
     retries: int = 3,
-    timeout_override: Optional[int] = None,
 ) -> str:
     """Call OpenRouter API with retry + circuit breaker awareness."""
     from src.openrouter_client import _is_circuit_open, _record_failure, _record_success
@@ -414,7 +497,7 @@ async def _call_openrouter(
         "temperature": temperature,
     }
 
-    timeout = aiohttp.ClientTimeout(total=timeout_override or 120)
+    timeout = aiohttp.ClientTimeout(total=120)
     for attempt in range(retries):
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:

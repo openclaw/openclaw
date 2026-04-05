@@ -47,24 +47,22 @@
       "enabled": true,
       "api_key": "${OPENROUTER_API_KEY}",
       "base_url": "https://openrouter.ai/api/v1",
-      "intent_model": "google/gemma-3-4b-it:free",
+      "intent_model": "arcee-ai/trinity-mini:free",
       "max_retries": 3,
       "retry_backoff_base": 2,
       "notes": "Permanent cloud mode. All inference routed through OpenRouter API."
     },
     "model_router": {
       "risk_analysis": "nvidia/nemotron-3-super-120b-a12b:free",
-      "tool_execution": "qwen/qwen3.6-plus:free",
-      "data_parsing": "google/gemma-3-4b-it:free",
+      "tool_execution": "arcee-ai/trinity-large-preview:free",
+      "data_parsing": "arcee-ai/trinity-mini:free",
       "general": "nvidia/nemotron-3-super-120b-a12b:free",
-      "code": "qwen/qwen3.6-plus:free",
-      "research": "stepfun/step-3.5-flash:free",
+      "code": "nvidia/nemotron-3-super-120b-a12b:free",
+      "research": "arcee-ai/trinity-large-preview:free",
       "vision": "nvidia/nemotron-nano-12b-v2-vl:free",
       "video_analyst": "nvidia/nemotron-nano-12b-v2-vl:free",
-      "intent": "google/gemma-3-4b-it:free",
-      "expand": "google/gemma-3-4b-it:free",
-      "agent": "z-ai/glm-4.5-air:free",
-      "notes": "2026-04-04: replaced qwen3.6-plus-preview (HTTP 404) with qwen3.6-plus:free; replaced trinity-mini (empty responses) with gemma-3-4b-it:free"
+      "intent": "arcee-ai/trinity-mini:free",
+      "expand": "arcee-ai/trinity-mini:free"
     },
     "aflow": {
       "enabled": true,
@@ -98,7 +96,7 @@
         "Planner": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 120,
@@ -121,7 +119,7 @@
         "Coder": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.2,
           "timeout_sec": 120,
@@ -146,7 +144,7 @@
         "Auditor": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 120,
@@ -175,7 +173,7 @@
         "Planner": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 120,
@@ -198,7 +196,7 @@
         "Foreman": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 90,
@@ -222,7 +220,7 @@
         "Executor_Architect": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.2,
           "timeout_sec": 90,
@@ -247,7 +245,7 @@
         "Executor_Tools": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.2,
           "timeout_sec": 90,
@@ -271,8 +269,8 @@
         },
         "Executor_Integration": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "openrouter_model": "stepfun/step-3.5-flash:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "openrouter_model": "arcee-ai/trinity-large-preview:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.3,
           "timeout_sec": 60,
@@ -296,7 +294,7 @@
         "Auditor": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 120,
@@ -319,7 +317,7 @@
         "Archivist": {
           "model": "arcee-ai/trinity-mini:free",
           "openrouter_model": "arcee-ai/trinity-mini:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.5,
           "timeout_sec": 60,
@@ -339,7 +337,7 @@
         "State_Manager": {
           "model": "arcee-ai/trinity-mini:free",
           "openrouter_model": "arcee-ai/trinity-mini:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.2,
           "timeout_sec": 90,
@@ -359,7 +357,7 @@
         "Test_Writer": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.2,
           "timeout_sec": 90,
@@ -388,8 +386,8 @@
       "description": "Deep research, analysis, and knowledge synthesis brigade.",
       "roles": {
         "Researcher": {
-          "model": "stepfun/step-3.5-flash:free",
-          "openrouter_model": "stepfun/step-3.5-flash:free",
+          "model": "arcee-ai/trinity-large-preview:free",
+          "openrouter_model": "arcee-ai/trinity-large-preview:free",
           "fallback_model": "arcee-ai/trinity-mini:free",
           "num_ctx": 32768,
           "temperature": 0.3,
@@ -414,7 +412,7 @@
         "Analyst": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 120,
@@ -438,7 +436,7 @@
         "Summarizer": {
           "model": "arcee-ai/trinity-mini:free",
           "openrouter_model": "arcee-ai/trinity-mini:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.5,
           "timeout_sec": 60,

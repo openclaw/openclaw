@@ -4,9 +4,8 @@ Reference: Yao et al., "ReAct: Synergizing Reasoning and Acting
 in Language Models", arXiv:2210.03629.
 """
 
-import asyncio
 import time
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.llm_gateway import route_llm
 
@@ -16,25 +15,14 @@ from src.ai.agents._shared import (
     logger,
 )
 
-_DEFAULT_TOOL_TIMEOUT_SEC = 30.0
-
 
 class ReActReasoner:
     """Structured reasoning following the ReAct pattern."""
 
     _FINISH_ACTION = "Finish"
 
-    def __init__(
-        self,
-        model: str = "",
-        tool_whitelist: Optional[FrozenSet[str]] = None,
-        tool_timeout_sec: float = _DEFAULT_TOOL_TIMEOUT_SEC,
-    ):
+    def __init__(self, model: str = ""):
         self.model = model
-        self._tool_whitelist = tool_whitelist
-        self._tool_timeout_sec = tool_timeout_sec
-        # tool_name → callable registry
-        self._tool_registry: Dict[str, Any] = {}
 
     async def reason(
         self,
@@ -45,10 +33,6 @@ class ReActReasoner:
         tools = tools or []
         history: List[ReActStep] = []
         start = time.monotonic()
-
-        # Filter tools against whitelist if set
-        if self._tool_whitelist is not None:
-            tools = [t for t in tools if t.get("name") in self._tool_whitelist]
 
         for step_idx in range(1, max_steps + 1):
             react_prompt = self.format_react_prompt(prompt, history, tools)
@@ -82,7 +66,7 @@ class ReActReasoner:
                     elapsed_sec=time.monotonic() - start,
                 )
 
-            observation = await self._execute_tool(action, action_input)
+            observation = f"[Tool '{action}' called with input: {action_input}]"
             history.append(
                 ReActStep(
                     step=step_idx,
@@ -108,30 +92,6 @@ class ReActReasoner:
             finished=False,
             elapsed_sec=elapsed,
         )
-
-    def register_tool(self, name: str, fn: Any) -> None:
-        """Register a callable tool by name."""
-        self._tool_registry[name] = fn
-
-    async def _execute_tool(self, action: str, action_input: str) -> str:
-        """Execute a registered tool with whitelist check and timeout."""
-        if self._tool_whitelist is not None and action not in self._tool_whitelist:
-            return f"[Tool '{action}' is not in the whitelist — skipped]"
-        fn = self._tool_registry.get(action)
-        if fn is None:
-            return f"[Tool '{action}' called with input: {action_input}]"
-        try:
-            if asyncio.iscoroutinefunction(fn):
-                result = await asyncio.wait_for(fn(action_input), timeout=self._tool_timeout_sec)
-            else:
-                result = fn(action_input)
-            return str(result)[:2000]
-        except asyncio.TimeoutError:
-            logger.warning("Tool execution timed out", tool=action, timeout=self._tool_timeout_sec)
-            return f"[Tool '{action}' timed out after {self._tool_timeout_sec}s]"
-        except Exception as e:
-            logger.warning("Tool execution error", tool=action, error=str(e))
-            return f"[Tool '{action}' error: {e}]"
 
     def format_react_prompt(
         self,
@@ -160,13 +120,6 @@ class ReActReasoner:
             "Thought: <your reasoning>\n"
             "Action: <tool name or Finish>\n"
             "Action Input: <input for the tool, or final answer if Action is Finish>\n\n"
-            "IMPORTANT RULES:\n"
-            "- If the user asks you to WRITE code (e.g. 'write a function', 'implement'), "
-            "DO NOT use list_directory or read_file. Instead, use 'Finish' and provide "
-            "the code directly as the final answer.\n"
-            "- Only use filesystem tools (list_directory, read_file) when the task requires "
-            "READING or INSPECTING existing files.\n"
-            "- Use web_search only for research/analysis tasks that need external info.\n\n"
             f"Available tools:\n{tool_desc}\n"
             "Use 'Finish' as the Action when you have the final answer."
         )

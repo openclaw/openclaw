@@ -27,11 +27,6 @@ from src.research._searcher import (
     multi_source_search,
     instant_answers,
 )
-from src.research_enhanced import (
-    EvidenceQualityScorer,
-    ResearchQualityMetrics,
-    MultiPerspectiveResearcher,
-)
 from src.research._analyzer import (
     score_evidence,
     detect_contradictions,
@@ -380,42 +375,6 @@ class DeepResearchPipeline:
             self._llm_call, question, report, all_evidence,
         )
 
-        # Step 9: Multi-perspective cross-check for complex topics (v6)
-        quality_metrics_dict = {}
-        if complexity == "complex" and state.evidence_count >= 4:
-            if status_callback:
-                await status_callback("DeepResearch", self.model, "🔬 Мульти-перспективный анализ...")
-            try:
-                mpr = MultiPerspectiveResearcher(model=self.model)
-                mp_result = await mpr.research(question, all_evidence[:10])
-                if mp_result.synthesis:
-                    report = await self._refine(question, report, [
-                        f"[Multi-perspective synthesis]\n{mp_result.synthesis}"
-                    ])
-                    self._research_context.append(
-                        f"Мульти-перспективный анализ завершён (уверенность {mp_result.confidence:.0%})."
-                    )
-            except Exception as e:
-                logger.warning("Multi-perspective analysis skipped", error=str(e))
-
-            # Compute quality metrics (heuristic, no LLM)
-            try:
-                scorer = EvidenceQualityScorer()
-                evidence_texts = [ep.content for ep in state.evidence if ep.content]
-                scores_list = [scorer.score(text) for text in evidence_texts[:20]]
-                metrics_calc = ResearchQualityMetrics()
-                qm = metrics_calc.compute(report, evidence_texts, sources)
-                quality_metrics_dict = {
-                    "coverage": round(qm.coverage, 2),
-                    "depth": round(qm.depth, 2),
-                    "source_diversity": round(qm.source_diversity, 2),
-                    "citation_density": round(qm.citation_density, 2),
-                    "consistency": round(qm.consistency, 2),
-                    "total_score": round(qm.total_score, 2),
-                }
-            except Exception as e:
-                logger.debug("Quality metrics skipped", error=str(e))
-
         total_iterations = iteration + 1 if sub_queries else 0
         state.iterations = total_iterations
         state.verified_facts = final_check.get("verified", [])
@@ -445,8 +404,6 @@ class DeepResearchPipeline:
             "elapsed_seconds": round(state.elapsed_seconds, 1),
             "search_stats": state.search_stats,
             "instant_answer": instant_answer,
-            # v6: quality metrics (for complex topics)
-            "quality_metrics": quality_metrics_dict,
         }
 
     # ------------------------------------------------------------------
