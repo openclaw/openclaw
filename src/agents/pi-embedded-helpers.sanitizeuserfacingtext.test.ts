@@ -149,6 +149,15 @@ describe("sanitizeUserFacingText", () => {
     ).toBe("LLM request failed: connection refused by the provider endpoint.");
   });
 
+  it.each(["disk full", "ENOSPC: no space left on device"])(
+    "rewrites disk-space failures with errorContext: %s",
+    (input) => {
+      expect(sanitizeUserFacingText(input, { errorContext: true })).toBe(
+        "OpenClaw could not write local session data because the disk is full. Free some disk space and try again.",
+      );
+    },
+  );
+
   it("sanitizes invalid streaming event order errors", () => {
     expect(
       sanitizeUserFacingText(
