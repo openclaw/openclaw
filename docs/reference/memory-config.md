@@ -387,12 +387,12 @@ conceptual details and chat commands, see [Dreaming](/concepts/dreaming).
 | `enabled`                 | `boolean` | `true`     | Master switch for all phases                                 |
 | `timezone`                | `string`  | unset      | Timezone for schedule evaluation and dreaming date bucketing |
 | `verboseLogging`          | `boolean` | `false`    | Emit detailed per-run dreaming logs                          |
-| `storage.mode`            | `string`  | `"inline"` | Inline `dreams.md`, separate reports, or both                |
+| `storage.mode`            | `string`  | `"inline"` | Inline `DREAMS.md`, separate reports, or both                |
 | `storage.separateReports` | `boolean` | `false`    | Write separate report files per phase                        |
 
 ### Light phase (`phases.light`)
 
-Scans recent traces, dedupes, and stages candidates into `dreams.md` when
+Scans recent traces, dedupes, and stages candidates into `DREAMS.md` when
 inline storage is enabled.
 Does **not** write to `MEMORY.md`.
 
@@ -435,7 +435,7 @@ writes durable facts. Also owns recovery when memory is thin.
 
 ### REM phase (`phases.rem`)
 
-Writes themes, reflections, and pattern notes into `dreams.md` when inline
+Writes themes, reflections, and pattern notes into `DREAMS.md` when inline
 storage is enabled.
 Does **not** write to `MEMORY.md`.
 

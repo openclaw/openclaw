@@ -162,10 +162,6 @@ describe("isMemoryPath", () => {
   it("allows explicit access to top-level DREAMS.md", () => {
     expect(isMemoryPath("DREAMS.md")).toBe(true);
   });
-
-  it("keeps explicit access compatible with legacy dreams.md", () => {
-    expect(isMemoryPath("dreams.md")).toBe(true);
-  });
 });
 
 describe("buildFileEntry", () => {

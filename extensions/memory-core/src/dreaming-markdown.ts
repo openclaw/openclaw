@@ -12,7 +12,6 @@ const DAILY_PHASE_LABELS: Record<Exclude<MemoryDreamingPhaseName, "deep">, strin
 };
 
 const DREAMS_FILENAME = "DREAMS.md";
-const LEGACY_DREAMS_FILENAME = "dreams.md";
 
 function resolvePhaseMarkers(
   phase: Exclude<MemoryDreamingPhaseName, "deep">,
@@ -62,44 +61,6 @@ function resolveDreamsPath(workspaceDir: string): string {
   return path.join(workspaceDir, DREAMS_FILENAME);
 }
 
-function resolveLegacyDreamsPath(workspaceDir: string): string {
-  return path.join(workspaceDir, LEGACY_DREAMS_FILENAME);
-}
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> {
-  try {
-    return new Set(await fs.readdir(workspaceDir));
-  } catch {
-    return new Set<string>();
-  }
-}
-
-async function prepareDreamsPathForWrite(workspaceDir: string): Promise<string> {
-  const dreamsPath = resolveDreamsPath(workspaceDir);
-  const workspaceEntries = await listWorkspaceEntries(workspaceDir);
-  if (workspaceEntries.has(DREAMS_FILENAME)) {
-    return dreamsPath;
-  }
-  const legacyDreamsPath = resolveLegacyDreamsPath(workspaceDir);
-  if (dreamsPath !== legacyDreamsPath && workspaceEntries.has(LEGACY_DREAMS_FILENAME)) {
-    await fs.rename(legacyDreamsPath, dreamsPath);
-    return dreamsPath;
-  }
-  if (await pathExists(dreamsPath)) {
-    return dreamsPath;
-  }
-  return dreamsPath;
-}
-
 function resolveDreamsBlockHeading(
   phase: Exclude<MemoryDreamingPhaseName, "deep">,
   isoDay: string,
@@ -140,7 +101,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
   let reportPath: string | undefined;
 
   if (shouldWriteInline(params.storage)) {
-    inlinePath = await prepareDreamsPathForWrite(params.workspaceDir);
+    inlinePath = resolveDreamsPath(params.workspaceDir);
     const original = await fs.readFile(inlinePath, "utf-8").catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
         return "";
