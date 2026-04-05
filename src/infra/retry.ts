@@ -105,6 +105,8 @@ function isRateLimitLikeError(err: unknown): boolean {
   return (
     code === "ERATELIMIT" ||
     code === "TOO_MANY_REQUESTS" ||
+    code === "RESOURCE_EXHAUSTED" ||
+    code === "THROTTLING_EXCEPTION" ||
     message.includes("rate limit") ||
     message.includes("429")
   );

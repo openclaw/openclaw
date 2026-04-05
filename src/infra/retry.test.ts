@@ -370,4 +370,46 @@ describe("retry-after inference", () => {
       vi.useRealTimers();
     }
   });
+
+  it("detects RESOURCE_EXHAUSTED as rate-limit-like", async () => {
+    vi.useFakeTimers();
+    try {
+      const delays: number[] = [];
+      const error = { code: "RESOURCE_EXHAUSTED", response: { headers: { "retry-after": "1" } } };
+      const fn = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("ok");
+      const promise = retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 0,
+        maxDelayMs: 60_000,
+        onRetry: (info) => delays.push(info.delayMs),
+      });
+      await vi.runAllTimersAsync();
+      await promise;
+      expect(delays).toHaveLength(1);
+      expect(delays[0]).toBe(1000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("detects THROTTLING_EXCEPTION as rate-limit-like", async () => {
+    vi.useFakeTimers();
+    try {
+      const delays: number[] = [];
+      const error = { code: "THROTTLING_EXCEPTION", response: { headers: { "retry-after": "1" } } };
+      const fn = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("ok");
+      const promise = retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 0,
+        maxDelayMs: 60_000,
+        onRetry: (info) => delays.push(info.delayMs),
+      });
+      await vi.runAllTimersAsync();
+      await promise;
+      expect(delays).toHaveLength(1);
+      expect(delays[0]).toBe(1000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

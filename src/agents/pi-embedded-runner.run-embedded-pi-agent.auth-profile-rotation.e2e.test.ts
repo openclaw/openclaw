@@ -588,6 +588,9 @@ async function runTurnWithCooldownSeed(params: {
         "openai:p2": { lastUsed: 2 },
       },
     });
+    const initialP2LastUsed = (
+      await readAuthStore(agentDir)
+    ).usageStats["openai:p2"]?.lastUsed!;
     mockSingleSuccessfulAttempt();
 
     await runEmbeddedPiAgentInline({
@@ -607,7 +610,11 @@ async function runTurnWithCooldownSeed(params: {
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
-    return { usageStats: await readUsageStats(agentDir), now };
+    return {
+      usageStats: await readUsageStats(agentDir),
+      now,
+      initialP2LastUsed,
+    };
   });
 }
 
@@ -1067,7 +1074,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
   });
 
   it("skips profiles in cooldown during initial selection", async () => {
-    const { usageStats, now } = await runTurnWithCooldownSeed({
+    const { usageStats, now, initialP2LastUsed } = await runTurnWithCooldownSeed({
       sessionKey: "agent:test:skip-cooldown",
       runId: "run:skip-cooldown",
       authProfileId: undefined,
@@ -1075,7 +1082,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     });
 
     expect(usageStats["openai:p1"]?.cooldownUntil).toBe(now + 60 * 60 * 1000);
-    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p2"]?.lastUsed).toBeGreaterThan(initialP2LastUsed);
   });
 
   it("fails over when all profiles are in cooldown and fallbacks are configured", async () => {
@@ -1425,6 +1432,13 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       };
       await fs.writeFile(authPath, JSON.stringify(payload));
 
+      const initialP1LastUsed = (
+        await readAuthStore(agentDir)
+      ).usageStats["openai:p1"]?.lastUsed!;
+      const initialP3LastUsed = (
+        await readAuthStore(agentDir)
+      ).usageStats["openai:p3"]?.lastUsed!;
+
       mockFailedThenSuccessfulAttempt("rate limit");
       await runAutoPinnedOpenAiTurn({
         agentDir,
@@ -1435,8 +1449,12 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
       const usageStats = await readUsageStats(agentDir);
-      expect(typeof usageStats["openai:p1"]?.lastUsed).toBe("number");
-      expect(typeof usageStats["openai:p3"]?.lastUsed).toBe("number");
+      expect(usageStats["openai:p1"]?.lastUsed).toBeGreaterThan(
+        initialP1LastUsed,
+      );
+      expect(usageStats["openai:p3"]?.lastUsed).toBeGreaterThan(
+        initialP3LastUsed,
+      );
       expect(usageStats["openai:p2"]?.cooldownUntil).toBe(now + 60 * 60 * 1000);
     });
   });
