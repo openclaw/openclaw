@@ -118,6 +118,12 @@ describe("plugin activation boundary", () => {
   it("does not load bundled plugins for config and env detection helpers", async () => {
     const { isChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
 
+    expect(isChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(true);
+    expect(isChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
+    expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(true);
+    expect(
+      isChannelConfigured({}, "irc", { IRC_HOST: "irc.example.com", IRC_NICK: "openclaw" }),
+    ).toBe(true);
     expect(isChannelConfigured({}, "whatsapp", {})).toBe(false);
     expect(
       resolveEnvApiKey("anthropic-vertex", {

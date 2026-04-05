@@ -28,7 +28,11 @@
       "selectionExtras": [
         "https://openclaw.ai"
       ],
-      "markdownCapable": true
+      "markdownCapable": true,
+      "configuredState": {
+        "specifier": "./configured-state",
+        "exportName": "hasTelegramConfiguredState"
+      }
     },
     "bundle": {
       "stageRuntimeDependencies": true
