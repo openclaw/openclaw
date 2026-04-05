@@ -15,6 +15,7 @@ import {
   listRuntimeVideoGenerationProviders,
 } from "../../video-generation/runtime.js";
 import type {
+  VideoGenerationIgnoredOverride,
   VideoGenerationProvider,
   VideoGenerationResolution,
   VideoGenerationSourceAsset,
@@ -373,15 +374,6 @@ function validateVideoGenerationCapabilities(params: {
       );
     }
   }
-  if (params.size && !caps.supportsSize) {
-    throw new ToolInputError(`${provider.id} does not support size overrides.`);
-  }
-  if (params.aspectRatio && !caps.supportsAspectRatio) {
-    throw new ToolInputError(`${provider.id} does not support aspectRatio overrides.`);
-  }
-  if (params.resolution && !caps.supportsResolution) {
-    throw new ToolInputError(`${provider.id} does not support resolution overrides.`);
-  }
   if (
     typeof params.durationSeconds === "number" &&
     Number.isFinite(params.durationSeconds) &&
@@ -396,12 +388,10 @@ function validateVideoGenerationCapabilities(params: {
       `${provider.id} supports at most ${caps.maxDurationSeconds} seconds per video.`,
     );
   }
-  if (typeof params.audio === "boolean" && !caps.supportsAudio) {
-    throw new ToolInputError(`${provider.id} does not support audio toggles.`);
-  }
-  if (typeof params.watermark === "boolean" && !caps.supportsWatermark) {
-    throw new ToolInputError(`${provider.id} does not support watermark toggles.`);
-  }
+}
+
+function formatIgnoredVideoGenerationOverride(override: VideoGenerationIgnoredOverride): string {
+  return `${override.key}=${String(override.value)}`;
 }
 
 type VideoGenerateSandboxConfig = {
@@ -605,6 +595,12 @@ async function executeVideoGenerationJob(params: {
     Number.isFinite(result.metadata.requestedDurationSeconds)
       ? result.metadata.requestedDurationSeconds
       : params.durationSeconds;
+  const ignoredOverrides = result.ignoredOverrides ?? [];
+  const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
+  const warning =
+    ignoredOverrides.length > 0
+      ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map(formatIgnoredVideoGenerationOverride).join(", ")}.`
+      : undefined;
   const normalizedDurationSeconds =
     typeof result.metadata?.normalizedDurationSeconds === "number" &&
     Number.isFinite(result.metadata.normalizedDurationSeconds)
@@ -617,6 +613,7 @@ async function executeVideoGenerationJob(params: {
     : undefined;
   const lines = [
     `Generated ${savedVideos.length} video${savedVideos.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+    ...(warning ? [`Warning: ${warning}`] : []),
     typeof requestedDurationSeconds === "number" &&
     typeof normalizedDurationSeconds === "number" &&
     requestedDurationSeconds !== normalizedDurationSeconds
@@ -677,9 +674,13 @@ async function executeVideoGenerationJob(params: {
               })),
             }
           : {}),
-      ...(params.size ? { size: params.size } : {}),
-      ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
-      ...(params.resolution ? { resolution: params.resolution } : {}),
+      ...(!ignoredOverrideKeys.has("size") && params.size ? { size: params.size } : {}),
+      ...(!ignoredOverrideKeys.has("aspectRatio") && params.aspectRatio
+        ? { aspectRatio: params.aspectRatio }
+        : {}),
+      ...(!ignoredOverrideKeys.has("resolution") && params.resolution
+        ? { resolution: params.resolution }
+        : {}),
       ...(typeof normalizedDurationSeconds === "number"
         ? { durationSeconds: normalizedDurationSeconds }
         : {}),
@@ -691,11 +692,17 @@ async function executeVideoGenerationJob(params: {
       ...(supportedDurationSeconds && supportedDurationSeconds.length > 0
         ? { supportedDurationSeconds }
         : {}),
-      ...(typeof params.audio === "boolean" ? { audio: params.audio } : {}),
-      ...(typeof params.watermark === "boolean" ? { watermark: params.watermark } : {}),
+      ...(!ignoredOverrideKeys.has("audio") && typeof params.audio === "boolean"
+        ? { audio: params.audio }
+        : {}),
+      ...(!ignoredOverrideKeys.has("watermark") && typeof params.watermark === "boolean"
+        ? { watermark: params.watermark }
+        : {}),
       ...(params.filename ? { filename: params.filename } : {}),
       attempts: result.attempts,
       metadata: result.metadata,
+      ...(warning ? { warning } : {}),
+      ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),
     },
   };
 }
