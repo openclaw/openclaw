@@ -35,10 +35,39 @@ describe("parseBooleanValue", () => {
     ).toBe(true);
   });
 
+  it("handles case-insensitive custom truthy/falsy lists", () => {
+    expect(
+      parseBooleanValue("yes", {
+        truthy: ["YES"],
+      }),
+    ).toBe(true);
+    expect(
+      parseBooleanValue("NO", {
+        falsy: ["no"],
+      }),
+    ).toBe(false);
+  });
+
+  it("handles non-string entries in custom truthy/falsy lists gracefully", () => {
+    expect(
+      parseBooleanValue("true", {
+        // @ts-expect-error - testing runtime robustness for untyped inputs
+        truthy: [1, "TRUE", null],
+      }),
+    ).toBe(true);
+  });
+
   it("returns undefined for unsupported values", () => {
     expect(parseBooleanValue("")).toBeUndefined();
     expect(parseBooleanValue("maybe")).toBeUndefined();
     expect(parseBooleanValue(1)).toBeUndefined();
+  });
+
+  it("handles malformed truthy/falsy options without crashing", () => {
+    // @ts-expect-error - testing malformed input
+    expect(parseBooleanValue("yes", { truthy: "YES" })).toBeUndefined();
+    // @ts-expect-error - testing malformed input
+    expect(parseBooleanValue("no", { falsy: { not: "an array" } })).toBeUndefined();
   });
 });
 
