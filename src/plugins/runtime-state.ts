@@ -14,6 +14,7 @@ export type RegistryState = {
   httpRoute: RegistrySurfaceState;
   channel: RegistrySurfaceState;
   key: string | null;
+  workspaceDir: string | null;
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
   importedPluginIds: Set<string>;
 };
