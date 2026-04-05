@@ -64,6 +64,7 @@ Docs: https://docs.openclaw.ai
 - MS Teams: download inline DM images via Graph API and preserve channel reply threading in proactive fallback. (#52212, #55198)
 - Agents/Claude CLI: persist explicit `openclaw agent --session-id` runs under a stable session key so follow-ups can reuse the stored CLI binding and resume the same underlying Claude session.
 - Agents/CLI backends: invalidate stored CLI session reuse when local CLI login state or the selected auth profile credential changes, so relogin and token rotation stop resuming stale sessions.
+- Agents/Anthropic: preserve native `toolu_*` replay ids on direct Anthropic and Anthropic Vertex paths so cache-sensitive history stops rewriting known-valid Anthropic tool-use ids. (#52612)
 - Gateway/macOS: recover installed-but-unloaded LaunchAgents during `openclaw gateway start` and `restart`, while still preferring live unmanaged gateways during restart recovery. (#43766) Thanks @HenryC-3.
 - Auth/failover: persist selected fallback overrides before retrying, shorten `auth_permanent` lockouts, and refresh websocket/shared-auth sessions only when real auth changes occur so retries and secret rotations behave predictably. (#60404, #60323, #60387)
 - Cron: replay interrupted recurring jobs on the first gateway restart instead of waiting for a second restart. (#60583) Thanks @joelnishanth.
