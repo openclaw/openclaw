@@ -297,9 +297,9 @@ async function fetchAttachment(params: {
   // Resolve contentType: prefer signal-cli's value, then sniff from buffer + filename.
   // signal-cli omits contentType for voice notes on some platforms/versions,
   // leaving saveMediaBuffer unable to classify the audio (no filePath, sniff
-  // fails for ADTS AAC). Detect here so the downstream transcription pipeline
-  // sees a usable MIME. Requires attachment.filename for the extension-based
-  // fallback to work. See #48614.
+  // fails for ADTS AAC). Pre-resolve here because saveMediaBuffer's internal
+  // detectMime only receives headerMime (no filePath), so without this the
+  // extension-based fallback is unreachable. See #48614.
   const filename = attachment.filename ?? undefined;
   const resolvedContentType =
     attachment.contentType ?? (await detectMime({ buffer, filePath: filename }));
