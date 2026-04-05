@@ -50,6 +50,13 @@ describe("isSensitiveConfigPath", () => {
     expect(isSensitiveConfigPath("channels.nostr.privateKey")).toBe(true);
     expect(isSensitiveConfigPath("channels.nostr.accounts.default.privateKey")).toBe(true);
   });
+
+  it("does not treat the top-level secrets namespace itself as sensitive", () => {
+    expect(isSensitiveConfigPath("secrets.defaults.env")).toBe(false);
+    expect(isSensitiveConfigPath("secrets.defaults.file")).toBe(false);
+    expect(isSensitiveConfigPath("secrets.providers.default.source")).toBe(false);
+    expect(isSensitiveConfigPath("secrets.providers.default.command")).toBe(false);
+  });
 });
 
 describe("plugin-owned channel hint paths", () => {

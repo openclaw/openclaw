@@ -148,7 +148,23 @@ function isWhitelistedSensitivePath(path: string): boolean {
 }
 
 function matchesSensitivePattern(path: string): boolean {
-  return SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
+  const segments = path
+    .split(".")
+    .map((segment) => segment.replaceAll("[]", "").replaceAll("*", "").trim())
+    .filter((segment) => segment.length > 0);
+  const scopedSegments = segments.length > 1 ? segments.slice(1) : segments;
+  const candidates = new Set<string>();
+
+  for (const segment of scopedSegments) {
+    candidates.add(segment);
+  }
+  for (let index = 0; index < scopedSegments.length - 1; index += 1) {
+    candidates.add(`${scopedSegments[index]}${scopedSegments[index + 1]}`);
+  }
+
+  return [...candidates].some((candidate) =>
+    SENSITIVE_PATTERNS.some((pattern) => pattern.test(candidate)),
+  );
 }
 
 export function isSensitiveConfigPath(path: string): boolean {

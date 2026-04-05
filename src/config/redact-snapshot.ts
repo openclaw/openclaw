@@ -379,6 +379,13 @@ function redactRawText(raw: string, config: unknown, hints?: ConfigUiHints): str
   });
 }
 
+function resolveRawSnapshotSource(snapshot: ConfigFileSnapshot): unknown {
+  if (snapshot.parsed && typeof snapshot.parsed === "object") {
+    return snapshot.parsed;
+  }
+  return snapshot.config;
+}
+
 let suppressRestoreWarnings = false;
 
 function withRestoreWarningsSuppressed<T>(fn: () => T): T {
@@ -436,15 +443,16 @@ export function redactConfigSnapshot(
 
   const redactedConfig = redactObject(snapshot.config, uiHints);
   const redactedParsed = snapshot.parsed ? redactObject(snapshot.parsed, uiHints) : snapshot.parsed;
-  let redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, snapshot.config, uiHints) : null;
+  const rawSnapshotSource = resolveRawSnapshotSource(snapshot);
+  let redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, rawSnapshotSource, uiHints) : null;
   if (
     redactedRaw &&
     shouldFallbackToStructuredRawRedaction({
       redactedRaw,
-      originalConfig: snapshot.config,
+      originalConfig: rawSnapshotSource,
       restoreParsed: (parsed) =>
         withRestoreWarningsSuppressed(() =>
-          restoreRedactedValues(parsed, snapshot.config, uiHints),
+          restoreRedactedValues(parsed, rawSnapshotSource, uiHints),
         ),
     })
   ) {

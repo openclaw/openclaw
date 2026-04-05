@@ -472,6 +472,166 @@ describe("redactConfigSnapshot", () => {
     expect(result.raw).toContain(REDACTED_SENTINEL);
   });
 
+  it("keeps raw text when parsed config uses env placeholders but runtime config is resolved", () => {
+    const raw = '{ "models": { "providers": { "brave": { "apiKey": "${BRAVE_API_KEY}" } } } }';
+    const snapshot: ConfigFileSnapshot = {
+      ...makeSnapshot(
+        {
+          models: {
+            providers: {
+              brave: {
+                apiKey: "resolved-brave-api-key-value",
+              },
+            },
+          },
+        },
+        raw,
+      ),
+      parsed: {
+        models: {
+          providers: {
+            brave: {
+              apiKey: "${BRAVE_API_KEY}",
+            },
+          },
+        },
+      },
+      sourceConfig: {
+        models: {
+          providers: {
+            brave: {
+              apiKey: "resolved-brave-api-key-value",
+            },
+          },
+        },
+      } as ConfigFileSnapshot["sourceConfig"],
+      resolved: {
+        models: {
+          providers: {
+            brave: {
+              apiKey: "resolved-brave-api-key-value",
+            },
+          },
+        },
+      } as ConfigFileSnapshot["resolved"],
+      runtimeConfig: {
+        models: {
+          providers: {
+            brave: {
+              apiKey: "resolved-brave-api-key-value",
+            },
+          },
+        },
+      } as ConfigFileSnapshot["runtimeConfig"],
+      config: {
+        models: {
+          providers: {
+            brave: {
+              apiKey: "resolved-brave-api-key-value",
+            },
+          },
+        },
+      } as ConfigFileSnapshot["config"],
+    };
+
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+    expect(result.raw).toBe(raw);
+  });
+
+  it("keeps raw text when runtime snapshot adds defaults absent from the authored file", () => {
+    const raw = "{\n}\n";
+    const snapshot: ConfigFileSnapshot = {
+      ...makeSnapshot({}, raw),
+      runtimeConfig: {
+        messages: {
+          ackReactionScope: "group-mentions",
+        },
+      } as ConfigFileSnapshot["runtimeConfig"],
+      config: {
+        messages: {
+          ackReactionScope: "group-mentions",
+        },
+      } as ConfigFileSnapshot["config"],
+    };
+
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+    expect(result.raw).toBe(raw);
+  });
+
+  it("preserves non-secret metadata under secrets.* when redacting secret refs", () => {
+    const raw = JSON.stringify(
+      {
+        secrets: {
+          providers: {
+            default: {
+              source: "env",
+            },
+          },
+          defaults: {
+            env: "default",
+          },
+        },
+        gateway: {
+          auth: {
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_TOKEN",
+            },
+          },
+        },
+      },
+      null,
+      2,
+    );
+    const snapshot = makeSnapshot(
+      {
+        secrets: {
+          providers: {
+            default: {
+              source: "env",
+            },
+          },
+          defaults: {
+            env: "default",
+          },
+        },
+        gateway: {
+          auth: {
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_TOKEN",
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, {
+      "gateway.auth.token": { sensitive: true },
+    });
+
+    const parsed = result.parsed as {
+      secrets?: {
+        providers?: { default?: { source?: string } };
+        defaults?: { env?: string };
+      };
+      gateway?: {
+        auth?: {
+          token?: { source?: string; provider?: string; id?: string };
+        };
+      };
+    };
+    expect(parsed.secrets?.providers?.default?.source).toBe("env");
+    expect(parsed.secrets?.defaults?.env).toBe("default");
+    expect(parsed.gateway?.auth?.token?.source).toBe("env");
+    expect(parsed.gateway?.auth?.token?.provider).toBe("default");
+    expect(parsed.gateway?.auth?.token?.id).toBe(REDACTED_SENTINEL);
+    expect(result.raw).not.toBeNull();
+  });
+
   it("drops raw text when overlap fallback triggers", () => {
     const config = {
       gateway: {
