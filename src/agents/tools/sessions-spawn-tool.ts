@@ -398,6 +398,22 @@ export function createSessionsSpawnTool(
             // Best-effort only: the ACP turn was already started above, so deleting the
             // child session record here does not guarantee the in-flight run was aborted.
             await cleanupUntrackedAcpSession(childSessionKey);
+            if (createdFlow && taskFlow) {
+              const latest = taskFlow.get(createdFlow.flowId) ?? createdFlow;
+              taskFlow.fail({
+                flowId: createdFlow.flowId,
+                expectedRevision: latest.revision,
+                stateJson: {
+                  task,
+                  runtime,
+                  label: label || null,
+                  childSessionKey,
+                  runId: childRunId,
+                  error: `Failed to register ACP run: ${summarizeError(err)}`,
+                },
+                blockedSummary: `Failed to register ACP run: ${summarizeError(err)}`,
+              });
+            }
             return jsonResult({
               status: "error",
               error: `Failed to register ACP run: ${summarizeError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,

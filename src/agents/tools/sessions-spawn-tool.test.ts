@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
   const spawnAcpDirectMock = vi.fn();
+  const registerSubagentRunMock = vi.fn();
   const createManagedMock = vi.fn();
   const getFlowMock = vi.fn();
   const setWaitingMock = vi.fn();
@@ -10,6 +11,7 @@ const hoisted = vi.hoisted(() => {
   return {
     spawnSubagentDirectMock,
     spawnAcpDirectMock,
+    registerSubagentRunMock,
     createManagedMock,
     getFlowMock,
     setWaitingMock,
@@ -38,6 +40,10 @@ vi.mock("../../plugins/runtime/runtime-taskflow.js", () => ({
       fail: (...args: unknown[]) => hoisted.failFlowMock(...args),
     }),
   }),
+}));
+
+vi.mock("../subagent-registry.js", () => ({
+  registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
 }));
 
 vi.mock("../subagent-capabilities.js", async () => {
@@ -73,6 +79,7 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
     });
+    hoisted.registerSubagentRunMock.mockReset().mockReturnValue(undefined);
     hoisted.createManagedMock.mockReset().mockReturnValue({
       flowId: "flow-1",
       revision: 1,
@@ -199,6 +206,43 @@ describe("sessions_spawn tool", () => {
     expect(result.details).toMatchObject({
       status: "accepted",
       flowId: "flow-1",
+    });
+  });
+
+  it("marks taskFlow failed when ACP registration aborts after spawn", async () => {
+    hoisted.registerSubagentRunMock.mockImplementation(() => {
+      throw new Error("registry unavailable");
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+      agentAccountId: "default",
+      agentTo: "channel:123",
+      agentThreadId: "456",
+    });
+
+    const result = await tool.execute("call-acp-flow-error", {
+      runtime: "acp",
+      task: "investigate the failing CI run",
+      agentId: "codex",
+      cwd: "/workspace",
+      taskFlow: {
+        controllerId: "tests/acp-registry-error",
+        goal: "Investigate CI",
+      },
+    });
+
+    expect(hoisted.failFlowMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flowId: "flow-1",
+        blockedSummary: expect.stringContaining("Failed to register ACP run: registry unavailable"),
+      }),
+    );
+    expect(result.details).toMatchObject({
+      status: "error",
+      childSessionKey: "agent:codex:acp:1",
+      runId: "run-acp",
+      error: expect.stringContaining("Failed to register ACP run: registry unavailable"),
     });
   });
 
