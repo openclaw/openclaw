@@ -86,6 +86,40 @@ describe("matrixSetupAdapter", () => {
     expect(next.channels?.matrix?.accounts?.ops?.deviceName).toBeUndefined();
   });
 
+  it("keeps avatarUrl when switching an account to env-backed auth", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            ops: {
+              name: "Ops",
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    const next = matrixSetupAdapter.applyAccountConfig({
+      cfg,
+      accountId: "ops",
+      input: {
+        name: "Ops",
+        useEnv: true,
+        avatarUrl: "  mxc://example.org/ops-avatar  ",
+      },
+    }) as CoreConfig;
+
+    expect(next.channels?.matrix?.accounts?.ops).toMatchObject({
+      name: "Ops",
+      enabled: true,
+      avatarUrl: "mxc://example.org/ops-avatar",
+    });
+    expect(next.channels?.matrix?.accounts?.ops?.homeserver).toBeUndefined();
+    expect(next.channels?.matrix?.accounts?.ops?.accessToken).toBeUndefined();
+  });
+
   it("stores proxy in account setup updates", () => {
     const next = matrixSetupAdapter.applyAccountConfig({
       cfg: {} as CoreConfig,

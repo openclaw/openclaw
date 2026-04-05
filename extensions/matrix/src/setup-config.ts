@@ -226,6 +226,7 @@ export function applyMatrixSetupAccountConfig(params: {
       password: null,
       deviceId: null,
       deviceName: null,
+      avatarUrl: resolveSetupAvatarUrl(params.input),
     });
   }
 
