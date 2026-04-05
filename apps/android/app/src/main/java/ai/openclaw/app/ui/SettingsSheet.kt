@@ -168,13 +168,24 @@ fun SettingsSheet(viewModel: MainViewModel) {
       viewModel.setCameraEnabled(cameraOk)
     }
 
-  var pendingLocationRequest by remember { mutableStateOf(false) }
+  var pendingLocationSelection by remember { mutableStateOf<LocationMode?>(null) }
   var pendingPreciseToggle by remember { mutableStateOf(false) }
+  val backgroundLocationOptionLabel =
+    remember(context) {
+      context.packageManager.backgroundPermissionOptionLabel?.toString()?.trim().orEmpty()
+        .ifEmpty { "Allow all the time" }
+    }
 
   val locationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
-      val fineOk = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true
-      val coarseOk = perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+      val fineOk =
+        perms[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+          ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+          PackageManager.PERMISSION_GRANTED
+      val coarseOk =
+        perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
+          ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+          PackageManager.PERMISSION_GRANTED
       val granted = fineOk || coarseOk
 
       if (pendingPreciseToggle) {
@@ -183,9 +194,27 @@ fun SettingsSheet(viewModel: MainViewModel) {
         return@rememberLauncherForActivityResult
       }
 
-      if (pendingLocationRequest) {
-        pendingLocationRequest = false
-        viewModel.setLocationMode(if (granted) LocationMode.WhileUsing else LocationMode.Off)
+      when (pendingLocationSelection) {
+        LocationMode.WhileUsing -> {
+          pendingLocationSelection = null
+          if (granted) {
+            viewModel.setLocationMode(LocationMode.WhileUsing)
+          }
+        }
+        LocationMode.Always -> {
+          if (!granted) {
+            pendingLocationSelection = null
+            return@rememberLauncherForActivityResult
+          }
+          if (hasBackgroundLocationPermission(context)) {
+            pendingLocationSelection = null
+            viewModel.setLocationMode(LocationMode.Always)
+          } else {
+            viewModel.setLocationMode(LocationMode.WhileUsing)
+            openAppSettings(context)
+          }
+        }
+        else -> Unit
       }
     }
 
@@ -207,6 +236,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
         context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
   val callLogPermissionAvailable = remember { BuildConfig.OPENCLAW_ENABLE_CALL_LOG }
+  val backgroundLocationAvailable = remember { BuildConfig.OPENCLAW_ENABLE_BACKGROUND_LOCATION }
   val photosPermission =
     if (Build.VERSION.SDK_INT >= 33) {
       Manifest.permission.READ_MEDIA_IMAGES
@@ -335,10 +365,27 @@ fun SettingsSheet(viewModel: MainViewModel) {
       assistantRoleHeld = isAssistantRoleHeld(context)
     }
 
-  DisposableEffect(lifecycleOwner, context) {
+  DisposableEffect(lifecycleOwner, context, locationMode, backgroundLocationAvailable) {
     val observer =
       LifecycleEventObserver { _, event ->
         if (event == Lifecycle.Event.ON_RESUME) {
+          val locationGranted = hasAnyLocationPermission(context)
+          val backgroundGranted = hasBackgroundLocationPermission(context)
+          when {
+            pendingLocationSelection == LocationMode.Always -> {
+              pendingLocationSelection = null
+              if (backgroundLocationAvailable && locationGranted && backgroundGranted) {
+                viewModel.setLocationMode(LocationMode.Always)
+              }
+            }
+            locationMode == LocationMode.Always &&
+              (!backgroundLocationAvailable || !locationGranted || !backgroundGranted) -> {
+              viewModel.setLocationMode(if (locationGranted) LocationMode.WhileUsing else LocationMode.Off)
+            }
+            locationMode == LocationMode.WhileUsing && !locationGranted -> {
+              viewModel.setLocationMode(LocationMode.Off)
+            }
+          }
           micPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
               PackageManager.PERMISSION_GRANTED
@@ -396,20 +443,36 @@ fun SettingsSheet(viewModel: MainViewModel) {
   }
 
   fun requestLocationPermissions() {
-    val fineOk =
-      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-    val coarseOk =
-      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
-    if (fineOk || coarseOk) {
+    if (hasAnyLocationPermission(context)) {
       viewModel.setLocationMode(LocationMode.WhileUsing)
     } else {
-      pendingLocationRequest = true
+      pendingLocationSelection = LocationMode.WhileUsing
       locationPermissionLauncher.launch(
         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
       )
     }
+  }
+
+  fun requestAlwaysLocationPermissions() {
+    if (!backgroundLocationAvailable) {
+      requestLocationPermissions()
+      return
+    }
+    if (!hasAnyLocationPermission(context)) {
+      pendingLocationSelection = LocationMode.Always
+      locationPermissionLauncher.launch(
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+      )
+      return
+    }
+    if (hasBackgroundLocationPermission(context)) {
+      pendingLocationSelection = null
+      viewModel.setLocationMode(LocationMode.Always)
+      return
+    }
+    pendingLocationSelection = LocationMode.Always
+    viewModel.setLocationMode(LocationMode.WhileUsing)
+    openAppSettings(context)
   }
 
   fun setPreciseLocationChecked(checked: Boolean) {
@@ -1145,6 +1208,26 @@ fun SettingsSheet(viewModel: MainViewModel) {
             },
           )
           HorizontalDivider(color = mobileBorder)
+          if (backgroundLocationAvailable) {
+            ListItem(
+              modifier = Modifier.fillMaxWidth(),
+              colors = listItemColors,
+              headlineContent = { Text("Always", style = mobileHeadline) },
+              supportingContent = {
+                Text(
+                  "Access even when OpenClaw is closed. Android opens system settings so you can choose $backgroundLocationOptionLabel.",
+                  style = mobileCallout,
+                )
+              },
+              trailingContent = {
+                RadioButton(
+                  selected = locationMode == LocationMode.Always,
+                  onClick = { requestAlwaysLocationPermissions() },
+                )
+              },
+            )
+            HorizontalDivider(color = mobileBorder)
+          }
           ListItem(
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
@@ -1330,6 +1413,18 @@ private fun hasNotificationsPermission(context: Context): Boolean {
   if (Build.VERSION.SDK_INT < 33) return true
   return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
           PackageManager.PERMISSION_GRANTED
+}
+
+private fun hasAnyLocationPermission(context: Context): Boolean {
+  return ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+    PackageManager.PERMISSION_GRANTED ||
+    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+    PackageManager.PERMISSION_GRANTED
+}
+
+private fun hasBackgroundLocationPermission(context: Context): Boolean {
+  return ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+    PackageManager.PERMISSION_GRANTED
 }
 
 private fun isNotificationListenerEnabled(context: Context): Boolean {

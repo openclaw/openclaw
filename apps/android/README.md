@@ -191,6 +191,9 @@ More details: `docs/platforms/android.md`.
 - Discovery:
   - Android 13+ (`API 33+`): `NEARBY_WIFI_DEVICES`
   - Android 12 and below: `ACCESS_FINE_LOCATION` (required for NSD scanning)
+- Location:
+  - Foreground access: `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION`
+  - Background access ("Always"): `ACCESS_BACKGROUND_LOCATION`
 - Foreground service notification (Android 13+): `POST_NOTIFICATIONS`
 - Camera:
   - `CAMERA` for `camera.snap` and `camera.clip`

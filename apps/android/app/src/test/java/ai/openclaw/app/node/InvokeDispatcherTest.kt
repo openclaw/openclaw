@@ -287,6 +287,8 @@ private class InvokeDispatcherFakeLocationDataSource : LocationDataSource {
 
   override fun hasCoarsePermission(context: Context): Boolean = false
 
+  override fun hasBackgroundPermission(context: Context): Boolean = false
+
   override suspend fun fetchLocation(
     desiredProviders: List<String>,
     maxAgeMs: Long?,

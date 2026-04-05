@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import androidx.core.content.ContextCompat
+import ai.openclaw.app.LocationMode
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.Json
@@ -14,6 +15,8 @@ internal interface LocationDataSource {
   fun hasFinePermission(context: Context): Boolean
 
   fun hasCoarsePermission(context: Context): Boolean
+
+  fun hasBackgroundPermission(context: Context): Boolean
 
   suspend fun fetchLocation(
     desiredProviders: List<String>,
@@ -32,6 +35,10 @@ private class DefaultLocationDataSource(
 
   override fun hasCoarsePermission(context: Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+      PackageManager.PERMISSION_GRANTED
+
+  override fun hasBackgroundPermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
       PackageManager.PERMISSION_GRANTED
 
   override suspend fun fetchLocation(
@@ -53,6 +60,7 @@ class LocationHandler private constructor(
   private val dataSource: LocationDataSource,
   private val json: Json,
   private val isForeground: () -> Boolean,
+  private val locationMode: () -> LocationMode,
   private val locationPreciseEnabled: () -> Boolean,
 ) {
   constructor(
@@ -60,12 +68,14 @@ class LocationHandler private constructor(
     location: LocationCaptureManager,
     json: Json,
     isForeground: () -> Boolean,
+    locationMode: () -> LocationMode,
     locationPreciseEnabled: () -> Boolean,
   ) : this(
     appContext = appContext,
     dataSource = DefaultLocationDataSource(location),
     json = json,
     isForeground = isForeground,
+    locationMode = locationMode,
     locationPreciseEnabled = locationPreciseEnabled,
   )
 
@@ -79,6 +89,7 @@ class LocationHandler private constructor(
       dataSource: LocationDataSource,
       json: Json = Json { ignoreUnknownKeys = true },
       isForeground: () -> Boolean = { true },
+      locationMode: () -> LocationMode = { LocationMode.WhileUsing },
       locationPreciseEnabled: () -> Boolean = { true },
     ): LocationHandler =
       LocationHandler(
@@ -86,15 +97,17 @@ class LocationHandler private constructor(
         dataSource = dataSource,
         json = json,
         isForeground = isForeground,
+        locationMode = locationMode,
         locationPreciseEnabled = locationPreciseEnabled,
       )
   }
 
   suspend fun handleLocationGet(paramsJson: String?): GatewaySession.InvokeResult {
-    if (!isForeground()) {
+    if (!isForeground() && !allowsBackgroundLocation()) {
       return GatewaySession.InvokeResult.error(
         code = "LOCATION_BACKGROUND_UNAVAILABLE",
-        message = "LOCATION_BACKGROUND_UNAVAILABLE: location requires OpenClaw to stay open",
+        message =
+          "LOCATION_BACKGROUND_UNAVAILABLE: set Location to Always and grant Background location",
       )
     }
     if (!dataSource.hasFinePermission(appContext) && !dataSource.hasCoarsePermission(appContext)) {
@@ -136,6 +149,9 @@ class LocationHandler private constructor(
       return GatewaySession.InvokeResult.error(code = "LOCATION_UNAVAILABLE", message = message)
     }
   }
+
+  private fun allowsBackgroundLocation(): Boolean =
+    locationMode() == LocationMode.Always && dataSource.hasBackgroundPermission(appContext)
 
   private fun parseLocationParams(paramsJson: String?): Triple<Long?, Long, String?> {
     if (paramsJson.isNullOrBlank()) {

@@ -11,15 +11,15 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 class SecurePrefsTest {
   @Test
-  fun loadLocationMode_migratesLegacyAlwaysValue() {
+  fun loadLocationMode_preservesAlwaysValue() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
     plainPrefs.edit().clear().putString("location.enabledMode", "always").commit()
 
     val prefs = SecurePrefs(context)
 
-    assertEquals(LocationMode.WhileUsing, prefs.locationMode.value)
-    assertEquals("whileUsing", plainPrefs.getString("location.enabledMode", null))
+    assertEquals(LocationMode.Always, prefs.locationMode.value)
+    assertEquals("always", plainPrefs.getString("location.enabledMode", null))
   }
 
   @Test

@@ -41,12 +41,35 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
               coarseGranted = true,
             ),
           isForeground = { false },
+          locationMode = { ai.openclaw.app.LocationMode.WhileUsing },
         )
 
       val result = handler.handleLocationGet(null)
 
       assertFalse(result.ok)
       assertEquals("LOCATION_BACKGROUND_UNAVAILABLE", result.error?.code)
+    }
+
+  @Test
+  fun handleLocationGet_allowsBackgroundWhenAlwaysModeAndBackgroundPermissionGranted() =
+    runTest {
+      val handler =
+        LocationHandler.forTesting(
+          appContext = appContext(),
+          dataSource =
+            FakeLocationDataSource(
+              fineGranted = true,
+              coarseGranted = true,
+              backgroundGranted = true,
+              payload = LocationCaptureManager.Payload("""{"ok":true}"""),
+            ),
+          isForeground = { false },
+          locationMode = { ai.openclaw.app.LocationMode.Always },
+        )
+
+      val result = handler.handleLocationGet(null)
+
+      assertTrue(result.ok)
     }
 
   @Test
@@ -162,6 +185,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
 private class FakeLocationDataSource(
   private val fineGranted: Boolean,
   private val coarseGranted: Boolean,
+  private val backgroundGranted: Boolean = false,
   private val payload: LocationCaptureManager.Payload? = null,
   private val failure: Throwable? = null,
   private val timeout: Boolean = false,
@@ -174,6 +198,8 @@ private class FakeLocationDataSource(
   override fun hasFinePermission(context: Context): Boolean = fineGranted
 
   override fun hasCoarsePermission(context: Context): Boolean = coarseGranted
+
+  override fun hasBackgroundPermission(context: Context): Boolean = backgroundGranted
 
   override suspend fun fetchLocation(
     desiredProviders: List<String>,
