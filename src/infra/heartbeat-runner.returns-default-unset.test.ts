@@ -789,7 +789,7 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  it("keeps heartbeat runs on the main session even when heartbeat.session targets a peer session", async () => {
+  it("keeps heartbeat runs on the main session even when heartbeat.session targets a subagent session", async () => {
     const replySpy = vi.fn();
     try {
       const tmpDir = await createCaseDir("hb-explicit-session-routes-main");

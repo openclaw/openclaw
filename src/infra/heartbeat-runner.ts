@@ -42,6 +42,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -185,7 +186,11 @@ function resolveHeartbeatSession(
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
-  const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
+  const forced = forcedSessionKey?.trim();
+  const forcedAgentId = isSubagentSessionKey(forced)
+    ? resolveAgentIdFromSessionKey(forced)
+    : undefined;
+  const resolvedAgentId = normalizeAgentId(agentId ?? forcedAgentId ?? resolveDefaultAgentId(cfg));
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
   const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
@@ -199,8 +204,7 @@ function resolveHeartbeatSession(
     return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
   }
 
-  const forced = forcedSessionKey?.trim();
-  if (forced) {
+  if (forced && !isSubagentSessionKey(forced)) {
     const forcedCandidate = toAgentStoreSessionKey({
       agentId: resolvedAgentId,
       requestKey: forced,
