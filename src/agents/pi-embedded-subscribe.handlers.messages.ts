@@ -350,33 +350,11 @@ export function handleMessageUpdate(
       ? (assistantRecord.partial as AssistantMessage)
       : msg;
   const phaseAwareVisibleText = coerceText(extractAssistantVisibleText(partialAssistant)).trim();
-  const partialVisiblePhase = normalizeAssistantPhase(
-    (partialAssistant as { phase?: unknown }).phase,
-  );
-  const explicitStructuredPartialPhases = new Set<AssistantPhase>();
-  if (Array.isArray(partialAssistant.content)) {
-    for (const block of partialAssistant.content) {
-      if (!block || typeof block !== "object") {
-        continue;
-      }
-      const record = block as { type?: unknown; textSignature?: unknown };
-      if (record.type !== "text") {
-        continue;
-      }
-      const signaturePhase = getAssistantTextSignaturePhase(record.textSignature);
-      if (signaturePhase) {
-        explicitStructuredPartialPhases.add(signaturePhase);
-      }
-    }
+  const deliveryPhase = resolveAssistantDeliveryPhase(partialAssistant);
+  if (deliveryPhase === "commentary" && !phaseAwareVisibleText) {
+    return;
   }
-  const structuredPartialPhase =
-    explicitStructuredPartialPhases.size === 1
-      ? [...explicitStructuredPartialPhases][0]
-      : undefined;
-  const shouldUsePhaseAwareBlockReply = Boolean(partialVisiblePhase || structuredPartialPhase);
-  const shouldDeferTextEndBlockReply =
-    shouldUsePhaseAwareBlockReply &&
-    (partialVisiblePhase ?? structuredPartialPhase) !== "final_answer";
+  const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
@@ -438,7 +416,7 @@ export function handleMessageUpdate(
         ctx.blockChunker?.reset();
       }
       const blockReplyChunk = replace ? cleanedText : deltaText;
-      if (!shouldDeferTextEndBlockReply && blockReplyChunk) {
+      if (blockReplyChunk) {
         if (ctx.blockChunker) {
           ctx.blockChunker.append(blockReplyChunk);
         } else {
@@ -446,12 +424,7 @@ export function handleMessageUpdate(
         }
       }
 
-      if (
-        !shouldDeferTextEndBlockReply &&
-        evtType === "text_end" &&
-        !ctx.state.lastBlockReplyText &&
-        cleanedText
-      ) {
+      if (evtType === "text_end" && !ctx.state.lastBlockReplyText && cleanedText) {
         if (ctx.blockChunker) {
           ctx.blockChunker.reset();
           ctx.blockChunker.append(cleanedText);
@@ -493,7 +466,6 @@ export function handleMessageUpdate(
 
   if (
     !ctx.params.silentExpected &&
-    !shouldDeferTextEndBlockReply &&
     ctx.params.onBlockReply &&
     ctx.blockChunking &&
     ctx.state.blockReplyBreak === "text_end"
@@ -503,7 +475,6 @@ export function handleMessageUpdate(
 
   if (
     !ctx.params.silentExpected &&
-    !shouldDeferTextEndBlockReply &&
     evtType === "text_end" &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
@@ -546,7 +517,7 @@ export function handleMessageEnd(
   });
 
   const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawVisibleText || rawText, { thinking: false, final: false }),
+    text: ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =
@@ -575,17 +546,6 @@ export function handleMessageEnd(
     emitReasoningEnd(ctx);
     finalizeMessageEnd();
     return;
-  }
-
-  if (!cleanedText && !hasMedia && !ctx.params.enforceFinalTag) {
-    const rawTrimmed = coerceText(rawText).trim();
-    const rawStrippedFinal = rawTrimmed.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
-    const rawCandidate = rawStrippedFinal || rawTrimmed;
-    if (rawCandidate) {
-      const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidate));
-      cleanedText = parsedFallback.text ?? rawCandidate;
-      ({ mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedFallback));
-    }
   }
 
   const previousStreamedText = ctx.state.lastStreamedAssistantCleaned ?? "";

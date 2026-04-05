@@ -907,6 +907,10 @@ export function createOpenAIWebSocketStreamFn(
         }
 
         const outputItemPhaseById = new Map<string, OpenAIResponsesAssistantPhase | undefined>();
+        const outputTextByPart = new Map<string, string>();
+        const emittedTextByPart = new Map<string, string>();
+        const getOutputTextKey = (itemId: string, contentIndex: number) =>
+          `${itemId}:${contentIndex}`;
         const emitTextDelta = (params: {
           fullText: string;
           deltaText: string;
@@ -946,6 +950,24 @@ export function createOpenAIWebSocketStreamFn(
             partial: partialMsg,
           });
         };
+        const emitBufferedTextDelta = (params: { itemId: string; contentIndex: number }) => {
+          const key = getOutputTextKey(params.itemId, params.contentIndex);
+          const fullText = outputTextByPart.get(key) ?? "";
+          const emittedText = emittedTextByPart.get(key) ?? "";
+          if (!fullText || fullText === emittedText) {
+            return;
+          }
+          const deltaText = fullText.startsWith(emittedText)
+            ? fullText.slice(emittedText.length)
+            : fullText;
+          emittedTextByPart.set(key, fullText);
+          emitTextDelta({
+            fullText,
+            deltaText,
+            itemId: params.itemId,
+            contentIndex: params.contentIndex,
+          });
+        };
         const capturedContextLength = context.messages.length;
         let sawWsOutput = false;
 
@@ -953,6 +975,8 @@ export function createOpenAIWebSocketStreamFn(
           await new Promise<void>((resolve, reject) => {
             const abortHandler = () => {
               outputItemPhaseById.clear();
+              outputTextByPart.clear();
+              emittedTextByPart.clear();
               cleanup();
               reject(new Error("aborted"));
             };
@@ -964,6 +988,8 @@ export function createOpenAIWebSocketStreamFn(
 
             const closeHandler = (code: number, reason: string) => {
               outputItemPhaseById.clear();
+              outputTextByPart.clear();
+              emittedTextByPart.clear();
               cleanup();
               const closeInfo = session.manager.lastCloseInfo;
               reject(
@@ -985,10 +1011,6 @@ export function createOpenAIWebSocketStreamFn(
               session.manager.off("close", closeHandler);
               unsubscribe();
             };
-
-            const outputTextByPart = new Map<string, string>();
-            const getOutputTextKey = (itemId: string, contentIndex: number) =>
-              `${itemId}:${contentIndex}`;
 
             const unsubscribe = session.manager.onMessage((event) => {
               if (
@@ -1014,6 +1036,15 @@ export function createOpenAIWebSocketStreamFn(
                       ? normalizeAssistantPhase((event.item as { phase?: unknown }).phase)
                       : undefined;
                   outputItemPhaseById.set(event.item.id, itemPhase);
+                  for (const key of outputTextByPart.keys()) {
+                    if (key.startsWith(`${event.item.id}:`)) {
+                      const [, contentIndexText] = key.split(":");
+                      emitBufferedTextDelta({
+                        itemId: event.item.id,
+                        contentIndex: Number.parseInt(contentIndexText ?? "0", 10) || 0,
+                      });
+                    }
+                  }
                 }
                 return;
               }
@@ -1022,26 +1053,22 @@ export function createOpenAIWebSocketStreamFn(
                 const key = getOutputTextKey(event.item_id, event.content_index);
                 const nextText = `${outputTextByPart.get(key) ?? ""}${event.delta}`;
                 outputTextByPart.set(key, nextText);
-                emitTextDelta({
-                  fullText: nextText,
-                  deltaText: event.delta,
-                  itemId: event.item_id,
-                  contentIndex: event.content_index,
-                });
+                if (outputItemPhaseById.has(event.item_id)) {
+                  emitBufferedTextDelta({
+                    itemId: event.item_id,
+                    contentIndex: event.content_index,
+                  });
+                }
                 return;
               }
 
               if (event.type === "response.output_text.done") {
                 const key = getOutputTextKey(event.item_id, event.content_index);
-                const previousText = outputTextByPart.get(key) ?? "";
-                if (event.text && event.text !== previousText) {
+                if (event.text && event.text !== outputTextByPart.get(key)) {
                   outputTextByPart.set(key, event.text);
-                  const deltaText = event.text.startsWith(previousText)
-                    ? event.text.slice(previousText.length)
-                    : event.text;
-                  emitTextDelta({
-                    fullText: event.text,
-                    deltaText,
+                }
+                if (outputItemPhaseById.has(event.item_id)) {
+                  emitBufferedTextDelta({
                     itemId: event.item_id,
                     contentIndex: event.content_index,
                   });
@@ -1052,6 +1079,7 @@ export function createOpenAIWebSocketStreamFn(
               if (event.type === "response.completed") {
                 outputItemPhaseById.clear();
                 outputTextByPart.clear();
+                emittedTextByPart.clear();
                 cleanup();
                 session.lastContextLength = capturedContextLength;
                 const assistantMsg = buildAssistantMessageFromResponse(event.response, {
@@ -1066,6 +1094,7 @@ export function createOpenAIWebSocketStreamFn(
               } else if (event.type === "response.failed") {
                 outputItemPhaseById.clear();
                 outputTextByPart.clear();
+                emittedTextByPart.clear();
                 cleanup();
                 reject(
                   new OpenAIWebSocketRuntimeError(
@@ -1079,6 +1108,7 @@ export function createOpenAIWebSocketStreamFn(
               } else if (event.type === "error") {
                 outputItemPhaseById.clear();
                 outputTextByPart.clear();
+                emittedTextByPart.clear();
                 cleanup();
                 reject(
                   new OpenAIWebSocketRuntimeError(

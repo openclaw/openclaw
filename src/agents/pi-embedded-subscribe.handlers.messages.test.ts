@@ -254,7 +254,7 @@ describe("handleMessageUpdate", () => {
     expect(ctx.state.blockBuffer).toBe("");
   });
 
-  it("replaces commentary preview text when a final_answer partial arrives", () => {
+  it("suppresses commentary partials until a final_answer partial arrives", () => {
     const onAgentEvent = vi.fn();
     const ctx = {
       params: {
@@ -339,20 +339,12 @@ describe("handleMessageUpdate", () => {
       },
     } as never);
 
-    expect(onAgentEvent).toHaveBeenCalledTimes(2);
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
     expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
       stream: "assistant",
       data: {
-        text: "Working...",
-        delta: "Working...",
-      },
-    });
-    expect(onAgentEvent.mock.calls[1]?.[0]).toMatchObject({
-      stream: "assistant",
-      data: {
         text: "Done.",
-        delta: "",
-        replace: true,
+        delta: "Done.",
       },
     });
   });

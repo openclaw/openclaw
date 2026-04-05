@@ -336,11 +336,6 @@ export function extractAssistantVisibleText(msg: AssistantMessage): string {
     return finalAnswerText;
   }
 
-  const commentaryText = extractAssistantTextForPhase(msg, "commentary");
-  if (commentaryText.trim()) {
-    return commentaryText;
-  }
-
   return extractAssistantTextForPhase(msg);
 }
 

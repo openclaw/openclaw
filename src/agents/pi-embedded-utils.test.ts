@@ -594,7 +594,7 @@ describe("extractAssistantVisibleText", () => {
     expect(extractAssistantVisibleText(msg)).toBe("Done.");
   });
 
-  it("falls back to commentary when final_answer is empty", () => {
+  it("does not fall back to commentary when final_answer is empty", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [
@@ -612,7 +612,7 @@ describe("extractAssistantVisibleText", () => {
       timestamp: Date.now(),
     });
 
-    expect(extractAssistantVisibleText(msg)).toBe("Working...");
+    expect(extractAssistantVisibleText(msg)).toBe("");
   });
 
   it("falls back to legacy unphased text when phased text is absent", () => {

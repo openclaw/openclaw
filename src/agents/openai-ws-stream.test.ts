@@ -1839,7 +1839,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     ]);
   });
 
-  it("degrades safely when a text delta arrives before its item mapping", async () => {
+  it("buffers text deltas until item mapping is available", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-late-map");
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
@@ -1910,12 +1910,12 @@ describe("createOpenAIWebSocketStreamFn", () => {
     const deltas = events.filter((event) => event.type === "text_delta");
     expect(deltas).toHaveLength(2);
     expect(deltas[0]).toMatchObject({ delta: "Working" });
-    expect(deltas[0]?.partial?.phase).toBeUndefined();
+    expect(deltas[0]?.partial?.phase).toBe("commentary");
     expect(deltas[0]?.partial?.content).toEqual([
       {
         type: "text",
         text: "Working",
-        textSignature: JSON.stringify({ v: 1, id: "item_late" }),
+        textSignature: JSON.stringify({ v: 1, id: "item_late", phase: "commentary" }),
       },
     ]);
     expect(deltas[1]).toMatchObject({ delta: "..." });
