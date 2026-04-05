@@ -46,6 +46,7 @@
   "thread-bindings-runtime",
   "together",
   "text-runtime",
+  "telegram-command-config",
   "text-chunking",
   "agent-runtime",
   "speech-runtime",

@@ -206,6 +206,7 @@ function installDiscoveryHooks(
     });
     vi.doMock(bundledProviderModules.vllmApiModuleId, async () => {
       return {
+        VLLM_PROVIDER_LABEL: "vLLM",
         buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
       };
     });
