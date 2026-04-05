@@ -10,7 +10,7 @@
             <parameter
                 android:name="prompt"
                 android:key="prompt"
-                android:mimeType="text/*"
+                android:mimeType="https://schema.org/Text"
                 android:required="true" />
         </intent>
     </capability>
