@@ -9,7 +9,7 @@ export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     reasoning: false,
     input: ["text"],
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens: 80000,
     cost: {
       input: 0.045,
       output: 0.15,
@@ -23,7 +23,7 @@ export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     reasoning: false,
     input: ["text"],
     contextWindow: 131072,
-    maxTokens: 8192,
+    maxTokens: 16384,
     cost: {
       input: 0.25,
       output: 1.0,
@@ -37,7 +37,7 @@ export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
     reasoning: true,
     input: ["text"],
     contextWindow: 262144,
-    maxTokens: 16384,
+    maxTokens: 80000,
     cost: {
       input: 0.25,
       output: 0.9,
