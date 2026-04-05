@@ -55,6 +55,7 @@ import {
   type Usage,
 } from "./open-responses.schema.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
+import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
 
 type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -394,37 +395,6 @@ function createResponseResource(params: {
   };
 }
 
-function createAssistantOutputItem(params: {
-  id: string;
-  text: string;
-  status?: "in_progress" | "completed";
-}): OutputItem {
-  return {
-    type: "message",
-    id: params.id,
-    role: "assistant",
-    content: [{ type: "output_text", text: params.text }],
-    status: params.status,
-  };
-}
-
-function createFunctionCallOutputItem(params: {
-  id: string;
-  callId: string;
-  name: string;
-  arguments: string;
-  status?: "in_progress" | "completed";
-}): OutputItem {
-  return {
-    type: "function_call",
-    id: params.id,
-    call_id: params.callId,
-    name: params.name,
-    arguments: params.arguments,
-    status: params.status,
-  };
-}
-
 async function runResponsesAgentCommand(params: {
   message: string;
   images: ImageContent[];
@@ -750,6 +720,7 @@ export async function handleOpenResponsesHttpRequest(
             createAssistantOutputItem({
               id: outputItemId,
               text: assistantText,
+              phase: "commentary",
               status: "completed",
             }),
           );
@@ -788,7 +759,12 @@ export async function handleOpenResponsesHttpRequest(
         model,
         status: "completed",
         output: [
-          createAssistantOutputItem({ id: outputItemId, text: content, status: "completed" }),
+          createAssistantOutputItem({
+            id: outputItemId,
+            text: content,
+            phase: "final_answer",
+            status: "completed",
+          }),
         ],
         usage,
       });
@@ -857,6 +833,7 @@ export async function handleOpenResponsesHttpRequest(
     const completedItem = createAssistantOutputItem({
       id: outputItemId,
       text: finalizeRequested.text,
+      phase: finalizeRequested.status === "completed" ? "final_answer" : "commentary",
       status: "completed",
     });
 
@@ -1027,6 +1004,7 @@ export async function handleOpenResponsesHttpRequest(
         const completedItem = createAssistantOutputItem({
           id: outputItemId,
           text: finalText,
+          phase: "commentary",
           status: "completed",
         });
         writeSseEvent(res, {
