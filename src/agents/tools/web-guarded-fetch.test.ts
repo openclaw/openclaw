@@ -28,6 +28,7 @@ vi.mock("../../infra/net/fetch-guard.js", () => {
 describe("web-guarded-fetch", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("uses trusted SSRF policy for trusted web tools endpoints", async () => {
