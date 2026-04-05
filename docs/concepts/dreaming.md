@@ -225,6 +225,20 @@ openclaw memory status --deep
 
 See [memory CLI](/cli/memory) for the full flag reference.
 
+### Preview and explain tools
+
+Two additional subcommands help you inspect promotion and REM behavior without writing anything:
+
+```bash
+# Explain why a candidate would or would not promote
+openclaw memory promote-explain "meeting notes"
+
+# Preview REM reflections, candidate truths, and deep promotions
+openclaw memory rem-harness --json
+```
+
+See [memory CLI](/cli/memory) for full options.
+
 ## How it works
 
 ### Light phase pipeline
