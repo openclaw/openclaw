@@ -28,6 +28,10 @@ vi.mock("../../runtime.js", () => ({
 vi.mock("../../agents/defaults.js", () => ({
   DEFAULT_MODEL: "gpt-5.4",
 }));
+vi.mock("../../config/sessions.js", () => ({
+  loadSessionStore: vi.fn(),
+  resolveStorePath: vi.fn(),
+}));
 
 import { createFollowupRunner } from "../../auto-reply/reply/followup-runner.js";
 import { buildFollowupRunForSession } from "../../auto-reply/reply/queue/build-followup-run.js";
@@ -38,6 +42,7 @@ import {
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { getExistingFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { createTypingController } from "../../auto-reply/reply/typing.js";
+import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { createRuntimeFollowup } from "./runtime-followup.js";
 
 const SESSION_KEY = "agent:main:telegram:direct:123:thread:123:456";
@@ -53,7 +58,7 @@ function makeFollowupRun() {
       sessionKey: SESSION_KEY,
       sessionFile: "/tmp/session-abc.jsonl",
       workspaceDir: "/tmp/workspace",
-      config: {},
+      config: { session: { store: "/tmp/custom-sessions.json" } },
       provider: "anthropic",
       model: "claude-opus-4-6",
       timeoutMs: 300_000,
@@ -78,6 +83,13 @@ beforeEach(() => {
   (enqueueFollowupRun as ReturnType<typeof vi.fn>).mockReturnValue(true);
   // Default: followup run built successfully
   (buildFollowupRunForSession as ReturnType<typeof vi.fn>).mockResolvedValue(makeFollowupRun());
+  (resolveStorePath as ReturnType<typeof vi.fn>).mockReturnValue("/tmp/custom-sessions.json");
+  (loadSessionStore as ReturnType<typeof vi.fn>).mockReturnValue({
+    [SESSION_KEY]: {
+      sessionId: "session-abc",
+      sessionFile: "/tmp/session-abc.jsonl",
+    },
+  });
 });
 
 describe("createRuntimeFollowup", () => {
@@ -169,6 +181,37 @@ describe("createRuntimeFollowup", () => {
     // Should register fresh runner and kick again
     expect(rememberFollowupDrainCallback).toHaveBeenCalled();
     expect(kickFollowupDrainIfIdle).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes session metadata into cold followup runner", async () => {
+    (getExistingFollowupQueue as ReturnType<typeof vi.fn>).mockReturnValue({ draining: false });
+    const sessionStore = {
+      [SESSION_KEY]: {
+        sessionId: "session-abc",
+        sessionFile: "/tmp/session-abc.jsonl",
+      },
+    };
+    (loadSessionStore as ReturnType<typeof vi.fn>).mockReturnValue(sessionStore);
+
+    const followup = createRuntimeFollowup();
+    const result = await followup.enqueueFollowupTurn({
+      sessionKey: SESSION_KEY,
+      prompt: "hello",
+    });
+
+    expect(result).toBe(true);
+    expect(resolveStorePath).toHaveBeenCalledWith("/tmp/custom-sessions.json", {
+      agentId: "main",
+    });
+    expect(createFollowupRunner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: sessionStore[SESSION_KEY],
+        sessionStore,
+        sessionKey: SESSION_KEY,
+        storePath: "/tmp/custom-sessions.json",
+        defaultModel: "claude-opus-4-6",
+      }),
+    );
   });
 
   it("catches errors and returns false", async () => {
