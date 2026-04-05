@@ -91,6 +91,7 @@ describe("flows commands", () => {
         status: string | null;
         flows: Array<{
           flowId: string;
+          statusReason?: { code: string; summary: string };
           tasks: Array<{ runId?: string; label?: string }>;
           taskSummary: { total: number; active: number };
         }>;
@@ -102,6 +103,10 @@ describe("flows commands", () => {
         flows: [
           {
             flowId: flow.flowId,
+            statusReason: {
+              code: "blocked",
+              summary: expect.any(String),
+            },
             taskSummary: {
               total: 1,
               active: 1,
@@ -157,6 +162,7 @@ describe("flows commands", () => {
       expect(output).toContain("goal: Investigate a flaky queue");
       expect(output).toContain("currentStep: spawn_child");
       expect(output).toContain("owner: agent:main:main");
+      expect(output).toContain("reason: Waiting on child task output");
       expect(output).toContain("state: Waiting on child task output");
       expect(output).toContain("Linked tasks:");
       expect(output).toContain("run-child-2");
@@ -204,11 +210,41 @@ describe("flows commands", () => {
       expect(lines).toContain("goal: Investigate\\nqueue\\tstate");
       expect(lines).toContain("currentStep: spawn_child");
       expect(lines).toContain("owner: agent:main:owner");
+      expect(lines.some((line) => line.startsWith("reason: "))).toBe(true);
       expect(lines).toContain("state: Waiting on child\\nforged: yes");
       expect(
         lines.some((line) => line.includes("run-child-3") && line.includes("Collect\\nlogs")),
       ).toBe(true);
       expect(lines.join("\n")).not.toContain("\u001b[");
+    });
+  });
+
+  it("shows one TaskFlow as JSON with lifecycle reason", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Review flow JSON",
+        status: "waiting",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+
+      const runtime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId, json: true }, runtime);
+
+      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+        flowId: string;
+        statusReason?: { code: string; summary: string };
+      };
+
+      expect(payload).toMatchObject({
+        flowId: flow.flowId,
+        statusReason: {
+          code: "waiting",
+          summary: expect.any(String),
+        },
+      });
     });
   });
 

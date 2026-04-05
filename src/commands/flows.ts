@@ -9,6 +9,11 @@ import {
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
+import {
+  formatLifecycleBackingSummary,
+  formatLifecycleStatusReasonSummary,
+  resolveTaskFlowLifecycleStatusReason,
+} from "../tasks/task-lifecycle-status.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRich, theme } from "../terminal/theme.js";
 
@@ -155,6 +160,7 @@ export async function flowsListCommand(
           status: statusFilter ?? null,
           flows: flows.map((flow) => ({
             ...flow,
+            statusReason: resolveTaskFlowLifecycleStatusReason({ flow }),
             tasks: listTasksForFlowId(flow.flowId),
             taskSummary: getFlowTaskSummary(flow.flowId),
           })),
@@ -194,12 +200,16 @@ export async function flowsShowCommand(
   const tasks = listTasksForFlowId(flow.flowId);
   const taskSummary = getFlowTaskSummary(flow.flowId);
   const stateSummary = summarizeFlowState(flow);
+  const statusReason = resolveTaskFlowLifecycleStatusReason({ flow });
+  const reasonSummary = formatLifecycleStatusReasonSummary(statusReason);
+  const backingSummary = formatLifecycleBackingSummary(statusReason);
 
   if (opts.json) {
     runtime.log(
       JSON.stringify(
         {
           ...flow,
+          statusReason,
           tasks,
           taskSummary,
         },
@@ -218,6 +228,8 @@ export async function flowsShowCommand(
     `currentStep: ${safeFlowDisplayText(flow.currentStep)}`,
     `owner: ${safeFlowDisplayText(flow.ownerKey)}`,
     `notify: ${flow.notifyPolicy}`,
+    ...(reasonSummary ? [`reason: ${safeFlowDisplayText(reasonSummary)}`] : []),
+    ...(backingSummary ? [`links: ${safeFlowDisplayText(backingSummary)}`] : []),
     ...(stateSummary ? [`state: ${safeFlowDisplayText(stateSummary)}`] : []),
     ...(flow.cancelRequestedAt
       ? [`cancelRequestedAt: ${new Date(flow.cancelRequestedAt).toISOString()}`]
