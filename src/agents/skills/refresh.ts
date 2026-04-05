@@ -52,9 +52,6 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.cache([\\/]|$)/,
 ];
 
-type WatchPathStats = {
-  isDirectory?: () => boolean;
-};
 function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): string[] {
   const paths: string[] = [];
   if (workspaceDir.trim()) {
