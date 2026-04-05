@@ -173,9 +173,11 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 
 `apiKey`, `modelId`, and `voiceId` are all required — the provider will not report itself
 as configured if any of them is missing. `baseUrl` defaults to `https://api.inworld.ai`.
+`apiKey` can also be supplied via the `INWORLD_API_KEY` environment variable.
 
 **V1 scope**: non-streaming synthesis only. Telephony/talk paths, voice discovery, and
-streaming are not supported in V1. Only `voiceId` can be overridden via model directives.
+streaming are not supported in V1. Use `inworld_voice` / `inworldvoice` to override the
+voice for a single reply via model directives.
 
 ### MiniMax primary
 
@@ -333,8 +335,8 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `minimax`, or `microsoft`; requires `allowProvider: true`)
-- `voice` (OpenAI voice) or `voiceId` (ElevenLabs / MiniMax)
+- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `inworld`, `minimax`, or `microsoft`; requires `allowProvider: true`)
+- `voice` (OpenAI voice) or `voiceId` (ElevenLabs / MiniMax) or `inworld_voice` / `inworldvoice` (Inworld)
 - `model` (OpenAI TTS model, ElevenLabs model id, or MiniMax model)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `vol` / `volume` (MiniMax volume, 0-10)

@@ -77,8 +77,6 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   warnings?: string[];
 } {
   switch (ctx.key) {
-    case "voiceid":
-    case "voice_id":
     case "inworld_voice":
     case "inworldvoice":
       if (!ctx.policy.allowVoice) {

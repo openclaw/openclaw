@@ -94,7 +94,7 @@ describe("buildInworldSpeechProvider", () => {
       allowSeed: false,
     };
 
-    it("handles voiceid key", () => {
+    it("does not handle generic voiceid key (let earlier providers claim it)", () => {
       const result = provider.parseDirectiveToken!({
         key: "voiceid",
         value: "Michael",
@@ -102,11 +102,10 @@ describe("buildInworldSpeechProvider", () => {
         providerConfig: BASE_CONFIG,
         currentOverrides: undefined,
       });
-      expect(result.handled).toBe(true);
-      expect(result.overrides?.voiceId).toBe("Michael");
+      expect(result.handled).toBe(false);
     });
 
-    it("handles voice_id key", () => {
+    it("does not handle generic voice_id key (let earlier providers claim it)", () => {
       const result = provider.parseDirectiveToken!({
         key: "voice_id",
         value: "Michael",
@@ -114,7 +113,7 @@ describe("buildInworldSpeechProvider", () => {
         providerConfig: BASE_CONFIG,
         currentOverrides: undefined,
       });
-      expect(result.handled).toBe(true);
+      expect(result.handled).toBe(false);
     });
 
     it("handles inworld_voice key", () => {
@@ -126,11 +125,24 @@ describe("buildInworldSpeechProvider", () => {
         currentOverrides: undefined,
       });
       expect(result.handled).toBe(true);
+      expect(result.overrides?.voiceId).toBe("Michael");
+    });
+
+    it("handles inworldvoice key", () => {
+      const result = provider.parseDirectiveToken!({
+        key: "inworldvoice",
+        value: "Michael",
+        policy,
+        providerConfig: BASE_CONFIG,
+        currentOverrides: undefined,
+      });
+      expect(result.handled).toBe(true);
+      expect(result.overrides?.voiceId).toBe("Michael");
     });
 
     it("returns handled:true but no overrides when allowVoice is false", () => {
       const result = provider.parseDirectiveToken!({
-        key: "voiceid",
+        key: "inworld_voice",
         value: "Michael",
         policy: { ...policy, allowVoice: false },
         providerConfig: BASE_CONFIG,

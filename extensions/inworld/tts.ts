@@ -2,14 +2,6 @@ export const DEFAULT_INWORLD_BASE_URL = "https://api.inworld.ai";
 
 export const INWORLD_TTS_MODELS = ["inworld-tts-1.5-max", "inworld-tts-1.5-mini"] as const;
 
-function normalizeInworldBaseUrl(baseUrl?: string): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return DEFAULT_INWORLD_BASE_URL;
-  }
-  return trimmed.replace(/\/+$/, "");
-}
-
 export async function inworldTTS(params: {
   text: string;
   apiKey: string;
@@ -24,7 +16,7 @@ export async function inworldTTS(params: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${normalizeInworldBaseUrl(baseUrl)}/tts/v1/voice`, {
+    const response = await fetch(`${baseUrl}/tts/v1/voice`, {
       method: "POST",
       headers: {
         Authorization: `Basic ${apiKey}`,
