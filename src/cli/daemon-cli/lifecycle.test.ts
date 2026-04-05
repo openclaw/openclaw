@@ -52,6 +52,10 @@ const probeGateway = vi.fn<
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
 const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
+const triggerOpenClawRestart = vi.fn(() => ({
+  ok: true as const,
+  method: "schtasks" as const,
+}));
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
@@ -77,6 +81,10 @@ vi.mock("../../gateway/probe.js", () => ({
 
 vi.mock("../../config/commands.js", () => ({
   isRestartEnabled: (config?: { commands?: unknown }) => isRestartEnabled(config),
+}));
+
+vi.mock("../../infra/restart.js", () => ({
+  triggerOpenClawRestart: () => triggerOpenClawRestart(),
 }));
 
 vi.mock("../../daemon/service.js", () => ({
@@ -159,6 +167,7 @@ describe("runDaemonRestart health checks", () => {
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
     recoverInstalledLaunchAgent.mockReset();
+    triggerOpenClawRestart.mockReset();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -198,6 +207,10 @@ describe("runDaemonRestart health checks", () => {
       configSnapshot: { commands: { restart: true } },
     });
     isRestartEnabled.mockReturnValue(true);
+    triggerOpenClawRestart.mockReturnValue({
+      ok: true,
+      method: "schtasks",
+    });
     signalVerifiedGatewayPidSync.mockImplementation(() => {});
     formatGatewayPidList.mockImplementation((pids) => pids.join(", "));
   });
@@ -327,6 +340,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("signals a single unmanaged gateway process on restart", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart({ runPostRestartCheck: true });
 
@@ -339,6 +353,21 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+    platformSpy.mockRestore();
+  });
+
+  it("uses the Windows scheduled-task restart path for unmanaged gateway restart", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+    mockUnmanagedRestart({ runPostRestartCheck: true });
+
+    await runDaemonRestart({ json: true });
+
+    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGTERM");
+    expect(triggerOpenClawRestart).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyListener).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+    platformSpy.mockRestore();
   });
 
   it("prefers unmanaged restart over launchd repair when a gateway listener is present", async () => {

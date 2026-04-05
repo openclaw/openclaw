@@ -139,6 +139,15 @@ function resolveBrowserFetchOperatorHint(url: string): string {
     : "If this is a sandboxed session, ensure the sandbox browser is running.";
 }
 
+function normalizeBrowserOperationPath(url: string): string {
+  try {
+    const parsed = isAbsoluteHttp(url) ? new URL(url) : new URL(url, "http://localhost");
+    return parsed.pathname || "/";
+  } catch {
+    return url;
+  }
+}
+
 function normalizeErrorMessage(err: unknown): string {
   if (err instanceof Error && err.message.trim().length > 0) {
     return err.message.trim();
@@ -163,6 +172,29 @@ async function discardResponseBody(res: Response): Promise<void> {
 
 function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const msg = normalizeErrorMessage(err);
+  const path = normalizeBrowserOperationPath(url);
+  const msgLower = msg.toLowerCase();
+  const looksLikeTimeout =
+    msgLower.includes("timed out") ||
+    msgLower.includes("timeout") ||
+    msgLower.includes("aborted") ||
+    msgLower.includes("abort");
+  if (looksLikeTimeout) {
+    if (path === "/start") {
+      return new Error(
+        appendBrowserToolModelHint(
+          "Browser startup timed out. The browser may still be launching; retry after a short delay or check browser status.",
+        ),
+      );
+    }
+    if (path === "/") {
+      return new Error(
+        appendBrowserToolModelHint(
+          "Browser status timed out while probing browser readiness. Retry after a short delay.",
+        ),
+      );
+    }
+  }
   const suffix = `${resolveBrowserFetchOperatorHint(url)} ${BROWSER_TOOL_MODEL_HINT}`;
   const normalized = msg.endsWith(".") ? msg : `${msg}.`;
   return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);
@@ -172,6 +204,7 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   const operatorHint = resolveBrowserFetchOperatorHint(url);
   const msg = String(err);
   const msgLower = msg.toLowerCase();
+  const path = normalizeBrowserOperationPath(url);
   const looksLikeTimeout =
     msgLower.includes("timed out") ||
     msgLower.includes("timeout") ||
@@ -179,6 +212,20 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     msgLower.includes("abort") ||
     msgLower.includes("aborterror");
   if (looksLikeTimeout) {
+    if (path === "/start") {
+      return new Error(
+        appendBrowserToolModelHint(
+          `Browser startup timed out after ${timeoutMs}ms. The browser may still be launching. ${operatorHint}`,
+        ),
+      );
+    }
+    if (path === "/") {
+      return new Error(
+        appendBrowserToolModelHint(
+          `Browser status timed out after ${timeoutMs}ms while probing readiness. ${operatorHint}`,
+        ),
+      );
+    }
     return new Error(
       appendBrowserToolModelHint(
         `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint}`,

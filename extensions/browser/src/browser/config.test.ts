@@ -56,8 +56,8 @@ describe("browser config", () => {
     expect(user?.userDataDir).toBeUndefined();
     // chrome-relay is no longer auto-created
     expect(resolveProfile(resolved, "chrome-relay")).toBe(null);
-    expect(resolved.remoteCdpTimeoutMs).toBe(1500);
-    expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
+    expect(resolved.remoteCdpTimeoutMs).toBe(5000);
+    expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(10_000);
   });
 
   it("derives default ports from OPENCLAW_GATEWAY_PORT when unset", () => {

@@ -2,9 +2,17 @@ import crypto from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../agents/pi-embedded.js";
+import { ensureSessionHeader } from "../agents/pi-embedded-helpers.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  buildClawRunnerExtraSystemPrompt,
+  buildClawRunnerPrompt,
+  buildClawVerifierExtraSystemPrompt,
+  buildClawVerifierPrompt,
+} from "./prompts.js";
 import type {
   ClawArtifactEntry,
   ClawAuditEntry,
@@ -22,6 +30,8 @@ import type {
 } from "../shared/claw-types.js";
 import {
   createManagedTaskFlow,
+  failFlow,
+  finishFlow,
   getTaskFlowById,
   resumeFlow,
   setFlowWaiting,
@@ -37,12 +47,24 @@ const MISSION_AUDIT_FILENAME = "AUDIT_LOG.jsonl";
 
 type ClawMissionStateRecord = Omit<ClawMissionDetail, "requiresAttention"> & {
   version: 1;
+  runnerSessionId: string | null;
+  runnerSessionFile: string | null;
+  recoveryTargetStatus: Extract<ClawMissionStatus, "running" | "verifying"> | null;
+  recentEvidence: string[];
+  consecutiveFailureCount: number;
+  consecutiveNoProgressCount: number;
+  consecutiveVerifierRejectCount: number;
+  lastFailureSummary: string | null;
+  lastVerifierRejectionSignature: string | null;
+  runCycleCount: number;
+  verifyCycleCount: number;
 };
 
 type ClawServiceDeps = {
   now?: () => Date;
   resolveWorkspaceDir?: () => string;
   loadConfig?: () => OpenClawConfig;
+  runEmbeddedPiAgent?: typeof runEmbeddedPiAgent;
 };
 
 const TERMINAL_MISSION_STATUSES = new Set<ClawMissionStatus>([
@@ -65,6 +87,11 @@ const PAUSABLE_MISSION_STATUSES = new Set<ClawMissionStatus>([
   "verifying",
   "blocked",
 ]);
+
+const CLAW_MAX_ACTIVE_MISSIONS = 1;
+const CLAW_RUNNER_MAX_FAILURES = 3;
+const CLAW_RUNNER_MAX_NO_PROGRESS = 3;
+const CLAW_VERIFIER_MAX_REJECTIONS = 2;
 
 function hasBlockingPreflight(checks: readonly ClawPreflightCheck[]): boolean {
   return checks.some(
@@ -105,6 +132,137 @@ function resolveQueuedCurrentStep(control: ClawControlState): string {
     return "Queued until autonomy is re-enabled.";
   }
   return "Queued for execution.";
+}
+
+function buildCycleRunId(kind: "runner" | "verifier", missionId: string): string {
+  return `claw-${kind}-${missionId}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function joinPayloadText(result: EmbeddedPiRunResult): string {
+  const text = (result.payloads ?? [])
+    .map((payload) => payload.text?.trim())
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+  return text.trim();
+}
+
+function normalizeEvidence(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function extractJsonObject(text: string): Record<string, unknown> | null {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidates = [fenced?.[1], trimmed]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start < 0 || end <= start) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed.slice(start, end + 1)) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+type ClawRunnerDecision = {
+  outcome: "continue" | "verify" | "blocked" | "failed";
+  summary: string;
+  currentStep: string;
+  nextStep?: string | null;
+  progress: boolean;
+  blockerSummary?: string | null;
+  blockerDetail?: string | null;
+  evidence: string[];
+};
+
+type ClawVerifierDecision = {
+  outcome: "done" | "reject" | "blocked";
+  summary: string;
+  nextStep?: string | null;
+  unmetCriteria: string[];
+  blockerSummary?: string | null;
+  evidence: string[];
+};
+
+function parseRunnerDecision(text: string): ClawRunnerDecision {
+  const parsed = extractJsonObject(text);
+  if (!parsed) {
+    throw new Error("Runner did not return a valid JSON object.");
+  }
+  const outcome = parsed.outcome;
+  if (
+    outcome !== "continue" &&
+    outcome !== "verify" &&
+    outcome !== "blocked" &&
+    outcome !== "failed"
+  ) {
+    throw new Error(`Runner returned an unsupported outcome: ${String(outcome)}`);
+  }
+  const summary = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
+  const currentStep =
+    typeof parsed.currentStep === "string" ? parsed.currentStep.trim() : summary || "";
+  if (!summary || !currentStep) {
+    throw new Error("Runner response must include summary and currentStep.");
+  }
+  return {
+    outcome,
+    summary,
+    currentStep,
+    nextStep: typeof parsed.nextStep === "string" ? parsed.nextStep.trim() : null,
+    progress: parsed.progress === false ? false : true,
+    blockerSummary:
+      typeof parsed.blockerSummary === "string" ? parsed.blockerSummary.trim() : null,
+    blockerDetail: typeof parsed.blockerDetail === "string" ? parsed.blockerDetail.trim() : null,
+    evidence: normalizeEvidence(parsed.evidence),
+  };
+}
+
+function parseVerifierDecision(text: string): ClawVerifierDecision {
+  const parsed = extractJsonObject(text);
+  if (!parsed) {
+    throw new Error("Verifier did not return a valid JSON object.");
+  }
+  const outcome = parsed.outcome;
+  if (outcome !== "done" && outcome !== "reject" && outcome !== "blocked") {
+    throw new Error(`Verifier returned an unsupported outcome: ${String(outcome)}`);
+  }
+  const summary = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
+  if (!summary) {
+    throw new Error("Verifier response must include summary.");
+  }
+  return {
+    outcome,
+    summary,
+    nextStep: typeof parsed.nextStep === "string" ? parsed.nextStep.trim() : null,
+    unmetCriteria: normalizeEvidence(parsed.unmetCriteria),
+    blockerSummary:
+      typeof parsed.blockerSummary === "string" ? parsed.blockerSummary.trim() : null,
+    evidence: normalizeEvidence(parsed.evidence),
+  };
 }
 
 function isActionableDecisionForMission(
@@ -351,9 +509,9 @@ function buildPreflightDecision(nowIso: string, summary: string): ClawPendingDec
   };
 }
 
-function buildDefaultControlState(nowIso: string): ClawControlState {
+function buildDefaultControlState(nowIso: string, autonomyEnabled: boolean): ClawControlState {
   return {
-    autonomyEnabled: true,
+    autonomyEnabled,
     pauseAll: false,
     stopAllNowRequestedAt: null,
     updatedAt: nowIso,
@@ -606,6 +764,29 @@ function assertMissionStateRecord(raw: unknown): ClawMissionStateRecord {
     logsDir: typeof state.logsDir === "string" ? state.logsDir : "",
     auditLogPath: typeof state.auditLogPath === "string" ? state.auditLogPath : "",
     auditCount: typeof state.auditCount === "number" ? state.auditCount : 0,
+    runnerSessionId: typeof state.runnerSessionId === "string" ? state.runnerSessionId : null,
+    runnerSessionFile: typeof state.runnerSessionFile === "string" ? state.runnerSessionFile : null,
+    recoveryTargetStatus:
+      state.recoveryTargetStatus === "running" || state.recoveryTargetStatus === "verifying"
+        ? state.recoveryTargetStatus
+        : null,
+    recentEvidence: Array.isArray(state.recentEvidence) ? normalizeEvidence(state.recentEvidence) : [],
+    consecutiveFailureCount:
+      typeof state.consecutiveFailureCount === "number" ? state.consecutiveFailureCount : 0,
+    consecutiveNoProgressCount:
+      typeof state.consecutiveNoProgressCount === "number" ? state.consecutiveNoProgressCount : 0,
+    consecutiveVerifierRejectCount:
+      typeof state.consecutiveVerifierRejectCount === "number"
+        ? state.consecutiveVerifierRejectCount
+        : 0,
+    lastFailureSummary:
+      typeof state.lastFailureSummary === "string" ? state.lastFailureSummary : null,
+    lastVerifierRejectionSignature:
+      typeof state.lastVerifierRejectionSignature === "string"
+        ? state.lastVerifierRejectionSignature
+        : null,
+    runCycleCount: typeof state.runCycleCount === "number" ? state.runCycleCount : 0,
+    verifyCycleCount: typeof state.verifyCycleCount === "number" ? state.verifyCycleCount : 0,
   } as ClawMissionStateRecord;
 }
 
@@ -651,6 +832,23 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
   const now = deps.now ?? (() => new Date());
   const resolveWorkspaceDir = deps.resolveWorkspaceDir ?? defaultResolveWorkspaceDir;
   const loadClawConfig = deps.loadConfig ?? loadConfig;
+  const runMissionAgent = deps.runEmbeddedPiAgent ?? runEmbeddedPiAgent;
+
+  function resolveClawExecutionConfig(): {
+    autonomyDefault: boolean;
+    maxActiveMissions: number;
+  } {
+    const cfg = loadClawConfig();
+    return {
+      autonomyDefault: cfg.claw?.autonomyDefault !== false,
+      maxActiveMissions:
+        typeof cfg.claw?.maxActiveMissions === "number" &&
+        Number.isFinite(cfg.claw.maxActiveMissions) &&
+        cfg.claw.maxActiveMissions > 0
+          ? Math.floor(cfg.claw.maxActiveMissions)
+          : CLAW_MAX_ACTIVE_MISSIONS,
+    };
+  }
 
   function resolveMissionsRoot(workspaceDir = resolveWorkspaceDir()) {
     return path.join(workspaceDir, MISSIONS_DIRNAME);
@@ -680,7 +878,10 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     if (existing) {
       return existing;
     }
-    const next = buildDefaultControlState(isoNow(now));
+    const next = buildDefaultControlState(
+      isoNow(now),
+      resolveClawExecutionConfig().autonomyDefault,
+    );
     await writeJsonFile(controlPath, next);
     return next;
   }
@@ -756,6 +957,29 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
         "utf-8",
       ),
     ]);
+  }
+
+  async function readMissionPromptFiles(
+    state: ClawMissionStateRecord,
+  ): Promise<Array<{ name: string; content: string }>> {
+    const names = [
+      "MISSION.md",
+      "PROJECT_SCOPE.md",
+      "PROJECT_PLAN.md",
+      "PROJECT_TASKS.md",
+      "PROJECT_STATUS.md",
+      "PROJECT_DONE_CRITERIA.md",
+      "PRECHECKS.md",
+      "BLOCKERS.md",
+      "DECISIONS.md",
+    ] as const;
+    const files = await Promise.all(
+      names.map(async (name) => ({
+        name,
+        content: await fs.readFile(path.join(state.missionDir, name), "utf-8"),
+      })),
+    );
+    return files;
   }
 
   async function recordAudit(
@@ -891,13 +1115,6 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
           blockedSummary: blockingSummary,
         });
         ensurePendingPreflightDecision(state, nowIso, blockingSummary);
-      } else if (shouldStartMissionImmediately(control)) {
-        moveMissionToRunning(state, "Mission execution started.");
-        await recordAudit(state, {
-          actor: "system",
-          type: "mission.started",
-          summary: "Mission execution runner started.",
-        });
       } else {
         const queuedStep = resolveQueuedCurrentStep(control);
         if (state.currentStep !== queuedStep) {
@@ -908,11 +1125,11 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       const waitKind = getFlowWaitKind(state);
       const pausedByGlobalControl = waitKind === "global_pause" || waitKind === "emergency_stop";
       if (pausedByGlobalControl && shouldStartMissionImmediately(control)) {
-        moveMissionToRunning(state, "Mission execution resumed after global control was cleared.");
+        moveMissionToQueued(state, "Queued after the global control was cleared.");
         await recordAudit(state, {
           actor: "system",
           type: "mission.resumed",
-          summary: "Mission resumed after the global control was cleared.",
+          summary: "Mission re-queued after the global control was cleared.",
         });
       }
     }
@@ -1139,6 +1356,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     params.state.blockedSummary = params.blockedSummary ?? null;
     params.state.flowRevision = result.flow.revision;
     params.state.flowStatus = result.flow.status as ClawManagedFlowStatus;
+    params.state.recoveryTargetStatus = null;
   }
 
   function moveMissionToQueued(state: ClawMissionStateRecord, currentStep: string): void {
@@ -1161,6 +1379,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     state.blockedSummary = null;
     state.flowRevision = result.flow.revision;
     state.flowStatus = result.flow.status as ClawManagedFlowStatus;
+    state.recoveryTargetStatus = null;
   }
 
   function moveMissionToRunning(state: ClawMissionStateRecord, currentStep: string): void {
@@ -1184,6 +1403,555 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     state.blockedSummary = null;
     state.flowRevision = result.flow.revision;
     state.flowStatus = result.flow.status as ClawManagedFlowStatus;
+    state.recoveryTargetStatus = null;
+  }
+
+  function moveMissionToVerifying(state: ClawMissionStateRecord, currentStep: string): void {
+    const flow = getFlowOrThrow(state);
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        status: "running",
+        currentStep,
+        stateJson: {
+          missionId: state.id,
+          missionStatus: "verifying",
+        },
+        waitJson: null,
+        blockedTaskId: null,
+        blockedSummary: null,
+      },
+    });
+    if (!result.applied) {
+      throw new Error(`Failed to move mission ${state.id} to verifying.`);
+    }
+    state.status = "verifying";
+    state.currentStep = currentStep;
+    state.blockedSummary = null;
+    state.flowRevision = result.flow.revision;
+    state.flowStatus = result.flow.status as ClawManagedFlowStatus;
+    state.recoveryTargetStatus = null;
+  }
+
+  function moveMissionToRecovering(
+    state: ClawMissionStateRecord,
+    targetStatus: Extract<ClawMissionStatus, "running" | "verifying">,
+    currentStep: string,
+  ): void {
+    const flow = getFlowOrThrow(state);
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        status: "running",
+        currentStep,
+        stateJson: {
+          missionId: state.id,
+          missionStatus: "recovering",
+          recoveryTargetStatus: targetStatus,
+        },
+        waitJson: null,
+        blockedTaskId: null,
+        blockedSummary: null,
+      },
+    });
+    if (!result.applied) {
+      throw new Error(`Failed to move mission ${state.id} to recovering.`);
+    }
+    state.status = "recovering";
+    state.currentStep = currentStep;
+    state.blockedSummary = null;
+    state.flowRevision = result.flow.revision;
+    state.flowStatus = result.flow.status as ClawManagedFlowStatus;
+    state.recoveryTargetStatus = targetStatus;
+  }
+
+  function syncActiveMissionFlow(state: ClawMissionStateRecord): void {
+    const flow = getFlowOrThrow(state);
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        status: "running",
+        currentStep: state.currentStep,
+        stateJson: {
+          missionId: state.id,
+          missionStatus: state.status,
+          recoveryTargetStatus: state.recoveryTargetStatus,
+        },
+        waitJson: null,
+        blockedTaskId: null,
+        blockedSummary: null,
+      },
+    });
+    if (!result.applied) {
+      throw new Error(`Failed to sync mission flow for ${state.id}.`);
+    }
+    state.flowRevision = result.flow.revision;
+    state.flowStatus = result.flow.status as ClawManagedFlowStatus;
+  }
+
+  function moveMissionToDone(state: ClawMissionStateRecord, currentStep: string): void {
+    const flow = getFlowOrThrow(state);
+    const endedAt = Date.now();
+    const result = finishFlow({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      currentStep,
+      stateJson: {
+        missionId: state.id,
+        missionStatus: "done",
+      },
+      endedAt,
+      updatedAt: endedAt,
+    });
+    if (!result.applied) {
+      throw new Error(`Failed to complete mission ${state.id}.`);
+    }
+    state.status = "done";
+    state.currentStep = currentStep;
+    state.endedAt = new Date(endedAt).toISOString();
+    state.flowRevision = result.flow.revision;
+    state.flowStatus = result.flow.status as ClawManagedFlowStatus;
+    state.blockedSummary = null;
+    state.recoveryTargetStatus = null;
+  }
+
+  function moveMissionToFailed(
+    state: ClawMissionStateRecord,
+    currentStep: string,
+    detail?: string | null,
+  ): void {
+    const flow = getFlowOrThrow(state);
+    const endedAt = Date.now();
+    const result = failFlow({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      currentStep,
+      stateJson: {
+        missionId: state.id,
+        missionStatus: "failed",
+        detail: detail ?? null,
+      },
+      blockedSummary: detail ?? undefined,
+      endedAt,
+      updatedAt: endedAt,
+    });
+    if (!result.applied) {
+      throw new Error(`Failed to fail mission ${state.id}.`);
+    }
+    state.status = "failed";
+    state.currentStep = currentStep;
+    state.endedAt = new Date(endedAt).toISOString();
+    state.flowRevision = result.flow.revision;
+    state.flowStatus = result.flow.status as ClawManagedFlowStatus;
+    state.blockedSummary = detail ?? null;
+    state.recoveryTargetStatus = null;
+  }
+
+  function ensureRunnerSession(state: ClawMissionStateRecord): {
+    sessionId: string;
+    sessionFile: string;
+  } {
+    if (!state.runnerSessionId) {
+      state.runnerSessionId = `claw-runner-${state.id}`;
+    }
+    if (!state.runnerSessionFile) {
+      state.runnerSessionFile = path.join(state.logsDir, "runner-session.jsonl");
+    }
+    return {
+      sessionId: state.runnerSessionId,
+      sessionFile: state.runnerSessionFile,
+    };
+  }
+
+  async function persistRuntimeState(state: ClawMissionStateRecord): Promise<void> {
+    state.updatedAt = isoNow(now);
+    await saveMissionState(state);
+    await writeDynamicMissionDocs(state);
+  }
+
+  async function executeRunnerCycle(state: ClawMissionStateRecord): Promise<void> {
+    const promptFiles = await readMissionPromptFiles(state);
+    const session = ensureRunnerSession(state);
+    await ensureSessionHeader({
+      sessionFile: session.sessionFile,
+      sessionId: session.sessionId,
+      cwd: state.workspaceDir,
+    });
+    const result = await runMissionAgent({
+      sessionId: session.sessionId,
+      sessionFile: session.sessionFile,
+      workspaceDir: state.workspaceDir,
+      config: loadClawConfig(),
+      trigger: "manual",
+      senderIsOwner: true,
+      prompt: buildClawRunnerPrompt({
+        missionId: state.id,
+        title: state.title,
+        goal: state.goal,
+        status: state.status,
+        currentStep: state.currentStep,
+        blockedSummary: state.blockedSummary,
+        recentEvidence: state.recentEvidence,
+        files: promptFiles,
+      }),
+      extraSystemPrompt: buildClawRunnerExtraSystemPrompt(),
+      runId: buildCycleRunId("runner", state.id),
+      timeoutMs: 120_000,
+      execOverrides: {
+        host: "gateway",
+        security: "full",
+        ask: "off",
+      },
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "full",
+      },
+    });
+    const runnerText = joinPayloadText(result);
+    const decision = parseRunnerDecision(runnerText);
+    state.runCycleCount += 1;
+    state.recentEvidence = decision.evidence.length > 0 ? decision.evidence : state.recentEvidence;
+    state.lastFailureSummary = null;
+    state.consecutiveFailureCount = 0;
+    state.currentStep = decision.currentStep;
+    await recordAudit(state, {
+      actor: "system",
+      type: "mission.runnerCycle",
+      summary: decision.summary,
+      detail: runnerText || null,
+    });
+
+    if (decision.progress) {
+      state.consecutiveNoProgressCount = 0;
+    } else {
+      state.consecutiveNoProgressCount += 1;
+    }
+
+    if (!decision.progress && state.consecutiveNoProgressCount >= CLAW_RUNNER_MAX_NO_PROGRESS) {
+      moveMissionToWaiting({
+        state,
+        status: "blocked",
+        currentStep: "Mission paused after repeated no-progress cycles.",
+        waitKind: "no_progress",
+        blockedSummary:
+          decision.nextStep?.trim() || "Mission made no progress across repeated runner cycles.",
+      });
+      await recordAudit(state, {
+        actor: "system",
+        type: "mission.blocked",
+        summary: "Mission blocked after repeated no-progress cycles.",
+      });
+      await persistRuntimeState(state);
+      return;
+    }
+
+    if (decision.outcome === "verify") {
+      moveMissionToVerifying(
+        state,
+        decision.nextStep?.trim() || "Run the required fresh-context verification pass.",
+      );
+      await recordAudit(state, {
+        actor: "system",
+        type: "mission.verifying",
+        summary: "Mission requested a fresh verification pass.",
+      });
+      await persistRuntimeState(state);
+      return;
+    }
+
+    if (decision.outcome === "blocked") {
+      moveMissionToWaiting({
+        state,
+        status: "blocked",
+        currentStep: decision.currentStep,
+        waitKind: "runtime_blocker",
+        note: decision.blockerDetail ?? null,
+        blockedSummary: decision.blockerSummary ?? decision.summary,
+      });
+      await recordAudit(state, {
+        actor: "system",
+        type: "mission.blocked",
+        summary: decision.blockerSummary ?? decision.summary,
+        detail: decision.blockerDetail ?? null,
+      });
+      await persistRuntimeState(state);
+      return;
+    }
+
+    if (decision.outcome === "failed") {
+      moveMissionToFailed(state, decision.currentStep, decision.summary);
+      await recordAudit(state, {
+        actor: "system",
+        type: "mission.failed",
+        summary: decision.summary,
+      });
+      await persistRuntimeState(state);
+      return;
+    }
+
+    state.currentStep = decision.nextStep?.trim() || decision.currentStep;
+    if (state.status === "recovering") {
+      moveMissionToRunning(state, state.currentStep);
+    } else {
+      syncActiveMissionFlow(state);
+    }
+    await persistRuntimeState(state);
+  }
+
+  async function executeVerifierCycle(state: ClawMissionStateRecord): Promise<void> {
+    const promptFiles = await readMissionPromptFiles(state);
+    const sessionId = `claw-verifier-${state.id}-${crypto.randomUUID().slice(0, 8)}`;
+    const sessionFile = path.join(
+      state.logsDir,
+      `verifier-${state.verifyCycleCount + 1}-${crypto.randomUUID().slice(0, 8)}.jsonl`,
+    );
+    await ensureSessionHeader({
+      sessionFile,
+      sessionId,
+      cwd: state.workspaceDir,
+    });
+    const result = await runMissionAgent({
+      sessionId,
+      sessionFile,
+      workspaceDir: state.workspaceDir,
+      config: loadClawConfig(),
+      trigger: "manual",
+      senderIsOwner: true,
+      prompt: buildClawVerifierPrompt({
+        missionId: state.id,
+        title: state.title,
+        goal: state.goal,
+        currentStep: state.currentStep,
+        recentEvidence: state.recentEvidence,
+        files: promptFiles,
+      }),
+      extraSystemPrompt: buildClawVerifierExtraSystemPrompt(),
+      runId: buildCycleRunId("verifier", state.id),
+      timeoutMs: 120_000,
+      execOverrides: {
+        host: "gateway",
+        security: "full",
+        ask: "off",
+      },
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "full",
+      },
+    });
+    const verifierText = joinPayloadText(result);
+    const decision = parseVerifierDecision(verifierText);
+    const rejectionSignature = decision.unmetCriteria.join("\n").trim() || decision.summary;
+    state.verifyCycleCount += 1;
+    state.recentEvidence = decision.evidence.length > 0 ? decision.evidence : state.recentEvidence;
+    await recordAudit(state, {
+      actor: "system",
+      type: "mission.verifierCycle",
+      summary: decision.summary,
+      detail: verifierText || null,
+    });
+
+    if (decision.outcome === "done") {
+      moveMissionToDone(state, "Mission completed and passed verification.");
+      state.consecutiveVerifierRejectCount = 0;
+      state.lastVerifierRejectionSignature = null;
+      await recordAudit(state, {
+        actor: "system",
+        type: "mission.done",
+        summary: "Mission passed the required verification step.",
+      });
+      await persistRuntimeState(state);
+      return;
+    }
+
+    if (decision.outcome === "blocked") {
+      moveMissionToWaiting({
+        state,
+        status: "blocked",
+        currentStep: "Verification is blocked pending operator action.",
+        waitKind: "verification_blocker",
+        blockedSummary: decision.blockerSummary ?? decision.summary,
+      });
+      await recordAudit(state, {
+        actor: "system",
+        type: "mission.blocked",
+        summary: decision.blockerSummary ?? decision.summary,
+      });
+      await persistRuntimeState(state);
+      return;
+    }
+
+    if (state.lastVerifierRejectionSignature === rejectionSignature) {
+      state.consecutiveVerifierRejectCount += 1;
+    } else {
+      state.consecutiveVerifierRejectCount = 1;
+      state.lastVerifierRejectionSignature = rejectionSignature;
+    }
+
+    if (state.consecutiveVerifierRejectCount >= CLAW_VERIFIER_MAX_REJECTIONS) {
+      moveMissionToWaiting({
+        state,
+        status: "blocked",
+        currentStep: "Verification repeatedly rejected the same unmet criteria.",
+        waitKind: "verification_rejected",
+        blockedSummary: decision.summary,
+      });
+      await recordAudit(state, {
+        actor: "system",
+        type: "mission.blocked",
+        summary: "Verification rejected the same unmet criteria repeatedly.",
+        detail: rejectionSignature,
+      });
+      await persistRuntimeState(state);
+      return;
+    }
+
+    moveMissionToRunning(
+      state,
+      decision.nextStep?.trim() || decision.summary || "Continue the mission after verifier rejection.",
+    );
+    await recordAudit(state, {
+      actor: "system",
+      type: "mission.verifierRejected",
+      summary: decision.summary,
+      detail: rejectionSignature,
+    });
+    await persistRuntimeState(state);
+  }
+
+  async function executeMissionCycle(state: ClawMissionStateRecord): Promise<void> {
+    try {
+      if (state.status === "verifying") {
+        await executeVerifierCycle(state);
+        return;
+      }
+      await executeRunnerCycle(state);
+    } catch (error) {
+      const summary = error instanceof Error ? error.message : String(error);
+      state.consecutiveFailureCount += 1;
+      state.lastFailureSummary = summary;
+      await recordAudit(state, {
+        actor: "system",
+        type: "mission.runnerError",
+        summary,
+      });
+      if (state.consecutiveFailureCount >= CLAW_RUNNER_MAX_FAILURES) {
+        moveMissionToFailed(state, "Mission failed after repeated runner errors.", summary);
+        await recordAudit(state, {
+          actor: "system",
+          type: "mission.failed",
+          summary: "Mission failed after repeated runner errors.",
+          detail: summary,
+        });
+      } else {
+        moveMissionToRunning(state, `Recover from runner error: ${summary}`);
+      }
+      await persistRuntimeState(state);
+    }
+  }
+
+  function selectActiveMission(
+    missions: readonly ClawMissionStateRecord[],
+  ): ClawMissionStateRecord | null {
+    const active = missions.filter((mission) =>
+      mission.status === "running" ||
+      mission.status === "recovering" ||
+      mission.status === "verifying",
+    );
+    if (active.length === 0) {
+      return null;
+    }
+    return active.toSorted((left, right) => left.updatedAt.localeCompare(right.updatedAt))[0] ?? null;
+  }
+
+  async function recoverInterruptedMissions(
+    workspaceDir = resolveWorkspaceDir(),
+  ): Promise<ClawMissionDetailSnapshot | null> {
+    let changedMissionId: string | null = null;
+    const missions = await loadAllMissionStates(workspaceDir);
+    for (const mission of missions) {
+      if (mission.status !== "running" && mission.status !== "verifying") {
+        continue;
+      }
+      moveMissionToRecovering(
+        mission,
+        mission.status === "verifying" ? "verifying" : "running",
+        "Recovering mission state after gateway restart.",
+      );
+      await recordAudit(mission, {
+        actor: "system",
+        type: "mission.recovering",
+        summary: "Mission moved into recovery after gateway startup.",
+      });
+      await persistRuntimeState(mission);
+      changedMissionId = mission.id;
+    }
+    if (!changedMissionId) {
+      return null;
+    }
+    return await getMissionSnapshot(changedMissionId, workspaceDir);
+  }
+
+  async function runNextMissionCycle(
+    workspaceDir = resolveWorkspaceDir(),
+  ): Promise<ClawMissionDetailSnapshot | null> {
+    const clawConfig = resolveClawExecutionConfig();
+    const control = await loadControlState(workspaceDir);
+    await reconcileMissionStates(workspaceDir, control);
+    if (!control.autonomyEnabled || control.pauseAll || control.stopAllNowRequestedAt) {
+      return null;
+    }
+
+    const missions = await loadAllMissionStates(workspaceDir);
+    let mission = selectActiveMission(missions);
+
+    if (!mission) {
+      const queued = missions.find((candidate) => candidate.status === "queued");
+      if (!queued) {
+        return null;
+      }
+      const activeCount = missions.filter((candidate) =>
+        candidate.status === "running" ||
+        candidate.status === "recovering" ||
+        candidate.status === "verifying",
+      ).length;
+      if (activeCount >= clawConfig.maxActiveMissions) {
+        return null;
+      }
+      moveMissionToRunning(queued, "Mission execution cycle started.");
+      await recordAudit(queued, {
+        actor: "system",
+        type: "mission.started",
+        summary: "Mission execution runner started.",
+      });
+      await persistRuntimeState(queued);
+      mission = queued;
+    }
+
+    if (!mission) {
+      return null;
+    }
+
+    if (mission.status === "recovering") {
+      if (mission.recoveryTargetStatus === "verifying") {
+        moveMissionToVerifying(mission, "Retrying verification after recovery.");
+      } else {
+        moveMissionToRunning(mission, "Mission execution resumed after recovery.");
+      }
+      await recordAudit(mission, {
+        actor: "system",
+        type: "mission.recovered",
+        summary: "Mission resumed after recovery.",
+      });
+      await persistRuntimeState(mission);
+    }
+
+    await executeMissionCycle(mission);
+    return await getMissionSnapshot(mission.id, workspaceDir);
   }
 
   async function createMission(params: {
@@ -1243,6 +2011,17 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       logsDir,
       auditLogPath,
       auditCount: 0,
+      runnerSessionId: null,
+      runnerSessionFile: null,
+      recoveryTargetStatus: null,
+      recentEvidence: [] as string[],
+      consecutiveFailureCount: 0,
+      consecutiveNoProgressCount: 0,
+      consecutiveVerifierRejectCount: 0,
+      lastFailureSummary: null,
+      lastVerifierRejectionSignature: null,
+      runCycleCount: 0,
+      verifyCycleCount: 0,
     };
 
     const flow = createManagedTaskFlow({
@@ -1302,16 +2081,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
         respondedAt: isoNow(now),
       };
       state.approvedAt = state.approvedAt ?? isoNow(now);
-      if (shouldStartMissionImmediately(control)) {
-        moveMissionToRunning(state, "Mission execution started.");
-        await recordAudit(state, {
-          actor: "system",
-          type: "mission.started",
-          summary: "Mission execution runner started.",
-        });
-      } else {
-        moveMissionToQueued(state, resolveQueuedCurrentStep(control));
-      }
+      moveMissionToQueued(state, resolveQueuedCurrentStep(control));
       await recordAudit(state, {
         actor: "operator",
         type: "decision.resolved",
@@ -1350,11 +2120,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     return await updateMission(missionId, async (state) => {
       const control = await loadControlState(state.workspaceDir);
       requireMissionStatus(state, ["paused", "blocked"], "resume");
-      if (shouldStartMissionImmediately(control)) {
-        moveMissionToRunning(state, "Mission execution resumed.");
-      } else {
-        moveMissionToQueued(state, resolveQueuedCurrentStep(control));
-      }
+      moveMissionToQueued(state, resolveQueuedCurrentStep(control));
       await recordAudit(state, {
         actor: "operator",
         type: "mission.resumed",
@@ -1432,16 +2198,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
           respondedAt: isoNow(now),
         };
         state.approvedAt = state.approvedAt ?? isoNow(now);
-        if (shouldStartMissionImmediately(control)) {
-          moveMissionToRunning(state, "Mission execution started.");
-          await recordAudit(state, {
-            actor: "system",
-            type: "mission.started",
-            summary: "Mission execution runner started.",
-          });
-        } else {
-          moveMissionToQueued(state, resolveQueuedCurrentStep(control));
-        }
+        moveMissionToQueued(state, resolveQueuedCurrentStep(control));
         await recordAudit(state, {
           actor: "operator",
           type: "decision.resolved",
@@ -1668,6 +2425,8 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     rerunPreflight,
     listArtifacts,
     getAudit,
+    recoverInterruptedMissions,
+    runNextMissionCycle,
     loadControlState,
     pauseAll,
     stopAllNow,

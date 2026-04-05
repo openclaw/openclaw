@@ -72,6 +72,17 @@ describe("infra runtime", () => {
       }
     });
 
+    it("avoids raw SIGUSR1 self-signals on Windows when no listener is registered", () => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const killSpy = vi.spyOn(process, "kill");
+      try {
+        expect(emitGatewayRestart()).toBe(true);
+        expect(killSpy).not.toHaveBeenCalledWith(process.pid, "SIGUSR1");
+      } finally {
+        platformSpy.mockRestore();
+      }
+    });
+
     it("coalesces duplicate scheduled restarts into a single pending timer", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};

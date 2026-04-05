@@ -62,7 +62,10 @@ export async function startBrowserBridgeServer(params: {
   port?: number;
   authToken?: string;
   authPassword?: string;
-  onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
+  onEnsureAttachTarget?: (
+    profile: ProfileContext["profile"],
+    signal?: AbortSignal,
+  ) => Promise<void>;
   resolveSandboxNoVncToken?: (token: string) => ResolvedNoVncObserver | null;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";

@@ -1,8 +1,15 @@
+import {
+  broadcastClawControl,
+  broadcastClawMissionSnapshot,
+} from "../../claw/gateway-events.js";
+import { ensureClawRuntimeStarted, wakeClawRuntime } from "../../claw/runtime.js";
 import { clawMissionService } from "../../claw/service.js";
 import type { ClawDecisionAction } from "../../shared/claw-types.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+
+ensureClawRuntimeStarted();
 
 function respondInvalidRequest(respond: RespondFn, message: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
@@ -96,68 +103,6 @@ function readDecisionAction(
   return null;
 }
 
-function broadcastInbox(context: GatewayRequestContext): void {
-  void clawMissionService
-    .buildDashboard()
-    .then((dashboard) => {
-      context.broadcast("claw.inbox.updated", { inbox: dashboard.inbox }, { dropIfSlow: true });
-    })
-    .catch(() => {
-      // Best-effort only.
-    });
-}
-
-function broadcastMissionSnapshot(
-  context: GatewayRequestContext,
-  params: {
-    previousStatus?: string | null;
-    snapshot: Awaited<ReturnType<typeof clawMissionService.getMissionSnapshot>>;
-    created?: boolean;
-    decisionResolved?: boolean;
-  },
-): void {
-  const mission = params.snapshot.mission;
-  if (!mission) {
-    return;
-  }
-  if (params.created) {
-    context.broadcast("claw.mission.created", { mission }, { dropIfSlow: true });
-    context.broadcast(
-      "claw.decision.requested",
-      {
-        missionId: mission.id,
-        decisions: mission.decisions.filter((decision) => decision.status === "pending"),
-      },
-      { dropIfSlow: true },
-    );
-  }
-  context.broadcast("claw.mission.updated", { mission }, { dropIfSlow: true });
-  if (params.previousStatus && params.previousStatus !== mission.status) {
-    context.broadcast(
-      "claw.mission.stateChanged",
-      {
-        missionId: mission.id,
-        previousStatus: params.previousStatus,
-        status: mission.status,
-      },
-      { dropIfSlow: true },
-    );
-  }
-  if (params.decisionResolved) {
-    context.broadcast(
-      "claw.decision.resolved",
-      { missionId: mission.id, decisions: mission.decisions },
-      { dropIfSlow: true },
-    );
-  }
-  context.broadcast(
-    "claw.audit.appended",
-    { missionId: mission.id, auditCount: mission.auditCount },
-    { dropIfSlow: true },
-  );
-  broadcastInbox(context);
-}
-
 export const clawHandlers: GatewayRequestHandlers = {
   "claw.missions.list": async ({ respond }) => {
     try {
@@ -191,7 +136,8 @@ export const clawHandlers: GatewayRequestHandlers = {
     try {
       const snapshot = await clawMissionService.createMission({ goal, title });
       respond(true, snapshot, undefined);
-      broadcastMissionSnapshot(context, { snapshot, created: true });
+      broadcastClawMissionSnapshot(context.broadcast, { snapshot, created: true });
+      wakeClawRuntime();
     } catch (error) {
       respondUnavailable(respond, error);
     }
@@ -210,7 +156,12 @@ export const clawHandlers: GatewayRequestHandlers = {
       const previousStatus = current.mission?.status ?? null;
       const snapshot = await clawMissionService.approveMissionStart(missionId);
       respond(true, snapshot, undefined);
-      broadcastMissionSnapshot(context, { previousStatus, snapshot, decisionResolved: true });
+      broadcastClawMissionSnapshot(context.broadcast, {
+        previousStatus,
+        snapshot,
+        decisionResolved: true,
+      });
+      wakeClawRuntime();
     } catch (error) {
       respondUnavailable(respond, error);
     }
@@ -230,7 +181,7 @@ export const clawHandlers: GatewayRequestHandlers = {
       const previousStatus = current.mission?.status ?? null;
       const snapshot = await clawMissionService.pauseMission(missionId, note);
       respond(true, snapshot, undefined);
-      broadcastMissionSnapshot(context, { previousStatus, snapshot });
+      broadcastClawMissionSnapshot(context.broadcast, { previousStatus, snapshot });
     } catch (error) {
       respondUnavailable(respond, error);
     }
@@ -249,7 +200,8 @@ export const clawHandlers: GatewayRequestHandlers = {
       const previousStatus = current.mission?.status ?? null;
       const snapshot = await clawMissionService.resumeMission(missionId);
       respond(true, snapshot, undefined);
-      broadcastMissionSnapshot(context, { previousStatus, snapshot });
+      broadcastClawMissionSnapshot(context.broadcast, { previousStatus, snapshot });
+      wakeClawRuntime();
     } catch (error) {
       respondUnavailable(respond, error);
     }
@@ -269,7 +221,11 @@ export const clawHandlers: GatewayRequestHandlers = {
       const previousStatus = current.mission?.status ?? null;
       const snapshot = await clawMissionService.cancelMission(missionId, note);
       respond(true, snapshot, undefined);
-      broadcastMissionSnapshot(context, { previousStatus, snapshot, decisionResolved: true });
+      broadcastClawMissionSnapshot(context.broadcast, {
+        previousStatus,
+        snapshot,
+        decisionResolved: true,
+      });
     } catch (error) {
       respondUnavailable(respond, error);
     }
@@ -302,7 +258,12 @@ export const clawHandlers: GatewayRequestHandlers = {
         note,
       });
       respond(true, snapshot, undefined);
-      broadcastMissionSnapshot(context, { previousStatus, snapshot, decisionResolved: true });
+      broadcastClawMissionSnapshot(context.broadcast, {
+        previousStatus,
+        snapshot,
+        decisionResolved: true,
+      });
+      wakeClawRuntime();
     } catch (error) {
       respondUnavailable(respond, error);
     }
@@ -319,7 +280,7 @@ export const clawHandlers: GatewayRequestHandlers = {
     try {
       const control = await clawMissionService.pauseAll(enabled ?? true);
       respond(true, { control }, undefined);
-      context.broadcast("claw.control.changed", { control }, { dropIfSlow: true });
+      broadcastClawControl(context.broadcast, control);
     } catch (error) {
       respondUnavailable(respond, error);
     }
@@ -332,7 +293,7 @@ export const clawHandlers: GatewayRequestHandlers = {
     try {
       const control = await clawMissionService.stopAllNow();
       respond(true, { control }, undefined);
-      context.broadcast("claw.control.changed", { control }, { dropIfSlow: true });
+      broadcastClawControl(context.broadcast, control);
     } catch (error) {
       respondUnavailable(respond, error);
     }
@@ -349,7 +310,8 @@ export const clawHandlers: GatewayRequestHandlers = {
     try {
       const control = await clawMissionService.setAutonomy(params.enabled);
       respond(true, { control }, undefined);
-      context.broadcast("claw.control.changed", { control }, { dropIfSlow: true });
+      broadcastClawControl(context.broadcast, control);
+      wakeClawRuntime();
     } catch (error) {
       respondUnavailable(respond, error);
     }
@@ -401,7 +363,8 @@ export const clawHandlers: GatewayRequestHandlers = {
       const previousStatus = current.mission?.status ?? null;
       const snapshot = await clawMissionService.rerunPreflight(missionId);
       respond(true, snapshot, undefined);
-      broadcastMissionSnapshot(context, { previousStatus, snapshot });
+      broadcastClawMissionSnapshot(context.broadcast, { previousStatus, snapshot });
+      wakeClawRuntime();
     } catch (error) {
       respondUnavailable(respond, error);
     }

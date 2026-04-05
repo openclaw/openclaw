@@ -296,6 +296,7 @@ export async function isChromeCdpReady(
 export async function launchOpenClawChrome(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
+  signal?: AbortSignal,
 ): Promise<RunningChrome> {
   if (!profile.cdpIsLoopback) {
     throw new Error(`Profile "${profile.name}" is remote; cannot launch local Chrome.`);
@@ -341,6 +342,24 @@ export async function launchOpenClawChrome(
 
   const startedAt = Date.now();
 
+  const killProcess = (child: ChildProcess | null | undefined) => {
+    if (!child) {
+      return;
+    }
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // ignore
+    }
+  };
+
+  const throwIfAborted = (child?: ChildProcess | null) => {
+    if (signal?.aborted) {
+      killProcess(child);
+      throw signal.reason instanceof Error ? signal.reason : new Error("browser startup aborted");
+    }
+  };
+
   const localStatePath = path.join(userDataDir, "Local State");
   const preferencesPath = path.join(userDataDir, "Default", "Preferences");
   const needsBootstrap = !exists(localStatePath) || !exists(preferencesPath);
@@ -351,6 +370,7 @@ export async function launchOpenClawChrome(
     const bootstrap = spawnOnce();
     const deadline = Date.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
     while (Date.now() < deadline) {
+      throwIfAborted(bootstrap);
       if (exists(localStatePath) && exists(preferencesPath)) {
         break;
       }
@@ -363,6 +383,7 @@ export async function launchOpenClawChrome(
     }
     const exitDeadline = Date.now() + CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS;
     while (Date.now() < exitDeadline) {
+      throwIfAborted(bootstrap);
       if (bootstrap.exitCode != null) {
         break;
       }
@@ -402,11 +423,14 @@ export async function launchOpenClawChrome(
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + CHROME_LAUNCH_READY_WINDOW_MS;
   while (Date.now() < readyDeadline) {
+    throwIfAborted(proc);
     if (await isChromeReachable(profile.cdpUrl)) {
       break;
     }
     await new Promise((r) => setTimeout(r, CHROME_LAUNCH_READY_POLL_MS));
   }
+
+  throwIfAborted(proc);
 
   if (!(await isChromeReachable(profile.cdpUrl))) {
     const stderrOutput = Buffer.concat(stderrChunks).toString("utf8").trim();
@@ -423,7 +447,7 @@ export async function launchOpenClawChrome(
       // ignore
     }
     throw new Error(
-      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".${sandboxHint}${stderrHint}`,
+      `Chrome startup timed out waiting for CDP HTTP readiness on port ${profile.cdpPort} for profile "${profile.name}". The browser may still be launching.${sandboxHint}${stderrHint}`,
     );
   }
 

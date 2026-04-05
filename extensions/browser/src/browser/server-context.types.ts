@@ -28,7 +28,7 @@ export type BrowserServerState = {
 };
 
 type BrowserProfileActions = {
-  ensureBrowserAvailable: () => Promise<void>;
+  ensureBrowserAvailable: (signal?: AbortSignal) => Promise<void>;
   ensureTabAvailable: (targetId?: string) => Promise<BrowserTab>;
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
   isReachable: (timeoutMs?: number) => Promise<boolean>;
@@ -69,6 +69,6 @@ export type ProfileStatus = {
 
 export type ContextOptions = {
   getState: () => BrowserServerState | null;
-  onEnsureAttachTarget?: (profile: ResolvedBrowserProfile) => Promise<void>;
+  onEnsureAttachTarget?: (profile: ResolvedBrowserProfile, signal?: AbortSignal) => Promise<void>;
   refreshConfigFromDisk?: boolean;
 };

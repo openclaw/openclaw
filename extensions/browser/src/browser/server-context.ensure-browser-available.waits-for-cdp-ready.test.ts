@@ -4,6 +4,10 @@ import {
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
 } from "./cdp-timeouts.js";
+import {
+  CDP_READY_AFTER_LAUNCH_POLL_MS,
+  CDP_READY_AFTER_LAUNCH_WINDOW_MS,
+} from "./server-context.constants.js";
 import * as chromeModule from "./chrome.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { makeBrowserServerState, mockLaunchedChrome } from "./server-context.test-harness.js";
@@ -38,7 +42,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
     mockLaunchedChrome(launchOpenClawChrome, 123);
 
     const promise = profile.ensureBrowserAvailable();
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(CDP_READY_AFTER_LAUNCH_POLL_MS + 50);
     await expect(promise).resolves.toBeUndefined();
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
@@ -53,8 +57,10 @@ describe("browser server-context ensureBrowserAvailable", () => {
     mockLaunchedChrome(launchOpenClawChrome, 321);
 
     const promise = profile.ensureBrowserAvailable();
-    const rejected = expect(promise).rejects.toThrow("not reachable after start");
-    await vi.advanceTimersByTimeAsync(8100);
+    const rejected = expect(promise).rejects.toThrow(
+      "Chrome startup timed out waiting for CDP websocket readiness",
+    );
+    await vi.advanceTimersByTimeAsync(CDP_READY_AFTER_LAUNCH_WINDOW_MS + 1000);
     await rejected;
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);

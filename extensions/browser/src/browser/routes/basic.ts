@@ -1,4 +1,8 @@
 import { getChromeMcpPid } from "../chrome-mcp.js";
+import {
+  PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
+  PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS,
+} from "../cdp-timeouts.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { toBrowserErrorResponse } from "../errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -75,8 +79,8 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
 
     try {
       const [cdpHttp, cdpReady] = await Promise.all([
-        profileCtx.isHttpReachable(300),
-        profileCtx.isReachable(600),
+        profileCtx.isHttpReachable(PROFILE_HTTP_REACHABILITY_TIMEOUT_MS),
+        profileCtx.isReachable(PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS),
       ]);
 
       const profileState = current.profiles.get(profileCtx.profile.name);
@@ -135,7 +139,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       res,
       ctx,
       run: async (profileCtx) => {
-        await profileCtx.ensureBrowserAvailable();
+        await profileCtx.ensureBrowserAvailable(req.signal);
         res.json({ ok: true, profile: profileCtx.profile.name });
       },
     });

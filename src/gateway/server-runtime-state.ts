@@ -24,6 +24,7 @@ import {
   type GatewayBroadcastFn,
   type GatewayBroadcastToConnIdsFn,
 } from "./server-broadcast.js";
+import { setGatewayBroadcastRuntime } from "./server-broadcast-runtime.js";
 import {
   type ChatRunEntry,
   createChatRunState,
@@ -136,6 +137,7 @@ export async function createGatewayRuntimeState(params: {
 
     const clients = new Set<GatewayWsClient>();
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+    setGatewayBroadcastRuntime(broadcast);
 
     const handleHooksRequest = createGatewayHooksRequestHandler({
       deps: params.deps,
