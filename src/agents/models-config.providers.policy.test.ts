@@ -38,4 +38,16 @@ describe("models-config.providers.policy", () => {
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     });
   });
+
+  it("does not treat generic transport APIs as provider plugin ids", () => {
+    const provider = {
+      api: "openai-completions" as const,
+      baseUrl: "https://example.invalid/v1",
+      apiKey: "EXAMPLE_KEY",
+      models: [],
+    };
+
+    expect(resolveProviderConfigApiKeyResolver("dashscope-vision", provider)).toBeUndefined();
+    expect(normalizeProviderSpecificConfig("dashscope-vision", provider)).toBe(provider);
+  });
 });
