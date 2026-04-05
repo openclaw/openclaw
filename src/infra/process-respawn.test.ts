@@ -72,6 +72,19 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("keeps OPENCLAW_NO_RESPAWN ahead of inherited supervisor hints", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.OPENCLAW_NO_RESPAWN = "1";
+    process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result).toEqual({ mode: "disabled" });
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("returns supervised when launchd hints are present on macOS (no kickstart)", () => {
     clearSupervisorHints();
     expectLaunchdSupervisedWithoutKickstart({ launchJobLabel: "ai.openclaw.gateway" });
