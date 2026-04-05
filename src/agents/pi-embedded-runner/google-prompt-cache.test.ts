@@ -1,14 +1,33 @@
 import crypto from "node:crypto";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
 
-function makeSessionManager(
-  entries: Array<{ type: string; customType: string; data: unknown }> = [],
-) {
+type SessionCustomEntry = {
+  type: "custom";
+  id: string;
+  parentId: string | null;
+  timestamp: string;
+  customType: string;
+  data: unknown;
+};
+
+function makeSessionManager(entries: SessionCustomEntry[] = []) {
+  let counter = 0;
   return {
     appendCustomEntry(customType: string, data: unknown) {
-      entries.push({ type: "custom", customType, data });
+      counter += 1;
+      const id = `entry-${counter}`;
+      entries.push({
+        type: "custom",
+        id,
+        parentId: null,
+        timestamp: new Date(counter * 1_000).toISOString(),
+        customType,
+        data,
+      });
+      return id;
     },
     getEntries() {
       return entries;
@@ -28,13 +47,14 @@ function makeGoogleModel(id = "gemini-3.1-pro-preview") {
     contextWindow: 128000,
     maxTokens: 8192,
     headers: { "X-Provider": "google" },
+    reasoning: true,
   } satisfies Model<"google-generative-ai">;
 }
 
 describe("google prompt cache", () => {
   it("creates cached content from the system prompt and strips that prompt from live requests", async () => {
     const now = 1_000_000;
-    const entries: Array<{ type: string; customType: string; data: unknown }> = [];
+    const entries: SessionCustomEntry[] = [];
     const sessionManager = makeSessionManager(entries);
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -45,7 +65,19 @@ describe("google prompt cache", () => {
         { status: 200, headers: { "content-type": "application/json" } },
       ),
     );
-    const innerStreamFn = vi.fn(() => "stream" as never);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const innerStreamFn = vi.fn(
+      (
+        model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        const payload: Record<string, unknown> = {};
+        void options?.onPayload?.(payload, model);
+        capturedPayload = payload;
+        return "stream" as never;
+      },
+    );
 
     const wrapped = await prepareGooglePromptCacheStreamFn(
       {
@@ -109,11 +141,11 @@ describe("google prompt cache", () => {
         systemPrompt: undefined,
         tools: expect.any(Array),
       }),
-      expect.objectContaining({
-        cachedContent: "cachedContents/system-cache-1",
-        temperature: 0.2,
-      }),
+      expect.objectContaining({ temperature: 0.2 }),
     );
+    expect(capturedPayload).toMatchObject({
+      cachedContent: "cachedContents/system-cache-1",
+    });
     expect(entries).toHaveLength(1);
     expect(entries[0]?.customType).toBe("openclaw.google-prompt-cache");
     expect((entries[0]?.data as { status?: string; cachedContent?: string })?.status).toBe("ready");
@@ -121,7 +153,7 @@ describe("google prompt cache", () => {
 
   it("reuses a persisted cache entry without creating a second cache", async () => {
     const now = 2_000_000;
-    const entries: Array<{ type: string; customType: string; data: unknown }> = [];
+    const entries: SessionCustomEntry[] = [];
     const sessionManager = makeSessionManager(entries);
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
@@ -151,7 +183,19 @@ describe("google prompt cache", () => {
     );
 
     fetchMock.mockClear();
-    const innerStreamFn = vi.fn(() => "second" as never);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const innerStreamFn = vi.fn(
+      (
+        model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        const payload: Record<string, unknown> = {};
+        void options?.onPayload?.(payload, model);
+        capturedPayload = payload;
+        return "second" as never;
+      },
+    );
     const wrapped = await prepareGooglePromptCacheStreamFn(
       {
         apiKey: "gemini-api-key",
@@ -179,8 +223,11 @@ describe("google prompt cache", () => {
     expect(innerStreamFn).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ systemPrompt: undefined }),
-      expect.objectContaining({ cachedContent: "cachedContents/system-cache-2" }),
+      expect.any(Object),
     );
+    expect(capturedPayload).toMatchObject({
+      cachedContent: "cachedContents/system-cache-2",
+    });
   });
 
   it("refreshes an about-to-expire cache entry instead of creating a new one", async () => {
@@ -190,6 +237,9 @@ describe("google prompt cache", () => {
     const sessionManager = makeSessionManager([
       {
         type: "custom",
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date(now - 5_000).toISOString(),
         customType: "openclaw.google-prompt-cache",
         data: {
           status: "ready",
@@ -214,7 +264,19 @@ describe("google prompt cache", () => {
         { status: 200, headers: { "content-type": "application/json" } },
       ),
     );
-    const innerStreamFn = vi.fn(() => "stream" as never);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const innerStreamFn = vi.fn(
+      (
+        model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        const payload: Record<string, unknown> = {};
+        void options?.onPayload?.(payload, model);
+        capturedPayload = payload;
+        return "stream" as never;
+      },
+    );
 
     const wrapped = await prepareGooglePromptCacheStreamFn(
       {
@@ -247,8 +309,11 @@ describe("google prompt cache", () => {
     expect(innerStreamFn).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ systemPrompt: undefined }),
-      expect.objectContaining({ cachedContent: "cachedContents/system-cache-3" }),
+      expect.any(Object),
     );
+    expect(capturedPayload).toMatchObject({
+      cachedContent: "cachedContents/system-cache-3",
+    });
   });
 
   it("stays out of the way when cachedContent is already configured explicitly", async () => {

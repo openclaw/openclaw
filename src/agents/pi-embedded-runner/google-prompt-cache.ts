@@ -10,6 +10,7 @@ import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "../transport-stream-shared.js";
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
 const GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS = 10 * 60_000;
@@ -382,8 +383,13 @@ export async function prepareGooglePromptCacheStreamFn(
 
   const inner = params.streamFn;
   return (model, context, options) =>
-    inner(model, buildManagedContextWithoutSystemPrompt(context), {
-      ...options,
-      cachedContent,
-    });
+    streamWithPayloadPatch(
+      inner,
+      model,
+      buildManagedContextWithoutSystemPrompt(context),
+      options,
+      (payload) => {
+        payload.cachedContent = cachedContent;
+      },
+    );
 }
