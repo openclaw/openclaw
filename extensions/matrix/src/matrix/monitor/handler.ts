@@ -25,7 +25,6 @@ import {
 } from "../poll-types.js";
 import type { LocationMessageEventContent, MatrixClient } from "../sdk.js";
 import {
-  editMessageMatrix,
   reactMatrixMessage,
   sendMessageMatrix,
   sendReadReceiptMatrix,
@@ -1282,7 +1281,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       });
       const draftStreamingEnabled = streaming === "partial";
       const draftReplyToId = replyToMode !== "off" && !threadTarget ? _messageId : undefined;
-      let currentDraftReplyToId = draftReplyToId;
       const draftStream = draftStreamingEnabled
         ? createMatrixDraftStream({
             roomId,
@@ -1308,9 +1306,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       let latestDraftFullText = "";
       const pendingDraftBoundaries: PendingDraftBoundary[] = [];
       const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
-      // Set after the first final payload consumes the draft event so
-      // subsequent finals go through normal delivery.
-      let draftConsumed = false;
 
       const getDisplayableDraftText = () => {
         const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
@@ -1377,152 +1372,28 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, _route.agentId),
           deliver: async (payload: ReplyPayload, info: { kind: string }) => {
             if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
-              const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-
               await draftStream.stop();
-
-              // After the first final payload consumes the draft, subsequent
-              // finals must go through normal delivery to avoid overwriting.
-              if (draftConsumed) {
-                await deliverMatrixReplies({
-                  cfg,
-                  replies: [payload],
-                  roomId,
-                  client,
-                  runtime,
-                  textLimit,
-                  replyToMode,
-                  threadId: threadTarget,
-                  accountId: _route.accountId,
-                  mediaLocalRoots,
-                  tableMode,
-                });
-                return;
-              }
-
-              // Read event id after stop() — flush may have created the
-              // initial message while draining pending text.
               const draftEventId = draftStream.eventId();
-
-              // If the payload carries a reply target that differs from the
-              // draft's, fall through to normal delivery — Matrix edits
-              // cannot change the reply relation on an existing event.
-              // Skip when replyToMode is "off" (replies stripped anyway)
-              // or when threadTarget is set (thread relations take
-              // precedence over replyToId in deliverMatrixReplies).
-              const payloadReplyToId = payload.replyToId?.trim() || undefined;
-              const payloadReplyMismatch =
-                replyToMode !== "off" &&
-                !threadTarget &&
-                payloadReplyToId !== currentDraftReplyToId;
-              const mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
-
-              if (
-                draftEventId &&
-                payload.text &&
-                !hasMedia &&
-                !payloadReplyMismatch &&
-                !mustDeliverFinalNormally
-              ) {
-                // Text-only: final edit of the draft message.  Skip if
-                // stop() already flushed identical text to avoid a
-                // redundant API call that wastes rate-limit budget.
-                if (payload.text !== draftStream.lastSentText()) {
-                  try {
-                    await editMessageMatrix(roomId, draftEventId, payload.text, {
-                      client,
-                      cfg,
-                      threadId: threadTarget,
-                      accountId: _route.accountId,
-                    });
-                  } catch {
-                    // Edit failed (rate limit, server error) — redact the
-                    // stale draft and fall back to normal delivery so the
-                    // user still gets the final answer.
-                    await client.redactEvent(roomId, draftEventId).catch(() => {});
-                    await deliverMatrixReplies({
-                      cfg,
-                      replies: [payload],
-                      roomId,
-                      client,
-                      runtime,
-                      textLimit,
-                      replyToMode,
-                      threadId: threadTarget,
-                      accountId: _route.accountId,
-                      mediaLocalRoots,
-                      tableMode,
-                    });
-                  }
-                }
-                draftConsumed = true;
-              } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
-                // Media payload: finalize draft text, send media separately.
-                let textEditOk = !mustDeliverFinalNormally;
-                if (textEditOk && payload.text && payload.text !== draftStream.lastSentText()) {
-                  textEditOk = await editMessageMatrix(roomId, draftEventId, payload.text, {
-                    client,
-                    cfg,
-                    threadId: threadTarget,
-                    accountId: _route.accountId,
-                  }).then(
-                    () => true,
-                    () => false,
-                  );
-                }
-                const reusesDraftAsFinalText = Boolean(payload.text?.trim()) && textEditOk;
-                // If the text edit failed, or there is no final text to reuse
-                // the preview, redact the stale draft and include text in media
-                // delivery so the final caption is not lost.
-                if (!reusesDraftAsFinalText) {
-                  await client.redactEvent(roomId, draftEventId).catch(() => {});
-                }
-                await deliverMatrixReplies({
-                  cfg,
-                  replies: [
-                    { ...payload, text: reusesDraftAsFinalText ? undefined : payload.text },
-                  ],
-                  roomId,
-                  client,
-                  runtime,
-                  textLimit,
-                  replyToMode,
-                  threadId: threadTarget,
-                  accountId: _route.accountId,
-                  mediaLocalRoots,
-                  tableMode,
-                });
-                draftConsumed = true;
-              } else {
-                // Redact stale draft when the final delivery will create a
-                // new message (reply-target mismatch, preview overflow, or no
-                // usable draft).
-                if (draftEventId && (payloadReplyMismatch || mustDeliverFinalNormally)) {
-                  await client.redactEvent(roomId, draftEventId).catch(() => {});
-                }
-                await deliverMatrixReplies({
-                  cfg,
-                  replies: [payload],
-                  roomId,
-                  client,
-                  runtime,
-                  textLimit,
-                  replyToMode,
-                  threadId: threadTarget,
-                  accountId: _route.accountId,
-                  mediaLocalRoots,
-                  tableMode,
-                });
+              await deliverMatrixReplies({
+                cfg,
+                replies: [payload],
+                roomId,
+                client,
+                runtime,
+                textLimit,
+                replyToMode,
+                threadId: threadTarget,
+                accountId: _route.accountId,
+                mediaLocalRoots,
+                tableMode,
+              });
+              if (draftEventId) {
+                await client.redactEvent(roomId, draftEventId).catch(() => {});
               }
 
-              // Only reset for intermediate blocks — after the final delivery
-              // the stream must stay stopped so late async callbacks cannot
-              // create ghost messages.
               if (info.kind === "block") {
-                draftConsumed = false;
                 advanceDraftBlockBoundary({ fallbackToLatestEnd: true });
                 draftStream.reset();
-                currentDraftReplyToId = replyToMode === "all" ? draftReplyToId : undefined;
                 updateDraftFromLatestFullText();
 
                 // Re-assert typing so the user still sees the indicator while

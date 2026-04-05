@@ -80,6 +80,10 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0]?.[1]).toMatchObject({
+      msgtype: "m.notice",
+    });
+    expect(sendMessageMock.mock.calls[0]?.[1]).not.toHaveProperty("m.mentions");
     expect(stream.eventId()).toBe("$evt1");
   });
 
@@ -102,6 +106,10 @@ describe("createMatrixDraftStream", () => {
 
     // First call = initial send, second call = edit (both go through sendMessage)
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageMock.mock.calls[1]?.[1]).toMatchObject({
+      msgtype: "m.notice",
+      "m.new_content": { msgtype: "m.notice" },
+    });
   });
 
   it("coalesces rapid updates within throttle window", async () => {
@@ -122,6 +130,11 @@ describe("createMatrixDraftStream", () => {
     expect(sendMessageMock.mock.calls[0][1]).toMatchObject({ body: "A" });
     // Edit uses "* <text>" prefix per Matrix m.replace spec.
     expect(sendMessageMock.mock.calls[1][1]).toMatchObject({ body: "* ABC" });
+    expect(sendMessageMock.mock.calls[0][1]).toMatchObject({ msgtype: "m.notice" });
+    expect(sendMessageMock.mock.calls[1][1]).toMatchObject({
+      msgtype: "m.notice",
+      "m.new_content": { msgtype: "m.notice" },
+    });
   });
 
   it("skips no-op updates", async () => {
@@ -296,7 +309,6 @@ describe("createMatrixDraftStream", () => {
 
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(stream.eventId()).toBeUndefined();
-    expect(stream.mustDeliverFinalNormally()).toBe(true);
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("preview exceeded single-event limit"),
     );
@@ -317,7 +329,6 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     expect(sendMessageMock).not.toHaveBeenCalled();
-    expect(stream.mustDeliverFinalNormally()).toBe(true);
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("preview exceeded single-event limit"),
     );

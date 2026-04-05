@@ -196,6 +196,7 @@ done:
 - `streaming: "partial"` creates one editable preview message for the current assistant block instead of sending multiple partial messages.
 - `blockStreaming: true` enables separate Matrix progress messages. With `streaming: "partial"`, Matrix keeps the live draft for the current block and preserves completed blocks as separate messages.
 - When `streaming: "partial"` and `blockStreaming` is off, Matrix only edits the live draft and sends the completed reply once that block or turn finishes.
+- Draft preview events use quiet Matrix notices, so notifications fire on completed blocks or the final completed reply instead of the first streamed token.
 - If the preview no longer fits in one Matrix event, OpenClaw stops preview streaming and falls back to normal final delivery.
 - Media replies still send attachments normally. If a stale preview can no longer be reused safely, OpenClaw redacts it before sending the final media reply.
 - Preview edits cost extra Matrix API calls. Leave streaming off if you want the most conservative rate-limit behavior.

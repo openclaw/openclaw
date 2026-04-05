@@ -110,6 +110,8 @@ export type MatrixMediaMsgType =
   | typeof MsgType.Video
   | typeof MsgType.File;
 
+export type MatrixTextMsgType = typeof MsgType.Text | typeof MsgType.Notice;
+
 export type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 export type MatrixFormattedContent = MessageEventContent & {

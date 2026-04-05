@@ -2,8 +2,10 @@ import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
 import type { CoreConfig } from "../types.js";
 import type { MatrixClient } from "./sdk.js";
 import { editMessageMatrix, prepareMatrixSingleText, sendSingleTextMessageMatrix } from "./send.js";
+import { MsgType } from "./send/types.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
+const DRAFT_PREVIEW_MSGTYPE = MsgType.Notice;
 
 export type MatrixDraftStream = {
   /** Update the draft with the latest accumulated text for the current block. */
@@ -18,8 +20,6 @@ export type MatrixDraftStream = {
   eventId: () => string | undefined;
   /** The last text successfully sent or edited. */
   lastSentText: () => string;
-  /** True when preview streaming must fall back to normal final delivery. */
-  mustDeliverFinalNormally: () => boolean;
 };
 
 export function createMatrixDraftStream(params: {
@@ -38,8 +38,6 @@ export function createMatrixDraftStream(params: {
   let currentEventId: string | undefined;
   let lastSentText = "";
   let stopped = false;
-  let sendFailed = false;
-  let finalizeInPlaceBlocked = false;
   let replyToId = params.replyToId;
 
   const sendOrEdit = async (text: string): Promise<boolean> => {
@@ -49,19 +47,10 @@ export function createMatrixDraftStream(params: {
     }
     const preparedText = prepareMatrixSingleText(trimmed, { cfg, accountId });
     if (!preparedText.fitsInSingleEvent) {
-      finalizeInPlaceBlocked = true;
-      if (!currentEventId) {
-        sendFailed = true;
-      }
       stopped = true;
       log?.(
         `draft-stream: preview exceeded single-event limit (${preparedText.convertedText.length} > ${preparedText.singleEventLimit})`,
       );
-      return false;
-    }
-    // If the initial send failed, stop trying for this block.  The deliver
-    // callback will fall back to deliverMatrixReplies.
-    if (sendFailed) {
       return false;
     }
     if (preparedText.trimmedText === lastSentText) {
@@ -75,6 +64,8 @@ export function createMatrixDraftStream(params: {
           replyToId,
           threadId,
           accountId,
+          msgtype: DRAFT_PREVIEW_MSGTYPE,
+          includeMentions: false,
         });
         currentEventId = result.messageId;
         lastSentText = preparedText.trimmedText;
@@ -85,25 +76,14 @@ export function createMatrixDraftStream(params: {
           cfg,
           threadId,
           accountId,
+          msgtype: DRAFT_PREVIEW_MSGTYPE,
+          includeMentions: false,
         });
         lastSentText = preparedText.trimmedText;
       }
       return true;
     } catch (err) {
       log?.(`draft-stream: send/edit failed: ${String(err)}`);
-      const isPreviewLimitError =
-        err instanceof Error && err.message.startsWith("Matrix single-message text exceeds limit");
-      if (isPreviewLimitError) {
-        // Once the preview no longer fits in one editable event, preserve the
-        // current preview as-is and fall back to normal final delivery.
-        finalizeInPlaceBlocked = true;
-      }
-      if (!currentEventId) {
-        // First send failed — give up for this block so the deliver callback
-        // falls through to normal delivery.
-        sendFailed = true;
-      }
-      // Signal failure so the loop stops retrying.
       stopped = true;
       return false;
     }
@@ -131,8 +111,6 @@ export function createMatrixDraftStream(params: {
     currentEventId = undefined;
     lastSentText = "";
     stopped = false;
-    sendFailed = false;
-    finalizeInPlaceBlocked = false;
     loop.resetPending();
     loop.resetThrottleWindow();
   };
@@ -149,6 +127,5 @@ export function createMatrixDraftStream(params: {
     reset,
     eventId: () => currentEventId,
     lastSentText: () => lastSentText,
-    mustDeliverFinalNormally: () => sendFailed || finalizeInPlaceBlocked,
   };
 }
