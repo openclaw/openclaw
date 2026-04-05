@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/Google: recognize Gemma model ids in native Google forward-compat resolution, keep the requested provider when cloning fallback templates, and force Gemma reasoning off so Gemma 4 routes stop failing through the Google catalog fallback. (#61507) Thanks @eyjohn.
 - Providers/Anthropic: skip `service_tier` injection for OAuth-authenticated stream wrapper requests so Claude OAuth requests stop failing with HTTP 401. (#60356) thanks @openperf.
 - Agents/exec: preserve explicit `host=node` routing under elevated defaults when `tools.exec.host=auto`, and fail loud on invalid elevated cross-host overrides. (#61739) Thanks @obviyus.
 - Agents/history: suppress commentary-only visible-text leaks in streaming and chat history views, and keep sanitized SSE history sequence numbers monotonic after transcript-only refreshes. (#61829) Thanks @100yenadmin.
