@@ -892,7 +892,7 @@ type ToolsMessageItem = {
 };
 
 function sortToolsMessageItems(items: ToolsMessageItem[]): ToolsMessageItem[] {
-  return items.toSorted((a, b) => a.name.localeCompare(b.name));
+  return [...items].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function formatCompactToolEntry(tool: ToolsMessageItem): string {
