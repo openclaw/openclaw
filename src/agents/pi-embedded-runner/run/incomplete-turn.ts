@@ -49,6 +49,31 @@ const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "make it so",
   "yes do it",
   "yep do it",
+  "تمام",
+  "حسنا",
+  "حسنًا",
+  "امض قدما",
+  "نفذها",
+  "mach es",
+  "leg los",
+  "los geht s",
+  "weiter",
+  "やって",
+  "進めて",
+  "そのまま進めて",
+  "allez y",
+  "vas y",
+  "fais le",
+  "continue",
+  "hazlo",
+  "adelante",
+  "sigue",
+  "faz isso",
+  "vai em frente",
+  "pode fazer",
+  "해줘",
+  "진행해",
+  "계속해",
 ]);
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
@@ -113,9 +138,10 @@ function shouldApplyPlanningOnlyRetryGuard(params: {
 
 function normalizeAckPrompt(text: string): string {
   return text
+    .normalize("NFKC")
     .trim()
     .toLowerCase()
-    .replace(/[`"'.,!?]+/g, " ")
+    .replace(/[\p{P}\p{S}]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

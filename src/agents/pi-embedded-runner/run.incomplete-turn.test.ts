@@ -109,6 +109,16 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(isLikelyExecutionAckPrompt("Can you do it?")).toBe(false);
   });
 
+  it("detects short execution approvals across requested locales", () => {
+    expect(isLikelyExecutionAckPrompt("نفذها")).toBe(true);
+    expect(isLikelyExecutionAckPrompt("mach es")).toBe(true);
+    expect(isLikelyExecutionAckPrompt("進めて")).toBe(true);
+    expect(isLikelyExecutionAckPrompt("fais-le")).toBe(true);
+    expect(isLikelyExecutionAckPrompt("adelante")).toBe(true);
+    expect(isLikelyExecutionAckPrompt("vai em frente")).toBe(true);
+    expect(isLikelyExecutionAckPrompt("진행해")).toBe(true);
+  });
+
   it("adds an ack-turn fast-path instruction for GPT action turns", () => {
     const instruction = resolveAckExecutionFastPathInstruction({
       provider: "openai",
