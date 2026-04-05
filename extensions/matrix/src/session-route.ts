@@ -9,6 +9,10 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
+import {
+  resolveMatrixSessionAccountId,
+  resolveMatrixStoredRoomId,
+} from "./matrix/session-store-metadata.js";
 import { resolveMatrixDirectUserId, resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 
 function resolveMatrixDmSessionScope(
@@ -20,22 +24,6 @@ function resolveMatrixDmSessionScope(
       accountId: params.accountId,
     }).dm?.sessionScope ?? "per-user"
   );
-}
-
-function resolveMatrixRoomTargetId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const target = resolveMatrixTargetIdentity(value);
-  return target?.kind === "room" && target.id.startsWith("!") ? target.id : undefined;
-}
-
-function resolveMatrixSessionAccountId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? normalizeAccountId(trimmed) : undefined;
 }
 
 function resolveMatrixCurrentDmRoomId(params: {
@@ -76,9 +64,11 @@ function resolveMatrixCurrentDmRoomId(params: {
     if (!currentUserId || currentUserId !== params.targetUserId) {
       return undefined;
     }
-    return resolveMatrixRoomTargetId(
-      existing.deliveryContext?.to ?? existing.lastTo ?? existing.origin?.to,
-    );
+    return resolveMatrixStoredRoomId({
+      deliveryTo: existing.deliveryContext?.to,
+      lastTo: existing.lastTo,
+      originTo: existing.origin?.to,
+    });
   } catch {
     return undefined;
   }

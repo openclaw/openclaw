@@ -31,6 +31,11 @@ import {
   sendReadReceiptMatrix,
   sendTypingMatrix,
 } from "../send.js";
+import {
+  resolveMatrixSessionAccountId,
+  resolveMatrixStoredRoomId,
+  trimMaybeString,
+} from "../session-store-metadata.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { resolveMatrixAllowListMatch } from "./allowlist.js";
@@ -170,14 +175,6 @@ function resolveMatrixInboundBodyText(params: {
   });
 }
 
-function trimMaybeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function rememberTrackedRoom(set: Set<string>, roomId: string): void {
   set.add(roomId);
   if (set.size > MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES) {
@@ -186,14 +183,6 @@ function rememberTrackedRoom(set: Set<string>, roomId: string): void {
       set.delete(oldest);
     }
   }
-}
-
-function extractMatrixRoomIdFromTarget(value: unknown): string | undefined {
-  const trimmed = trimMaybeString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.startsWith("room:") ? trimMaybeString(trimmed.slice("room:".length)) : undefined;
 }
 
 function resolveMatrixSharedDmContextNotice(params: {
@@ -239,17 +228,18 @@ function resolveMatrixSharedDmContextNotice(params: {
     }
 
     const priorAccountId =
-      trimMaybeString(existing.deliveryContext?.accountId) ??
-      trimMaybeString(existing.lastAccountId) ??
-      trimMaybeString(existing.origin?.accountId);
+      resolveMatrixSessionAccountId(
+        existing.deliveryContext?.accountId ?? existing.lastAccountId ?? existing.origin?.accountId,
+      ) ?? undefined;
     if (priorAccountId && priorAccountId !== params.accountId) {
       return null;
     }
 
-    const priorRoomId =
-      extractMatrixRoomIdFromTarget(existing.deliveryContext?.to) ??
-      extractMatrixRoomIdFromTarget(existing.lastTo) ??
-      extractMatrixRoomIdFromTarget(existing.origin?.to);
+    const priorRoomId = resolveMatrixStoredRoomId({
+      deliveryTo: existing.deliveryContext?.to,
+      lastTo: existing.lastTo,
+      originTo: existing.origin?.to,
+    });
     if (!priorRoomId || priorRoomId === params.roomId) {
       return null;
     }
