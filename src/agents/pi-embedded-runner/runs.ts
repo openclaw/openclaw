@@ -1,14 +1,27 @@
 import {
+  abortActiveReplyRuns,
+  abortReplyRunBySessionId,
+  getActiveReplyRunCount,
+  isReplyRunActiveForSessionId,
+  isReplyRunStreamingForSessionId,
+  listActiveReplyRunSessionIds,
+  queueReplyRunMessage,
+  resolveActiveReplyRunSessionId,
+  waitForReplyRunEndBySessionId,
+} from "../../auto-reply/reply/reply-operation.js";
+import {
   diagnosticLogger as diag,
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
-type EmbeddedPiQueueHandle = {
+export type EmbeddedPiQueueHandle = {
+  kind?: "embedded";
   queueMessage: (text: string) => Promise<void>;
   isStreaming: () => boolean;
   isCompacting: () => boolean;
+  cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: () => void;
 };
 
@@ -75,6 +88,11 @@ function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void
 export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
+    const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text);
+    if (queuedReplyRunMessage) {
+      logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+      return true;
+    }
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
     return false;
   }
@@ -109,6 +127,9 @@ export function abortEmbeddedPiRun(
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
     if (!handle) {
+      if (abortReplyRunBySessionId(sessionId)) {
+        return true;
+      }
       diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
       return false;
     }
@@ -137,7 +158,7 @@ export function abortEmbeddedPiRun(
         diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
       }
     }
-    return aborted;
+    return abortActiveReplyRuns({ mode }) || aborted;
   }
 
   if (mode === "all") {
@@ -151,14 +172,14 @@ export function abortEmbeddedPiRun(
         diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
       }
     }
-    return aborted;
+    return abortActiveReplyRuns({ mode }) || aborted;
   }
 
   return false;
 }
 
 export function isEmbeddedPiRunActive(sessionId: string): boolean {
-  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId);
+  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId);
   if (active) {
     diag.debug(`run active check: sessionId=${sessionId} active=true`);
   }
@@ -168,7 +189,7 @@ export function isEmbeddedPiRunActive(sessionId: string): boolean {
 export function isEmbeddedPiRunStreaming(sessionId: string): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
-    return false;
+    return isReplyRunStreamingForSessionId(sessionId);
   }
   return handle.isStreaming();
 }
@@ -178,11 +199,20 @@ export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | 
   if (!normalizedSessionKey) {
     return undefined;
   }
-  return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
+  return (
+    resolveActiveReplyRunSessionId(normalizedSessionKey) ??
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
+  );
 }
 
 export function getActiveEmbeddedRunCount(): number {
-  return ACTIVE_EMBEDDED_RUNS.size;
+  let activeCount = ACTIVE_EMBEDDED_RUNS.size;
+  for (const sessionId of listActiveReplyRunSessionIds()) {
+    if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+      activeCount += 1;
+    }
+  }
+  return Math.max(activeCount, getActiveReplyRunCount());
 }
 
 export function getActiveEmbeddedRunSnapshot(
@@ -243,13 +273,13 @@ export async function waitForActiveEmbeddedRuns(
 
   const startedAt = Date.now();
   while (true) {
-    if (ACTIVE_EMBEDDED_RUNS.size === 0) {
+    if (getActiveEmbeddedRunCount() === 0) {
       return { drained: true };
     }
     const elapsedMs = Date.now() - startedAt;
     if (elapsedMs >= maxWaitMs) {
       diag.warn(
-        `wait for active embedded runs timed out: activeRuns=${ACTIVE_EMBEDDED_RUNS.size} timeoutMs=${maxWaitMs}`,
+        `wait for active embedded runs timed out: activeRuns=${getActiveEmbeddedRunCount()} timeoutMs=${maxWaitMs}`,
       );
       return { drained: false };
     }
@@ -258,8 +288,11 @@ export async function waitForActiveEmbeddedRuns(
 }
 
 export function waitForEmbeddedPiRunEnd(sessionId: string, timeoutMs = 15_000): Promise<boolean> {
-  if (!sessionId || !ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+  if (!sessionId) {
     return Promise.resolve(true);
+  }
+  if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+    return waitForReplyRunEndBySessionId(sessionId, timeoutMs);
   }
   diag.debug(`waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutMs}`);
   return new Promise((resolve) => {
@@ -434,5 +467,3 @@ export const __testing = {
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.clear();
   },
 };
-
-export type { EmbeddedPiQueueHandle };

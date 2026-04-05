@@ -749,10 +749,7 @@ export async function runMemoryFlushIfNeeded(params: {
       if (updatedEntry) {
         activeSessionEntry = updatedEntry;
         params.followupRun.run.sessionId = updatedEntry.sessionId;
-        params.replyOperation.moveSession(
-          updatedEntry.sessionId,
-          params.followupRun.run.sessionKey,
-        );
+        params.replyOperation.updateSessionId(updatedEntry.sessionId);
         if (updatedEntry.sessionFile) {
           params.followupRun.run.sessionFile = updatedEntry.sessionFile;
         }
@@ -783,10 +780,7 @@ export async function runMemoryFlushIfNeeded(params: {
         if (updatedEntry) {
           activeSessionEntry = updatedEntry;
           params.followupRun.run.sessionId = updatedEntry.sessionId;
-          params.replyOperation.moveSession(
-            updatedEntry.sessionId,
-            params.followupRun.run.sessionKey,
-          );
+          params.replyOperation.updateSessionId(updatedEntry.sessionId);
           if (updatedEntry.sessionFile) {
             params.followupRun.run.sessionFile = updatedEntry.sessionFile;
           }

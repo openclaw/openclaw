@@ -136,9 +136,10 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    const replySessionKey = queued.run.sessionKey ?? sessionKey;
     const replyOperation = createReplyOperation({
       sessionId: queued.run.sessionId,
-      sessionKey: queued.run.sessionKey,
+      sessionKey: replySessionKey ?? "",
       resetTriggered: false,
       upstreamAbortSignal: opts?.abortSignal,
     });

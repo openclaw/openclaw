@@ -1372,19 +1372,25 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
       } = subscription;
 
-      const queueHandle: EmbeddedPiQueueHandle = {
+      const queueHandle: EmbeddedPiQueueHandle & {
+        kind: "embedded";
+        cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
+      } = {
+        kind: "embedded",
         queueMessage: async (text: string) => {
           await activeSession.steer(text);
         },
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),
+        cancel: () => {
+          abortRun();
+        },
         abort: abortRun,
       };
       if (params.replyOperation) {
-        params.replyOperation.attachEmbeddedHandle(queueHandle);
-      } else {
-        setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+        params.replyOperation.attachBackend(queueHandle);
       }
+      setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
@@ -1950,10 +1956,9 @@ export async function runEmbeddedAttempt(
           );
         }
         if (params.replyOperation) {
-          params.replyOperation.detachEmbeddedHandle(queueHandle);
-        } else {
-          clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+          params.replyOperation.detachBackend(queueHandle);
         }
+        clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 

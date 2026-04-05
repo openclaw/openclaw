@@ -738,6 +738,7 @@ export async function runAgentTurnWithFallback(params: {
                   messageProvider: params.followupRun.run.messageProvider,
                   agentAccountId: params.followupRun.run.agentAccountId,
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                  replyOperation: params.replyOperation,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,

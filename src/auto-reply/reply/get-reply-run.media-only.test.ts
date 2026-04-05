@@ -293,7 +293,7 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-    expect(call?.replyOperation?.resetTriggered).toBe(true);
+    expect(call?.resetTriggered).toBe(true);
     expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
   });
 

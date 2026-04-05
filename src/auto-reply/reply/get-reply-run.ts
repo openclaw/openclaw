@@ -38,7 +38,7 @@ import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings.js";
-import { createReplyOperation } from "./reply-operation.js";
+import { replyRunRegistry } from "./reply-operation.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -416,20 +416,15 @@ export async function runPreparedReply(
     inlineMode: perMessageQueueMode,
     inlineOptions: perMessageQueueOptions,
   });
-  const {
-    abortEmbeddedPiRun,
-    isEmbeddedPiRunActive,
-    isEmbeddedPiRunStreaming,
-    resolveActiveEmbeddedRunSessionId,
-    resolveEmbeddedSessionLane,
-    waitForEmbeddedPiRunEnd,
-  } = await loadPiEmbeddedRuntime();
+  const { abortEmbeddedPiRun, resolveEmbeddedSessionLane } = await loadPiEmbeddedRuntime();
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
   const laneSize = getQueueSize(sessionLaneKey);
   if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
     const cleared = clearCommandLane(sessionLaneKey);
-    const activeSessionId = sessionKey ? resolveActiveEmbeddedRunSessionId(sessionKey) : undefined;
-    const aborted = abortEmbeddedPiRun(activeSessionId ?? preparedSessionState.sessionId);
+    const activeSessionId = replyRunRegistry.resolveSessionId(sessionKey);
+    const aborted =
+      replyRunRegistry.abort(sessionKey) ||
+      abortEmbeddedPiRun(activeSessionId ?? preparedSessionState.sessionId);
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
   const authProfileId = await resolveSessionAuthProfileOverride({
@@ -444,14 +439,9 @@ export async function runPreparedReply(
   });
   const { runReplyAgent } = await loadAgentRunnerRuntime();
   const queueKey = sessionKey ?? sessionIdFinal;
-  // Do not yield after the final ownership check, or a competing same-session turn
-  // can steal the active handle before ReplyOperation registration.
   preparedSessionState = resolvePreparedSessionState();
-  const activeSessionId =
-    (sessionKey ? resolveActiveEmbeddedRunSessionId(sessionKey) : undefined) ??
-    preparedSessionState.sessionId;
-  const isActive = isEmbeddedPiRunActive(activeSessionId);
-  const isStreaming = isEmbeddedPiRunStreaming(activeSessionId);
+  const isActive = replyRunRegistry.isActive(sessionKey);
+  const isStreaming = replyRunRegistry.isStreaming(sessionKey);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
     resolvedQueue.mode === "followup" ||
@@ -464,22 +454,15 @@ export async function runPreparedReply(
     queueMode: resolvedQueue.mode,
   });
   if (isActive && activeRunQueueAction === "run-now") {
-    const ended = await waitForEmbeddedPiRunEnd(activeSessionId);
+    const ended = await replyRunRegistry.waitForIdle(sessionKey);
     preparedSessionState = resolvePreparedSessionState();
-    const activeSessionIdAfterWait =
-      (sessionKey ? resolveActiveEmbeddedRunSessionId(sessionKey) : undefined) ??
-      preparedSessionState.sessionId;
-    if (!ended && isEmbeddedPiRunActive(activeSessionIdAfterWait)) {
+    if (!ended && replyRunRegistry.isActive(sessionKey)) {
       typing.cleanup();
       return {
         text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
       };
     }
   }
-  const shouldCreateReplyOperation =
-    !(shouldSteer && isStreaming && !shouldFollowup) &&
-    activeRunQueueAction !== "drop" &&
-    activeRunQueueAction !== "enqueue-followup";
   const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
   const followupRun = {
     prompt: queuedBody,
@@ -553,14 +536,6 @@ export async function runPreparedReply(
     },
   };
 
-  const replyOperation = shouldCreateReplyOperation
-    ? createReplyOperation({
-        sessionId: preparedSessionState.sessionId,
-        sessionKey,
-        resetTriggered,
-        upstreamAbortSignal: opts?.abortSignal,
-      })
-    : undefined;
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     followupRun,
@@ -570,10 +545,7 @@ export async function runPreparedReply(
     shouldFollowup,
     isActive,
     isRunActive: () => {
-      const currentActiveSessionId = sessionKey
-        ? resolveActiveEmbeddedRunSessionId(sessionKey)
-        : undefined;
-      return isEmbeddedPiRunActive(currentActiveSessionId ?? followupRun.run.sessionId);
+      return replyRunRegistry.isActive(sessionKey);
     },
     isStreaming,
     opts,
@@ -592,6 +564,6 @@ export async function runPreparedReply(
     sessionCtx,
     shouldInjectGroupIntro,
     typingMode,
-    replyOperation,
+    resetTriggered,
   });
 }

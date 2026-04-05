@@ -1,4 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ReplyOperation } from "../../auto-reply/reply/reply-operation.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
@@ -33,6 +34,7 @@ export type RunCliAgentParams = {
   messageProvider?: string;
   agentAccountId?: string;
   abortSignal?: AbortSignal;
+  replyOperation?: ReplyOperation;
 };
 
 export type CliPreparedBackend = {

@@ -235,6 +235,18 @@ export async function executePreparedCliRun(
         input: stdinPayload,
         onStdout: streamingParser ? (chunk: string) => streamingParser.push(chunk) : undefined,
       });
+      const replyBackendHandle = params.replyOperation
+        ? {
+            kind: "cli" as const,
+            cancel: () => {
+              managedRun.cancel("manual-cancel");
+            },
+            isStreaming: () => false,
+          }
+        : undefined;
+      if (replyBackendHandle) {
+        params.replyOperation?.attachBackend(replyBackendHandle);
+      }
       const abortManagedRun = () => {
         managedRun.cancel("manual-cancel");
       };
@@ -246,6 +258,9 @@ export async function executePreparedCliRun(
       try {
         result = await managedRun.wait();
       } finally {
+        if (replyBackendHandle) {
+          params.replyOperation?.detachBackend(replyBackendHandle);
+        }
         params.abortSignal?.removeEventListener("abort", abortManagedRun);
       }
       streamingParser?.finish();

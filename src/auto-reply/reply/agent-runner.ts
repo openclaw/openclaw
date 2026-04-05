@@ -60,7 +60,12 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-operation.js";
+import {
+  createReplyOperation,
+  ReplyRunAlreadyActiveError,
+  replyRunRegistry,
+  type ReplyOperation,
+} from "./reply-operation.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -99,6 +104,7 @@ export async function runReplyAgent(params: {
   sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
+  resetTriggered?: boolean;
   replyOperation?: ReplyOperation;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
@@ -127,6 +133,7 @@ export async function runReplyAgent(params: {
     sessionCtx,
     shouldInjectGroupIntro,
     typingMode,
+    resetTriggered,
     replyOperation: providedReplyOperation,
   } = params;
 
@@ -207,7 +214,10 @@ export async function runReplyAgent(params: {
   };
 
   if (shouldSteer && isStreaming) {
-    const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
+    const steerSessionId =
+      (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
+      followupRun.run.sessionId;
+    const steered = queueEmbeddedPiMessage(steerSessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
       await touchActiveSessionEntry();
       typing.cleanup();
@@ -258,14 +268,26 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
-  const replyOperation =
-    providedReplyOperation ??
-    createReplyOperation({
-      sessionId: followupRun.run.sessionId,
-      sessionKey,
-      resetTriggered: false,
-      upstreamAbortSignal: opts?.abortSignal,
-    });
+  const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
+  let replyOperation: ReplyOperation;
+  try {
+    replyOperation =
+      providedReplyOperation ??
+      createReplyOperation({
+        sessionId: followupRun.run.sessionId,
+        sessionKey: replySessionKey ?? "",
+        resetTriggered: resetTriggered === true,
+        upstreamAbortSignal: opts?.abortSignal,
+      });
+  } catch (error) {
+    if (error instanceof ReplyRunAlreadyActiveError) {
+      typing.cleanup();
+      return {
+        text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+      };
+    }
+    throw error;
+  }
   let runFollowupTurn = queuedRunFollowupTurn;
 
   try {
