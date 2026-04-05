@@ -381,14 +381,27 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
-  it("rejects pasted Anthropic token setup", async () => {
+  it("writes pasted Anthropic setup-tokens and logs the legacy warning", async () => {
     const runtime = createRuntime();
+    mocks.clackText.mockResolvedValue(`sk-ant-oat01-${"a".repeat(80)}`);
 
-    await expect(modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime)).rejects.toThrow(
-      "Anthropic setup-token auth is no longer available for new setup in OpenClaw.",
+    await modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime);
+
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "anthropic:manual",
+      credential: {
+        type: "token",
+        provider: "anthropic",
+        token: `sk-ant-oat01-${"a".repeat(80)}`,
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Anthropic setup-token auth is a legacy/manual path in OpenClaw.",
     );
-
-    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Anthropic told OpenClaw users this path requires Extra Usage on the Claude account.",
+    );
   });
 
   it("runs token auth for any token-capable provider plugin", async () => {
@@ -434,9 +447,21 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
-  it("rejects setup-token for Anthropic even when explicitly requested", async () => {
+  it("runs setup-token for Anthropic when the provider exposes the method", async () => {
     const runtime = createRuntime();
-    const runTokenAuth = vi.fn();
+    const runTokenAuth = vi.fn().mockResolvedValue({
+      profiles: [
+        {
+          profileId: "anthropic:default",
+          credential: {
+            type: "token",
+            provider: "anthropic",
+            token: `sk-ant-oat01-${"b".repeat(80)}`,
+          },
+        },
+      ],
+      defaultModel: "anthropic/claude-sonnet-4-6",
+    });
     mocks.resolvePluginProviders.mockReturnValue([
       {
         id: "anthropic",
@@ -452,13 +477,17 @@ describe("modelsAuthLoginCommand", () => {
       },
     ]);
 
-    await expect(
-      modelsAuthSetupTokenCommand({ provider: "anthropic", yes: true }, runtime),
-    ).rejects.toThrow(
-      "Anthropic setup-token auth is no longer available for new setup in OpenClaw.",
-    );
+    await modelsAuthSetupTokenCommand({ provider: "anthropic", yes: true }, runtime);
 
-    expect(runTokenAuth).not.toHaveBeenCalled();
-    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(runTokenAuth).toHaveBeenCalledOnce();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "anthropic:default",
+      credential: {
+        type: "token",
+        provider: "anthropic",
+        token: `sk-ant-oat01-${"b".repeat(80)}`,
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
   });
 });
