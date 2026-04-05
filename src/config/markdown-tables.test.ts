@@ -15,7 +15,7 @@ vi.mock("../channels/plugins/registry.js", async () => {
   );
   return {
     ...actual,
-    listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
+    listChannelPlugins: () => listChannelPluginsMock(),
   };
 });
 
@@ -24,8 +24,7 @@ vi.mock("../plugins/runtime.js", async () => {
     await vi.importActual<typeof import("../plugins/runtime.js")>("../plugins/runtime.js");
   return {
     ...actual,
-    getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
-      getActivePluginChannelRegistryVersionMock(...args),
+    getActivePluginChannelRegistryVersion: () => getActivePluginChannelRegistryVersionMock(),
   };
 });
 
