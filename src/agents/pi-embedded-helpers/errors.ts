@@ -1235,6 +1235,7 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
     lower.includes("session does not exist") ||
     lower.includes("session expired") ||
     lower.includes("session invalid") ||
+    lower.includes("no conversation found") ||
     lower.includes("conversation not found") ||
     lower.includes("conversation does not exist") ||
     lower.includes("conversation expired") ||

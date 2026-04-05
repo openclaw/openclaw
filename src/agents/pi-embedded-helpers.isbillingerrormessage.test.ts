@@ -940,6 +940,13 @@ describe("classifyFailoverReason", () => {
       classifyFailoverReason("AWS Bedrock: Too many tokens per day. Please try again tomorrow."),
     ).toBe("rate_limit");
   });
+  it('classifies Claude CLI "No conversation found" errors as session_expired', () => {
+    expect(
+      classifyFailoverReason(
+        "No conversation found with session ID: dfee08ff-0000-4000-8000-000000000000",
+      ),
+    ).toBe("session_expired");
+  });
   it("classifies provider high-demand / service-unavailable messages as overloaded", () => {
     expect(
       classifyFailoverReason(
