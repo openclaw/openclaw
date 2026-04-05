@@ -49,6 +49,9 @@ function createConfig(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
         model: "openai/gpt-5.4",
       },
     },
+    browser: {
+      enabled: false,
+    },
     plugins: {
       entries: {
         browser: { enabled: true },
@@ -188,7 +191,12 @@ describe("createClawMissionService", () => {
     });
     const service = createClawMissionService({
       resolveWorkspaceDir: () => workspaceDir,
-      loadConfig: () => createConfig(),
+      loadConfig: () =>
+        createConfig({
+          browser: {
+            enabled: true,
+          },
+        }),
       inspectBrowserReadiness,
     });
 
@@ -201,6 +209,69 @@ describe("createClawMissionService", () => {
     expect(
       created.mission?.preflight.find((check) => check.id === "browser-runtime")?.detail,
     ).toContain("CDP handshake failed");
+    expect(inspectBrowserReadiness).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports healthy browser readiness for non-browser missions and reuses the cached probe", async () => {
+    const inspectBrowserReadiness = vi.fn().mockResolvedValue({
+      ready: true,
+      summary: "Browser control is healthy and ready.",
+    });
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () =>
+        createConfig({
+          browser: {
+            enabled: true,
+          },
+        }),
+      inspectBrowserReadiness,
+    });
+
+    const first = await service.createMission({
+      goal: "Refactor the mission audit writer to reduce duplication.",
+    });
+    const second = await service.createMission({
+      goal: "Clean up the queue runner and keep the same behavior.",
+    });
+
+    expect(first.mission?.status).toBe("awaiting_approval");
+    expect(first.mission?.preflight.find((check) => check.id === "browser-runtime")?.status).toBe(
+      "ready",
+    );
+    expect(second.mission?.status).toBe("awaiting_approval");
+    expect(
+      second.mission?.preflight.find((check) => check.id === "browser-runtime")?.summary,
+    ).toContain("Browser control is healthy and ready");
+    expect(inspectBrowserReadiness).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not block non-browser missions when browser readiness is degraded", async () => {
+    const inspectBrowserReadiness = vi.fn().mockResolvedValue({
+      ready: false,
+      summary: "Browser control did not report a ready state.",
+      detail: "Remote browser profile is restarting.",
+    });
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () =>
+        createConfig({
+          browser: {
+            enabled: true,
+          },
+        }),
+      inspectBrowserReadiness,
+    });
+
+    const created = await service.createMission({
+      goal: "Refactor the queue status formatter for clearer output.",
+    });
+
+    expect(created.mission?.status).toBe("awaiting_approval");
+    const browserCheck = created.mission?.preflight.find((check) => check.id === "browser-runtime");
+    expect(browserCheck?.status).toBe("info");
+    expect(browserCheck?.detail).toContain("Remote browser profile is restarting");
+    expect(created.mission?.blockedSummary).toBeNull();
     expect(inspectBrowserReadiness).toHaveBeenCalledTimes(1);
   });
 

@@ -109,6 +109,7 @@ const CLAW_MAX_ACTIVE_MISSIONS = 1;
 const CLAW_RUNNER_MAX_FAILURES = 3;
 const CLAW_RUNNER_MAX_NO_PROGRESS = 3;
 const CLAW_VERIFIER_MAX_REJECTIONS = 2;
+const BROWSER_READINESS_CACHE_MS = 15_000;
 const START_APPROVAL_TITLE = "Approve unattended continuation";
 const START_APPROVAL_SUMMARY =
   "Review the generated mission packet and approve once to let Claw continue autonomously. Packet planning and preflight may already have inspected or changed state.";
@@ -713,6 +714,13 @@ function normalizeAuthProviderKey(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function buildBrowserReadinessCacheKey(cfg: OpenClawConfig): string {
+  return JSON.stringify({
+    browser: cfg.browser ?? null,
+    browserPluginEnabled: isBrowserPluginEnabled(cfg),
+  });
+}
+
 function inspectExternalAuthReadiness(params: {
   cfg: OpenClawConfig;
   capabilityNeeds: ClawMissionCapabilityNeeds;
@@ -910,17 +918,21 @@ async function buildPreflightChecks(params: {
     isToolExposedForMission(params.cfg, "subagents");
   const browserPluginReady = isBrowserPluginEnabled(params.cfg);
   const gatewayRuntimeReady = getGatewayBroadcastRuntime() != null;
-  const browserReadiness =
-    capabilityNeeds.browserRequired && browserToolReady && browserPluginReady && browserConfigured
-      ? await params.inspectBrowserReadiness(params.cfg)
-      : null;
-  const browserReady =
-    browserToolReady &&
-    browserPluginReady &&
-    browserConfigured &&
-    (!capabilityNeeds.browserRequired || browserReadiness?.ready === true);
-  const browserSummary = capabilityNeeds.browserRequired
-    ? browserReady
+  const browserCapabilityConfigured = browserToolReady || browserPluginReady || browserConfigured;
+  const shouldInspectBrowserReadiness = browserToolReady && browserPluginReady && browserConfigured;
+  const browserReadiness = shouldInspectBrowserReadiness
+    ? await params.inspectBrowserReadiness(params.cfg)
+    : null;
+  const browserGlobalReady = shouldInspectBrowserReadiness && browserReadiness?.ready === true;
+  const browserReady = capabilityNeeds.browserRequired ? browserGlobalReady : true;
+  let browserStatus: ClawPreflightCheck["status"];
+  let browserSummary: string;
+  let browserDetail =
+    browserReadiness?.detail ??
+    (browserConfigDetail ? `Browser configuration error: ${browserConfigDetail}` : null);
+  if (capabilityNeeds.browserRequired) {
+    browserStatus = browserGlobalReady ? "ready" : "needs_setup";
+    browserSummary = browserGlobalReady
       ? (browserReadiness?.summary ?? "Browser automation is available for this mission.")
       : !browserPluginReady
         ? "This goal appears to require browser work, but the browser plugin is not enabled."
@@ -929,17 +941,36 @@ async function buildPreflightChecks(params: {
           : !browserConfigured
             ? "This goal appears to require browser work, but browser control is disabled or invalid in config."
             : (browserReadiness?.summary ??
-              "This goal appears to require browser work, but the browser runtime is not ready.")
-    : browserToolReady && browserPluginReady && browserConfigured
-      ? "Browser automation is configured and can be used later if the mission needs it."
-      : "Browser automation is optional for this mission.";
-  const browserDetail =
-    browserReadiness?.detail ??
-    (browserConfigDetail
-      ? `Browser configuration error: ${browserConfigDetail}`
-      : capabilityNeeds.browserRequired && !browserConfigured
-        ? "Enable a browser control profile in config before approving this mission."
-        : null);
+              "This goal appears to require browser work, but the browser runtime is not ready.");
+    if (!browserDetail && !browserConfigured) {
+      browserDetail = "Enable a browser control profile in config before approving this mission.";
+    }
+  } else if (browserGlobalReady) {
+    browserStatus = "ready";
+    browserSummary =
+      browserReadiness?.summary ??
+      "Browser automation is healthy and ready for browser-backed missions.";
+  } else if (!browserCapabilityConfigured) {
+    browserStatus = "info";
+    browserSummary = "Browser automation is optional for this mission.";
+  } else if (!browserToolReady) {
+    browserStatus = "info";
+    browserSummary =
+      "Browser automation is configured, but the browser tool is blocked by current tool policy.";
+  } else if (!browserPluginReady) {
+    browserStatus = "info";
+    browserSummary =
+      "Browser automation is optional for this mission, but the browser plugin is not enabled.";
+  } else if (!browserConfigured) {
+    browserStatus = "info";
+    browserSummary =
+      "Browser automation is optional for this mission, but browser control is disabled or invalid in config.";
+  } else {
+    browserStatus = "info";
+    browserSummary =
+      browserReadiness?.summary ??
+      "Browser automation is optional for this mission, but the browser runtime is not ready for browser-backed work.";
+  }
   const authReady =
     !capabilityNeeds.manualAuthRequired &&
     (externalAuthReadiness == null || externalAuthReadiness.ready);
@@ -1058,13 +1089,7 @@ async function buildPreflightChecks(params: {
       id: "browser-runtime",
       category: "browser",
       title: "Browser automation availability",
-      status: capabilityNeeds.browserRequired
-        ? browserReady
-          ? "ready"
-          : "needs_setup"
-        : browserToolReady && browserPluginReady && browserConfigured
-          ? "ready"
-          : "info",
+      status: browserStatus,
       summary: browserSummary,
       detail: browserDetail,
       blocker: capabilityNeeds.browserRequired && !browserReady,
@@ -1598,6 +1623,30 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
   const loadClawConfig = deps.loadConfig ?? loadConfig;
   const runMissionAgent = deps.runEmbeddedPiAgent ?? runEmbeddedPiAgent;
   const inspectBrowserReadiness = deps.inspectBrowserReadiness ?? defaultInspectBrowserReadiness;
+  let browserReadinessCache: {
+    key: string;
+    inspectedAtMs: number;
+    value: ClawBrowserReadiness;
+  } | null = null;
+
+  async function getBrowserReadinessSnapshot(cfg: OpenClawConfig): Promise<ClawBrowserReadiness> {
+    const cacheKey = buildBrowserReadinessCacheKey(cfg);
+    const currentMs = now().getTime();
+    if (
+      browserReadinessCache &&
+      browserReadinessCache.key === cacheKey &&
+      currentMs - browserReadinessCache.inspectedAtMs <= BROWSER_READINESS_CACHE_MS
+    ) {
+      return browserReadinessCache.value;
+    }
+    const value = await inspectBrowserReadiness(cfg);
+    browserReadinessCache = {
+      key: cacheKey,
+      inspectedAtMs: currentMs,
+      value,
+    };
+    return value;
+  }
 
   function resolveClawExecutionConfig(): {
     autonomyDefault: boolean;
@@ -3079,7 +3128,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       workspaceDir,
       missionDir,
       cfg,
-      inspectBrowserReadiness,
+      inspectBrowserReadiness: getBrowserReadinessSnapshot,
     });
     const awaitingSetup = hasBlockingPreflight(preflight);
     const blockedSummary = summarizeBlockingPreflight(preflight);
@@ -3379,7 +3428,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
         workspaceDir: state.workspaceDir,
         missionDir: state.missionDir,
         cfg,
-        inspectBrowserReadiness,
+        inspectBrowserReadiness: getBrowserReadinessSnapshot,
       });
       const nowIso = isoNow(now);
       const blockingSummary = summarizeBlockingPreflight(state.preflight);

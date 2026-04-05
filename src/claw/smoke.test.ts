@@ -48,6 +48,9 @@ function createConfig(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
         model: "openai/gpt-5.4",
       },
     },
+    browser: {
+      enabled: false,
+    },
     plugins: {
       entries: {
         browser: { enabled: true },
