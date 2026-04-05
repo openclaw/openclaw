@@ -299,20 +299,7 @@ export async function runPreparedReply(
       prefixedBodyBase = parts.slice(1).join(" ").trim();
     }
   }
-  // Drain system events once, then prepend to each path's body independently.
-  // The queue/steer path uses effectiveBaseBody (unstripped, no session hints) to match
-  // main's pre-PR behavior; the immediate-run path uses prefixedBodyBase (post-hints,
-  // post-think-hint-strip) so the run sees the cleaned-up body.
-  const eventsBlock = await drainFormattedSystemEvents({
-    cfg,
-    sessionKey,
-    isMainSession,
-    isNewSession,
-  });
-  const prependEvents = (body: string) => (eventsBlock ? `${eventsBlock}\n\n${body}` : body);
-  const bodyWithEvents = prependEvents(effectiveBaseBody);
-  prefixedBodyBase = prependEvents(prefixedBodyBase);
-  prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
+  const prefixedBodyCore = prefixedBodyBase;
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
   const threadContextNote = threadHistoryBody
@@ -320,6 +307,38 @@ export async function runPreparedReply(
     : threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
+  const drainedSystemEventBlocks: string[] = [];
+  const rebuildPromptBodies = async (): Promise<{
+    prefixedCommandBody: string;
+    queuedBody: string;
+  }> => {
+    const eventsBlock = await drainFormattedSystemEvents({
+      cfg,
+      sessionKey,
+      isMainSession,
+      isNewSession,
+    });
+    if (eventsBlock) {
+      drainedSystemEventBlocks.push(eventsBlock);
+    }
+    const combinedEventsBlock = drainedSystemEventBlocks.join("\n");
+    const prependEvents = (body: string) =>
+      combinedEventsBlock ? `${combinedEventsBlock}\n\n${body}` : body;
+    const bodyWithEvents = prependEvents(effectiveBaseBody);
+    const prefixedBodyWithEvents = appendUntrustedContext(
+      prependEvents(prefixedBodyCore),
+      sessionCtx.UntrustedContext,
+    );
+    const prefixedBody = [threadContextNote, prefixedBodyWithEvents].filter(Boolean).join("\n\n");
+    const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
+    const queuedBody = mediaNote
+      ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
+      : queueBodyBase;
+    const prefixedCommandBody = mediaNote
+      ? [mediaNote, mediaReplyHint, prefixedBody || ""].filter(Boolean).join("\n").trim()
+      : prefixedBody;
+    return { prefixedCommandBody, queuedBody };
+  };
   const skillResult =
     process.env.OPENCLAW_TEST_FAST === "1"
       ? {
@@ -344,14 +363,11 @@ export async function runPreparedReply(
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  const prefixedBody = [threadContextNote, prefixedBodyBase].filter(Boolean).join("\n\n");
   const mediaNote = buildInboundMediaNote(ctx);
   const mediaReplyHint = mediaNote
     ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
     : undefined;
-  let prefixedCommandBody = mediaNote
-    ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
-    : prefixedBody;
+  let { prefixedCommandBody, queuedBody } = await rebuildPromptBodies();
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -402,12 +418,6 @@ export async function runPreparedReply(
     };
   };
   let preparedSessionState = resolvePreparedSessionState();
-  // Use bodyWithEvents (events prepended, but no session hints / untrusted context) so
-  // deferred turns receive system events while keeping the same scope as effectiveBaseBody did.
-  const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
-  const queuedBody = mediaNote
-    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
-    : queueBodyBase;
   const resolvedQueue = resolveQueueSettings({
     cfg,
     channel: sessionCtx.Provider,
@@ -470,7 +480,16 @@ export async function runPreparedReply(
     queueMode: resolvedQueue.mode,
   });
   if (isActive && activeRunQueueAction === "run-now") {
-    await waitForEmbeddedPiRunEnd(activeSessionId);
+    const activeSessionIdBeforeWait = activeSessionId ?? resolveActiveQueueSessionId();
+    if (resolvedQueue.mode === "interrupt" && activeSessionIdBeforeWait) {
+      const aborted = abortEmbeddedPiRun(activeSessionIdBeforeWait);
+      logVerbose(
+        `Interrupting active run for ${sessionKey ?? sessionIdFinal} (aborted=${aborted})`,
+      );
+    }
+    if (activeSessionIdBeforeWait) {
+      await waitForEmbeddedPiRunEnd(activeSessionIdBeforeWait);
+    }
     preparedSessionState = resolvePreparedSessionState();
     authProfileId = await resolveSessionAuthProfileOverride({
       cfg,
@@ -483,6 +502,7 @@ export async function runPreparedReply(
       isNewSession,
     });
     preparedSessionState = resolvePreparedSessionState();
+    ({ prefixedCommandBody, queuedBody } = await rebuildPromptBodies());
     ({ activeSessionId, isActive, isStreaming } = resolveQueueBusyState());
     if (isActive) {
       typing.cleanup();

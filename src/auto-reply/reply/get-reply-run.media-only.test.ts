@@ -374,7 +374,7 @@ describe("runPreparedReply media-only handling", () => {
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
-  it("treats embedded-only active runs as busy even without a reply operation", async () => {
+  it("interrupts embedded-only active runs even without a reply operation", async () => {
     const queueSettings = await import("./queue/settings.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     const embeddedAbort = vi.fn();
@@ -395,7 +395,7 @@ describe("runPreparedReply media-only handling", () => {
 
     await Promise.resolve();
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
-    expect(embeddedAbort).not.toHaveBeenCalled();
+    expect(embeddedAbort).toHaveBeenCalledOnce();
 
     clearActiveEmbeddedRun("session-embedded-only", embeddedHandle, "session-key");
 
@@ -581,6 +581,37 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
 
     nextRun.complete();
+  });
+  it("re-drains system events after waiting behind an active run", async () => {
+    const queueSettings = await import("./queue/settings.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    vi.mocked(drainFormattedSystemEvents)
+      .mockResolvedValueOnce("System: [t] Initial event.")
+      .mockResolvedValueOnce("System: [t] Post-compaction context.");
+
+    const previousRun = createReplyOperation({
+      sessionId: "session-events-after-wait",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    previousRun.setPhase("running");
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-events-after-wait",
+      }),
+    );
+
+    await Promise.resolve();
+    previousRun.complete();
+
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.commandBody).toContain("System: [t] Initial event.");
+    expect(call?.commandBody).toContain("System: [t] Post-compaction context.");
+    expect(call?.followupRun.prompt).toContain("System: [t] Initial event.");
+    expect(call?.followupRun.prompt).toContain("System: [t] Post-compaction context.");
   });
   it("uses inbound origin channel for run messageProvider", async () => {
     await runPreparedReply(
