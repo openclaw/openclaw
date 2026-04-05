@@ -224,6 +224,32 @@ describe("secrets audit", () => {
     expect(hasFinding(report, (entry) => entry.code === "PLAINTEXT_FOUND")).toBe(true);
   });
 
+  it("ignores env variable references in .env while still flagging real plaintext values", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(
+      fixture.envPath,
+      [
+        `${OPENAI_API_KEY_MARKER}=\${OPENAI_API_KEY}`,
+        `${OPENAI_API_KEY_MARKER}=$OPENAI_API_KEY`,
+        `${OPENAI_API_KEY_MARKER}=sk-openai-plaintext`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    const envPlaintextFindings = report.findings.filter(
+      (entry) =>
+        entry.code === "PLAINTEXT_FOUND" &&
+        entry.file === fixture.envPath &&
+        entry.jsonPath === `$env.${OPENAI_API_KEY_MARKER}`,
+    );
+
+    expect(envPlaintextFindings).toHaveLength(1);
+  });
+
   it("does not mutate legacy auth.json during audit", async () => {
     await fs.rm(fixture.authStorePath, { force: true });
     await writeJsonFile(fixture.authJsonPath, {
