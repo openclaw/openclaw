@@ -44,6 +44,18 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.channel).toBe("last");
   });
 
+  it("preserves explicit delivery.channel for isolated agentTurn jobs", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: { mode: "announce", channel: "webchat" },
+        payload: { kind: "agentTurn", message: "hello" },
+      }),
+    );
+    expect(plan.mode).toBe("announce");
+    expect(plan.requested).toBe(true);
+    expect(plan.channel).toBe("webchat");
+  });
+
   it("resolves mode=none with requested=false and no channel (#21808)", () => {
     const plan = resolveCronDeliveryPlan(
       makeJob({

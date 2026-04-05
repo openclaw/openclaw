@@ -666,9 +666,12 @@ describe("createJob delivery defaults", () => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "hello" },
-      delivery: { mode: "none" },
+      delivery: {
+        mode: "announce",
+        channel: "webchat",
+      },
     });
-    expect(job.delivery).toEqual({ mode: "none" });
+    expect(job.delivery).toEqual({ mode: "announce", channel: "webchat" });
   });
 
   it("does not set delivery for main systemEvent jobs without explicit delivery", () => {
