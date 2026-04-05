@@ -6,6 +6,7 @@ export type { VideoGenerationProviderPlugin } from "../plugins/types.js";
 export type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
+  VideoGenerationProviderConfiguredContext,
   VideoGenerationRequest,
   VideoGenerationResolution,
   VideoGenerationResult,

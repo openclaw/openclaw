@@ -1,4 +1,5 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
 import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
@@ -88,6 +89,11 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
     label: "Google",
     defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
     models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image-preview"],
+    isConfigured: ({ agentDir }) =>
+      isProviderApiKeyConfigured({
+        provider: "google",
+        agentDir,
+      }),
     capabilities: {
       generate: {
         maxCount: 4,

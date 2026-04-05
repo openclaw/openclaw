@@ -1,4 +1,5 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -57,6 +58,11 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
     label: "MiniMax",
     defaultModel: DEFAULT_MODEL,
     models: [DEFAULT_MODEL],
+    isConfigured: ({ agentDir }) =>
+      isProviderApiKeyConfigured({
+        provider: providerId,
+        agentDir,
+      }),
     capabilities: {
       generate: {
         maxCount: 9,
