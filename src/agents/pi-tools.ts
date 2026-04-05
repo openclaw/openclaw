@@ -55,8 +55,8 @@ import {
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
 import {
-  createToolFsPolicy,
   resolveToolFsConfig,
+  combineToolFsPolicies,
   type ToolFsPolicy,
 } from "./tool-fs-policy.js";
 import {
@@ -430,17 +430,15 @@ export function createOpenClawCodingTools(options?: {
   ]);
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
-  const fsPolicy = options?.fsPolicy
-    ? createToolFsPolicy({
-        ...options.fsPolicy,
-        // Memory-triggered runs are always workspace-contained, even if a spawned fsPolicy override is present.
-        workspaceOnly: isMemoryFlushRun || options.fsPolicy.workspaceOnly,
-      })
-    : createToolFsPolicy({
-        allowedPaths: fsConfig.allowedPaths,
-        denyPaths: fsConfig.denyPaths,
-        workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
-      });
+  // Merge spawned session fsPolicy ceiling with current config to ensure
+  // monotonic tightening: new denyPaths and workspaceOnly settings apply to
+  // already-running spawned sessions. Intersection for allowedPaths, union for denyPaths.
+  const fsPolicy = combineToolFsPolicies({
+    globalPolicy: fsConfig,
+    spawnPolicy: options?.fsPolicy,
+    // Memory-triggered runs are always workspace-contained.
+    agentPolicy: { workspaceOnly: isMemoryFlushRun ? true : undefined },
+  });
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
