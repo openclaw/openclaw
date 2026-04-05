@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as pluginAutoEnableModule from "../config/plugin-auto-enable.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   canLoadActivatedBundledPluginPublicSurface,
@@ -187,7 +188,6 @@ describe("plugin-sdk facade runtime", () => {
     vi.doUnmock("../plugins/manifest-registry.js");
     vi.resetModules();
   });
-
   it("clears the cache on load failure so retries re-execute", () => {
     const dir = createThrowingPluginDir("openclaw-facade-throw-");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
