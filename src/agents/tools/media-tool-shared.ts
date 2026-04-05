@@ -115,12 +115,32 @@ export function resolveMediaToolLocalRoots(
         // Find first glob-magic character and take the directory prefix.
         // Include extglob operators (!, +, @) when followed by '(' (e.g. @(foo|bar)).
         const firstMagic = (() => {
+          // We only treat backslash as an escape when it escapes a glob magic
+          // character. On Windows, backslash is also a path separator.
+          const escapable = new Set([
+            "*",
+            "?",
+            "[",
+            "]",
+            "{",
+            "}",
+            "(",
+            ")",
+            "!",
+            "+",
+            "@",
+          ]);
+
           for (let i = 0; i < pattern.length; i += 1) {
             const ch = pattern[i];
 
-            // minimatch supports escaping via backslash.
             if (ch === "\\") {
-              i += 1;
+              const next = pattern[i + 1];
+              if (next && escapable.has(next)) {
+                i += 1;
+                continue;
+              }
+              // Otherwise it's likely a Windows path separator; do not skip.
               continue;
             }
 
@@ -137,14 +157,30 @@ export function resolveMediaToolLocalRoots(
           }
           return -1;
         })();
+
         if (firstMagic >= 0) {
           // Take the directory prefix (last path separator before magic)
           const lastSep = Math.max(
             pattern.lastIndexOf("/", firstMagic),
             pattern.lastIndexOf("\\", firstMagic),
           );
-          if (lastSep > 0) {
-            allowlistRoots.push(pattern.slice(0, lastSep));
+          if (lastSep >= 0) {
+            // Preserve the root separator for drive-root patterns:
+            // - "C:\\**\\*.pdf" -> "C:\\" (not "C:")
+            // - "C:/**/**/*.pdf" -> "C:/" (not "C:")
+            const driveRootSep =
+              /^[A-Za-z]:/u.test(pattern) &&
+              (pattern[2] === "\\" || pattern[2] === "/")
+                ? 2
+                : -1;
+            if (lastSep === driveRootSep) {
+              allowlistRoots.push(pattern.slice(0, 3));
+            } else if (lastSep > 0) {
+              allowlistRoots.push(pattern.slice(0, lastSep));
+            } else {
+              // lastSep == 0 -> rooted at filesystem root (POSIX '/')
+              allowlistRoots.push(pattern.slice(0, 1));
+            }
           }
         } else {
           // No glob magic - it's a literal path, use as-is
