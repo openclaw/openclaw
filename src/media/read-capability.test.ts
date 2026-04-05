@@ -6,7 +6,7 @@ import {
 } from "./read-capability.js";
 
 describe("createAgentScopedHostMediaReadFile", () => {
-  it("returns undefined when tools.fs.roots is configured", () => {
+  it("returns a root-scoped readFile when tools.fs.roots is configured", () => {
     const result = createAgentScopedHostMediaReadFile({
       cfg: {
         tools: {
@@ -17,7 +17,21 @@ describe("createAgentScopedHostMediaReadFile", () => {
       } as OpenClawConfig,
     });
 
-    expect(result).toBeUndefined();
+    expect(result).toBeTypeOf("function");
+  });
+
+  it("rejects reads outside configured roots", async () => {
+    const readFile = createAgentScopedHostMediaReadFile({
+      cfg: {
+        tools: {
+          fs: {
+            roots: [{ path: "/data/shared", kind: "dir", access: "ro" }],
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    await expect(readFile!("/etc/passwd")).rejects.toThrow(/outside configured filesystem roots/);
   });
 
   it("returns undefined when tools.fs.roots is empty (deny-all)", () => {
