@@ -269,6 +269,24 @@ describe("provider-runtime", () => {
     });
   });
 
+  it("matches bundled provider aliases after manifest ownership resolves", () => {
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(["modelstudio"]);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "modelstudio",
+        label: "Model Studio",
+        aliases: ["dashscope"],
+        auth: [],
+      },
+    ]);
+
+    expectProviderRuntimePluginLoad({
+      provider: "dashscope",
+      expectedPluginId: "modelstudio",
+      expectedOnlyPluginIds: ["modelstudio"],
+    });
+  });
+
   it("skips plugin loading when the provider has no owning plugin", () => {
     expectProviderRuntimePluginLoad({
       provider: "anthropic",
@@ -1004,3 +1022,4 @@ describe("provider-runtime", () => {
     );
   });
 });
+

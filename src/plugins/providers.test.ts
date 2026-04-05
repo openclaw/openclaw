@@ -53,6 +53,10 @@ function setOwningProviderManifestPlugins() {
       id: "openai",
       providerIds: ["openai", "openai-codex"],
     }),
+    createManifestProviderPlugin({
+      id: "modelstudio",
+      providerIds: ["modelstudio", "dashscope"],
+    }),
   ]);
 }
 
@@ -395,6 +399,10 @@ describe("resolvePluginProviders", () => {
       expectedPluginIds: ["openai"],
     },
     {
+      provider: "dashscope",
+      expectedPluginIds: ["modelstudio"],
+    },
+    {
       provider: "gemini-cli",
       expectedPluginIds: undefined,
     },
@@ -407,3 +415,4 @@ describe("resolvePluginProviders", () => {
     },
   );
 });
+

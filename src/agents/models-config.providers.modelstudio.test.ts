@@ -31,4 +31,17 @@ describe("Model Studio implicit provider", () => {
       ),
     ).toBe(false);
   });
+  it("should opt native DashScope aliases into streaming usage", () => {
+    const providers = applyNativeStreamingUsageCompat({
+      dashscope: buildModelStudioProvider(),
+    });
+    expect(providers?.dashscope).toBeDefined();
+    expect(providers?.dashscope?.baseUrl).toBe("https://coding-intl.dashscope.aliyuncs.com/v1");
+    expect(
+      providers?.dashscope?.models?.every(
+        (model) => model.compat?.supportsUsageInStreaming === true,
+      ),
+    ).toBe(true);
+  });
 });
+

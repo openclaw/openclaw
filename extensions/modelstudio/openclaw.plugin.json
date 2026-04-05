@@ -1,9 +1,10 @@
 {
   "id": "modelstudio",
   "enabledByDefault": true,
-  "providers": ["modelstudio"],
+  "providers": ["modelstudio", "dashscope"],
   "providerAuthEnvVars": {
-    "modelstudio": ["MODELSTUDIO_API_KEY"]
+    "modelstudio": ["MODELSTUDIO_API_KEY"],
+    "dashscope": ["MODELSTUDIO_API_KEY"]
   },
   "providerAuthChoices": [
     {
@@ -69,3 +70,4 @@
     "properties": {}
   }
 }
+

@@ -21,6 +21,7 @@ export default defineSingleProviderPluginEntry({
   provider: {
     label: "Model Studio",
     docsPath: "/providers/models",
+    aliases: ["dashscope"],
     auth: [
       {
         methodId: "standard-api-key-cn",
@@ -120,3 +121,4 @@ export default defineSingleProviderPluginEntry({
     wrapStreamFn: ({ streamFn }) => createDashscopeStreamingUsageWrapper(streamFn),
   },
 });
+
