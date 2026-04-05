@@ -33,7 +33,7 @@ type Attachment = {
   description?: string;
 };
 
-const defaultOptions: Required<Omit<RequestClientOptions, "baseUrl" | "tokenHeader">> & {
+const defaultOptions: Required<Omit<RequestClientOptions, "baseUrl" | "tokenHeader" | "fetch">> & {
   baseUrl: string;
   tokenHeader: "Bot" | "Bearer";
 } = {
@@ -242,6 +242,7 @@ class ProxyRequestClientCompat {
           .join("&")}`
       : "";
     const url = `${this.options.baseUrl}${path}${queryString}`;
+    const originalRequest = new Request(url, { method });
     const headers =
       this.token === "webhook"
         ? new Headers()
@@ -332,7 +333,7 @@ class ProxyRequestClientCompat {
 
     if (response.status === 429) {
       const rateLimitBody = toRateLimitBody(parsedBody, rawBody, response.headers);
-      const rateLimitError = new RateLimitError(response, rateLimitBody);
+      const rateLimitError = new RateLimitError(response, rateLimitBody, originalRequest);
       this.scheduleRateLimit(
         routeKey,
         rateLimitError.retryAfter,
