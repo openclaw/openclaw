@@ -39,7 +39,7 @@ describe("registerBuiltInMemoryEmbeddingProviders", () => {
       },
     });
 
-    expect(ids).toEqual(["local", "openai", "gemini", "voyage", "mistral"]);
+    expect(ids).toEqual(["local", "openai", "gemini", "voyage", "jina", "mistral"]);
     expect(mocks.listRegisteredMemoryEmbeddingProviderAdapters).toHaveBeenCalledTimes(1);
     expect(mocks.listMemoryEmbeddingProviders).not.toHaveBeenCalled();
   });
@@ -57,7 +57,7 @@ describe("registerBuiltInMemoryEmbeddingProviders", () => {
       },
     });
 
-    expect(ids).toEqual(["openai", "voyage", "mistral"]);
+    expect(ids).toEqual(["openai", "voyage", "jina", "mistral"]);
     expect(mocks.listMemoryEmbeddingProviders).not.toHaveBeenCalled();
   });
 });

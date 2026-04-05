@@ -22,6 +22,10 @@ export {
   buildGeminiEmbeddingRequest,
 } from "./host/embeddings-gemini.js";
 export {
+  createJinaEmbeddingProvider,
+  DEFAULT_JINA_EMBEDDING_MODEL,
+} from "./host/embeddings-jina.js";
+export {
   createMistralEmbeddingProvider,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
 } from "./host/embeddings-mistral.js";

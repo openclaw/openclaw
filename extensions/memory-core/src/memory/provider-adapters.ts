@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
+  DEFAULT_JINA_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
@@ -8,6 +9,7 @@ import {
   OPENAI_BATCH_ENDPOINT,
   buildGeminiEmbeddingRequest,
   createGeminiEmbeddingProvider,
+  createJinaEmbeddingProvider,
   createLocalEmbeddingProvider,
   createMistralEmbeddingProvider,
   createOpenAiEmbeddingProvider,
@@ -82,7 +84,7 @@ function formatLocalSetupError(err: unknown): string {
       ? "2) Reinstall OpenClaw (this should install node-llama-cpp): npm i -g openclaw@latest"
       : null,
     "3) If you use pnpm: pnpm approve-builds (select node-llama-cpp), then pnpm rebuild node-llama-cpp",
-    ...["openai", "gemini", "voyage", "mistral"].map(
+    ...["openai", "gemini", "voyage", "jina", "mistral"].map(
       (provider) => `Or set agents.defaults.memorySearch.provider = "${provider}" (remote).`,
     ),
   ]
@@ -261,6 +263,32 @@ const voyageAdapter: MemoryEmbeddingProviderAdapter = {
   },
 };
 
+const jinaAdapter: MemoryEmbeddingProviderAdapter = {
+  id: "jina",
+  defaultModel: DEFAULT_JINA_EMBEDDING_MODEL,
+  transport: "remote",
+  autoSelectPriority: 45,
+  allowExplicitWhenConfiguredAuto: true,
+  shouldContinueAutoSelection: isMissingApiKeyError,
+  create: async (options) => {
+    const { provider, client } = await createJinaEmbeddingProvider({
+      ...options,
+      provider: "jina",
+      fallback: "none",
+    });
+    return {
+      provider,
+      runtime: {
+        id: "jina",
+        cacheKeyData: {
+          provider: "jina",
+          model: client.model,
+        },
+      },
+    };
+  },
+};
+
 const mistralAdapter: MemoryEmbeddingProviderAdapter = {
   id: "mistral",
   defaultModel: DEFAULT_MISTRAL_EMBEDDING_MODEL,
@@ -318,6 +346,7 @@ export const builtinMemoryEmbeddingProviderAdapters = [
   openAiAdapter,
   geminiAdapter,
   voyageAdapter,
+  jinaAdapter,
   mistralAdapter,
 ] as const;
 
@@ -380,6 +409,7 @@ export function listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata(): Ar
 
 export {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
+  DEFAULT_JINA_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,

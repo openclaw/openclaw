@@ -11,6 +11,7 @@ import {
   type GeminiEmbeddingClient,
   type GeminiTaskType,
 } from "./embeddings-gemini.js";
+import { createJinaEmbeddingProvider, type JinaEmbeddingClient } from "./embeddings-jina.js";
 import {
   createMistralEmbeddingProvider,
   type MistralEmbeddingClient,
@@ -21,6 +22,7 @@ import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./emb
 import { importNodeLlamaCpp } from "./node-llama.js";
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
+export type { JinaEmbeddingClient } from "./embeddings-jina.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
@@ -35,14 +37,21 @@ export type EmbeddingProvider = {
   embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+export type EmbeddingProviderId =
+  | "openai"
+  | "local"
+  | "gemini"
+  | "voyage"
+  | "jina"
+  | "mistral"
+  | "ollama";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
 // Remote providers considered for auto-selection when provider === "auto".
 // Ollama is intentionally excluded here so that "auto" mode does not
 // implicitly assume a local Ollama instance is available.
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
+const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "jina", "mistral"] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -53,6 +62,7 @@ export type EmbeddingProviderResult = {
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
+  jina?: JinaEmbeddingClient;
   mistral?: MistralEmbeddingClient;
   ollama?: OllamaEmbeddingClient;
 };
@@ -187,6 +197,10 @@ export async function createEmbeddingProvider(
     if (id === "voyage") {
       const { provider, client } = await createVoyageEmbeddingProvider(options);
       return { provider, voyage: client };
+    }
+    if (id === "jina") {
+      const { provider, client } = await createJinaEmbeddingProvider(options);
+      return { provider, jina: client };
     }
     if (id === "mistral") {
       const { provider, client } = await createMistralEmbeddingProvider(options);
