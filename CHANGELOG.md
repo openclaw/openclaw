@@ -182,6 +182,8 @@ Docs: https://docs.openclaw.ai
 - Tasks/maintenance: reconcile stale cron and chat-backed CLI task rows against live cron-job and agent-run ownership instead of treating any persisted session key as proof that the task is still running. (#60310) Thanks @lml2468.
 - Update/npm: prefer the npm binary that owns the installed global OpenClaw prefix so mixed Homebrew-plus-nvm setups update the right install. (#60153) Thanks @jayeshp19.
 
+- Discord: restore DM voice-note preflight transcription so direct-message audio stops arriving as raw `<media:document>` placeholders. (#61314) Thanks @affsantos.
+
 ## 2026.4.2
 
 ### Breaking
