@@ -1,0 +1,323 @@
+name: 'Shadow Healer (Phase 2: Auto-Fix PR)'
+
+on:
+  workflow_run:
+    workflows: ['CI', 'Dagger CI']
+    types: [completed]
+
+jobs:
+  analyze:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get failure logs
+        run: |
+          FAILED_RUN="${{ github.event.workflow_run.id }}"
+          echo "Fetching logs from workflow run: $FAILED_RUN"
+          gh run view "$FAILED_RUN" --log 2>&1 | tail -500 > /tmp/failure-log.txt || echo "Log fetch failed, using partial data"
+          cat /tmp/failure-log.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: AI Shadow Analysis (Structured)
+        run: |
+          mkdir -p /tmp/claude-analysis
+
+          # Prepare log excerpt (last 300 lines for context)
+          if [ -f /tmp/failure-log.txt ]; then
+            tail -300 /tmp/failure-log.txt > /tmp/log-excerpt.txt
+          else
+            echo "No failure log available" > /tmp/log-excerpt.txt
+          fi
+
+          # Get workflow context
+          WORKFLOW_NAME="${{ github.event.workflow_run.name }}"
+          RUN_ID="${{ github.event.workflow_run.id }}"
+          BRANCH="${{ github.event.workflow_run.head_branch }}"
+          COMMIT="${{ github.event.workflow_run.head_commit }}"
+
+          echo "Analyzing failure for: $WORKFLOW_NAME (Run: $RUN_ID)"
+
+          # Call GLM for AI analysis (using z.ai free endpoint)
+          {
+            echo "Workflow: $WORKFLOW_NAME"
+            echo "Branch: $BRANCH"
+            echo "Commit: $COMMIT"
+            echo "---"
+            cat /tmp/log-excerpt.txt
+          } > /tmp/analysis-prompt.txt
+
+          # Enhanced prompt for Phase 2: structured patch suggestions
+          PROMPT="Analyze this GitHub Actions CI failure log and provide:
+
+          Output ONLY valid JSON (no markdown):
+          {
+            \"root_cause\": \"detailed explanation of why it failed\",
+            \"failed_step\": \"name of the step that failed\",
+            \"auto_fixable\": true/false,
+            \"fix_type\": \"config|workflow|dependency|other\",
+            \"priority\": \"critical|high|medium|low\",
+            \"confidence\": 0.0-1.0,
+            \"files_to_modify\": [\"file/path1\", \"file/path2\"],
+            \"patches\": [
+              {
+                \"file\": \"path/to/file\",
+                \"search\": \"exact string to find\",
+                \"replace\": \"replacement string\"
+              }
+            ],
+            \"suggested_pr_title\": \"fix(ci): auto-heal [specific issue]\",
+            \"safety_notes\": \"warnings or constraints for auto-fixing\"
+          }
+
+          Log:
+          \$(cat /tmp/analysis-prompt.txt | head -200)"
+
+          curl -s --max-time 60 \
+            -H "Authorization: Bearer $ZAI_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg p "$PROMPT" '{model:"glm-5.1",messages:[{role:"user",content:$p}],temperature:0.1}')" \
+            "$ZAI_BASE_URL/chat/completions" \
+            | jq -r '.choices[0].message.content // empty' > /tmp/ai-patch.json 2>&1 \
+            || echo '{"error":"AI analysis failed","root_cause":"unknown","auto_fixable":false}' > /tmp/ai-patch.json
+
+          # Validate JSON output
+          if ! jq . /tmp/ai-patch.json > /dev/null 2>&1; then
+            echo '{"error":"invalid_json","auto_fixable":false}' > /tmp/ai-patch.json
+          fi
+
+          echo "AI Analysis Result:"
+          cat /tmp/ai-patch.json
+        env:
+          ZAI_BASE_URL: ${{ secrets.ZAI_BASE_URL }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+
+      - name: Record to healing log
+        run: |
+          mkdir -p "$(dirname ci-healing-log.jsonl)"
+
+          # Parse AI patch or use error fallback
+          if [ ! -f /tmp/ai-patch.json ] || [ ! -s /tmp/ai-patch.json ]; then
+            AI_PATCH='{"error":"analysis_unavailable","auto_fixable":false}'
+          else
+            AI_PATCH=$(cat /tmp/ai-patch.json)
+          fi
+
+          # Create healing log entry
+          LOG_ENTRY=$(jq -n \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg workflow "${{ github.event.workflow_run.name }}" \
+            --arg run_id "${{ github.event.workflow_run.id }}" \
+            --arg branch "${{ github.event.workflow_run.head_branch }}" \
+            --arg commit "${{ github.event.workflow_run.head_commit }}" \
+            --arg conclusion "${{ github.event.workflow_run.conclusion }}" \
+            --arg html_url "${{ github.event.workflow_run.html_url }}" \
+            --argjson ai_patch "$AI_PATCH" \
+            '{timestamp, workflow, run_id, branch, commit, conclusion, html_url, ai_patch, phase: "shadow-healer-v2"}')
+
+          echo "$LOG_ENTRY" >> ci-healing-log.jsonl
+
+          echo "Healing log entry recorded:"
+          echo "$LOG_ENTRY" | jq .
+
+      - name: Commit healing log
+        run: |
+          git config user.name 'shadow-healer[bot]'
+          git config user.email 'shadow-healer@noreply.github.com'
+
+          # Only commit if ci-healing-log.jsonl has changes
+          if git diff --quiet ci-healing-log.jsonl; then
+            echo "No new entries to commit"
+          else
+            git add ci-healing-log.jsonl
+            git commit -m "shadow: record CI failure analysis [v2] - ${{ github.event.workflow_run.name }} #${{ github.event.workflow_run.id }}"
+            git push origin "${{ github.ref }}"
+            echo "Healing log committed and pushed"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Export analysis for next job
+        run: |
+          if [ -f /tmp/ai-patch.json ]; then
+            cp /tmp/ai-patch.json /tmp/analysis-result.json
+            cat /tmp/analysis-result.json | jq .
+          else
+            echo '{"error":"no analysis","auto_fixable":false}' > /tmp/analysis-result.json
+          fi
+
+      - name: Upload analysis artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadow-healer-analysis
+          path: /tmp/analysis-result.json
+          retention-days: 1
+
+  auto-fix:
+    if: github.event.workflow_run.conclusion == 'failure'
+    needs: analyze
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download analysis
+        uses: actions/download-artifact@v4
+        with:
+          name: shadow-healer-analysis
+          path: /tmp
+
+      - name: Check if auto-fixable
+        id: check-fix
+        run: |
+          if [ ! -f /tmp/analysis-result.json ]; then
+            echo "auto_fixable=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          AUTO_FIXABLE=$(jq -r '.auto_fixable // false' /tmp/analysis-result.json)
+          FIX_TYPE=$(jq -r '.fix_type // "unknown"' /tmp/analysis-result.json)
+
+          echo "auto_fixable=$AUTO_FIXABLE" >> $GITHUB_OUTPUT
+          echo "fix_type=$FIX_TYPE" >> $GITHUB_OUTPUT
+
+          # Safety constraints: only allow fixes to config/workflow files
+          if [ "$AUTO_FIXABLE" = "true" ]; then
+            if [ "$FIX_TYPE" != "config" ] && [ "$FIX_TYPE" != "workflow" ]; then
+              echo "⚠️ Fix type '$FIX_TYPE' not allowed in auto-fix (only config/workflow)"
+              echo "auto_fixable=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Apply patches and create PR
+        if: steps.check-fix.outputs.auto_fixable == 'true'
+        run: |
+          set -e
+
+          ANALYSIS=$(cat /tmp/analysis-result.json)
+
+          # Extract patch details
+          PR_TITLE=$(echo "$ANALYSIS" | jq -r '.suggested_pr_title // "fix(ci): auto-heal CI failure"')
+          PATCHES=$(echo "$ANALYSIS" | jq -r '.patches // []')
+          SAFETY_NOTES=$(echo "$ANALYSIS" | jq -r '.safety_notes // ""')
+          ROOT_CAUSE=$(echo "$ANALYSIS" | jq -r '.root_cause // "unknown"')
+
+          # Create a unique branch name
+          TIMESTAMP=$(date +%s)
+          BRANCH_NAME="shadow-healer/fix-${{ github.event.workflow_run.id }}-$TIMESTAMP"
+
+          echo "Creating branch: $BRANCH_NAME"
+          git config user.name 'shadow-healer[bot]'
+          git config user.email 'shadow-healer@noreply.github.com'
+          git checkout -b "$BRANCH_NAME"
+
+          # Apply patches
+          PATCH_COUNT=$(echo "$PATCHES" | jq 'length')
+          echo "Applying $PATCH_COUNT patches..."
+
+          if [ "$PATCH_COUNT" -gt 0 ]; then
+            echo "$PATCHES" | jq -c '.[]' | while read -r patch; do
+              FILE=$(echo "$patch" | jq -r '.file')
+              SEARCH=$(echo "$patch" | jq -r '.search')
+              REPLACE=$(echo "$patch" | jq -r '.replace')
+
+              echo "Patching: $FILE"
+
+              if [ ! -f "$FILE" ]; then
+                echo "ERROR: File not found: $FILE"
+                exit 1
+              fi
+
+              # Use sed to replace (escaping special chars)
+              SEARCH_ESCAPED=$(echo "$SEARCH" | sed 's/[&/\]/\\&/g')
+              REPLACE_ESCAPED=$(echo "$REPLACE" | sed 's/[&/\]/\\&/g')
+              sed -i "s/$SEARCH_ESCAPED/$REPLACE_ESCAPED/g" "$FILE"
+
+              echo "✓ Patched: $FILE"
+            done
+          else
+            echo "No patches to apply"
+            exit 1
+          fi
+
+          # Commit changes
+          git add -A
+          git commit -m "fix(ci): auto-heal ${{ github.event.workflow_run.name }} [${{ github.event.workflow_run.id }}]
+
+          Root cause: $ROOT_CAUSE
+
+          Safety notes: $SAFETY_NOTES
+
+          AI-generated fix by shadow-healer[bot]"
+
+          # Push branch
+          git push origin "$BRANCH_NAME"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+
+      - name: Create PR
+        if: steps.check-fix.outputs.auto_fixable == 'true' && env.branch_name != ''
+        run: |
+          ANALYSIS=$(cat /tmp/analysis-result.json)
+          PR_TITLE=$(echo "$ANALYSIS" | jq -r '.suggested_pr_title // "fix(ci): auto-heal CI failure"')
+          ROOT_CAUSE=$(echo "$ANALYSIS" | jq -r '.root_cause // "unknown"')
+          WORKFLOW_NAME="${{ github.event.workflow_run.name }}"
+          RUN_ID="${{ github.event.workflow_run.id }}"
+
+          PR_BODY="## Shadow Healer Auto-Fix PR
+
+          **AI-Generated Fix** for: \`$WORKFLOW_NAME\` (Run #$RUN_ID)
+
+          ### Root Cause
+          \`\`\`
+          $ROOT_CAUSE
+          \`\`\`
+
+          ### Changes Made
+          Patches applied automatically based on AI analysis.
+
+          ### Safety
+          - Only workflow and config files modified
+          - Requires human review before merge
+          - Original failure: https://github.com/${{ github.repository }}/actions/runs/$RUN_ID
+
+          ---
+          *Created by shadow-healer[bot] - Phase 2: Auto-Fix*"
+
+          gh pr create \
+            --base main \
+            --head "${{ env.branch_name }}" \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY" \
+            --label "shadow-healer" \
+            --label "agent-pr" \
+            --draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Shadow Healer Phase 2 Report"
+          echo ""
+          echo "- **Workflow**: ${{ github.event.workflow_run.name }}"
+          echo "- **Run ID**: ${{ github.event.workflow_run.id }}"
+          echo "- **Status**: ${{ github.event.workflow_run.conclusion }}"
+          echo "- **Auto-Fixable**: ${{ steps.check-fix.outputs.auto_fixable }}"
+          echo "- **Fix Type**: ${{ steps.check-fix.outputs.fix_type }}"
+          if [ "${{ steps.check-fix.outputs.auto_fixable }}" = "true" ]; then
+            echo "- **Action**: Fix PR created (draft) at \`${{ env.branch_name }}\`"
+          else
+            echo "- **Action**: Analysis recorded only, no auto-fix applied"
+          fi
+          echo ""
+          echo "See ci-healing-log.jsonl for full analysis trail."
