@@ -107,6 +107,7 @@ function formatStatus(cfg: OpenClawConfig): string {
     `- cadence: ${cadence}${timezone}`,
     `- limit: ${resolved.limit}`,
     `- thresholds: minScore=${resolved.minScore}, minRecallCount=${resolved.minRecallCount}, minUniqueQueries=${resolved.minUniqueQueries}`,
+    `- verboseLogging: ${resolved.verboseLogging ? "on" : "off"}`,
   ].join("\n");
 }
 

@@ -379,15 +379,16 @@ Dreaming is configured under `plugins.entries.memory-core.config.dreaming`,
 not under `agents.defaults.memorySearch`. For conceptual details and chat
 commands, see [Dreaming](/concepts/memory-dreaming).
 
-| Key                | Type     | Default        | Description                               |
-| ------------------ | -------- | -------------- | ----------------------------------------- |
-| `mode`             | `string` | `"off"`        | Preset: `off`, `core`, `rem`, or `deep`   |
-| `cron`             | `string` | preset default | Cron expression override for the schedule |
-| `timezone`         | `string` | user timezone  | Timezone for schedule evaluation          |
-| `limit`            | `number` | preset default | Max candidates to promote per cycle       |
-| `minScore`         | `number` | preset default | Minimum weighted score for promotion      |
-| `minRecallCount`   | `number` | preset default | Minimum recall count threshold            |
-| `minUniqueQueries` | `number` | preset default | Minimum distinct query count threshold    |
+| Key                | Type      | Default        | Description                               |
+| ------------------ | --------- | -------------- | ----------------------------------------- |
+| `mode`             | `string`  | `"off"`        | Preset: `off`, `core`, `rem`, or `deep`   |
+| `cron`             | `string`  | preset default | Cron expression override for the schedule |
+| `timezone`         | `string`  | user timezone  | Timezone for schedule evaluation          |
+| `limit`            | `number`  | preset default | Max candidates to promote per cycle       |
+| `minScore`         | `number`  | preset default | Minimum weighted score for promotion      |
+| `minRecallCount`   | `number`  | preset default | Minimum recall count threshold            |
+| `minUniqueQueries` | `number`  | preset default | Minimum distinct query count threshold    |
+| `verboseLogging`   | `boolean` | `false`        | Emit detailed per-run dreaming logs       |
 
 ### Preset defaults
 

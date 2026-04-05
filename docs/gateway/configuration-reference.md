@@ -2649,6 +2649,7 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
   - `minScore`: minimum weighted score threshold for promotion.
   - `minRecallCount`: minimum recall count threshold.
   - `minUniqueQueries`: minimum distinct query count threshold.
+  - `verboseLogging`: emit detailed per-run dreaming logs into the normal gateway log stream.
 - Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.

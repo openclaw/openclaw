@@ -113,6 +113,7 @@ export type ShortTermPromotionDreamingConfig = {
   minScore: number;
   minRecallCount: number;
   minUniqueQueries: number;
+  verboseLogging: boolean;
 };
 
 type ReconcileResult =
@@ -177,6 +178,22 @@ function normalizeScore(value: unknown, fallback: number): number {
     return fallback;
   }
   return num;
+}
+
+function normalizeBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") {
+      return true;
+    }
+    if (normalized === "false") {
+      return false;
+    }
+  }
+  return fallback;
 }
 
 function formatErrorMessage(err: unknown): string {
@@ -370,6 +387,7 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     minScore,
     minRecallCount,
     minUniqueQueries,
+    verboseLogging: normalizeBoolean(dreaming?.verboseLogging, false),
   };
 }
 
@@ -471,6 +489,11 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   }
 
   try {
+    if (params.config.verboseLogging) {
+      params.logger.info(
+        `memory-core: dreaming verbose enabled (cron=${params.config.cron}, limit=${params.config.limit}, minScore=${params.config.minScore.toFixed(3)}, minRecallCount=${params.config.minRecallCount}, minUniqueQueries=${params.config.minUniqueQueries}).`,
+      );
+    }
     const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
     if (repair.changed) {
       params.logger.info(
@@ -484,6 +507,18 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       minRecallCount: params.config.minRecallCount,
       minUniqueQueries: params.config.minUniqueQueries,
     });
+    if (params.config.verboseLogging) {
+      const candidateSummary =
+        candidates.length > 0
+          ? candidates
+              .map(
+                (candidate) =>
+                  `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} queries=${candidate.uniqueQueries} components={freq=${candidate.components.frequency.toFixed(3)},rel=${candidate.components.relevance.toFixed(3)},div=${candidate.components.diversity.toFixed(3)},rec=${candidate.components.recency.toFixed(3)},cons=${candidate.components.consolidation.toFixed(3)},concept=${candidate.components.conceptual.toFixed(3)}}`,
+              )
+              .join(" | ")
+          : "none";
+      params.logger.info(`memory-core: dreaming candidate details ${candidateSummary}`);
+    }
     const applied = await applyShortTermPromotions({
       workspaceDir,
       candidates,
@@ -492,6 +527,18 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
       minRecallCount: params.config.minRecallCount,
       minUniqueQueries: params.config.minUniqueQueries,
     });
+    if (params.config.verboseLogging) {
+      const appliedSummary =
+        applied.appliedCandidates.length > 0
+          ? applied.appliedCandidates
+              .map(
+                (candidate) =>
+                  `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount}`,
+              )
+              .join(" | ")
+          : "none";
+      params.logger.info(`memory-core: dreaming applied details ${appliedSummary}`);
+    }
     params.logger.info(
       `memory-core: dreaming promotion complete (candidates=${candidates.length}, applied=${applied.applied}).`,
     );
