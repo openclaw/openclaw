@@ -266,6 +266,63 @@ describe("createDiscordNativeCommand option wiring", () => {
     expect(respond).not.toHaveBeenCalledWith([]);
   });
 
+  it("returns no autocomplete choices outside the Discord allowlist when commands.useAccessGroups is false and commands.allowFrom is not configured", async () => {
+    const command = createNativeCommand("think", {
+      cfg: {
+        commands: {
+          useAccessGroups: false,
+        },
+        channels: {
+          discord: {
+            groupPolicy: "allowlist",
+            guilds: {
+              "other-guild": {
+                channels: {
+                  "other-channel": {
+                    enabled: true,
+                    requireMention: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as ReturnType<typeof loadConfig>,
+    });
+    const level = requireOption(command, "level");
+    const autocomplete = readAutocomplete(level);
+    if (typeof autocomplete !== "function") {
+      throw new Error("think level option did not wire autocomplete");
+    }
+    const respond = vi.fn(async (_choices: unknown[]) => undefined);
+
+    await autocomplete({
+      user: {
+        id: "allowed-user",
+        username: "allowed",
+        globalName: "Allowed",
+      },
+      channel: {
+        type: ChannelType.GuildText,
+        id: "channel-1",
+        name: "general",
+      },
+      guild: {
+        id: "guild-1",
+      },
+      rawData: {
+        member: { roles: [] },
+      },
+      options: {
+        getFocused: () => ({ value: "xh" }),
+      },
+      respond,
+      client: {},
+    } as never);
+
+    expect(respond).toHaveBeenCalledWith([]);
+  });
+
   it("returns no autocomplete choices for group DMs outside dm.groupChannels", async () => {
     const discordConfig = {
       dm: {
