@@ -298,6 +298,8 @@ export function createFollowupRunner(params: {
                     bootstrapPromptWarningSignaturesSeen[
                       bootstrapPromptWarningSignaturesSeen.length - 1
                     ],
+                  messageProvider: queued.run.messageProvider,
+                  agentAccountId: queued.run.agentAccountId,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   cliResult.meta?.systemPromptReport,

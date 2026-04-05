@@ -1058,6 +1058,8 @@ describe("createFollowupRunner CLI backend dispatch", () => {
         provider: "claude-cli",
         model: "opus",
         prompt: queued.prompt,
+        messageProvider: queued.run.messageProvider,
+        agentAccountId: queued.run.agentAccountId,
       }),
     );
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
