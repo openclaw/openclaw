@@ -130,6 +130,28 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadText(payloads, "Handle payment required errors in your API.");
   });
 
+  it("keeps sticker-only directive payloads", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["STICKER:1070:17878"],
+      lastAssistant: makeStoppedAssistant(),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBeUndefined();
+    expect(payloads[0]?.sticker).toEqual({ raw: "1070:17878" });
+  });
+
+  it("keeps mixed text + sticker directive payloads", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["ありがとう！\nSTICKER:446:1988"],
+      lastAssistant: makeStoppedAssistant(),
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("ありがとう！");
+    expect(payloads[0]?.sticker).toEqual({ raw: "446:1988" });
+  });
+
   it("suppresses raw error JSON even when errorMessage is missing", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],

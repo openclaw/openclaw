@@ -126,6 +126,7 @@ export function buildEmbeddedRunPayloads(params: {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  sticker?: { raw: string };
   replyToId?: string;
   isError?: boolean;
   isReasoning?: boolean;
@@ -136,6 +137,7 @@ export function buildEmbeddedRunPayloads(params: {
   const replyItems: Array<{
     text: string;
     media?: string[];
+    sticker?: { raw: string };
     isError?: boolean;
     isReasoning?: boolean;
     audioAsVoice?: boolean;
@@ -190,15 +192,17 @@ export function buildEmbeddedRunPayloads(params: {
       const {
         text: cleanedText,
         mediaUrls,
+        sticker,
         audioAsVoice,
         replyToId,
         replyToTag,
         replyToCurrent,
       } = parseReplyDirectives(agg);
-      if (cleanedText) {
+      if (cleanedText || sticker) {
         replyItems.push({
           text: cleanedText,
           media: mediaUrls,
+          sticker,
           audioAsVoice,
           replyToId,
           replyToTag,
@@ -284,17 +288,19 @@ export function buildEmbeddedRunPayloads(params: {
     const {
       text: cleanedText,
       mediaUrls,
+      sticker,
       audioAsVoice,
       replyToId,
       replyToTag,
       replyToCurrent,
     } = parseReplyDirectives(text);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice && !sticker) {
       continue;
     }
     replyItems.push({
       text: cleanedText,
       media: mediaUrls,
+      sticker,
       audioAsVoice,
       replyToId,
       replyToTag,
@@ -352,6 +358,7 @@ export function buildEmbeddedRunPayloads(params: {
       text: normalizeOptionalString(item.text),
       mediaUrls: item.media?.length ? item.media : undefined,
       mediaUrl: item.media?.[0],
+      sticker: item.sticker,
       isError: item.isError,
       replyToId: item.replyToId,
       replyToTag: item.replyToTag,
@@ -359,7 +366,7 @@ export function buildEmbeddedRunPayloads(params: {
       audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
     }))
     .filter((p) => {
-      if (!hasOutboundReplyContent(p)) {
+      if (!hasOutboundReplyContent(p) && !p.sticker) {
         return false;
       }
       if (p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)) {
