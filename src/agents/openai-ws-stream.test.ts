@@ -512,7 +512,9 @@ describe("convertTools", () => {
         parameters: { type: "object", properties: {}, additionalProperties: false },
       },
     ];
-    const result = convertTools(tools as Parameters<typeof convertTools>[0], { strict: true });
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0], {
+      strict: true,
+    });
 
     expect(result[0]).toEqual({
       type: "function",
@@ -540,7 +542,9 @@ describe("convertTools", () => {
         },
       },
     ];
-    const result = convertTools(tools as Parameters<typeof convertTools>[0], { strict: true });
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0], {
+      strict: true,
+    });
 
     expect(result[0]).toEqual({
       type: "function",

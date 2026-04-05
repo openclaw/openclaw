@@ -92,12 +92,14 @@ describe("http.request node command", () => {
       } as never,
       client: {
         connect: {
+          minProtocol: 1,
+          maxProtocol: 3,
           commands: ["http.request"],
           role: "node",
           client: {
-            id: "android-node-1",
+            id: "test",
             mode: "node",
-            name: "android-test",
+            displayName: "android-test",
             platform: "Android 16",
             version: "test",
           },
@@ -151,12 +153,14 @@ describe("http.request node command", () => {
       } as never,
       client: {
         connect: {
+          minProtocol: 1,
+          maxProtocol: 3,
           commands: ["http.request"],
           role: "node",
           client: {
-            id: "ios-node-1",
+            id: "test",
             mode: "node",
-            name: "ios-test",
+            displayName: "ios-test",
             platform: "iOS 26.0",
             version: "test",
           },
@@ -209,12 +213,14 @@ describe("http.request node command", () => {
       } as never,
       client: {
         connect: {
+          minProtocol: 1,
+          maxProtocol: 3,
           commands: ["http.request"],
           role: "node",
           client: {
-            id: "android-node-1",
+            id: "test",
             mode: "node",
-            name: "android-test",
+            displayName: "android-test",
             platform: "Android 16",
             version: "test",
           },
