@@ -48,6 +48,21 @@ describe("isCacheTtlEligibleProvider", () => {
     expect(isCacheTtlEligibleProvider("openrouter", "openai/gpt-4o")).toBe(false);
   });
 
+  it("allows direct Google Gemini cache-ttl models", () => {
+    expect(
+      isCacheTtlEligibleProvider("google", "gemini-3.1-pro-preview", "google-generative-ai"),
+    ).toBe(true);
+    expect(isCacheTtlEligibleProvider("google", "gemini-2.5-flash", "google-generative-ai")).toBe(
+      true,
+    );
+  });
+
+  it("rejects non-cacheable Google model families", () => {
+    expect(
+      isCacheTtlEligibleProvider("google", "gemini-live-2.5-flash-preview", "google-generative-ai"),
+    ).toBe(false);
+  });
+
   it("allows custom anthropic-messages providers", () => {
     expect(isCacheTtlEligibleProvider("litellm", "claude-sonnet-4-6", "anthropic-messages")).toBe(
       true,

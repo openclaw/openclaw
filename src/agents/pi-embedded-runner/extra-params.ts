@@ -9,7 +9,6 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
-import { resolveCacheRetention } from "./anthropic-cache-retention.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
@@ -18,6 +17,7 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import { createOpenAIResponsesContextManagementWrapper } from "./openai-stream-wrappers.js";
+import { resolveCacheRetention } from "./prompt-cache-retention.js";
 import { createOpenRouterSystemCacheWrapper } from "./proxy-stream-wrappers.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
