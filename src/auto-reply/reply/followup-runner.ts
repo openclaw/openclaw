@@ -5,9 +5,10 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionBinding } from "../../agents/cli-session.js";
+import { clearCliSession, getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
@@ -15,6 +16,7 @@ import {
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { saveSessionStore } from "../../config/sessions/store.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
@@ -275,32 +277,60 @@ export function createFollowupRunner(params: {
             try {
               if (isCliProvider(provider, queued.run.config)) {
                 const cliSessionBinding = getCliSessionBinding(activeSessionEntry, provider);
-                const cliResult = await runCliAgent({
-                  sessionId: queued.run.sessionId,
-                  sessionKey: queued.run.sessionKey,
-                  agentId: queued.run.agentId,
-                  sessionFile: queued.run.sessionFile,
-                  workspaceDir: queued.run.workspaceDir,
-                  config: queued.run.config,
-                  prompt: queued.prompt,
-                  provider,
-                  model,
-                  thinkLevel: queued.run.thinkLevel,
-                  timeoutMs: queued.run.timeoutMs,
-                  runId,
-                  extraSystemPrompt: queued.run.extraSystemPrompt,
-                  ownerNumbers: queued.run.ownerNumbers,
-                  cliSessionId: cliSessionBinding?.sessionId,
-                  cliSessionBinding,
-                  authProfileId: authProfile.authProfileId,
-                  bootstrapPromptWarningSignaturesSeen,
-                  bootstrapPromptWarningSignature:
-                    bootstrapPromptWarningSignaturesSeen[
-                      bootstrapPromptWarningSignaturesSeen.length - 1
-                    ],
-                  messageProvider: queued.run.messageProvider,
-                  agentAccountId: queued.run.agentAccountId,
-                });
+                const runCliFollowup = (nextCliSessionId: string | undefined) =>
+                  runCliAgent({
+                    sessionId: queued.run.sessionId,
+                    sessionKey: queued.run.sessionKey,
+                    agentId: queued.run.agentId,
+                    sessionFile: queued.run.sessionFile,
+                    workspaceDir: queued.run.workspaceDir,
+                    config: queued.run.config,
+                    prompt: queued.prompt,
+                    provider,
+                    model,
+                    thinkLevel: queued.run.thinkLevel,
+                    timeoutMs: queued.run.timeoutMs,
+                    runId,
+                    extraSystemPrompt: queued.run.extraSystemPrompt,
+                    ownerNumbers: queued.run.ownerNumbers,
+                    cliSessionId: nextCliSessionId,
+                    cliSessionBinding:
+                      nextCliSessionId === cliSessionBinding?.sessionId
+                        ? cliSessionBinding
+                        : undefined,
+                    authProfileId: authProfile.authProfileId,
+                    bootstrapPromptWarningSignaturesSeen,
+                    bootstrapPromptWarningSignature:
+                      bootstrapPromptWarningSignaturesSeen[
+                        bootstrapPromptWarningSignaturesSeen.length - 1
+                      ],
+                    messageProvider: queued.run.messageProvider,
+                    agentAccountId: queued.run.agentAccountId,
+                  });
+                const cliResult = await runCliFollowup(cliSessionBinding?.sessionId).catch(
+                  async (err) => {
+                    if (
+                      err instanceof FailoverError &&
+                      err.reason === "session_expired" &&
+                      cliSessionBinding?.sessionId &&
+                      sessionStore &&
+                      sessionKey &&
+                      storePath
+                    ) {
+                      const nextActiveEntry =
+                        activeSessionEntry ?? sessionStore[sessionKey] ?? undefined;
+                      if (nextActiveEntry) {
+                        clearCliSession(nextActiveEntry, provider);
+                        nextActiveEntry.updatedAt = Date.now();
+                        sessionStore[sessionKey] = nextActiveEntry;
+                        activeSessionEntry = nextActiveEntry;
+                        await saveSessionStore(storePath, sessionStore);
+                      }
+                      return runCliFollowup(undefined);
+                    }
+                    throw err;
+                  },
+                );
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   cliResult.meta?.systemPromptReport,
                 );

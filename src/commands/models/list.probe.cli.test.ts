@@ -167,4 +167,47 @@ describe("runAuthProbes CLI backend dispatch", () => {
       }),
     );
   });
+
+  it("keeps the embedded probe prompt unchanged for non-CLI providers", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "test-token",
+        },
+      },
+      order: {},
+    };
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "OK" }],
+      meta: {
+        agentMeta: {
+          sessionId: "embedded-session",
+          provider: "anthropic",
+          model: "sonnet-4-6",
+        },
+      },
+    });
+
+    await runAuthProbes({
+      cfg: {} as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: ["anthropic/sonnet-4-6"],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 1,
+      },
+    });
+
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "Reply with exactly OK and nothing else. Do not use tools.",
+        streamParams: { maxTokens: 1 },
+      }),
+    );
+  });
 });
