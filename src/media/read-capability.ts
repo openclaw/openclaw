@@ -1,7 +1,10 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
 import { resolveGroupToolPolicy } from "../agents/pi-tools.policy.js";
-import { resolveEffectiveToolFsRootExpansionAllowed } from "../agents/tool-fs-policy.js";
+import {
+  resolveEffectiveToolFsRootExpansionAllowed,
+  resolveToolFsConfig,
+} from "../agents/tool-fs-policy.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -53,7 +56,6 @@ function isAgentScopedHostMediaReadAllowed(
     senderUsername: normalizeOptionalString(params.requesterSenderUsername),
     senderE164: normalizeOptionalString(params.requesterSenderE164),
   });
-  // Sender/group policy only applies when a concrete group override exists.
   if (groupPolicy && !isToolAllowedByPolicies("read", [groupPolicy])) {
     return false;
   }
@@ -67,6 +69,12 @@ export function createAgentScopedHostMediaReadFile(
     workspaceDir?: string;
   } & OutboundHostMediaPolicyContext,
 ): OutboundMediaReadFile | undefined {
+  // Do not attach an unrestricted host readFile capability when tools.fs.roots
+  // is configured; root-scoped localRoots must remain authoritative.
+  const fsConfig = resolveToolFsConfig({ cfg: params.cfg, agentId: params.agentId });
+  if (fsConfig.roots !== undefined) {
+    return undefined;
+  }
   if (!isAgentScopedHostMediaReadAllowed(params)) {
     return undefined;
   }
