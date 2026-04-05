@@ -43,22 +43,30 @@ function createRegistryPluginIdNormalizer(
   };
 }
 
-function maybeResolveBundledRuntimeSkillDir(candidate: string): string {
+interface BundledRuntimeRemap {
+  remapped: string;
+  /** Package root that contains both dist-runtime/ and dist/ trees. */
+  packageRoot: string | null;
+}
+
+function maybeResolveBundledRuntimeSkillDir(candidate: string): BundledRuntimeRemap {
   const normalized = path.normalize(candidate);
   const runtimeMarker = path.join("dist-runtime", "extensions") + path.sep;
   const markerIndex = normalized.lastIndexOf(runtimeMarker);
   if (markerIndex === -1) {
-    return candidate;
+    return { remapped: candidate, packageRoot: null };
   }
 
   const packageRoot = normalized.slice(0, markerIndex);
   const bundledLeaf = normalized.slice(markerIndex + runtimeMarker.length);
   if (!packageRoot || !bundledLeaf) {
-    return candidate;
+    return { remapped: candidate, packageRoot: null };
   }
 
   const builtCandidate = path.join(packageRoot, "dist", "extensions", bundledLeaf);
-  return fs.existsSync(builtCandidate) ? builtCandidate : candidate;
+  return fs.existsSync(builtCandidate)
+    ? { remapped: builtCandidate, packageRoot }
+    : { remapped: candidate, packageRoot: null };
 }
 
 export function resolvePluginSkillDirs(params: {
@@ -132,7 +140,18 @@ export function resolvePluginSkillDirs(params: {
       if (seen.has(candidate)) {
         continue;
       }
-      const preferredCandidate = path.resolve(maybeResolveBundledRuntimeSkillDir(candidate));
+      const { remapped, packageRoot } = maybeResolveBundledRuntimeSkillDir(candidate);
+      const preferredCandidate = path.resolve(remapped);
+      if (packageRoot != null && preferredCandidate !== candidate) {
+        // Re-validate the remapped path against the package root to prevent
+        // symlink-based escapes through the dist/ overlay.
+        if (!isPathInsideWithRealpath(packageRoot, preferredCandidate, { requireRealpath: true })) {
+          log.warn(
+            `remapped plugin skill path escapes plugin root (${record.id}): ${preferredCandidate}`,
+          );
+          continue;
+        }
+      }
       if (seen.has(preferredCandidate)) {
         continue;
       }

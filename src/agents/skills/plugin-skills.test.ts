@@ -267,6 +267,37 @@ describe("resolvePluginSkillDirs", () => {
     expect(dirs).toEqual([path.resolve(builtPluginRoot, "skills")]);
   });
 
+  it("rejects remapped built path when it symlinks outside plugin root", async () => {
+    const { workspaceDir, builtPluginRoot, runtimePluginRoot } =
+      await setupBundledRuntimeOverlayPlugin();
+
+    // Replace the built skills dir with a symlink pointing outside the plugin root.
+    const outsideDir = await tempDirs.make("openclaw-outside-");
+    const builtSkills = path.join(builtPluginRoot, "skills");
+    await fs.rm(builtSkills, { recursive: true });
+    await fs.symlink(outsideDir, builtSkills);
+
+    hoisted.loadPluginManifestRegistry.mockReturnValue(
+      createSinglePluginRegistry({
+        pluginRoot: runtimePluginRoot,
+        skills: ["./skills"],
+      }),
+    );
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {
+        plugins: {
+          entries: {
+            helper: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([]);
+  });
+
   it("resolves enabled plugin skills through legacy manifest aliases", async () => {
     const workspaceDir = await tempDirs.make("openclaw-");
     const pluginRoot = await tempDirs.make("openclaw-legacy-plugin-");
