@@ -22,6 +22,7 @@ import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
+import { loadClawDashboard } from "./controllers/claw.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
@@ -411,6 +412,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "sessions.changed") {
     void loadSessions(host as unknown as OpenClawApp);
+    return;
+  }
+
+  if (evt.event.startsWith("claw.")) {
+    void loadClawDashboard(host as unknown as OpenClawApp);
     return;
   }
 

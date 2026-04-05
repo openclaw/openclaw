@@ -5,6 +5,12 @@ import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
+  ClawControlState,
+  ClawInboxItem,
+  ClawMissionDetail,
+  ClawMissionSummary,
+} from "../../../src/shared/claw-types.js";
+import type {
   ClawHubSearchResult,
   ClawHubSkillDetail,
   SkillMessage,
@@ -104,6 +110,16 @@ export type AppViewState = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
   execApprovalError: string | null;
+  clawLoading: boolean;
+  clawError: string | null;
+  clawMissions: ClawMissionSummary[];
+  clawSelectedMissionId: string | null;
+  clawMission: ClawMissionDetail | null;
+  clawGoalDraft: string;
+  clawCreateBusy: boolean;
+  clawActionBusy: boolean;
+  clawControl: ClawControlState | null;
+  clawInbox: ClawInboxItem[];
   pendingGatewayUrl: string | null;
   configLoading: boolean;
   configRaw: string;

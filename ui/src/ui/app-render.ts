@@ -25,6 +25,19 @@ import {
   saveAgentsConfig,
 } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
+import {
+  approveClawMission,
+  cancelClawMission,
+  createClawMission,
+  loadClawDashboard,
+  pauseAllClaw,
+  pauseClawMission,
+  rerunClawPreflight,
+  resumeClawMission,
+  selectClawMission,
+  setClawAutonomy,
+  stopAllClawNow,
+} from "./controllers/claw.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
   applyConfig,
@@ -141,6 +154,7 @@ function createLazy<T>(loader: () => Promise<T>): () => T | null {
 
 const lazyAgents = createLazy(() => import("./views/agents.ts"));
 const lazyChannels = createLazy(() => import("./views/channels.ts"));
+const lazyClaw = createLazy(() => import("./views/claw.ts"));
 const lazyCron = createLazy(() => import("./views/cron.ts"));
 const lazyDebug = createLazy(() => import("./views/debug.ts"));
 const lazyInstances = createLazy(() => import("./views/instances.ts"));
@@ -771,6 +785,58 @@ export function renderApp(state: AppViewState) {
               onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
               onRefreshLogs: () => state.loadOverview(),
             })
+          : nothing}
+        ${state.tab === "claw"
+          ? lazyRender(lazyClaw, (m) =>
+              m.renderClaw({
+                loading: state.clawLoading,
+                error: state.clawError,
+                createBusy: state.clawCreateBusy,
+                actionBusy: state.clawActionBusy,
+                goalDraft: state.clawGoalDraft,
+                missions: state.clawMissions,
+                mission: state.clawMission,
+                selectedMissionId: state.clawSelectedMissionId,
+                control: state.clawControl,
+                inbox: state.clawInbox,
+                onGoalDraftChange: (value) => {
+                  state.clawGoalDraft = value;
+                },
+                onCreateMission: () => {
+                  void createClawMission(state);
+                },
+                onSelectMission: (missionId) => {
+                  void selectClawMission(state, missionId);
+                },
+                onApproveMission: (missionId) => {
+                  void approveClawMission(state, missionId);
+                },
+                onPauseMission: (missionId) => {
+                  void pauseClawMission(state, missionId);
+                },
+                onResumeMission: (missionId) => {
+                  void resumeClawMission(state, missionId);
+                },
+                onCancelMission: (missionId) => {
+                  void cancelClawMission(state, missionId);
+                },
+                onRerunPreflight: (missionId) => {
+                  void rerunClawPreflight(state, missionId);
+                },
+                onPauseAll: () => {
+                  void pauseAllClaw(state);
+                },
+                onStopAllNow: () => {
+                  void stopAllClawNow(state);
+                },
+                onSetAutonomy: (enabled) => {
+                  void setClawAutonomy(state, enabled);
+                },
+                onRefresh: () => {
+                  void loadClawDashboard(state);
+                },
+              }),
+            )
           : nothing}
         ${state.tab === "channels"
           ? lazyRender(lazyChannels, (m) =>
