@@ -110,6 +110,12 @@ let runsTesting: typeof import("../../agents/pi-embedded-runner/runs.js").__test
 let resetActiveEmbeddedRuns: typeof import("../../agents/pi-embedded-runner/runs.js").__testing.resetActiveEmbeddedRuns;
 let loadScopeCounter = 0;
 
+function createGatewayDrainingError(): Error {
+  const error = new Error("Gateway is draining for restart; new tasks are not accepted");
+  error.name = "GatewayDrainingError";
+  return error;
+}
+
 async function loadFreshGetReplyRunModuleForTest() {
   ({ runPreparedReply } = await importFreshModule<typeof import("./get-reply-run.js")>(
     import.meta.url,

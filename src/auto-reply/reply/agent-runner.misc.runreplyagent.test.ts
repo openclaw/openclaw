@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing as embeddedRunsTesting,
   abortEmbeddedPiRun,
   getActiveEmbeddedRunCount,
   isEmbeddedPiRunActive,
@@ -19,7 +18,9 @@ import {
   registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
+import { __testing as abortTesting, tryFastAbortFromMessage } from "./abort.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import { buildTestCtx } from "./test-ctx.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
@@ -39,6 +40,22 @@ const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const compactState = vi.hoisted(() => ({
+  compactEmbeddedPiSessionMock: vi.fn(),
+  actualCompactEmbeddedPiSession: undefined as
+    | typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession
+    | undefined,
+}));
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -56,8 +73,11 @@ vi.mock("../../agents/pi-embedded.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/pi-embedded.js")>(
     "../../agents/pi-embedded.js",
   );
+  compactState.actualCompactEmbeddedPiSession = actual.compactEmbeddedPiSession;
   return {
     ...actual,
+    compactEmbeddedPiSession: (params: unknown) =>
+      compactState.compactEmbeddedPiSessionMock(params),
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
   };
