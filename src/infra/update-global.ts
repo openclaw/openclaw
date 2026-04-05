@@ -171,7 +171,7 @@ export function resolveGlobalInstallSpec(params: {
 
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
-): Promise<NodeJS.ProcessEnv | undefined> {
+): Promise<Record<string, string>> {
   const pathPrepend = await resolvePortableGitPathPrepend(env);
   const merged = Object.fromEntries(
     Object.entries(env ?? process.env)
