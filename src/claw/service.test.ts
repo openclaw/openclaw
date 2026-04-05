@@ -177,6 +177,30 @@ describe("createClawMissionService", () => {
     expect(created.mission?.preflight.some((check) => check.id === "process-tool")).toBe(true);
   });
 
+  it("blocks browser-required missions when browser readiness is missing", async () => {
+    const inspectBrowserReadiness = vi.fn().mockResolvedValue({
+      ready: false,
+      summary: "Browser control did not report a ready state.",
+      detail: "CDP handshake failed.",
+    });
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      inspectBrowserReadiness,
+    });
+
+    const created = await service.createMission({
+      goal: "Open the website in the browser, log in, and verify the result.",
+    });
+
+    expect(created.mission?.status).toBe("awaiting_setup");
+    expect(created.mission?.blockedSummary).toContain("Browser control");
+    expect(
+      created.mission?.preflight.find((check) => check.id === "browser-runtime")?.detail,
+    ).toContain("CDP handshake failed");
+    expect(inspectBrowserReadiness).toHaveBeenCalledTimes(1);
+  });
+
   it("applies global pause to active missions", async () => {
     const service = createClawMissionService({
       resolveWorkspaceDir: () => workspaceDir,
@@ -295,16 +319,16 @@ describe("createClawMissionService", () => {
     );
   });
 
-  it("honors claw.requiredVerifier=false and completes without a verifier run", async () => {
-    const runEmbeddedPiAgent = vi.fn().mockResolvedValueOnce(
+  it("claims queued missions up to claw.maxActiveMissions and keeps the cap stable", async () => {
+    const runEmbeddedPiAgent = vi.fn().mockResolvedValue(
       agentResult(
         JSON.stringify({
-          outcome: "verify",
-          summary: "The runner completed the mission and does not need a verifier.",
-          currentStep: "Ready to complete.",
-          nextStep: "Mark the mission done.",
+          outcome: "continue",
+          summary: "The runner made bounded progress.",
+          currentStep: "Continue mission execution.",
+          nextStep: "Advance the next repository change.",
           progress: true,
-          evidence: ["Completed the requested work."],
+          evidence: ["Captured a bounded execution checkpoint."],
         }),
       ),
     );
@@ -314,21 +338,103 @@ describe("createClawMissionService", () => {
       loadConfig: () =>
         createConfig({
           claw: {
-            requiredVerifier: false,
+            maxActiveMissions: 2,
+          },
+        }),
+      runEmbeddedPiAgent,
+    });
+
+    const first = await service.createMission({
+      goal: "Implement the first approved Claw mission.",
+    });
+    const second = await service.createMission({
+      goal: "Implement the second approved Claw mission.",
+    });
+    const third = await service.createMission({
+      goal: "Implement the third approved Claw mission.",
+    });
+    await service.approveMissionStart(first.mission!.id);
+    await service.approveMissionStart(second.mission!.id);
+    await service.approveMissionStart(third.mission!.id);
+
+    const firstDrain = await service.runMissionCycles();
+    expect(firstDrain).toHaveLength(2);
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+
+    const firstDashboard = await service.buildDashboard();
+    expect(firstDashboard.missions.filter((mission) => mission.status === "running")).toHaveLength(2);
+    expect(firstDashboard.missions.filter((mission) => mission.status === "queued")).toHaveLength(1);
+
+    const secondDrain = await service.runMissionCycles();
+    expect(secondDrain).toHaveLength(2);
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(4);
+
+    const secondDashboard = await service.buildDashboard();
+    expect(secondDashboard.missions.filter((mission) => mission.status === "running")).toHaveLength(2);
+    expect(secondDashboard.missions.filter((mission) => mission.status === "queued")).toHaveLength(1);
+  });
+
+  it("uses a bounded planning pass to generate a mission-specific packet", async () => {
+    const runEmbeddedPiAgent = vi.fn().mockResolvedValueOnce(
+      agentResult(
+        JSON.stringify({
+          summary: "Implement the requested Claw scope with a focused execution plan.",
+          scopeIn: [
+            "Implement the requested Claw mission behavior in the current repository.",
+            "Keep the Control UI mission packet aligned with runtime progress.",
+          ],
+          scopeOut: ["Telegram channel work."],
+          phases: [
+            "Inspect the current Claw runtime and mission files.",
+            "Implement the requested mission behavior and controls.",
+            "Verify the result against explicit done criteria.",
+          ],
+          tasks: [
+            "Inspect the existing Claw runtime and Control UI surfaces.",
+            "Implement the requested mission behavior in the repository.",
+            "Verify the outcome and record durable evidence.",
+          ],
+          doneCriteria: [
+            "The requested Claw behavior is implemented in the repository.",
+            "The mission packet and audit trail reflect the final state.",
+            "A fresh verifier can confirm the requested outcome.",
+          ],
+        }),
+      ),
+    );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () =>
+        createConfig({
+          claw: {
+            enabled: true,
           },
         }),
       runEmbeddedPiAgent,
     });
 
     const created = await service.createMission({
-      goal: "Finish a mission without requiring a verifier pass.",
+      goal: "Implement the requested Claw mission behavior in this repository.",
     });
-    const missionId = created.mission!.id;
-    await service.approveMissionStart(missionId);
+    const mission = created.mission!;
 
-    const cycle = await service.runNextMissionCycle();
-    expect(cycle?.mission?.status).toBe("done");
+    const scope = await fs.readFile(path.join(mission.missionDir, "PROJECT_SCOPE.md"), "utf-8");
+    const plan = await fs.readFile(path.join(mission.missionDir, "PROJECT_PLAN.md"), "utf-8");
+    const tasks = await fs.readFile(path.join(mission.missionDir, "PROJECT_TASKS.md"), "utf-8");
+    const done = await fs.readFile(
+      path.join(mission.missionDir, "PROJECT_DONE_CRITERIA.md"),
+      "utf-8",
+    );
+
+    expect(scope).toContain("Implement the requested Claw mission behavior");
+    expect(plan).toContain("focused execution plan");
+    expect(tasks).toContain("Inspect the existing Claw runtime and Control UI surfaces.");
+    expect(done).toContain("fresh verifier");
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+
+    const audit = await service.getAudit(mission.id);
+    expect(audit.map((entry) => entry.type)).toContain("mission.packetPlanned");
   });
 
   it("keeps plan and task files in sync with mission progress", async () => {
@@ -362,22 +468,31 @@ describe("createClawMissionService", () => {
     const tasks = await fs.readFile(path.join(mission.missionDir, "PROJECT_TASKS.md"), "utf-8");
 
     expect(plan).toContain("Continue implementing the next repository change.");
-    expect(tasks).toContain("Execute the current mission objective");
+    expect(tasks).toContain("## Current Focus");
     expect(tasks).toContain("Continue implementing the next repository change.");
   });
 
-  it("marks running missions as recovering and resumes them on the next cycle", async () => {
+  it("auto-resumes safe verifier recoveries after restart", async () => {
     const runEmbeddedPiAgent = vi
       .fn()
-      .mockResolvedValue(
+      .mockResolvedValueOnce(
         agentResult(
           JSON.stringify({
-            outcome: "continue",
-            summary: "The runner made progress and should keep going.",
-            currentStep: "Continue mission execution.",
-            nextStep: "Keep executing the next task.",
+            outcome: "verify",
+            summary: "The runner finished the mission and requested verification.",
+            currentStep: "Ready for verification.",
+            nextStep: "Run the verifier.",
             progress: true,
-            evidence: ["Recovered and continued execution."],
+            evidence: ["Runner completed the requested work."],
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "done",
+            summary: "Verification passed after recovery.",
+            evidence: ["Verifier confirmed the done criteria."],
           }),
         ),
       );
@@ -397,9 +512,201 @@ describe("createClawMissionService", () => {
 
     const recovered = await service.recoverInterruptedMissions();
     expect(recovered?.mission?.status).toBe("recovering");
+    expect(
+      recovered?.mission?.decisions.some(
+        (decision) => decision.kind === "recovery_uncertain" && decision.status === "pending",
+      ),
+    ).toBe(false);
+
+    const resumed = await service.runNextMissionCycle();
+    expect(resumed?.mission?.status).toBe("done");
+    expect(resumed?.mission?.endedAt).toBeTruthy();
+  });
+
+  it("blocks uncertain running recoveries and creates a recovery decision", async () => {
+    const runEmbeddedPiAgent = vi.fn().mockResolvedValueOnce(
+      agentResult(
+        JSON.stringify({
+          outcome: "continue",
+          summary: "The runner made progress and should keep going.",
+          currentStep: "Continue mission execution.",
+          nextStep: "Keep executing the next task.",
+          progress: true,
+          evidence: ["Updated the repository state before restart."],
+        }),
+      ),
+    );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Block uncertain recoveries until the operator confirms continuation.",
+    });
+    const missionId = created.mission!.id;
+    await service.approveMissionStart(missionId);
+    await service.runNextMissionCycle();
+
+    const recovered = await service.recoverInterruptedMissions();
+    expect(recovered?.mission?.status).toBe("blocked");
+    expect(recovered?.mission?.currentStep).toBe(
+      "Awaiting operator confirmation before resuming recovery.",
+    );
+    expect(recovered?.mission?.blockedSummary).toContain("operator confirmation");
+    expect(
+      recovered?.mission?.decisions.some(
+        (decision) => decision.kind === "recovery_uncertain" && decision.status === "pending",
+      ),
+    ).toBe(true);
+
+    const nextCycle = await service.runNextMissionCycle();
+    expect(nextCycle).toBeNull();
+  });
+
+  it("lets the operator continue an uncertain recovery", async () => {
+    const runEmbeddedPiAgent = vi
+      .fn()
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "continue",
+            summary: "The runner made progress and should keep going.",
+            currentStep: "Continue mission execution.",
+            nextStep: "Keep executing the next task.",
+            progress: true,
+            evidence: ["Updated the repository state before restart."],
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "continue",
+            summary: "The runner resumed after the operator approved recovery.",
+            currentStep: "Continue mission execution.",
+            nextStep: "Advance the next task.",
+            progress: true,
+            evidence: ["Resumed mission execution after confirmation."],
+          }),
+        ),
+      );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Continue uncertain recoveries only after operator confirmation.",
+    });
+    const missionId = created.mission!.id;
+    await service.approveMissionStart(missionId);
+    await service.runNextMissionCycle();
+
+    const recovered = await service.recoverInterruptedMissions();
+    const decision = recovered?.mission?.decisions.find(
+      (entry) => entry.kind === "recovery_uncertain" && entry.status === "pending",
+    );
+    expect(decision?.id).toBeTruthy();
+
+    const continued = await service.replyDecision({
+      missionId,
+      decisionId: decision!.id,
+      action: "continue",
+    });
+    expect(continued.mission?.status).toBe("queued");
+    expect(
+      continued.mission?.decisions.find((entry) => entry.id === decision!.id)?.status,
+    ).toBe("resolved");
 
     const resumed = await service.runNextMissionCycle();
     expect(resumed?.mission?.status).toBe("running");
-    expect(resumed?.mission?.currentStep).toBe("Keep executing the next task.");
+    expect(resumed?.mission?.currentStep).toBe("Advance the next task.");
+  });
+
+  it("lets the operator pause an uncertain recovery", async () => {
+    const runEmbeddedPiAgent = vi.fn().mockResolvedValueOnce(
+      agentResult(
+        JSON.stringify({
+          outcome: "continue",
+          summary: "The runner made progress and should keep going.",
+          currentStep: "Continue mission execution.",
+          nextStep: "Keep executing the next task.",
+          progress: true,
+          evidence: ["Updated the repository state before restart."],
+        }),
+      ),
+    );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Allow the operator to pause uncertain recoveries.",
+    });
+    const missionId = created.mission!.id;
+    await service.approveMissionStart(missionId);
+    await service.runNextMissionCycle();
+
+    const recovered = await service.recoverInterruptedMissions();
+    const decision = recovered?.mission?.decisions.find(
+      (entry) => entry.kind === "recovery_uncertain" && entry.status === "pending",
+    );
+    expect(decision?.id).toBeTruthy();
+
+    const paused = await service.replyDecision({
+      missionId,
+      decisionId: decision!.id,
+      action: "pause",
+    });
+    expect(paused.mission?.status).toBe("paused");
+  });
+
+  it("lets the operator cancel an uncertain recovery", async () => {
+    const runEmbeddedPiAgent = vi.fn().mockResolvedValueOnce(
+      agentResult(
+        JSON.stringify({
+          outcome: "continue",
+          summary: "The runner made progress and should keep going.",
+          currentStep: "Continue mission execution.",
+          nextStep: "Keep executing the next task.",
+          progress: true,
+          evidence: ["Updated the repository state before restart."],
+        }),
+      ),
+    );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Allow the operator to cancel uncertain recoveries.",
+    });
+    const missionId = created.mission!.id;
+    await service.approveMissionStart(missionId);
+    await service.runNextMissionCycle();
+
+    const recovered = await service.recoverInterruptedMissions();
+    const decision = recovered?.mission?.decisions.find(
+      (entry) => entry.kind === "recovery_uncertain" && entry.status === "pending",
+    );
+    expect(decision?.id).toBeTruthy();
+
+    const cancelled = await service.replyDecision({
+      missionId,
+      decisionId: decision!.id,
+      action: "cancel",
+    });
+    expect(cancelled.mission?.status).toBe("cancelled");
   });
 });

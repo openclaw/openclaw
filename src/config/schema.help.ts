@@ -1022,8 +1022,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum number of concurrently active Claw missions allowed to execute at once. Keep this at 1 for the current single-runner delivery unless you intentionally validate parallel mission behavior.",
   "claw.loopMs":
     "Wake-loop interval in milliseconds for the Claw mission runtime when it polls for queued or recovering work. Use shorter intervals for faster pickup or longer intervals to reduce idle churn.",
-  "claw.requiredVerifier":
-    "Requires a fresh-context verifier pass before Claw can mark a mission done. Keep enabled to reduce self-confirmation bias and preserve the required verification contract.",
   "claw.autonomyDefault":
     "Default global autonomy state for newly created Claw control state. Keep enabled for the approved-mission workflow unless you intentionally want all missions to queue until an operator explicitly resumes autonomy.",
   plugins:

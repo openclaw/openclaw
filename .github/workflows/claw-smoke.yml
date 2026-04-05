@@ -1,0 +1,78 @@
+name: Claw Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/claw-smoke.yml"
+      - "src/claw/**"
+      - "src/shared/claw-types.ts"
+      - "src/gateway/server-methods/claw.ts"
+      - "src/gateway/server-methods.ts"
+      - "src/gateway/server-methods-list.ts"
+      - "src/gateway/server-broadcast.ts"
+      - "src/gateway/server-broadcast-runtime.ts"
+      - "src/gateway/server-runtime-state.ts"
+      - "src/gateway/method-scopes.ts"
+      - "src/agents/system-prompt.ts"
+      - "src/agents/system-prompt.test.ts"
+      - "src/config/types.claw.ts"
+      - "src/config/zod-schema.ts"
+      - "src/config/schema.help.ts"
+      - "src/config/schema.labels.ts"
+      - "ui/src/ui/controllers/claw.ts"
+      - "ui/src/ui/views/claw.ts"
+      - "ui/src/ui/app-render.ts"
+      - "ui/src/ui/app-gateway.ts"
+      - "ui/src/ui/app.ts"
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+    paths:
+      - ".github/workflows/claw-smoke.yml"
+      - "src/claw/**"
+      - "src/shared/claw-types.ts"
+      - "src/gateway/server-methods/claw.ts"
+      - "src/gateway/server-methods.ts"
+      - "src/gateway/server-methods-list.ts"
+      - "src/gateway/server-broadcast.ts"
+      - "src/gateway/server-broadcast-runtime.ts"
+      - "src/gateway/server-runtime-state.ts"
+      - "src/gateway/method-scopes.ts"
+      - "src/agents/system-prompt.ts"
+      - "src/agents/system-prompt.test.ts"
+      - "src/config/types.claw.ts"
+      - "src/config/zod-schema.ts"
+      - "src/config/schema.help.ts"
+      - "src/config/schema.labels.ts"
+      - "ui/src/ui/controllers/claw.ts"
+      - "ui/src/ui/views/claw.ts"
+      - "ui/src/ui/app-render.ts"
+      - "ui/src/ui/app-gateway.ts"
+      - "ui/src/ui/app.ts"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  claw-smoke:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run Claw smoke
+        env:
+          OPENCLAW_VITEST_MAX_WORKERS: "1"
+        run: pnpm test src/claw/smoke.test.ts

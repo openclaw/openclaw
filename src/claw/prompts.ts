@@ -125,6 +125,45 @@ export function buildClawHelperExtraSystemPrompt(): string {
   ].join("\n");
 }
 
+export function buildClawPlanningExtraSystemPrompt(): string {
+  return [
+    "You are producing a one-shot mission packet plan for Claw before execution begins.",
+    "Stay bounded: inspect only what you need to create a useful mission-specific scope, plan, tasks, and done criteria.",
+    "Do not start executing the mission itself.",
+    "Return structured planning output only.",
+    "End the turn with exactly one JSON object and no extra prose.",
+  ].join("\n");
+}
+
+export function buildClawPlanningPrompt(params: {
+  missionId: string;
+  title: string;
+  goal: string;
+  workspaceDir: string;
+}): string {
+  return [
+    "Create the initial mission packet for this Claw mission.",
+    "",
+    `Mission ID: ${params.missionId}`,
+    `Title: ${params.title}`,
+    `Workspace: ${params.workspaceDir}`,
+    "",
+    "Goal:",
+    params.goal,
+    "",
+    "Planning contract:",
+    "- Inspect the repository only as needed to produce a useful mission-specific packet.",
+    "- Keep the plan bounded and execution-oriented.",
+    "- Scope should describe what is in and out.",
+    "- Phases should describe the high-level sequence.",
+    "- Tasks should be concrete actions, not generic filler.",
+    "- Done criteria must be explicit enough for a fresh verifier to evaluate.",
+    "",
+    "Return exactly one JSON object with this shape:",
+    '```json\n{"summary":"strategy summary","scopeIn":["item"],"scopeOut":["item"],"phases":["phase"],"tasks":["task"],"doneCriteria":["criterion"]}\n```',
+  ].join("\n");
+}
+
 export function buildClawHelperPrompt(params: {
   missionId: string;
   title: string;

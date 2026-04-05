@@ -79,8 +79,8 @@ async function drainClawRuntimeQueue(): Promise<void> {
         }
         state.recovered = true;
       }
-      const snapshot = await clawMissionService.runNextMissionCycle();
-      if (snapshot) {
+      const snapshots = await clawMissionService.runMissionCycles();
+      for (const snapshot of snapshots) {
         broadcastClawMissionSnapshot(getGatewayBroadcastRuntime(), { snapshot });
       }
     } while (state.wakeRequested);
