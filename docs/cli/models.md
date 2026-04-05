@@ -132,5 +132,5 @@ Notes:
   `--profile-id`.
 - `paste-token --expires-in <duration>` stores an absolute token expiry from a
   relative duration such as `365d` or `12h`.
-- Anthropic billing note: Anthropic's public Claude Code docs still include direct Claude Code terminal usage in Claude plan limits. Separately, Anthropic notified OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription.
+- Anthropic billing note: We believe Claude Code CLI fallback is likely allowed for local, user-managed automation based on Anthropic's public CLI docs. That said, Anthropic's third-party harness policy creates enough ambiguity around subscription-backed use in external products that we do not recommend it for production. Anthropic also notified OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription.
 - Anthropic `setup-token` / `paste-token` are available again as a legacy/manual OpenClaw path. Use them with the expectation that Anthropic told OpenClaw users this path requires **Extra Usage**.
