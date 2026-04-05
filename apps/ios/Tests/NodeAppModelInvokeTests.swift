@@ -165,6 +165,41 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(appModel._test_pendingExecApprovalPrompt() == nil)
     }
 
+    @Test @MainActor func dismissPendingExecApprovalPromptByIdLeavesDifferentPromptVisible() throws {
+        let appModel = NodeAppModel()
+        appModel._test_presentExecApprovalPrompt(
+            try #require(
+                NodeAppModel._test_makeExecApprovalPrompt(
+                    id: "approval-active",
+                    commandText: "echo keep",
+                    allowedDecisions: ["allow-once", "deny"],
+                    host: "gateway",
+                    nodeId: nil,
+                    agentId: nil,
+                    expiresAtMs: 1)))
+
+        appModel.dismissPendingExecApprovalPrompt(approvalId: "approval-stale")
+
+        let prompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        #expect(prompt.id == "approval-active")
+    }
+
+    @Test func approvalNotificationErrorClassificationPrefersStructuredDetails() {
+        let staleError = GatewayResponseError(
+            method: "exec.approval.get",
+            code: "INVALID_REQUEST",
+            message: "gateway error",
+            details: ["reason": AnyCodable("APPROVAL_NOT_FOUND")])
+        let unavailableError = GatewayResponseError(
+            method: "exec.approval.resolve",
+            code: "INVALID_REQUEST",
+            message: "gateway error",
+            details: ["reason": AnyCodable("APPROVAL_ALLOW_ALWAYS_UNAVAILABLE")])
+
+        #expect(NodeAppModel._test_isApprovalNotificationStaleError(staleError))
+        #expect(NodeAppModel._test_isApprovalNotificationUnavailableError(unavailableError))
+    }
+
     @Test func operatorLoopWaitsForBootstrapHandoffBeforeUsingStoredToken() {
         #expect(
             !NodeAppModel._test_shouldStartOperatorGatewayLoop(

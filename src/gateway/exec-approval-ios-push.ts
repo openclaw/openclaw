@@ -40,6 +40,11 @@ type DeliveryPlan = {
   relayConfig?: ApnsRelayConfig;
 };
 
+type ApprovalDeliveryState = {
+  nodeIds: string[];
+  requestPushPromise: Promise<{ attempted: number; delivered: number }>;
+};
+
 function isIosPlatform(platform: string | undefined): boolean {
   const normalized = platform?.trim().toLowerCase() ?? "";
   return normalized.startsWith("ios") || normalized.startsWith("ipados");
@@ -250,49 +255,76 @@ async function sendResolvedPushes(params: {
 }
 
 export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogger }) {
-  const approvalTargetsById = new Map<string, string[]>();
+  const approvalDeliveriesById = new Map<string, ApprovalDeliveryState>();
+  const pendingDeliveryStateById = new Map<string, Promise<ApprovalDeliveryState | null>>();
 
   return {
     async handleRequested(request: ExecApprovalRequest): Promise<boolean> {
-      const plan = await resolveDeliveryPlan({
-        requireApprovalScope: true,
-        log: params.log,
-      });
-      if (plan.targets.length === 0) {
-        approvalTargetsById.delete(request.id);
+      const deliveryStatePromise = (async (): Promise<ApprovalDeliveryState | null> => {
+        const plan = await resolveDeliveryPlan({
+          requireApprovalScope: true,
+          log: params.log,
+        });
+        if (plan.targets.length === 0) {
+          approvalDeliveriesById.delete(request.id);
+          return null;
+        }
+
+        const deliveryState: ApprovalDeliveryState = {
+          nodeIds: plan.targets.map((target) => target.nodeId),
+          requestPushPromise: sendRequestedPushes({ request, plan, log: params.log }).catch(
+            (err) => {
+              const message = err instanceof Error ? err.message : String(err);
+              params.log.error?.(`exec approvals: iOS request push failed: ${message}`);
+              return { attempted: plan.targets.length, delivered: 0 };
+            },
+          ),
+        };
+        approvalDeliveriesById.set(request.id, deliveryState);
+        return deliveryState;
+      })();
+      pendingDeliveryStateById.set(request.id, deliveryStatePromise);
+
+      const deliveryState = await deliveryStatePromise;
+      if (pendingDeliveryStateById.get(request.id) === deliveryStatePromise) {
+        pendingDeliveryStateById.delete(request.id);
+      }
+      if (!deliveryState) {
         return false;
       }
-      approvalTargetsById.set(
-        request.id,
-        plan.targets.map((target) => target.nodeId),
-      );
-      void sendRequestedPushes({ request, plan, log: params.log })
-        .then(({ attempted, delivered }) => {
-          if (attempted > 0 && delivered === 0) {
-            params.log.warn?.(
-              `exec approvals: iOS request push reached no devices approvalId=${request.id} attempted=${attempted}`,
-            );
-          }
-        })
-        .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
-          params.log.error?.(`exec approvals: iOS request push failed: ${message}`);
-        });
+
+      const { attempted, delivered } = await deliveryState.requestPushPromise;
+      if (attempted > 0 && delivered === 0) {
+        params.log.warn?.(
+          `exec approvals: iOS request push reached no devices approvalId=${request.id} attempted=${attempted}`,
+        );
+        if (
+          approvalDeliveriesById.get(request.id)?.requestPushPromise ===
+          deliveryState.requestPushPromise
+        ) {
+          approvalDeliveriesById.delete(request.id);
+        }
+        return false;
+      }
       return true;
     },
 
     async handleResolved(resolved: ExecApprovalResolved): Promise<void> {
-      const explicitNodeIds = approvalTargetsById.get(resolved.id);
-      approvalTargetsById.delete(resolved.id);
-      if (!explicitNodeIds?.length) {
+      const deliveryState =
+        approvalDeliveriesById.get(resolved.id) ??
+        (await pendingDeliveryStateById.get(resolved.id));
+      approvalDeliveriesById.delete(resolved.id);
+      pendingDeliveryStateById.delete(resolved.id);
+      if (!deliveryState?.nodeIds.length) {
         params.log.debug?.(
           `exec approvals: iOS cleanup push skipped approvalId=${resolved.id} reason=missing-targets`,
         );
         return;
       }
+      await deliveryState.requestPushPromise;
       const plan = await resolveDeliveryPlan({
         requireApprovalScope: false,
-        explicitNodeIds,
+        explicitNodeIds: deliveryState.nodeIds,
         log: params.log,
       });
       if (plan.targets.length === 0) {
@@ -306,17 +338,20 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
     },
 
     async handleExpired(request: ExecApprovalRequest): Promise<void> {
-      const explicitNodeIds = approvalTargetsById.get(request.id);
-      approvalTargetsById.delete(request.id);
-      if (!explicitNodeIds?.length) {
+      const deliveryState =
+        approvalDeliveriesById.get(request.id) ?? (await pendingDeliveryStateById.get(request.id));
+      approvalDeliveriesById.delete(request.id);
+      pendingDeliveryStateById.delete(request.id);
+      if (!deliveryState?.nodeIds.length) {
         params.log.debug?.(
           `exec approvals: iOS cleanup push skipped approvalId=${request.id} reason=missing-targets`,
         );
         return;
       }
+      await deliveryState.requestPushPromise;
       const plan = await resolveDeliveryPlan({
         requireApprovalScope: false,
-        explicitNodeIds,
+        explicitNodeIds: deliveryState.nodeIds,
         log: params.log,
       });
       if (plan.targets.length === 0) {

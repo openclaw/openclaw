@@ -125,6 +125,7 @@ final class NodeAppModel {
     private(set) var pendingExecApprovalPrompt: ExecApprovalPrompt?
     private(set) var pendingExecApprovalPromptResolving: Bool = false
     private(set) var pendingExecApprovalPromptErrorText: String?
+    private var pendingExecApprovalPromptRequestGeneration: Int = 0
     private var queuedAgentDeepLinkPrompt: AgentDeepLinkPrompt?
     private var lastAgentDeepLinkPromptAt: Date = .distantPast
     @ObservationIgnored private var queuedAgentDeepLinkPromptTask: Task<Void, Never>?
@@ -2820,12 +2821,12 @@ extension NodeAppModel {
     }
 
     private struct ExecApprovalGetRequest: Encodable {
-        var id: String
+        let id: String
     }
 
     private struct ExecApprovalResolveRequest: Encodable {
-        var id: String
-        var decision: String
+        let id: String
+        let decision: String
     }
 
     private struct ExecApprovalGetResponse: Decodable {
@@ -2842,10 +2843,15 @@ extension NodeAppModel {
         let approvalId = prompt.approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !approvalId.isEmpty else { return }
 
+        self.pendingExecApprovalPromptRequestGeneration &+= 1
+        let requestGeneration = self.pendingExecApprovalPromptRequestGeneration
         self.pendingExecApprovalPromptResolving = true
         self.pendingExecApprovalPromptErrorText = nil
 
         let fetchedPrompt = await self.fetchExecApprovalPrompt(approvalId: approvalId)
+        guard self.pendingExecApprovalPromptRequestGeneration == requestGeneration else {
+            return
+        }
         self.pendingExecApprovalPromptResolving = false
         switch fetchedPrompt {
         case let .loaded(fetchedPrompt):
@@ -2854,7 +2860,7 @@ extension NodeAppModel {
             await ExecApprovalNotificationBridge.removeNotifications(
                 forApprovalID: approvalId,
                 notificationCenter: self.notificationCenter)
-            self.dismissPendingExecApprovalPrompt()
+            self.clearPendingExecApprovalPromptIfMatches(approvalId)
         case let .failed(message):
             self.execApprovalNotificationLogger.error(
                 "Exec approval prompt fetch failed id=\(approvalId, privacy: .public) reason=\(message, privacy: .public)")
@@ -3002,18 +3008,26 @@ extension NodeAppModel {
         self.dismissPendingExecApprovalPrompt()
     }
 
-    private static func isApprovalNotificationStaleError(_ error: Error) -> Bool {
+    nonisolated private static func isApprovalNotificationStaleError(_ error: Error) -> Bool {
         guard let gatewayError = error as? GatewayResponseError else { return false }
-        let message = gatewayError.message.lowercased()
-        return gatewayError.code == "INVALID_REQUEST"
-            && (message.contains("unknown or expired approval id") || message.contains("approval_not_found"))
+        if gatewayError.code != "INVALID_REQUEST" {
+            return false
+        }
+        if gatewayError.detailsReason == "APPROVAL_NOT_FOUND" {
+            return true
+        }
+        return gatewayError.message.lowercased().contains("unknown or expired approval id")
     }
 
-    private static func isApprovalNotificationUnavailableError(_ error: Error) -> Bool {
+    nonisolated private static func isApprovalNotificationUnavailableError(_ error: Error) -> Bool {
         guard let gatewayError = error as? GatewayResponseError else { return false }
-        let message = gatewayError.message.lowercased()
-        return gatewayError.code == "INVALID_REQUEST"
-            && message.contains("allow-always is unavailable")
+        if gatewayError.code != "INVALID_REQUEST" {
+            return false
+        }
+        if gatewayError.detailsReason == "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE" {
+            return true
+        }
+        return gatewayError.message.lowercased().contains("allow-always is unavailable")
     }
 
     private struct SilentPushWakeAttemptResult {
@@ -3062,13 +3076,31 @@ extension NodeAppModel {
         return await self.isOperatorConnected()
     }
 
+    private func ensureOperatorReconnectLoopIfNeeded() {
+        guard let cfg = self.activeGatewayConnectConfig else {
+            return
+        }
+        guard self.operatorGatewayTask == nil else {
+            return
+        }
+        let stableID = cfg.stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveStableID = stableID.isEmpty ? cfg.url.absoluteString : stableID
+        let sessionBox = cfg.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        self.startOperatorGatewayLoop(
+            url: cfg.url,
+            stableID: effectiveStableID,
+            token: cfg.token,
+            bootstrapToken: cfg.bootstrapToken,
+            password: cfg.password,
+            nodeOptions: cfg.nodeOptions,
+            sessionBox: sessionBox)
+    }
+
     private func ensureOperatorApprovalConnection(timeoutMs: Int) async -> Bool {
         if await self.isOperatorConnected() {
             return true
         }
-        if let cfg = self.activeGatewayConnectConfig {
-            self.applyGatewayConnectConfig(cfg)
-        }
+        self.ensureOperatorReconnectLoopIfNeeded()
         return await self.waitForOperatorConnection(timeoutMs: timeoutMs, pollMs: 250)
     }
 
@@ -3492,6 +3524,14 @@ extension NodeAppModel {
 
     func _test_pendingExecApprovalPrompt() -> ExecApprovalPrompt? {
         self.pendingExecApprovalPrompt
+    }
+
+    nonisolated static func _test_isApprovalNotificationStaleError(_ error: Error) -> Bool {
+        self.isApprovalNotificationStaleError(error)
+    }
+
+    nonisolated static func _test_isApprovalNotificationUnavailableError(_ error: Error) -> Bool {
+        self.isApprovalNotificationUnavailableError(error)
     }
 
     static func _test_makeExecApprovalPrompt(

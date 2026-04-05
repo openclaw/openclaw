@@ -32,6 +32,10 @@ const APPROVAL_NOT_FOUND_DETAILS = {
   reason: ErrorCodes.APPROVAL_NOT_FOUND,
 } as const;
 
+const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
+  reason: "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
+} as const;
+
 type ExecApprovalIosPushDelivery = {
   handleRequested?: (request: ExecApprovalRequest) => Promise<boolean>;
   handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
@@ -415,6 +419,9 @@ export function createExecApprovalHandlers(
           errorShape(
             ErrorCodes.INVALID_REQUEST,
             "allow-always is unavailable because the effective policy requires approval every time",
+            {
+              details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
+            },
           ),
         );
         return;

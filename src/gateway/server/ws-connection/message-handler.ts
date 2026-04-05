@@ -7,7 +7,6 @@ import {
   getDeviceBootstrapTokenProfile,
   redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
-  restoreDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
 import {
@@ -1079,8 +1078,8 @@ export function attachGatewayWsMessageHandler(params: {
             issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
           });
         }
-        const bootstrapProfileForHello = device ? handoffBootstrapProfile : null;
-        if (device && bootstrapProfileForHello !== null) {
+        if (device && handoffBootstrapProfile) {
+          const bootstrapProfileForHello = handoffBootstrapProfile as DeviceBootstrapProfile;
           for (const bootstrapRole of bootstrapProfileForHello.roles) {
             if (bootstrapDeviceTokens.some((entry) => entry.role === bootstrapRole)) {
               continue;
@@ -1276,16 +1275,19 @@ export function attachGatewayWsMessageHandler(params: {
             );
         }
 
-        let consumedBootstrapTokenRecord:
-          | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
-          | undefined;
+        try {
+          await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
+        } catch (err) {
+          setCloseCause("hello-send-failed", { error: formatForLog(err) });
+          close();
+          return;
+        }
         if (authMethod === "bootstrap-token" && bootstrapTokenCandidate && device) {
           try {
             if (handoffBootstrapProfile) {
               const revoked = await revokeDeviceBootstrapToken({
                 token: bootstrapTokenCandidate,
               });
-              consumedBootstrapTokenRecord = revoked.record;
               if (!revoked.removed) {
                 logGateway.warn(
                   `bootstrap token revoke skipped after device-token handoff device=${device.id}`,
@@ -1301,7 +1303,6 @@ export function attachGatewayWsMessageHandler(params: {
                 const revoked = await revokeDeviceBootstrapToken({
                   token: bootstrapTokenCandidate,
                 });
-                consumedBootstrapTokenRecord = revoked.record;
                 if (!revoked.removed) {
                   logGateway.warn(
                     `bootstrap token revoke skipped after profile redemption device=${device.id}`,
@@ -1314,24 +1315,6 @@ export function attachGatewayWsMessageHandler(params: {
               `bootstrap token post-connect bookkeeping failed device=${device.id}: ${formatForLog(err)}`,
             );
           }
-        }
-        try {
-          await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
-        } catch (err) {
-          if (consumedBootstrapTokenRecord) {
-            try {
-              await restoreDeviceBootstrapToken({
-                record: consumedBootstrapTokenRecord,
-              });
-            } catch (restoreErr) {
-              logGateway.warn(
-                `bootstrap token restore failed after hello send error device=${device?.id ?? "unknown"}: ${formatForLog(restoreErr)}`,
-              );
-            }
-          }
-          setCloseCause("hello-send-failed", { error: formatForLog(err) });
-          close();
-          return;
         }
         logWs("out", "hello-ok", {
           connId,

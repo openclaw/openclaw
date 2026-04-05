@@ -7,6 +7,22 @@ const resolveApnsRelayConfigFromEnvMock = vi.fn();
 const sendApnsExecApprovalAlertMock = vi.fn();
 const sendApnsExecApprovalResolvedWakeMock = vi.fn();
 
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 vi.mock("../config/config.js", () => ({
   loadConfig: () => ({ gateway: {} }),
 }));
@@ -142,9 +158,127 @@ describe("createExecApprovalIosPushDelivery", () => {
     });
 
     expect(accepted).toBe(true);
-    await Promise.resolve();
     expect(loadApnsRegistrationMock).toHaveBeenCalledWith("ios-device-1");
     expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not treat iOS as a live approval route when every push fails", async () => {
+    const warn = vi.fn();
+    listDevicePairingMock.mockResolvedValue({
+      pending: [],
+      paired: [
+        {
+          deviceId: "ios-device-1",
+          publicKey: "pub",
+          platform: "iOS 18",
+          role: "operator",
+          roles: ["operator"],
+          createdAtMs: 1,
+          approvedAtMs: 1,
+          tokens: {
+            operator: {
+              token: "operator-token",
+              role: "operator",
+              scopes: ["operator.approvals", "operator.read"],
+              createdAtMs: 1,
+            },
+          },
+        },
+      ],
+    });
+    sendApnsExecApprovalAlertMock.mockResolvedValue({
+      ok: false,
+      status: 410,
+      reason: "Unregistered",
+      environment: "sandbox",
+      topic: "ai.openclaw.ios.test",
+      tokenSuffix: "token",
+      transport: "direct",
+    });
+
+    const { createExecApprovalIosPushDelivery } = await import("./exec-approval-ios-push.js");
+    const delivery = createExecApprovalIosPushDelivery({ log: { warn } });
+
+    const accepted = await delivery.handleRequested({
+      id: "approval-dead-route",
+      request: { command: "echo ok", host: "gateway", allowedDecisions: ["allow-once"] },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    });
+
+    expect(accepted).toBe(false);
+    expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "exec approvals: iOS request push failed node=ios-device-1 status=410 reason=Unregistered",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "exec approvals: iOS request push reached no devices approvalId=approval-dead-route attempted=1",
+    );
+  });
+
+  it("waits for request delivery to finish before sending cleanup pushes", async () => {
+    listDevicePairingMock.mockResolvedValue({
+      pending: [],
+      paired: [
+        {
+          deviceId: "ios-device-1",
+          publicKey: "pub",
+          platform: "iOS 18",
+          role: "operator",
+          roles: ["operator"],
+          createdAtMs: 1,
+          approvedAtMs: 1,
+          tokens: {
+            operator: {
+              token: "operator-token",
+              role: "operator",
+              scopes: ["operator.approvals", "operator.read"],
+              createdAtMs: 1,
+            },
+          },
+        },
+      ],
+    });
+    const requestedPush = createDeferred<{
+      ok: boolean;
+      status: number;
+      environment: string;
+      topic: string;
+      tokenSuffix: string;
+      transport: string;
+    }>();
+    sendApnsExecApprovalAlertMock.mockReturnValue(requestedPush.promise);
+
+    const { createExecApprovalIosPushDelivery } = await import("./exec-approval-ios-push.js");
+    const delivery = createExecApprovalIosPushDelivery({ log: {} });
+
+    const requested = delivery.handleRequested({
+      id: "approval-ordered-cleanup",
+      request: { command: "echo ok", host: "gateway", allowedDecisions: ["allow-once"] },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    });
+    const resolved = delivery.handleResolved({
+      id: "approval-ordered-cleanup",
+      decision: "allow-once",
+      ts: 1,
+    });
+
+    await Promise.resolve();
+    expect(sendApnsExecApprovalResolvedWakeMock).not.toHaveBeenCalled();
+
+    requestedPush.resolve({
+      ok: true,
+      status: 200,
+      environment: "sandbox",
+      topic: "ai.openclaw.ios.test",
+      tokenSuffix: "token",
+      transport: "direct",
+    });
+    await requested;
+    await resolved;
+
+    expect(sendApnsExecApprovalResolvedWakeMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips cleanup pushes when the original request target set is unknown", async () => {
@@ -199,7 +333,6 @@ describe("createExecApprovalIosPushDelivery", () => {
       createdAtMs: 1,
       expiresAtMs: 2,
     });
-    await Promise.resolve();
     vi.clearAllMocks();
     loadApnsRegistrationMock.mockResolvedValue({
       nodeId: "ios-device-1",
