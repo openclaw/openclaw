@@ -37,19 +37,14 @@ type MinimaxImageApiResponse = {
 };
 
 function resolveMinimaxImageBaseUrl(
-  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
-  providerId: string,
+  _cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
+  _providerId: string,
 ): string {
-  const direct = cfg?.models?.providers?.[providerId]?.baseUrl?.trim();
-  if (!direct) {
-    return DEFAULT_MINIMAX_IMAGE_BASE_URL;
-  }
-  // Extract origin from the configured base URL (which may include path like /anthropic)
-  try {
-    return new URL(direct).origin;
-  } catch {
-    return DEFAULT_MINIMAX_IMAGE_BASE_URL;
-  }
+  // MiniMax image generation uses a dedicated endpoint (api.minimax.io) that is
+  // separate from the text/chat API endpoint (api.minimax.io/anthropic).
+  // The provider's configured baseUrl is for the text API and should not be
+  // used for image generation, as they have different endpoints.
+  return DEFAULT_MINIMAX_IMAGE_BASE_URL;
 }
 
 function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider {
