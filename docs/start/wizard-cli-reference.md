@@ -133,8 +133,8 @@ What you set:
     Reuses a local Claude CLI login on the gateway host and switches model
     selection to a canonical `claude-cli/claude-*` ref.
 
-    This is the preferred interactive Anthropic path in `openclaw onboard` and
-    `openclaw configure`.
+    This is an available local fallback path in `openclaw onboard` and
+    `openclaw configure`. For production, prefer an Anthropic API key.
 
     - macOS: checks Keychain item "Claude Code-credentials"
     - Linux and Windows: reuses `~/.claude/.credentials.json` if present

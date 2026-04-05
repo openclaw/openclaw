@@ -5,12 +5,12 @@ import {
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   composeAccountWarningCollectors,
   composeWarningCollectors,
   createAllowlistProviderOpenWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
   createResolvedDirectoryEntriesLister,
@@ -32,7 +32,6 @@ import {
   createAccountStatusSink,
   chunkTextForOutbound,
   DEFAULT_ACCOUNT_ID,
-  getChatChannelMeta,
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
 } from "./channel-api.js";
@@ -54,7 +53,18 @@ import { ircSetupAdapter } from "./setup-core.js";
 import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig, IrcProbe } from "./types.js";
 
-const meta = getChatChannelMeta("irc");
+const meta = {
+  id: "irc",
+  label: "IRC",
+  selectionLabel: "IRC (Server + Nick)",
+  docsPath: "/channels/irc",
+  docsLabel: "irc",
+  blurb: "classic IRC networks; host, nick, channels.",
+  order: 80,
+  detailLabel: "IRC",
+  systemImage: "number",
+  markdownCapable: true,
+};
 
 function normalizePairingTarget(raw: string): string {
   const normalized = normalizeIrcAllowEntry(raw);

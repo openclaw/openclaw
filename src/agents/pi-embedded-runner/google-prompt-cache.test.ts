@@ -42,12 +42,12 @@ function makeGoogleModel(id = "gemini-3.1-pro-preview") {
     api: "google-generative-ai",
     provider: "google",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128000,
     maxTokens: 8192,
     headers: { "X-Provider": "google" },
-    reasoning: true,
   } satisfies Model<"google-generative-ai">;
 }
 
@@ -236,10 +236,10 @@ describe("google prompt cache", () => {
     const systemPromptDigest = crypto.createHash("sha256").update("Follow policy.").digest("hex");
     const sessionManager = makeSessionManager([
       {
-        type: "custom",
         id: "entry-1",
         parentId: null,
         timestamp: new Date(now - 5_000).toISOString(),
+        type: "custom",
         customType: "openclaw.google-prompt-cache",
         data: {
           status: "ready",

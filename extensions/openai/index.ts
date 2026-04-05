@@ -8,9 +8,8 @@ import {
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import {
-  OPENAI_FRIENDLY_PROMPT_OVERLAY,
   resolveOpenAIPromptOverlayMode,
-  shouldApplyOpenAIPromptOverlay,
+  resolveOpenAISystemPromptContribution,
 } from "./prompt-overlay.js";
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -22,24 +21,29 @@ export default definePluginEntry({
   description: "Bundled OpenAI provider plugins",
   register(api) {
     const promptOverlayMode = resolveOpenAIPromptOverlayMode(api.pluginConfig);
+    const buildProviderWithPromptContribution = <
+      T extends
+        | ReturnType<typeof buildOpenAIProvider>
+        | ReturnType<typeof buildOpenAICodexProviderPlugin>,
+    >(
+      provider: T,
+    ): T => ({
+      ...provider,
+      resolveSystemPromptContribution: (ctx) =>
+        resolveOpenAISystemPromptContribution({
+          mode: promptOverlayMode,
+          modelProviderId: provider.id,
+          modelId: ctx.modelId,
+        }),
+    });
     api.registerCliBackend(buildOpenAICodexCliBackend());
-    api.registerProvider(buildOpenAIProvider());
-    api.registerProvider(buildOpenAICodexProviderPlugin());
+    api.registerProvider(buildProviderWithPromptContribution(buildOpenAIProvider()));
+    api.registerProvider(buildProviderWithPromptContribution(buildOpenAICodexProviderPlugin()));
     api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider());
     api.registerRealtimeTranscriptionProvider(buildOpenAIRealtimeTranscriptionProvider());
     api.registerRealtimeVoiceProvider(buildOpenAIRealtimeVoiceProvider());
     api.registerSpeechProvider(buildOpenAISpeechProvider());
     api.registerMediaUnderstandingProvider(openaiMediaUnderstandingProvider);
     api.registerMediaUnderstandingProvider(openaiCodexMediaUnderstandingProvider);
-    if (promptOverlayMode !== "off") {
-      api.on("before_prompt_build", (_event, ctx) =>
-        shouldApplyOpenAIPromptOverlay({
-          mode: promptOverlayMode,
-          modelProviderId: ctx.modelProviderId,
-        })
-          ? { appendSystemContext: OPENAI_FRIENDLY_PROMPT_OVERLAY }
-          : undefined,
-      );
-    }
   },
 });

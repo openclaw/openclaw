@@ -8,7 +8,7 @@ import {
   detectPluginInstallPathIssue,
   formatPluginInstallPathIssue,
   removePluginFromConfig,
-} from "openclaw/plugin-sdk/runtime";
+} from "openclaw/plugin-sdk/runtime-doctor";
 import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   isPrivateNetworkOptInEnabled,

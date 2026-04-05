@@ -1,4 +1,4 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 import { zaloPlugin } from "./src/channel.js";
 import { setZaloRuntime } from "./src/runtime.js";
 

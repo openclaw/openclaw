@@ -13,6 +13,8 @@ import type {
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
+import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
+import type { PromptMode } from "../agents/system-prompt.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -1044,6 +1046,18 @@ export type ProviderDeferSyntheticProfileAuthContext = {
   resolvedApiKey?: string;
 };
 
+export type ProviderSystemPromptContributionContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  promptMode: PromptMode;
+  runtimeChannel?: string;
+  runtimeCapabilities?: string[];
+  agentId?: string;
+};
+
 /** Text-inference provider capability registered by a plugin. */
 export type ProviderPlugin = {
   id: string;
@@ -1401,6 +1415,15 @@ export type ProviderPlugin = {
   resolveDefaultThinkingLevel?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
+  /**
+   * Provider-owned system-prompt contribution.
+   *
+   * Use this when a provider/model family needs cache-aware prompt tuning
+   * without replacing the full OpenClaw-owned system prompt.
+   */
+  resolveSystemPromptContribution?: (
+    ctx: ProviderSystemPromptContributionContext,
+  ) => ProviderSystemPromptContribution | null | undefined;
   /**
    * Provider-owned global config defaults.
    *
@@ -1965,6 +1988,25 @@ export type OpenClawPluginModule =
 
 export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
 
+export type PluginConfigMigration = (config: OpenClawConfig) =>
+  | {
+      config: OpenClawConfig;
+      changes: string[];
+    }
+  | null
+  | undefined;
+
+export type PluginLegacyConfigMigration = (raw: Record<string, unknown>, changes: string[]) => void;
+
+export type PluginSetupAutoEnableContext = {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+};
+
+export type PluginSetupAutoEnableProbe = (
+  ctx: PluginSetupAutoEnableContext,
+) => string | string[] | null | undefined;
+
 /** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
   id: string;
@@ -2026,6 +2068,12 @@ export type OpenClawPluginApi = {
   registerService: (service: OpenClawPluginService) => void;
   /** Register a text-only CLI backend used by the local CLI runner. */
   registerCliBackend: (backend: CliBackendPlugin) => void;
+  /** Register a lightweight config migration that can run before plugin runtime loads. */
+  registerConfigMigration: (migrate: PluginConfigMigration) => void;
+  /** Register a lightweight raw legacy-config migration for pre-schema config repair. */
+  registerLegacyConfigMigration: (migrate: PluginLegacyConfigMigration) => void;
+  /** Register a lightweight config probe that can auto-enable this plugin generically. */
+  registerAutoEnableProbe: (probe: PluginSetupAutoEnableProbe) => void;
   /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
   /** Register a speech synthesis provider (speech capability). */

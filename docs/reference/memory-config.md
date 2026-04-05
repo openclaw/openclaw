@@ -307,6 +307,8 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under
 | `update.waitForBootSync`  | `boolean` | `false` | Block startup until refresh completes |
 | `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
 | `update.commandTimeoutMs` | `number`  | --      | Timeout for QMD commands              |
+| `update.updateTimeoutMs`  | `number`  | --      | Timeout for QMD update operations     |
+| `update.embedTimeoutMs`   | `number`  | --      | Timeout for QMD embed operations      |
 
 ### Limits
 

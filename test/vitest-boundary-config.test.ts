@@ -12,7 +12,7 @@ describe("loadBoundaryIncludePatternsFromEnv", () => {
 });
 
 describe("boundary vitest config", () => {
-  it("keeps boundary suites on the shared runner with shared test bootstrap", () => {
+  it("keeps boundary suites on the non-isolated runner with shared test bootstrap", () => {
     const config = createBoundaryVitestConfig({});
 
     expect(config.test?.isolate).toBe(false);

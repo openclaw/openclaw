@@ -175,13 +175,12 @@ function normalizeResolvedModel(params: {
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> {
-  const normalizedInputModel =
-    Array.isArray(params.model.input) && params.model.input.length > 0
-      ? params.model
-      : ({
-          ...params.model,
-          input: ["text"],
-        } as Model<Api>);
+  const normalizedInputModel = {
+    ...params.model,
+    input: resolveProviderModelInput({
+      input: params.model.input,
+    }),
+  } as Model<Api>;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({
     provider: params.provider,
@@ -294,6 +293,17 @@ function resolveConfiguredProviderConfig(
   return findNormalizedProviderValue(configuredProviders, provider);
 }
 
+function resolveProviderModelInput(params: {
+  input?: unknown;
+  fallbackInput?: unknown;
+}): Array<"text" | "image"> {
+  const resolvedInput = Array.isArray(params.input) ? params.input : params.fallbackInput;
+  const normalizedInput = Array.isArray(resolvedInput)
+    ? resolvedInput.filter((item): item is "text" | "image" => item === "text" || item === "image")
+    : [];
+  return normalizedInput.length > 0 ? normalizedInput : ["text"];
+}
+
 function applyConfiguredProviderOverrides(params: {
   provider: string;
   discoveredModel: ProviderRuntimeModel;
@@ -333,11 +343,10 @@ function applyConfiguredProviderOverrides(params: {
       headers: discoveredHeaders,
     };
   }
-  const resolvedInput = configuredModel?.input ?? discoveredModel.input;
-  const normalizedInput =
-    Array.isArray(resolvedInput) && resolvedInput.length > 0
-      ? resolvedInput.filter((item) => item === "text" || item === "image")
-      : (["text"] as Array<"text" | "image">);
+  const normalizedInput = resolveProviderModelInput({
+    input: configuredModel?.input,
+    fallbackInput: discoveredModel.input,
+  });
 
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
@@ -414,6 +423,9 @@ export function buildInlineProviderModels(
       return attachModelProviderRequestTransport(
         {
           ...model,
+          input: resolveProviderModelInput({
+            input: model.input,
+          }),
           provider: trimmed,
           baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
           api: requestConfig.api ?? model.api,
@@ -592,7 +604,9 @@ function resolveConfiguredFallbackModel(params: {
         provider,
         baseUrl: requestConfig.baseUrl,
         reasoning: configuredModel?.reasoning ?? false,
-        input: ["text"],
+        input: resolveProviderModelInput({
+          input: configuredModel?.input,
+        }),
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow:
           configuredModel?.contextWindow ??

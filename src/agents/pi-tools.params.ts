@@ -266,6 +266,7 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
     ...tool,
     parameters: {
       ...schema,
+      additionalProperties: "additionalProperties" in schema ? schema.additionalProperties : false,
       properties,
       required,
     },

@@ -23,7 +23,7 @@ import {
   type LookupFn,
   normalizeAccountId,
   normalizeOptionalAccountId,
-  ssrfPolicyFromAllowPrivateNetwork,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "./config-runtime-api.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
@@ -360,7 +360,10 @@ function buildMatrixNetworkFields(params: {
   }
   return {
     ...(params.allowPrivateNetwork
-      ? { allowPrivateNetwork: true, ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(true) }
+      ? {
+          allowPrivateNetwork: true,
+          ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
+        }
       : {}),
     ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
   };
@@ -501,10 +504,15 @@ export function validateMatrixHomeserverUrl(
 
 export async function resolveValidatedMatrixHomeserverUrl(
   homeserver: string,
-  opts?: { allowPrivateNetwork?: boolean; lookupFn?: LookupFn },
+  opts?: {
+    dangerouslyAllowPrivateNetwork?: boolean;
+    allowPrivateNetwork?: boolean;
+    lookupFn?: LookupFn;
+  },
 ): Promise<string> {
   const normalized = validateMatrixHomeserverUrl(homeserver, opts);
   await assertHttpUrlTargetsPrivateNetwork(normalized, {
+    dangerouslyAllowPrivateNetwork: opts?.dangerouslyAllowPrivateNetwork,
     allowPrivateNetwork: opts?.allowPrivateNetwork,
     lookupFn: opts?.lookupFn,
     errorMessage: MATRIX_HTTP_HOMESERVER_ERROR,
@@ -699,7 +707,7 @@ export async function resolveMatrixAuth(params?: {
     })) ?? resolved.accessToken;
   const tokenAuthPassword = resolved.password;
   const homeserver = await resolveValidatedMatrixHomeserverUrl(resolved.homeserver, {
-    allowPrivateNetwork: resolved.allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: resolved.allowPrivateNetwork,
   });
   let credentialsWriter: typeof import("../credentials-write.runtime.js") | undefined;
   const loadCredentialsWriter = async () => {

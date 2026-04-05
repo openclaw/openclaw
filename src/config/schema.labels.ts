@@ -187,6 +187,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.agentToAgent": "Agent-to-Agent Tool Access",
   "tools.agentToAgent.enabled": "Enable Agent-to-Agent Tool",
   "tools.agentToAgent.allow": "Agent-to-Agent Target Allowlist",
+  "tools.experimental": "Experimental Tools",
+  "tools.experimental.planTool": "Enable Structured Plan Tool",
   "tools.elevated": "Elevated Tool Access",
   "tools.elevated.enabled": "Enable Elevated Tool Access",
   "tools.elevated.allowFrom": "Elevated Tool Allow Rules",
@@ -741,10 +743,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.tts.providers.*.apiKey": "TTS Provider API Key", // pragma: allowlist secret
   "talk.provider": "Talk Active Provider",
   "talk.providers": "Talk Provider Settings",
-  "talk.providers.*.voiceId": "Talk Provider Voice ID",
-  "talk.providers.*.voiceAliases": "Talk Provider Voice Aliases",
-  "talk.providers.*.modelId": "Talk Provider Model ID",
-  "talk.providers.*.outputFormat": "Talk Provider Output Format",
+  "talk.providers.*": "Talk Provider Config",
   "talk.providers.*.apiKey": "Talk Provider API Key", // pragma: allowlist secret
   channels: "Channels",
   "channels.defaults": "Channel Defaults",

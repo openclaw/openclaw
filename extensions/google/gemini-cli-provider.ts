@@ -5,11 +5,11 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { formatGoogleOauthApiKey, parseGoogleUsageToken } from "./oauth-token-shared.js";
-import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
+import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 
 const PROVIDER_ID = "google-gemini-cli";
 const PROVIDER_LABEL = "Gemini CLI OAuth";
@@ -83,8 +83,14 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
               refresh: result.refresh,
               expires: result.expires,
               email: result.email,
-              credentialExtra: { projectId: result.projectId },
-              notes: ["If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID."],
+              ...(result.projectId ? { credentialExtra: { projectId: result.projectId } } : {}),
+              ...(result.projectId
+                ? {
+                    notes: [
+                      "If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID.",
+                    ],
+                  }
+                : {}),
             });
           } catch (err) {
             spin.stop("Gemini CLI OAuth failed");
@@ -106,7 +112,11 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
       },
     },
     resolveDynamicModel: (ctx) =>
-      resolveGoogle31ForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
+      resolveGoogleGeminiForwardCompatModel({
+        providerId: PROVIDER_ID,
+        templateProviderId: "google",
+        ctx,
+      }),
     ...GOOGLE_GEMINI_CLI_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),

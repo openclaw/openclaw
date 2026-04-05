@@ -242,8 +242,9 @@ function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelE
         ...(setupEntry ? { setupEntry } : {}),
       });
     } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
       log.warn(
-        `[channels] failed to load bundled channel ${manifest.id} from ${candidate.source}: ${String(error)}`,
+        `[channels] failed to load bundled channel ${manifest.id} from ${candidate.source}: ${detail}`,
       );
     }
   }

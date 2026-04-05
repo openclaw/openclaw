@@ -125,6 +125,14 @@
       "destination": "/concepts/context"
     },
     {
+      "source": "/zh-CN",
+      "destination": "/zh-CN/index"
+    },
+    {
+      "source": "/zh-CN/",
+      "destination": "/zh-CN/index"
+    },
+    {
       "source": "/compaction",
       "destination": "/concepts/compaction"
     },
@@ -1227,6 +1235,7 @@
                 "pages": [
                   "providers/anthropic",
                   "providers/bedrock",
+                  "providers/bedrock-mantle",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
@@ -1582,24 +1591,6 @@
               {
                 "group": "Docs meta",
                 "pages": ["start/hubs", "start/docs-directory"]
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "language": "ja",
-        "tabs": [
-          {
-            "tab": "はじめに",
-            "groups": [
-              {
-                "group": "概要",
-                "pages": ["ja-JP/index"]
-              },
-              {
-                "group": "初回セットアップ",
-                "pages": ["ja-JP/start/getting-started", "ja-JP/start/wizard"]
               }
             ]
           }

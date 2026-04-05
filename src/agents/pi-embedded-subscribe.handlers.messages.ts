@@ -24,6 +24,8 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
+type AssistantDeliveryPhase = "commentary" | "final_answer";
+
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
   if (openIndex < 0) {
@@ -63,6 +65,48 @@ const coerceText = (value: unknown): string => {
   }
   return "";
 };
+
+function normalizeAssistantDeliveryPhase(value: unknown): AssistantDeliveryPhase | undefined {
+  return value === "commentary" || value === "final_answer" ? value : undefined;
+}
+
+function resolveAssistantDeliveryPhase(
+  message: AgentMessage | undefined,
+): AssistantDeliveryPhase | undefined {
+  if (!message || message.role !== "assistant") {
+    return undefined;
+  }
+  const directPhase = normalizeAssistantDeliveryPhase((message as { phase?: unknown }).phase);
+  if (directPhase) {
+    return directPhase;
+  }
+  if (!Array.isArray(message.content)) {
+    return undefined;
+  }
+  for (const part of message.content) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const block = part as { type?: unknown; textSignature?: unknown };
+    if (block.type !== "text" || typeof block.textSignature !== "string") {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(block.textSignature) as { phase?: unknown };
+      const phase = normalizeAssistantDeliveryPhase(parsed.phase);
+      if (phase) {
+        return phase;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
+  return resolveAssistantDeliveryPhase(message) === "commentary";
+}
 
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
@@ -196,6 +240,7 @@ export function handleMessageUpdate(
   }
 
   ctx.noteLastAssistant(msg);
+  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }
@@ -253,6 +298,10 @@ export function handleMessageUpdate(
     delta,
     content,
   });
+
+  if (suppressVisibleAssistantOutput) {
+    return;
+  }
 
   let chunk = "";
   if (evtType === "text_delta") {
@@ -387,6 +436,7 @@ export function handleMessageEnd(
   }
 
   const assistantMessage = msg;
+  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   if (ctx.state.deterministicApprovalPromptSent) {
@@ -417,6 +467,24 @@ export function handleMessageEnd(
   const parsedText = trimmedText ? parseReplyDirectives(stripTrailingDirective(trimmedText)) : null;
   let cleanedText = parsedText?.text ?? "";
   let { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
+
+  const finalizeMessageEnd = () => {
+    ctx.state.deltaBuffer = "";
+    ctx.state.blockBuffer = "";
+    ctx.blockChunker?.reset();
+    ctx.state.blockState.thinking = false;
+    ctx.state.blockState.final = false;
+    ctx.state.blockState.inlineCode = createInlineCodeState();
+    ctx.state.lastStreamedAssistant = undefined;
+    ctx.state.lastStreamedAssistantCleaned = undefined;
+    ctx.state.reasoningStreamOpen = false;
+  };
+
+  if (suppressVisibleAssistantOutput) {
+    emitReasoningEnd(ctx);
+    finalizeMessageEnd();
+    return;
+  }
 
   if (!cleanedText && !hasMedia && !ctx.params.enforceFinalTag) {
     const rawTrimmed = coerceText(rawText).trim();
@@ -550,18 +618,6 @@ export function handleMessageEnd(
   if (!ctx.params.silentExpected && ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
-
-  const finalizeMessageEnd = () => {
-    ctx.state.deltaBuffer = "";
-    ctx.state.blockBuffer = "";
-    ctx.blockChunker?.reset();
-    ctx.state.blockState.thinking = false;
-    ctx.state.blockState.final = false;
-    ctx.state.blockState.inlineCode = createInlineCodeState();
-    ctx.state.lastStreamedAssistant = undefined;
-    ctx.state.lastStreamedAssistantCleaned = undefined;
-    ctx.state.reasoningStreamOpen = false;
-  };
 
   if (
     !ctx.params.silentExpected &&

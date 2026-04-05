@@ -146,10 +146,7 @@ export const FIELD_HELP: Record<string, string> = {
   "talk.provider": 'Active Talk provider id (for example "elevenlabs").',
   "talk.providers":
     "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
-  "talk.providers.*.voiceId": "Provider default voice ID for Talk mode.",
-  "talk.providers.*.voiceAliases": "Optional provider voice alias map for Talk directives.",
-  "talk.providers.*.modelId": "Provider default model ID for Talk mode.",
-  "talk.providers.*.outputFormat": "Provider default output format for Talk mode.",
+  "talk.providers.*": "Provider-owned Talk config fields for the matching provider id.",
   "talk.providers.*.apiKey": "Provider API key for Talk mode.", // pragma: allowlist secret
   "talk.interruptOnSpeech":
     "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
@@ -315,6 +312,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Enables the agent_to_agent tool surface so one agent can invoke another agent at runtime. Keep off in simple deployments and enable only when orchestration value outweighs complexity.",
   "tools.agentToAgent.allow":
     "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
+  "tools.experimental":
+    "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
+  "tools.experimental.planTool":
+    "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
   "tools.elevated":
     "Elevated tool access controls for privileged command surfaces that should only be reachable from trusted senders. Keep disabled unless operator workflows explicitly require elevated actions.",
   "tools.elevated.enabled":

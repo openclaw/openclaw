@@ -1,4 +1,3 @@
-import { resolveBrowserConfig } from "../../extensions/browser/runtime-api.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
@@ -12,6 +11,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { resolveBrowserConfig } from "../plugin-sdk/browser-config.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";

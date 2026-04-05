@@ -5,10 +5,6 @@ import {
   type ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  getChannelsCommandSecretTargetIds,
-  resolveCommandSecretRefsViaGateway,
-} from "openclaw/plugin-sdk/runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
@@ -251,6 +247,9 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
   }
+
+  const { getChannelsCommandSecretTargetIds, resolveCommandSecretRefsViaGateway } =
+    await import("openclaw/plugin-sdk/runtime-secret-resolution");
 
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
     config: cfg,

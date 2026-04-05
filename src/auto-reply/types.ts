@@ -64,6 +64,67 @@ export type GetReplyOptions = {
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
+  /** Called when a concrete work item starts, updates, or completes. */
+  onItemEvent?: (payload: {
+    itemId?: string;
+    kind?: string;
+    title?: string;
+    name?: string;
+    phase?: string;
+    status?: string;
+    summary?: string;
+    progressText?: string;
+    approvalId?: string;
+    approvalSlug?: string;
+  }) => Promise<void> | void;
+  /** Called when the agent emits a structured plan update. */
+  onPlanUpdate?: (payload: {
+    phase?: string;
+    title?: string;
+    explanation?: string;
+    steps?: string[];
+    source?: string;
+  }) => Promise<void> | void;
+  /** Called when an approval becomes pending or resolves. */
+  onApprovalEvent?: (payload: {
+    phase?: string;
+    kind?: string;
+    status?: string;
+    title?: string;
+    itemId?: string;
+    toolCallId?: string;
+    approvalId?: string;
+    approvalSlug?: string;
+    command?: string;
+    host?: string;
+    reason?: string;
+    message?: string;
+  }) => Promise<void> | void;
+  /** Called when command output streams or completes. */
+  onCommandOutput?: (payload: {
+    itemId?: string;
+    phase?: string;
+    title?: string;
+    toolCallId?: string;
+    name?: string;
+    output?: string;
+    status?: string;
+    exitCode?: number | null;
+    durationMs?: number;
+    cwd?: string;
+  }) => Promise<void> | void;
+  /** Called when a patch completes with a file summary. */
+  onPatchSummary?: (payload: {
+    itemId?: string;
+    phase?: string;
+    title?: string;
+    toolCallId?: string;
+    name?: string;
+    added?: string[];
+    modified?: string[];
+    deleted?: string[];
+    summary?: string;
+  }) => Promise<void> | void;
   /** Called when context auto-compaction starts (allows UX feedback during the pause). */
   onCompactionStart?: () => Promise<void> | void;
   /** Called when context auto-compaction completes. */

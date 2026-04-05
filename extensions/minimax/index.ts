@@ -12,7 +12,7 @@ import {
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import {
@@ -80,7 +80,7 @@ function resolveApiCatalog(ctx: ProviderCatalogContext) {
   }
   return {
     provider: {
-      ...buildMinimaxProvider(),
+      ...buildMinimaxProvider(ctx.env),
       apiKey,
     },
   };
@@ -105,7 +105,7 @@ function resolvePortalCatalog(ctx: ProviderCatalogContext) {
 
   return {
     provider: buildPortalProviderCatalog({
-      baseUrl: explicitBaseUrl || buildMinimaxPortalProvider().baseUrl,
+      baseUrl: explicitBaseUrl || buildMinimaxPortalProvider(ctx.env).baseUrl,
       apiKey,
     }),
   };
