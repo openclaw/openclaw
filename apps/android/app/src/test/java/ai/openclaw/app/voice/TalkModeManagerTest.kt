@@ -43,6 +43,7 @@ class TalkModeManagerTest {
     playbackGeneration(manager).set(11L)
 
     manager.setPlaybackEnabled(false)
+    manager.setPlaybackEnabled(false)
 
     assertTrue(playbackJob.isCancelled)
     assertEquals(12L, playbackGeneration(manager).get())
