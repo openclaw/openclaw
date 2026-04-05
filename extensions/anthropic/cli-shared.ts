@@ -1,6 +1,7 @@
 import type { CliBackendConfig } from "openclaw/plugin-sdk/cli-backend";
 
 export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
+export const CLAUDE_CLI_AUTH_PROFILE_ID = "claude-cli:default";
 
 export const CLAUDE_CLI_MODEL_ALIASES: Record<string, string> = {
   opus: "opus",

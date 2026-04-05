@@ -1,22 +1,42 @@
 import { describe, expect, it, vi } from "vitest";
 
-const readClaudeCliCredentialsCached = vi.hoisted(() => vi.fn());
+const readClaudeCliCredentialsForSetup = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importActual) => {
-  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-auth")>();
+vi.mock("./cli-auth-seam.js", async (importActual) => {
+  const actual = await importActual<typeof import("./cli-auth-seam.js")>();
   return {
     ...actual,
-    readClaudeCliCredentialsCached,
+    readClaudeCliCredentialsForSetup,
   };
 });
 
-const { buildAnthropicCliMigrationResult, hasClaudeCliAuth } = await import("./cli-migration.js");
+const { buildAnthropicCliMigrationResult, buildClaudeCliRuntimeAuthProfile, hasClaudeCliAuth } =
+  await import("./cli-migration.js");
 
 describe("anthropic cli migration", () => {
   it("detects local Claude CLI auth", () => {
-    readClaudeCliCredentialsCached.mockReturnValue({ type: "oauth" });
+    readClaudeCliCredentialsForSetup.mockReturnValue({ type: "oauth" });
 
     expect(hasClaudeCliAuth()).toBe(true);
+  });
+
+  it("builds a claude-cli runtime auth profile from native setup credentials", () => {
+    readClaudeCliCredentialsForSetup.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "setup-access-token",
+      refresh: "refresh-token",
+      expires: 123,
+    });
+
+    expect(buildClaudeCliRuntimeAuthProfile()).toEqual({
+      profileId: "claude-cli:default",
+      credential: {
+        type: "token",
+        provider: "claude-cli",
+        token: "setup-access-token",
+      },
+    });
   });
 
   it("rewrites anthropic defaults to claude-cli defaults", () => {

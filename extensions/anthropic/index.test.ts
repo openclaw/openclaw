@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 
-const { readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(() => ({
-  readClaudeCliCredentialsForRuntimeMock: vi.fn(),
-}));
+const { readClaudeCliCredentialsForSetupMock, readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(
+  () => ({
+    readClaudeCliCredentialsForSetupMock: vi.fn(),
+    readClaudeCliCredentialsForRuntimeMock: vi.fn(),
+  }),
+);
 
 vi.mock("./cli-auth-seam.js", () => {
   return {
+    readClaudeCliCredentialsForSetup: readClaudeCliCredentialsForSetupMock,
     readClaudeCliCredentialsForRuntime: readClaudeCliCredentialsForRuntimeMock,
   };
 });
@@ -138,6 +142,35 @@ describe("anthropic provider replay hooks", () => {
       apiKey: "bearer-token",
       source: "Claude CLI native auth",
       mode: "token",
+    });
+  });
+
+  it("stores a claude-cli auth profile during anthropic cli migration", async () => {
+    readClaudeCliCredentialsForSetupMock.mockReset();
+    readClaudeCliCredentialsForSetupMock.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "setup-access-token",
+      refresh: "refresh-token",
+      expires: 123,
+    });
+
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const cliAuth = provider.auth.find((entry) => entry.id === "cli");
+
+    expect(cliAuth).toBeDefined();
+
+    const result = await cliAuth?.run({
+      config: {},
+    } as never);
+
+    expect(result?.profiles).toContainEqual({
+      profileId: "claude-cli:default",
+      credential: {
+        type: "token",
+        provider: "claude-cli",
+        token: "setup-access-token",
+      },
     });
   });
 });
