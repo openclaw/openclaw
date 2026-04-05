@@ -53,6 +53,11 @@ tool with the `react` action. Reaction behavior varies by channel.
     - `remove: true` removes that specific emoji reaction.
   </Accordion>
 
+  <Accordion title="Feishu/Lark">
+    - Use the `feishu_reaction` tool with actions `add`, `remove`, and `list`.
+    - Add/remove requires `emoji_type`; remove also requires `reaction_id`.
+  </Accordion>
+
   <Accordion title="Signal">
     - Inbound reaction notifications are controlled by `channels.signal.reactionNotifications`: `"off"` disables them, `"own"` (default) emits events when users react to bot messages, and `"all"` emits events for all reactions.
   </Accordion>
