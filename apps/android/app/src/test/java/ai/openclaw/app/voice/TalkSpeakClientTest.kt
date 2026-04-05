@@ -103,4 +103,26 @@ class TalkSpeakClientTest {
     val result = client.synthesize(text = "Hello", directive = null)
     assertTrue(result is TalkSpeakResult.Failure)
   }
+
+  @Test
+  fun fallsBackWhenGatewayOmitsReason() = runTest {
+    val client =
+      TalkSpeakClient(
+        requestDetailed = { _, _, _ ->
+          GatewaySession.RpcResult(
+            ok = false,
+            payloadJson = null,
+            error =
+              GatewaySession.ErrorShape(
+                code = "INVALID_REQUEST",
+                message = "unknown method: talk.speak",
+                details = null,
+              ),
+          )
+        },
+      )
+
+    val result = client.synthesize(text = "Hello", directive = null)
+    assertTrue(result is TalkSpeakResult.FallbackToLocal)
+  }
 }
