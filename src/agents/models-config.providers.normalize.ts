@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { registerProviderRetryConfig } from "./provider-retry.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   normalizeProviderSpecificConfig,
@@ -135,6 +136,12 @@ export function normalizeProviders(params: {
       continue;
     }
     next[normalizedKey] = normalizedProvider;
+
+    // Register provider-level retry config when present so the transport
+    // layer can wrap LLM API calls with retry on transient failures.
+    if (normalizedProvider.retry) {
+      registerProviderRetryConfig(normalizedKey, normalizedProvider.retry);
+    }
   }
 
   const normalizedProviders = mutated ? next : providers;

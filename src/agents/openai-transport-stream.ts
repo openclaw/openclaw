@@ -28,6 +28,7 @@ import {
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import { getProviderRetryRunner } from "./provider-retry.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -707,10 +708,15 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           params = nextParams as typeof params;
         }
         params = mergeTransportMetadata(params, turnState?.metadata);
-        const responseStream = (await client.responses.create(
-          params as never,
-          options?.signal ? { signal: options.signal } : undefined,
-        )) as unknown as AsyncIterable<unknown>;
+        const createStream = async () =>
+          (await client.responses.create(
+            params as never,
+            options?.signal ? { signal: options.signal } : undefined,
+          )) as unknown as AsyncIterable<unknown>;
+        const retryRunner = getProviderRetryRunner(model.provider);
+        const responseStream = retryRunner
+          ? await retryRunner(createStream, "responses")
+          : await createStream();
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model, {
           serviceTier: (options as OpenAIResponsesOptions | undefined)?.serviceTier,
@@ -861,10 +867,15 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           params = nextParams as typeof params;
         }
         params = mergeTransportMetadata(params, turnState?.metadata);
-        const responseStream = (await client.responses.create(
-          params as never,
-          options?.signal ? { signal: options.signal } : undefined,
-        )) as unknown as AsyncIterable<unknown>;
+        const createStream = async () =>
+          (await client.responses.create(
+            params as never,
+            options?.signal ? { signal: options.signal } : undefined,
+          )) as unknown as AsyncIterable<unknown>;
+        const retryRunner = getProviderRetryRunner(model.provider);
+        const responseStream = retryRunner
+          ? await retryRunner(createStream, "azure-responses")
+          : await createStream();
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model);
         if (options?.signal?.aborted) {
@@ -990,9 +1001,14 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
-        const responseStream = (await client.chat.completions.create(params as never, {
-          signal: options?.signal,
-        })) as unknown as AsyncIterable<ChatCompletionChunk>;
+        const createStream = async () =>
+          (await client.chat.completions.create(params as never, {
+            signal: options?.signal,
+          })) as unknown as AsyncIterable<ChatCompletionChunk>;
+        const retryRunner = getProviderRetryRunner(model.provider);
+        const responseStream = retryRunner
+          ? await retryRunner(createStream, "completions")
+          : await createStream();
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream);
         if (options?.signal?.aborted) {
