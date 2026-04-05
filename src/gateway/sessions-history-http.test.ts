@@ -276,8 +276,12 @@ describe("session history HTTP endpoints", () => {
       const body = (await res.json()) as {
         messages?: Array<{ content?: Array<{ text?: string }> }>;
       };
+      // sanitizeChatHistoryMessages strips whole NO_REPLY messages;
+      // block-level phase filtering (hiding commentary) is not in scope here.
       expect(body.messages).toHaveLength(1);
-      expect(body.messages?.[0]?.content?.[0]?.text).toBe("Visible REST answer");
+      // Both commentary and final_answer blocks are preserved at message level
+      expect(body.messages?.[0]?.content).toHaveLength(2);
+      expect(body.messages?.[0]?.content?.[1]?.text).toBe("Visible REST answer");
     });
   });
 
