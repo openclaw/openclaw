@@ -36,6 +36,22 @@ describe("exec allowlist matching", () => {
 
     // Bare name does not match a different executable
     expect(matchAllowlist([{ pattern: "node" }], pythonResolution)?.pattern ?? null).toBe(null);
+
+    // On Windows, bare pattern strips .exe before matching
+    const winResolution = {
+      rawExecutable: "python3",
+      resolvedPath: "C:\\Python39\\python3.exe",
+      executableName: "python3.exe",
+    };
+    expect(
+      matchAllowlist([{ pattern: "python3" }], winResolution, undefined, "win32")?.pattern,
+    ).toBe("python3");
+  });
+
+  it("does not widen wildcard+argPattern entries into global allows", () => {
+    // { pattern: "*", argPattern: "..." } should NOT match without argv on non-Windows
+    const wildArgEntry = { pattern: "*", argPattern: "--safe-flag" };
+    expect(matchAllowlist([wildArgEntry], baseResolution)?.pattern ?? null).toBe(null);
   });
 
   it("matches bare wildcard patterns against arbitrary resolved executables", () => {
