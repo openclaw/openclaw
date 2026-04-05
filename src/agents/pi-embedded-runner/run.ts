@@ -113,6 +113,7 @@ function backfillSessionKey(params: {
   config: RunEmbeddedPiAgentParams["config"];
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
 }): string | undefined {
   const trimmed = params.sessionKey?.trim() || undefined;
   if (trimmed) {
@@ -122,11 +123,10 @@ function backfillSessionKey(params: {
     return undefined;
   }
   try {
-    // Intentionally omit agentId to avoid resolveExplicitAgentSessionKey() binding
-    // one-off callers (e.g. model probes) to the agent's main session.
     const resolved = resolveSessionKeyForRequest({
       cfg: params.config,
       sessionId: params.sessionId,
+      agentId: params.agentId,
     });
     return resolved.sessionKey?.trim() || undefined;
   } catch (err) {
@@ -146,6 +146,7 @@ export async function runEmbeddedPiAgent(
     config: params.config,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
   });
   if (effectiveSessionKey !== params.sessionKey) {
     params = { ...params, sessionKey: effectiveSessionKey };

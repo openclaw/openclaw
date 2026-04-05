@@ -382,13 +382,21 @@ describe("session history HTTP endpoints", () => {
       });
       expect(appended.ok).toBe(true);
 
+      const suppressedEvent = await readSseEvent(reader!, streamState);
+      expect(suppressedEvent.event).toBe("history");
+      const suppressedData = suppressedEvent.data as {
+        messages?: Array<{ content?: Array<{ text?: string }>; __openclaw?: { seq?: number } }>;
+      };
+      expect(suppressedData.messages?.[0]?.content?.[0]?.text).toBe("NO_REPLY");
+      expect(suppressedData.messages?.[0]?.__openclaw?.seq).toBe(3);
+
       const nextEvent = await readSseEvent(reader!, streamState);
       expect(nextEvent.event).toBe("history");
       const nextData = nextEvent.data as {
         messages?: Array<{ content?: Array<{ text?: string }>; __openclaw?: { seq?: number } }>;
       };
       expect(nextData.messages?.[0]?.content?.[0]?.text).toBe("third message");
-      expect(nextData.messages?.[0]?.__openclaw?.seq).toBe(3);
+      expect(nextData.messages?.[0]?.__openclaw?.seq).toBe(4);
 
       await reader?.cancel();
     });
