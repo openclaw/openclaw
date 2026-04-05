@@ -901,6 +901,18 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
   });
 
+  it("rotates for timeout prompt failures without cooling down the profile", async () => {
+    const { usageStats } = await runAutoPinnedPromptErrorRotationCase({
+      errorMessage: "request ended without sending any chunks",
+      sessionKey: "agent:test:timeout-prompt-rotation",
+      runId: "run:timeout-prompt-rotation",
+    });
+    expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
+    expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+    expect(computeBackoffMock).not.toHaveBeenCalled();
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+  });
+
   it("uses configured overload backoff before rotating profiles", async () => {
     const { usageStats } = await runAutoPinnedRotationCase({
       errorMessage: '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',

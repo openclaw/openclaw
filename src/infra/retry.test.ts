@@ -22,19 +22,23 @@ type NumberRetryCase = {
 async function runRetryAfterCase(params: {
   minDelayMs: number;
   maxDelayMs: number;
-  retryAfterMs: number;
+  retryAfterMs?: number;
+  error?: Error;
 }): Promise<number[]> {
   vi.clearAllTimers();
   vi.useFakeTimers();
   try {
-    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(params.error ?? new Error("boom"))
+      .mockResolvedValueOnce("ok");
     const delays: number[] = [];
     const promise = retryAsync(fn, {
       attempts: 2,
       minDelayMs: params.minDelayMs,
       maxDelayMs: params.maxDelayMs,
       jitter: 0,
-      retryAfterMs: () => params.retryAfterMs,
+      ...(params.retryAfterMs === undefined ? {} : { retryAfterMs: () => params.retryAfterMs }),
       onRetry: (info) => delays.push(info.delayMs),
     });
     await vi.runAllTimersAsync();
