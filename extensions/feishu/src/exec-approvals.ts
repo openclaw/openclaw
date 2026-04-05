@@ -70,13 +70,14 @@ export function isFeishuExecApprovalTargetRecipient(params: {
     ...params,
     channel: "feishu",
     matchTarget: ({ target, normalizedSenderId }) => {
-      const to = target.to?.trim();
-      if (!to) {
+      // Use the same parser as approver normalization to handle all
+      // Feishu address forms (user:ou_xxx, dm:ou_xxx, open_id:ou_xxx,
+      // feishu:user:ou_xxx, bare ou_xxx).
+      const parsed = parseFeishuDirectConversationId(target.to);
+      if (!parsed) {
         return false;
       }
-      // Strip "user:" prefix for DM targets
-      const normalized = to.startsWith("user:") ? to.slice(5) : to;
-      return normalized === normalizedSenderId;
+      return parsed === normalizedSenderId;
     },
   });
 }
