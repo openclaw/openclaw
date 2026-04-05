@@ -597,6 +597,47 @@ describe("gateway send mirroring", () => {
     });
   });
 
+  it("still resolves outbound routing metadata when a sessionKey is provided", async () => {
+    mockDeliverySuccess("m-matrix-session-route");
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:main:matrix:channel:!dm:example.org",
+      baseSessionKey: "agent:main:matrix:channel:!dm:example.org",
+      peer: { kind: "channel", id: "!dm:example.org" },
+      chatType: "direct",
+      from: "matrix:@alice:example.org",
+      to: "room:!dm:example.org",
+    });
+
+    await runSend({
+      to: "@alice:example.org",
+      message: "hello",
+      channel: "matrix",
+      sessionKey: "agent:main:matrix:channel:!dm:example.org",
+      idempotencyKey: "idem-matrix-session-route",
+    });
+
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "matrix",
+        target: "resolved",
+        currentSessionKey: "agent:main:matrix:channel:!dm:example.org",
+      }),
+    );
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining({
+          sessionKey: "agent:main:matrix:channel:!dm:example.org",
+          baseSessionKey: "agent:main:matrix:channel:!dm:example.org",
+          to: "room:!dm:example.org",
+        }),
+      }),
+    );
+    expectDeliverySessionMirror({
+      agentId: "main",
+      sessionKey: "agent:main:matrix:channel:!dm:example.org",
+    });
+  });
+
   it("prefers explicit agentId over sessionKey agent for delivery and mirror", async () => {
     mockDeliverySuccess("m-agent-precedence");
 

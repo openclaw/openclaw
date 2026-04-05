@@ -175,7 +175,10 @@ function resolveMatrixInboundBodyText(params: {
   });
 }
 
-function rememberTrackedRoom(set: Set<string>, roomId: string): void {
+function markTrackedRoomIfFirst(set: Set<string>, roomId: string): boolean {
+  if (set.has(roomId)) {
+    return false;
+  }
   set.add(roomId);
   if (set.size > MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES) {
     const oldest = set.keys().next().value;
@@ -183,6 +186,7 @@ function rememberTrackedRoom(set: Set<string>, roomId: string): void {
       set.delete(oldest);
     }
   }
+  return true;
 }
 
 function resolveMatrixSharedDmContextNotice(params: {
@@ -773,6 +777,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           eventTs: eventTs ?? undefined,
           resolveAgentRoute: core.channel.routing.resolveAgentRoute,
         });
+        const hasExplicitSessionBinding = _configuredBinding !== null || _runtimeBindingId !== null;
         const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, _route.agentId);
         const selfDisplayName = content.formatted_body
           ? await getMemberDisplayName(roomId, selfUserId).catch(() => undefined)
@@ -967,6 +972,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
         return {
           route: _route,
+          hasExplicitSessionBinding,
           roomConfig,
           isDirectMessage,
           isRoom,
@@ -1019,6 +1025,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       const {
         route: _route,
+        hasExplicitSessionBinding,
         roomConfig,
         isDirectMessage,
         isRoom,
@@ -1121,15 +1128,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         sessionKey: _route.sessionKey,
       });
       const sharedDmContextNotice = isDirectMessage
-        ? resolveMatrixSharedDmContextNotice({
-            storePath,
-            sessionKey: _route.sessionKey,
-            roomId,
-            accountId: _route.accountId,
-            dmSessionScope,
-            sentRooms: sharedDmContextNoticeRooms,
-            logVerboseMessage,
-          })
+        ? hasExplicitSessionBinding
+          ? null
+          : resolveMatrixSharedDmContextNotice({
+              storePath,
+              sessionKey: _route.sessionKey,
+              roomId,
+              accountId: _route.accountId,
+              dmSessionScope,
+              sentRooms: sharedDmContextNoticeRooms,
+              logVerboseMessage,
+            })
         : null;
       const body = core.channel.reply.formatAgentEnvelope({
         channel: "Matrix",
@@ -1198,8 +1207,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
       });
 
-      if (sharedDmContextNotice) {
-        rememberTrackedRoom(sharedDmContextNoticeRooms, roomId);
+      if (sharedDmContextNotice && markTrackedRoomIfFirst(sharedDmContextNoticeRooms, roomId)) {
         client
           .sendMessage(roomId, {
             msgtype: "m.notice",

@@ -793,6 +793,75 @@ describe("matrix monitor handler pairing account scope", () => {
     }
   });
 
+  it("skips the shared-session notice when a Matrix DM is explicitly bound", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-bound-notice-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:bound:session-1": {
+          sessionId: "sess-bound",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "matrix",
+            to: "room:!other:example.org",
+            accountId: "ops",
+          },
+        },
+      }),
+      "utf8",
+    );
+    const sendNotice = vi.fn(async () => "$notice");
+    const touch = vi.fn();
+    registerSessionBindingAdapter({
+      channel: "matrix",
+      accountId: "ops",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === "!dm:example.org"
+          ? {
+              bindingId: "ops:!dm:example.org",
+              targetSessionKey: "agent:bound:session-1",
+              targetKind: "session",
+              conversation: {
+                channel: "matrix",
+                accountId: "ops",
+                conversationId: "!dm:example.org",
+              },
+              status: "active",
+              boundAt: Date.now(),
+              metadata: {
+                boundBy: "user-1",
+              },
+            }
+          : null,
+      touch,
+    });
+
+    try {
+      const { handler } = createMatrixHandlerTestHarness({
+        isDirectMessage: true,
+        resolveStorePath: () => storePath,
+        client: {
+          sendMessage: sendNotice,
+        },
+      });
+
+      await handler(
+        "!dm:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$dm-bound-1",
+          body: "follow up",
+        }),
+      );
+
+      expect(sendNotice).not.toHaveBeenCalled();
+      expect(touch).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses stable room ids instead of room-declared aliases in group context", async () => {
     const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
