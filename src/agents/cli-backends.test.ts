@@ -331,7 +331,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
   });
 
-  it("keeps bundle MCP enabled for override-only claude-cli config when the plugin registry is absent", () => {
+  it("normalizes override-only claude-cli config when the plugin registry is absent", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
 
@@ -342,6 +342,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
             "claude-cli": {
               command: "/usr/local/bin/claude",
               args: ["-p", "--output-format", "json"],
+              resumeArgs: ["-p", "--output-format", "json", "--resume", "{sessionId}"],
             },
           },
         },
@@ -352,6 +353,22 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved).not.toBeNull();
     expect(resolved?.bundleMcp).toBe(true);
+    expect(resolved?.config.args).toEqual([
+      "-p",
+      "--output-format",
+      "json",
+      "--permission-mode",
+      "bypassPermissions",
+    ]);
+    expect(resolved?.config.resumeArgs).toEqual([
+      "-p",
+      "--output-format",
+      "json",
+      "--resume",
+      "{sessionId}",
+      "--permission-mode",
+      "bypassPermissions",
+    ]);
   });
 });
 
