@@ -3,6 +3,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   fetchWithTimeout,
+  postJsonRequest,
   postTranscriptionRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
@@ -220,37 +221,57 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
           transport: "http",
         });
 
-      const form = new FormData();
-      form.set("prompt", req.prompt);
-      form.set("model", req.model?.trim() || DEFAULT_OPENAI_VIDEO_MODEL);
+      const model = req.model?.trim() || DEFAULT_OPENAI_VIDEO_MODEL;
       const seconds = resolveDurationSeconds(req.durationSeconds);
-      if (seconds) {
-        form.set("seconds", seconds);
-      }
       const size = resolveSize({
         size: req.size,
         aspectRatio: req.aspectRatio,
         resolution: req.resolution,
       });
-      if (size) {
-        form.set("size", size);
-      }
       const referenceAsset = resolveReferenceAsset(req);
-      if (referenceAsset) {
-        form.set("input_reference", referenceAsset);
-      }
-
-      const multipartHeaders = new Headers(headers);
-      multipartHeaders.delete("Content-Type");
-      const { response, release } = await postTranscriptionRequest({
-        url: `${baseUrl}/videos`,
-        headers: multipartHeaders,
-        body: form,
-        timeoutMs: req.timeoutMs,
-        fetchFn,
-        allowPrivateNetwork,
-        dispatcherPolicy,
-      });
+      const requestResult = referenceAsset
+        ? await (() => {
+            const form = new FormData();
+            form.set("prompt", req.prompt);
+            form.set("model", model);
+            if (seconds) {
+              form.set("seconds", seconds);
+            }
+            if (size) {
+              form.set("size", size);
+            }
+            form.set("input_reference", referenceAsset);
+            const multipartHeaders = new Headers(headers);
+            multipartHeaders.delete("Content-Type");
+            return postTranscriptionRequest({
+              url: `${baseUrl}/videos`,
+              headers: multipartHeaders,
+              body: form,
+              timeoutMs: req.timeoutMs,
+              fetchFn,
+              allowPrivateNetwork,
+              dispatcherPolicy,
+            });
+          })()
+        : await (() => {
+            const jsonHeaders = new Headers(headers);
+            jsonHeaders.set("Content-Type", "application/json");
+            return postJsonRequest({
+              url: `${baseUrl}/videos`,
+              headers: jsonHeaders,
+              body: {
+                prompt: req.prompt,
+                model,
+                ...(seconds ? { seconds } : {}),
+                ...(size ? { size } : {}),
+              },
+              timeoutMs: req.timeoutMs,
+              fetchFn,
+              allowPrivateNetwork,
+              dispatcherPolicy,
+            });
+          })();
+      const { response, release } = requestResult;
 
       try {
         await assertOkOrThrowHttpError(response, "OpenAI video generation failed");
@@ -275,7 +296,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         });
         return {
           videos: [video],
-          model: completed.model ?? submitted.model ?? req.model ?? DEFAULT_OPENAI_VIDEO_MODEL,
+          model: completed.model ?? submitted.model ?? model,
           metadata: {
             videoId,
             status: completed.status,
