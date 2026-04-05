@@ -956,7 +956,9 @@ describe("sanitizeSessionHistory", () => {
     const baseMessages = castAgentMessages([
       makeUserMessage("Read IDENTITY.md"),
       makeAssistantMessage(
-        [{ type: "toolUse", id: priorToolId, name: "read", input: { path: "IDENTITY.md" } }],
+        [
+          { type: "toolUse", id: priorToolId, name: "read", input: { path: "IDENTITY.md" } },
+        ] as unknown as AssistantMessage["content"],
         { stopReason: "toolUse" },
       ),
       {
@@ -973,7 +975,9 @@ describe("sanitizeSessionHistory", () => {
       ...baseMessages,
       makeUserMessage("Ask a subagent for an emoji"),
       makeAssistantMessage(
-        [{ type: "toolUse", id: laterToolId, name: "subagent", input: { prompt: "emoji" } }],
+        [
+          { type: "toolUse", id: laterToolId, name: "subagent", input: { prompt: "emoji" } },
+        ] as unknown as AssistantMessage["content"],
         { stopReason: "toolUse" },
       ),
       {
