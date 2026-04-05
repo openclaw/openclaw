@@ -259,3 +259,85 @@ describe("resolveRetryConfig", () => {
     expect(resolveRetryConfig(undefined, overrides)).toEqual(expected);
   });
 });
+
+describe("retry-after inference", () => {
+  it("extracts retryAfterMs from error retryAfterMs property", async () => {
+    const delays: number[] = [];
+    const error = {
+      status: 429,
+      retryAfterMs: 1500,
+    };
+    const fn = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("ok");
+    const result = retryAsync(fn, {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 60_000,
+      onRetry: (info) => delays.push(info.delayMs),
+    });
+    await result;
+    expect(delays).toHaveLength(1);
+    expect(delays[0]).toBe(1500);
+  });
+
+  it("extracts retryAfter from error retryAfter property (seconds)", async () => {
+    const delays: number[] = [];
+    const error = {
+      status: 429,
+      retryAfter: 5,
+    };
+    const fn = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("ok");
+    const result = retryAsync(fn, {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 60_000,
+      onRetry: (info) => delays.push(info.delayMs),
+    });
+    await result;
+    expect(delays).toHaveLength(1);
+    expect(delays[0]).toBe(5000);
+  });
+
+  it("extracts retryAfter from nested response.headers", async () => {
+    const delays: number[] = [];
+    const error = {
+      status: 429,
+      response: {
+        headers: {
+          "retry-after": "3",
+        },
+      },
+    };
+    const fn = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("ok");
+    const result = retryAsync(fn, {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 60_000,
+      onRetry: (info) => delays.push(info.delayMs),
+    });
+    await result;
+    expect(delays).toHaveLength(1);
+    expect(delays[0]).toBe(3000);
+  });
+
+  it("detects rate limit from nested response.status", async () => {
+    const delays: number[] = [];
+    const error = {
+      response: {
+        status: 429,
+        headers: {
+          "retry-after": "2",
+        },
+      },
+    };
+    const fn = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("ok");
+    const result = retryAsync(fn, {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 60_000,
+      onRetry: (info) => delays.push(info.delayMs),
+    });
+    await result;
+    expect(delays).toHaveLength(1);
+    expect(delays[0]).toBe(2000);
+  });
+});
