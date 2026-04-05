@@ -54,6 +54,10 @@
 > Also read `STATUS.md` (repo root) for current project state.
 > Task brief for Codex: `CODEX_TASK_BRIEF.md` (repo root).
 
+- Primary development host: `DevAgents` (`root@204.168.223.245` via `ssh DevAgents`).
+- All routine development, builds, git operations, and deployments now happen on and from the DevAgents server, not from the local Mac unless the user explicitly asks otherwise.
+- Gateway repo on DevAgents: `/root/projects/openclaw`
+- Dashboard repo on DevAgents: `/root/projects/openclaw-dashboard`
 - One branch = one owner (Claude or Codex). Never touch the other agent's active branch.
 - Check STATUS.md before creating a branch to avoid file/area conflicts.
 - Update STATUS.md at session end with what you did, branch name, and owner.
@@ -70,6 +74,7 @@
   - `Org` = dashboard-level unit in Firestore.
   - `Workspace` = per-Agent local dir on Hetzner, usually `/root/.openclaw/agents/{name}/workspace/`.
 - Hetzner servers:
+  - Dev host: `204.168.223.245` (`DevAgents`) for development, builds, and deploy orchestration
   - EU prod: `89.167.70.46`
   - US standby: `5.161.84.219`
 - Artifact Registry image:
@@ -79,8 +84,8 @@
 - Per-Agent env file:
   - `/root/.openclaw/agents/{name}/docker.env`
 - Ops scripts:
-  - build/push from EU server: `/opt/openclaw-ops/scripts/build-and-push.sh <tag>`
-  - deploy on target server: `/opt/openclaw-ops/scripts/deploy.sh <tag>`
+  - build/push from DevAgents server: `/opt/openclaw-ops/scripts/build-and-push.sh <tag>`
+  - deploy from DevAgents server to target server: `/opt/openclaw-ops/scripts/deploy.sh <tag>`
 - Tag format:
   - `vYYYY.M.D.N`
   - `vYYYY.M.D.N-hotfix`
