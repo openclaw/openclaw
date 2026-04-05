@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
 afterEach(() => {
@@ -135,7 +136,7 @@ describe("Ollama provider", () => {
       }
       return notFoundJsonResponse();
     });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
     const providers = await resolveProvidersWithOllamaKey(agentDir);
     const models = providers?.ollama?.models ?? [];
@@ -162,7 +163,7 @@ describe("Ollama provider", () => {
       }
       return notFoundJsonResponse();
     });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
     const providers = await resolveProvidersWithOllamaKey(agentDir);
     const model = providers?.ollama?.models?.find((entry) => entry.id === "qwen3:32b");
@@ -192,7 +193,7 @@ describe("Ollama provider", () => {
         json: async () => ({ model_info: { "llama.context_length": 65536 } }),
       };
     });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
     const providers = await resolveProvidersWithOllamaKey(agentDir);
     const models = providers?.ollama?.models ?? [];
@@ -221,7 +222,7 @@ describe("Ollama provider", () => {
       const agentDir = createAgentDir();
       enableDiscoveryEnv();
       const fetchMock = vi.fn();
-      vi.stubGlobal("fetch", fetchMock);
+      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
       const explicitModels: ModelDefinitionConfig[] = [
         {
           id: "gpt-oss:20b",
