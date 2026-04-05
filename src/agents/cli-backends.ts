@@ -1,3 +1,7 @@
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  normalizeClaudeBackendConfig,
+} from "../../extensions/anthropic/cli-backend-api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
@@ -10,11 +14,25 @@ export type ResolvedCliBackend = {
   pluginId?: string;
 };
 
-function resolveFallbackBundleMcpCapability(provider: string): boolean {
-  // Claude CLI consumes explicit MCP config overlays even when the runtime
-  // plugin registry is not initialized yet (for example direct runner tests or
-  // narrow non-gateway entrypoints).
-  return provider === "claude-cli";
+export { normalizeClaudeBackendConfig };
+
+type FallbackCliBackendPolicy = {
+  bundleMcp: boolean;
+  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+};
+
+const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {
+  [CLAUDE_CLI_BACKEND_ID]: {
+    // Claude CLI consumes explicit MCP config overlays even when the runtime
+    // plugin registry is not initialized yet (for example direct runner tests
+    // or narrow non-gateway entrypoints).
+    bundleMcp: true,
+    normalizeConfig: normalizeClaudeBackendConfig,
+  },
+};
+
+function resolveFallbackCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
+  return FALLBACK_CLI_BACKEND_POLICIES[provider];
 }
 
 function normalizeBackendKey(key: string): string {
@@ -96,6 +114,7 @@ export function resolveCliBackendConfig(
   cfg?: OpenClawConfig,
 ): ResolvedCliBackend | null {
   const normalized = normalizeBackendKey(provider);
+  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   const override = pickBackendConfig(configured, normalized);
   const registered = resolveRegisteredBackend(normalized);
@@ -117,13 +136,16 @@ export function resolveCliBackendConfig(
   if (!override) {
     return null;
   }
-  const command = override.command?.trim();
+  const config = fallbackPolicy?.normalizeConfig
+    ? fallbackPolicy.normalizeConfig(override)
+    : override;
+  const command = config.command?.trim();
   if (!command) {
     return null;
   }
   return {
     id: normalized,
-    config: { ...override, command },
-    bundleMcp: resolveFallbackBundleMcpCapability(normalized),
+    config: { ...config, command },
+    bundleMcp: fallbackPolicy?.bundleMcp === true,
   };
 }

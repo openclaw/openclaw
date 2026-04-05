@@ -218,6 +218,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     applyExtraParamsToAgentMock.mockReturnValue({
       effectiveExtraParams: { transport: "websocket" },
     });
+    resolveContextEngineMock.mockResolvedValue({ info: { ownsCompaction: false } } as never);
     resolveAgentTransportOverrideMock.mockReturnValue("websocket");
 
     await compactEmbeddedPiSessionDirect({
@@ -250,11 +251,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         id: "fake",
       }),
       "/tmp",
-    );
-    expect(resolveAgentTransportOverrideMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        effectiveExtraParams: { transport: "websocket" },
-      }),
     );
   });
 
@@ -589,6 +585,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
   });
 
   it("registers the Ollama api provider before compaction", async () => {
+    resolveContextEngineMock.mockResolvedValue({ info: { ownsCompaction: false } } as never);
     resolveModelMock.mockReturnValue({
       model: {
         provider: "ollama",

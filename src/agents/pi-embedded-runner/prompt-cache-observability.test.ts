@@ -13,12 +13,7 @@ describe("prompt cache observability", () => {
 
   it("collects trimmed tool names only", () => {
     expect(
-      collectPromptCacheToolNames([
-        { name: " read " },
-        { name: "" },
-        {},
-        { name: "write" },
-      ]),
+      collectPromptCacheToolNames([{ name: " read " }, { name: "" }, {}, { name: "write" }]),
     ).toEqual(["read", "write"]);
   });
 

@@ -2,7 +2,10 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { ssrfPolicyFromAllowPrivateNetwork } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  isPrivateNetworkOptInEnabled,
+  ssrfPolicyFromAllowPrivateNetwork,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveMatrixAccountStringValues } from "../auth-precedence.js";
 import { getMatrixScopedEnvVarNames } from "../env-vars.js";
 import type { CoreConfig } from "../types.js";
@@ -273,8 +276,9 @@ export function resolveMatrixConfigForAccount(
     accountInitialSyncLimit ?? clampMatrixInitialSyncLimit(matrix.initialSyncLimit);
   const encryption =
     typeof account.encryption === "boolean" ? account.encryption : (matrix.encryption ?? false);
-  const allowPrivateNetwork =
-    account.allowPrivateNetwork === true || matrix.allowPrivateNetwork === true ? true : undefined;
+  const allowPrivateNetwork = isPrivateNetworkOptInEnabled(account) || isPrivateNetworkOptInEnabled(matrix)
+    ? true
+    : undefined;
 
   return {
     homeserver: resolvedStrings.homeserver,

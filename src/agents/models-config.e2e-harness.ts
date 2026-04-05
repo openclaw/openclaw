@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
+import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import { resetModelsJsonReadyCacheForTest } from "./models-config.js";
 import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 
 export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
@@ -14,10 +18,16 @@ export function installModelsConfigTestHooks(opts?: { restoreFetch?: boolean }) 
 
   beforeEach(() => {
     previousHome = process.env.HOME;
+    resetPluginLoaderTestStateForTest();
+    resetModelsJsonReadyCacheForTest();
+    resetProviderRuntimeHookCacheForTest();
   });
 
   afterEach(() => {
     process.env.HOME = previousHome;
+    resetPluginLoaderTestStateForTest();
+    resetModelsJsonReadyCacheForTest();
+    resetProviderRuntimeHookCacheForTest();
     if (opts?.restoreFetch && originalFetch) {
       globalThis.fetch = originalFetch;
     }
@@ -103,6 +113,7 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "OPENROUTER_API_KEY",
   "PI_CODING_AGENT_DIR",
   "QIANFAN_API_KEY",
+  "QWEN_API_KEY",
   "MODELSTUDIO_API_KEY",
   "SYNTHETIC_API_KEY",
   "STEPFUN_API_KEY",
@@ -113,6 +124,7 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "KIMI_API_KEY",
   "KIMICODE_API_KEY",
   "GEMINI_API_KEY",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
   "GOOGLE_APPLICATION_CREDENTIALS",
   "GOOGLE_CLOUD_LOCATION",
   "GOOGLE_CLOUD_PROJECT",
@@ -145,6 +157,12 @@ export function snapshotImplicitProviderEnv(env?: NodeJS.ProcessEnv): NodeJS.Pro
       snapshot[envVar] = value;
     }
   }
+
+  // Provider discovery tests can temporarily scrub VITEST/NODE_ENV to exercise
+  // live HTTP paths. Keep the bundled plugin root pinned to the source checkout
+  // so those tests do not fall back to potentially stale dist-runtime wrappers.
+  snapshot.OPENCLAW_BUNDLED_PLUGINS_DIR ??=
+    resolveBundledPluginsDir({ VITEST: "true" } as NodeJS.ProcessEnv) ?? undefined;
 
   return snapshot;
 }

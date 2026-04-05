@@ -23,9 +23,19 @@ The tool is only registered when OpenClaw can resolve a PDF-capable model config
 
 1. `agents.defaults.pdfModel`
 2. fallback to `agents.defaults.imageModel`
-3. fallback to best effort provider defaults based on available auth
+3. fallback to the agent's resolved session/default model
+4. if native-PDF providers are auth-backed, prefer them ahead of generic image fallback candidates
 
 If no usable model can be resolved, the `pdf` tool is not exposed.
+
+Availability notes:
+
+- The fallback chain is auth-aware. A configured `provider/model` only counts if
+  OpenClaw can actually authenticate that provider for the agent.
+- Native PDF providers are currently **Anthropic** and **Google**.
+- If the resolved session/default provider already has a configured vision/PDF
+  model, the PDF tool reuses that before falling back to other auth-backed
+  providers.
 
 ## Input reference
 
@@ -65,6 +75,8 @@ The tool sends raw PDF bytes directly to provider APIs.
 Native mode limits:
 
 - `pages` is not supported. If set, the tool returns an error.
+- Multi-PDF input is supported; each PDF is sent as a native document block /
+  inline PDF part before the prompt.
 
 ### Extraction fallback mode
 
@@ -80,6 +92,9 @@ Fallback details:
 
 - Page image extraction uses a pixel budget of `4,000,000`.
 - If the target model does not support image input and there is no extractable text, the tool errors.
+- If text extraction succeeds but image extraction would require vision on a
+  text-only model, OpenClaw drops the rendered images and continues with the
+  extracted text.
 - Extraction fallback requires `pdfjs-dist` (and `@napi-rs/canvas` for image rendering).
 
 ## Config

@@ -17,6 +17,7 @@ import {
   resolveTlonSetupConfigured,
   tlonSetupAdapter,
 } from "./setup-core.js";
+import { tlonDoctor } from "./doctor.js";
 import {
   formatTargetHint,
   normalizeShip,
@@ -100,6 +101,7 @@ export const tlonPlugin = createChatChannelPlugin({
           },
         }),
     },
+    doctor: tlonDoctor,
     messaging: {
       normalizeTarget: (target) => {
         const parsed = parseTlonTarget(target);

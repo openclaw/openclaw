@@ -499,6 +499,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.imageModel.fallbacks": "Image Model Fallbacks",
   "agents.defaults.imageGenerationModel.primary": "Image Generation Model",
   "agents.defaults.imageGenerationModel.fallbacks": "Image Generation Model Fallbacks",
+  "agents.defaults.videoGenerationModel.primary": "Video Generation Model",
+  "agents.defaults.videoGenerationModel.fallbacks": "Video Generation Model Fallbacks",
   "agents.defaults.pdfModel.primary": "PDF Model",
   "agents.defaults.pdfModel.fallbacks": "PDF Model Fallbacks",
   "agents.defaults.pdfMaxBytesMb": "PDF Max Size (MB)",

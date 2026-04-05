@@ -334,15 +334,15 @@ Kimi K2 模型 ID：
 
 Kimi Coding 使用 Moonshot AI 的 Anthropic 兼容端点：
 
-- 提供商：`kimi-coding`
+- 提供商：`kimi`
 - 身份验证：`KIMI_API_KEY`
-- 示例模型：`kimi-coding/k2p5`
+- 示例模型：`kimi/kimi-code`
 
 ```json5
 {
   env: { KIMI_API_KEY: "sk-..." },
   agents: {
-    defaults: { model: { primary: "kimi-coding/k2p5" } },
+    defaults: { model: { primary: "kimi/kimi-code" } },
   },
 }
 ```

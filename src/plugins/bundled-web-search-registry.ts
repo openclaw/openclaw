@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveBundledPluginWebSearchProviders } from "./web-search-providers.js";
+import { resolvePluginWebSearchProviders } from "./web-search-providers.runtime.js";
 
 function hasConfiguredCredentialValue(value: unknown): boolean {
   if (typeof value === "string") {
@@ -16,10 +16,11 @@ export function hasBundledWebSearchCredential(params: {
   const searchConfig =
     params.searchConfig ??
     (params.config.tools?.web?.search as Record<string, unknown> | undefined);
-  return resolveBundledPluginWebSearchProviders({
+  return resolvePluginWebSearchProviders({
     config: params.config,
     env: params.env,
     bundledAllowlistCompat: true,
+    origin: "bundled",
   }).some((provider) => {
     const configuredCredential =
       provider.getConfiguredCredentialValue?.(params.config) ??

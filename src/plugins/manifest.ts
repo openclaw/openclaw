@@ -1,11 +1,11 @@
-import JSON5 from "json5";
 import fs from "node:fs";
 import path from "node:path";
+import JSON5 from "json5";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
-import type { PluginConfigUiHint, PluginKind } from "./types.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
+import type { PluginConfigUiHint, PluginKind } from "./types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
@@ -76,6 +76,7 @@ export type PluginManifestContracts = {
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
   imageGenerationProviders?: string[];
+  videoGenerationProviders?: string[];
   webFetchProviders?: string[];
   webSearchProviders?: string[];
   tools?: string[];
@@ -155,6 +156,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const realtimeVoiceProviders = normalizeStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeStringList(value.mediaUnderstandingProviders);
   const imageGenerationProviders = normalizeStringList(value.imageGenerationProviders);
+  const videoGenerationProviders = normalizeStringList(value.videoGenerationProviders);
   const webFetchProviders = normalizeStringList(value.webFetchProviders);
   const webSearchProviders = normalizeStringList(value.webSearchProviders);
   const tools = normalizeStringList(value.tools);
@@ -164,6 +166,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
+    ...(videoGenerationProviders.length > 0 ? { videoGenerationProviders } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
     ...(tools.length > 0 ? { tools } : {}),

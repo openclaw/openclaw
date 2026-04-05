@@ -1,48 +1,23 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withActivatedPluginIds } from "./activation-context.js";
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
-import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
+import {
+  loadOpenClawPlugins,
+  resolveRuntimePluginRegistry,
+  type PluginLoadOptions,
+} from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import {
+  resolveDiscoveredProviderPluginIds,
   resolveEnabledProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForModelRefs,
   withBundledProviderVitestCompat,
 } from "./providers.js";
+import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
-
-function withRuntimeActivatedPluginIds(params: {
-  config?: PluginLoadOptions["config"];
-  pluginIds: readonly string[];
-}): PluginLoadOptions["config"] {
-  if (params.pluginIds.length === 0) {
-    return params.config;
-  }
-  const allow = new Set(params.config?.plugins?.allow ?? []);
-  const entries = {
-    ...params.config?.plugins?.entries,
-  };
-  for (const pluginId of params.pluginIds) {
-    const normalized = pluginId.trim();
-    if (!normalized) {
-      continue;
-    }
-    allow.add(normalized);
-    entries[normalized] = {
-      ...entries[normalized],
-      enabled: true,
-    };
-  }
-  return {
-    ...params.config,
-    plugins: {
-      ...params.config?.plugins,
-      ...(allow.size > 0 ? { allow: [...allow] } : {}),
-      entries,
-    },
-  };
-}
 
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
@@ -56,13 +31,15 @@ export function resolvePluginProviders(params: {
   activate?: boolean;
   cache?: boolean;
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
+  mode?: "runtime" | "setup";
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
   const modelOwnedPluginIds = params.modelRefs?.length
     ? resolveOwningPluginIdsForModelRefs({
         models: params.modelRefs,
         config: params.config,
-        workspaceDir: params.workspaceDir,
+        workspaceDir,
         env,
       })
     : [];
@@ -70,14 +47,44 @@ export function resolvePluginProviders(params: {
     params.onlyPluginIds || modelOwnedPluginIds.length > 0
       ? [...new Set([...(params.onlyPluginIds ?? []), ...modelOwnedPluginIds])]
       : undefined;
-  const runtimeConfig = withRuntimeActivatedPluginIds({
+  const runtimeConfig = withActivatedPluginIds({
     config: params.config,
     pluginIds: modelOwnedPluginIds,
   });
+  if (params.mode === "setup") {
+    const providerPluginIds = resolveDiscoveredProviderPluginIds({
+      config: runtimeConfig,
+      workspaceDir,
+      env,
+      onlyPluginIds: requestedPluginIds,
+    });
+    if (providerPluginIds.length === 0) {
+      return [];
+    }
+    const registry = loadOpenClawPlugins({
+      config: withActivatedPluginIds({
+        config: runtimeConfig,
+        pluginIds: providerPluginIds,
+      }),
+      activationSourceConfig: runtimeConfig,
+      autoEnabledReasons: {},
+      workspaceDir,
+      env,
+      onlyPluginIds: providerPluginIds,
+      pluginSdkResolution: params.pluginSdkResolution,
+      cache: params.cache ?? false,
+      activate: params.activate ?? false,
+      logger: createPluginLoaderLogger(log),
+    });
+    return registry.providers.map((entry) => ({
+      ...entry.provider,
+      pluginId: entry.pluginId,
+    }));
+  }
   const activation = resolveBundledPluginCompatibleActivationInputs({
     rawConfig: runtimeConfig,
     env,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     onlyPluginIds: requestedPluginIds,
     applyAutoEnable: true,
     compatMode: {
@@ -96,7 +103,7 @@ export function resolvePluginProviders(params: {
     : activation.config;
   const providerPluginIds = resolveEnabledProviderPluginIds({
     config,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     env,
     onlyPluginIds: requestedPluginIds,
   });
@@ -104,7 +111,7 @@ export function resolvePluginProviders(params: {
     config,
     activationSourceConfig: activation.activationSourceConfig,
     autoEnabledReasons: activation.autoEnabledReasons,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     env,
     onlyPluginIds: providerPluginIds,
     pluginSdkResolution: params.pluginSdkResolution,

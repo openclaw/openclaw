@@ -20,6 +20,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js"
 describe("openai transport stream", () => {
   it("reports the supported transport-aware APIs", () => {
     expect(isTransportAwareApiSupported("openai-responses")).toBe(true);
+    expect(isTransportAwareApiSupported("openai-codex-responses")).toBe(true);
     expect(isTransportAwareApiSupported("openai-completions")).toBe(true);
     expect(isTransportAwareApiSupported("azure-openai-responses")).toBe(true);
     expect(isTransportAwareApiSupported("anthropic-messages")).toBe(true);
@@ -40,6 +41,20 @@ describe("openai transport stream", () => {
         contextWindow: 200000,
         maxTokens: 8192,
       } satisfies Model<"openai-responses">),
+    ).toBeTypeOf("function");
+    expect(
+      createBoundaryAwareStreamFnForModel({
+        id: "codex-mini-latest",
+        name: "Codex Mini Latest",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">),
     ).toBeTypeOf("function");
     expect(
       createBoundaryAwareStreamFnForModel({
@@ -100,6 +115,39 @@ describe("openai transport stream", () => {
       api: "openclaw-openai-responses-transport",
       provider: "openai",
       id: "gpt-5.4",
+    });
+    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
+  });
+
+  it("prepares a Codex Responses simple-completion api alias when transport overrides are attached", () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "codex-mini-latest",
+        name: "Codex Mini Latest",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        proxy: {
+          mode: "explicit-proxy",
+          url: "http://proxy.internal:8443",
+        },
+      },
+    );
+
+    const prepared = prepareTransportAwareSimpleModel(model);
+
+    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
+    expect(prepared).toMatchObject({
+      api: "openclaw-openai-responses-transport",
+      provider: "openai-codex",
+      id: "codex-mini-latest",
     });
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
   });
@@ -532,7 +580,7 @@ describe("openai transport stream", () => {
           {
             name: "lookup_weather",
             description: "Get forecast",
-            parameters: { type: "object", properties: {} },
+            parameters: { type: "object", properties: {}, additionalProperties: false },
           },
         ],
       } as never,
@@ -540,6 +588,37 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ strict?: boolean }> };
 
     expect(params.tools?.[0]?.strict).toBe(true);
+  });
+
+  it("omits responses strict tool shaping when a native OpenAI tool schema is not strict-compatible", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ strict?: boolean }> };
+
+    expect(params.tools?.[0]).not.toHaveProperty("strict");
   });
 
   it("omits responses strict tool shaping for proxy-like OpenAI routes", () => {
@@ -786,13 +865,13 @@ describe("openai transport stream", () => {
     expect(params.messages?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
   });
 
-  it("uses system role and streaming usage compat for native ModelStudio completions providers", () => {
+  it("uses system role and streaming usage compat for native Qwen completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "qwen3.6-plus",
         name: "Qwen 3.6 Plus",
         api: "openai-completions",
-        provider: "modelstudio",
+        provider: "qwen",
         baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         reasoning: true,
         input: ["text"],
@@ -812,6 +891,33 @@ describe("openai transport stream", () => {
     };
 
     expect(params.messages?.[0]).toMatchObject({ role: "system" });
+    expect(params.stream_options).toMatchObject({ include_usage: true });
+  });
+
+  it("enables streaming usage compat for generic providers on native DashScope endpoints", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "glm-5",
+        name: "GLM-5",
+        api: "openai-completions",
+        provider: "generic",
+        baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      stream_options?: { include_usage?: boolean };
+    };
+
     expect(params.stream_options).toMatchObject({ include_usage: true });
   });
 
@@ -937,7 +1043,7 @@ describe("openai transport stream", () => {
           {
             name: "lookup_weather",
             description: "Get forecast",
-            parameters: { type: "object", properties: {} },
+            parameters: { type: "object", properties: {}, additionalProperties: false },
           },
         ],
       } as never,
@@ -945,6 +1051,37 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ function?: { strict?: boolean } }> };
 
     expect(params.tools?.[0]?.function?.strict).toBe(true);
+  });
+
+  it("omits completions strict tool shaping when a native OpenAI tool schema is not strict-compatible", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ function?: { strict?: boolean } }> };
+
+    expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
   });
 
   it("uses Mistral compat defaults for direct Mistral completions providers", () => {

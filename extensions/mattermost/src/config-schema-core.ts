@@ -8,6 +8,13 @@ import {
 import { z } from "openclaw/plugin-sdk/zod";
 import { buildSecretInputSchema } from "./secret-input.js";
 
+const MattermostGroupSchema = z
+  .object({
+    /** Whether mentions are required to trigger the bot in this group. */
+    requireMention: z.boolean().optional(),
+  })
+  .strict();
+
 function requireMattermostOpenAllowFrom(params: {
   policy?: string;
   allowFrom?: Array<string | number>;
@@ -63,6 +70,14 @@ const MattermostSlashCommandsSchema = z
   .strict()
   .optional();
 
+const MattermostNetworkSchema = z
+  .object({
+    /** Dangerous opt-in for self-hosted Mattermost on trusted private/internal hosts. */
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -98,8 +113,10 @@ const MattermostAccountSchemaBase = z
         allowedSourceIps: z.array(z.string()).optional(),
       })
       .optional(),
-    /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Mattermost on LAN/VPN. */
-    allowPrivateNetwork: z.boolean().optional(),
+    /** Per-group configuration (keyed by Mattermost channel ID or "*" for default). */
+    groups: z.record(z.string(), MattermostGroupSchema.optional()).optional(),
+    /** Network policy overrides for self-hosted Mattermost on trusted private/internal hosts. */
+    network: MattermostNetworkSchema,
     /** Retry configuration for DM channel creation */
     dmChannelRetry: DmChannelRetrySchema,
   })

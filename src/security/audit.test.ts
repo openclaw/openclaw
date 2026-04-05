@@ -1563,6 +1563,28 @@ describe("security audit", () => {
         ],
       },
       {
+        name: "home credential bind is treated as dangerous",
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                docker: {
+                  binds: [path.join(isolatedHome, ".docker", "config.json") + ":/mnt/docker:ro"],
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        expectedFindings: [
+          {
+            checkId: "sandbox.dangerous_bind_mount",
+            severity: "critical",
+            title: "Dangerous bind mount in sandbox config",
+          },
+        ],
+      },
+      {
         name: "container namespace join network mode",
         cfg: {
           agents: {

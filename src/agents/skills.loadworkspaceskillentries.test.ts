@@ -149,6 +149,26 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(entries.map((entry) => entry.skill.name)).toContain("fallback-name");
   });
 
+  it("marks disable-model-invocation skills as hidden in exposure metadata for newly loaded entries", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "hidden-skill"),
+      name: "hidden-skill",
+      description: "Hidden prompt entry",
+      frontmatterExtra: "disable-model-invocation: true",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    const hiddenEntry = entries.find((entry) => entry.skill.name === "hidden-skill");
+
+    expect(hiddenEntry?.invocation?.disableModelInvocation).toBe(true);
+    expect(hiddenEntry?.exposure?.includeInAvailableSkillsPrompt).toBe(false);
+  });
+
   it("inherits agents.defaults.skills when an agent omits skills", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     await writeSkill({

@@ -15,7 +15,11 @@ export function buildTlonAccountFields(input: TlonAccountFieldsInput) {
     ...(input.url ? { url: input.url } : {}),
     ...(input.code ? { code: input.code } : {}),
     ...(typeof input.allowPrivateNetwork === "boolean"
-      ? { allowPrivateNetwork: input.allowPrivateNetwork }
+      ? {
+          network: {
+            dangerouslyAllowPrivateNetwork: input.allowPrivateNetwork,
+          },
+        }
       : {}),
     ...(input.groupChannels ? { groupChannels: input.groupChannels } : {}),
     ...(input.dmAllowlist ? { dmAllowlist: input.dmAllowlist } : {}),

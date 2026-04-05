@@ -445,6 +445,23 @@ EOF
 )"
 }
 
+ensure_vm_running_for_retry() {
+  local status
+  status="$(prlctl status "$VM_NAME" 2>/dev/null || true)"
+  case "$status" in
+    *" suspended")
+      # Some Windows guest transport drops leave the VM suspended between retry
+      # attempts; wake it before the next prlctl exec.
+      warn "VM suspended during retry path; resuming $VM_NAME"
+      prlctl resume "$VM_NAME" >/dev/null
+      ;;
+    *" stopped")
+      warn "VM stopped during retry path; starting $VM_NAME"
+      prlctl start "$VM_NAME" >/dev/null
+      ;;
+  esac
+}
+
 run_windows_retry() {
   local label="$1"
   local max_attempts="$2"
@@ -463,7 +480,12 @@ run_windows_retry() {
     fi
     warn "$label attempt $attempt failed (rc=$rc)"
     if (( attempt < max_attempts )); then
-      wait_for_guest_ready >/dev/null 2>&1 || true
+      if ! ensure_vm_running_for_retry >/dev/null 2>&1; then
+        :
+      fi
+      if ! wait_for_guest_ready >/dev/null 2>&1; then
+        :
+      fi
       sleep 5
     fi
   done

@@ -15,6 +15,24 @@ export const MINIMAX_API_COST = {
   cacheRead: 0.06,
   cacheWrite: 0.375,
 };
+export const MINIMAX_API_HIGHSPEED_COST = {
+  input: 0.6,
+  output: 2.4,
+  cacheRead: 0.06,
+  cacheWrite: 0.375,
+};
+export const MINIMAX_M25_API_COST = {
+  input: 0.3,
+  output: 1.2,
+  cacheRead: 0.03,
+  cacheWrite: 0.375,
+};
+export const MINIMAX_M25_API_HIGHSPEED_COST = {
+  input: 0.6,
+  output: 2.4,
+  cacheRead: 0.03,
+  cacheWrite: 0.375,
+};
 export const MINIMAX_HOSTED_COST = {
   input: 0,
   output: 0,
@@ -29,6 +47,19 @@ export const MINIMAX_LM_STUDIO_COST = {
 };
 
 type MinimaxCatalogId = keyof typeof MINIMAX_TEXT_MODEL_CATALOG;
+
+export function resolveMinimaxApiCost(modelId: string): ModelDefinitionConfig["cost"] {
+  if (modelId === "MiniMax-M2.5-highspeed") {
+    return MINIMAX_M25_API_HIGHSPEED_COST;
+  }
+  if (modelId === "MiniMax-M2.5") {
+    return MINIMAX_M25_API_COST;
+  }
+  if (modelId === "MiniMax-M2.7-highspeed") {
+    return MINIMAX_API_HIGHSPEED_COST;
+  }
+  return MINIMAX_API_COST;
+}
 
 export function buildMinimaxModelDefinition(params: {
   id: string;
@@ -55,7 +86,7 @@ export function buildMinimaxModelDefinition(params: {
 export function buildMinimaxApiModelDefinition(modelId: string): ModelDefinitionConfig {
   return buildMinimaxModelDefinition({
     id: modelId,
-    cost: MINIMAX_API_COST,
+    cost: resolveMinimaxApiCost(modelId),
     contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
   });

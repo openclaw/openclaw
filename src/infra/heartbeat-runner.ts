@@ -16,8 +16,11 @@ import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payl
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
+  isTaskDue,
+  parseHeartbeatTasks,
   resolveHeartbeatPrompt as resolveHeartbeatPromptText,
   stripHeartbeatToken,
+  type HeartbeatTask,
 } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -407,6 +410,8 @@ type HeartbeatPreflight = HeartbeatReasonFlags & {
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
   skipReason?: HeartbeatSkipReason;
+  tasks?: HeartbeatTask[];
+  heartbeatFileContent?: string;
 };
 
 function resolveHeartbeatReasonFlags(reason?: string): HeartbeatReasonFlags {
@@ -459,14 +464,24 @@ async function resolveHeartbeatPreflight(params: {
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  let heartbeatFileContent: string | undefined;
   try {
-    const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
-    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent)) {
+    heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
+    const tasks = parseHeartbeatTasks(heartbeatFileContent);
+    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) && tasks.length === 0) {
       return {
         ...basePreflight,
         skipReason: "empty-heartbeat-file",
+        tasks: [],
+        heartbeatFileContent,
       };
     }
+    // Return tasks even if file has other content - backward compatible
+    return {
+      ...basePreflight,
+      tasks,
+      heartbeatFileContent,
+    };
   } catch (err: unknown) {
     if (hasErrnoCode(err, "ENOENT")) {
       // Missing HEARTBEAT.md is intentional in some setups (for example, when
@@ -481,7 +496,7 @@ async function resolveHeartbeatPreflight(params: {
 }
 
 type HeartbeatPromptResolution = {
-  prompt: string;
+  prompt: string | null;
   hasExecCompletion: boolean;
   hasCronEvents: boolean;
 };
@@ -504,6 +519,8 @@ function resolveHeartbeatRunPrompt(params: {
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
   workspaceDir: string;
+  startedAt: number;
+  heartbeatFileContent?: string;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const pendingEvents = params.preflight.shouldInspectPendingEvents
@@ -518,6 +535,42 @@ function resolveHeartbeatRunPrompt(params: {
     .map((event) => event.text);
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
   const hasCronEvents = cronEvents.length > 0;
+
+  // If tasks are defined, build a batched prompt with due tasks
+  if (params.preflight.tasks && params.preflight.tasks.length > 0) {
+    const tasks = params.preflight.tasks;
+    const dueTasks = tasks.filter((task) =>
+      isTaskDue(
+        (params.preflight.session.entry?.heartbeatTaskState as Record<string, number>)?.[task.name],
+        task.interval,
+        params.startedAt,
+      ),
+    );
+
+    if (dueTasks.length > 0) {
+      const taskList = dueTasks.map((task) => `- ${task.name}: ${task.prompt}`).join("\n");
+      let prompt = `Run the following periodic tasks (only those due based on their intervals):
+
+${taskList}
+
+After completing all due tasks, reply HEARTBEAT_OK.`;
+
+      // Preserve HEARTBEAT.md directives (non-task content)
+      if (params.heartbeatFileContent) {
+        const directives = params.heartbeatFileContent
+          .replace(/^[\s\S]*?^tasks:[\s\S]*?(?=^[^\s]|^$)/m, "")
+          .trim();
+        if (directives) {
+          prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
+        }
+      }
+      return { prompt, hasExecCompletion: false, hasCronEvents: false };
+    }
+    // No tasks due - skip this heartbeat to avoid wasteful API calls
+    return { prompt: null, hasExecCompletion: false, hasCronEvents: false };
+  }
+
+  // Fallback to original behavior
   const basePrompt = hasExecCompletion
     ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
     : hasCronEvents
@@ -589,23 +642,6 @@ export async function runHeartbeatOnce(opts: {
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
   const useIsolatedSession = heartbeat?.isolatedSession === true;
-  let runSessionKey = sessionKey;
-  let runStorePath = storePath;
-  if (useIsolatedSession) {
-    const isolatedKey = `${sessionKey}:heartbeat`;
-    const cronSession = resolveCronSession({
-      cfg,
-      sessionKey: isolatedKey,
-      agentId,
-      nowMs: startedAt,
-      forceNew: true,
-    });
-    cronSession.store[isolatedKey] = cronSession.sessionEntry;
-    await saveSessionStore(cronSession.storePath, cronSession.store);
-    runSessionKey = isolatedKey;
-    runStorePath = cronSession.storePath;
-  }
-
   const delivery = resolveHeartbeatDeliveryTarget({
     cfg,
     entry,
@@ -653,7 +689,62 @@ export async function runHeartbeatOnce(opts: {
     preflight,
     canRelayToUser,
     workspaceDir,
+    startedAt,
+    heartbeatFileContent: preflight.heartbeatFileContent,
   });
+
+  // If no tasks are due, skip heartbeat entirely
+  if (prompt === null) {
+    return { status: "skipped", reason: "no-tasks-due" };
+  }
+
+  let runSessionKey = sessionKey;
+  let runStorePath = storePath;
+  if (useIsolatedSession) {
+    const isolatedKey = `${sessionKey}:heartbeat`;
+    const cronSession = resolveCronSession({
+      cfg,
+      sessionKey: isolatedKey,
+      agentId,
+      nowMs: startedAt,
+      forceNew: true,
+    });
+    cronSession.store[isolatedKey] = cronSession.sessionEntry;
+    await saveSessionStore(cronSession.storePath, cronSession.store);
+    runSessionKey = isolatedKey;
+    runStorePath = cronSession.storePath;
+  }
+
+  // Update task last run times AFTER successful heartbeat completion
+  const updateTaskTimestamps = async () => {
+    if (!preflight.tasks || preflight.tasks.length === 0) {
+      return;
+    }
+
+    const store = loadSessionStore(storePath);
+    const current = store[sessionKey];
+    // Initialize stub entry on first run when current doesn't exist
+    const base = current ?? {
+      // Generate valid sessionId - derive from sessionKey without colons
+      sessionId: sessionKey.replace(/:/g, "_"),
+      updatedAt: startedAt,
+      createdAt: startedAt,
+      messageCount: 0,
+      lastMessageAt: startedAt,
+      heartbeatTaskState: {},
+    };
+    const taskState = { ...base.heartbeatTaskState };
+
+    for (const task of preflight.tasks) {
+      if (isTaskDue(taskState[task.name], task.interval, startedAt)) {
+        taskState[task.name] = startedAt;
+      }
+    }
+
+    store[sessionKey] = { ...base, heartbeatTaskState: taskState };
+    await saveSessionStore(storePath, store);
+  };
+
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
@@ -762,6 +853,7 @@ export async function runHeartbeatOnce(opts: {
         silent: !okSent,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
       });
+      await updateTaskTimestamps();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -798,6 +890,7 @@ export async function runHeartbeatOnce(opts: {
         silent: !okSent,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
       });
+      await updateTaskTimestamps();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -834,6 +927,7 @@ export async function runHeartbeatOnce(opts: {
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         accountId: delivery.accountId,
       });
+      await updateTaskTimestamps();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -854,10 +948,12 @@ export async function runHeartbeatOnce(opts: {
         hasMedia: mediaUrls.length > 0,
         accountId: delivery.accountId,
       });
+      await updateTaskTimestamps();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
     if (!visibility.showAlerts) {
+      await updateTaskTimestamps();
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -947,6 +1043,7 @@ export async function runHeartbeatOnce(opts: {
       accountId: delivery.accountId,
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
+    await updateTaskTimestamps();
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
     const reason = formatErrorMessage(err);

@@ -10,8 +10,7 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
+import { chunkText, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   buildBaseChannelStatusSummary,

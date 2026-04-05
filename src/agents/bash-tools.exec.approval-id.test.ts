@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
@@ -241,15 +241,13 @@ describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ callGatewayTool } = await import("./tools/gateway.js"));
     ({ createExecTool } = await import("./bash-tools.exec.js"));
     ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
     ({ getExecApprovalApproverDmNoticeText } = await import("../infra/exec-approval-reply.js"));
     ({ sendMessage } = await import("../infra/outbound/message.js"));
-  });
-
-  beforeEach(async () => {
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
@@ -1253,6 +1251,19 @@ describe("exec approvals", () => {
     mockNoApprovalRouteRegistration();
 
     let systemRunInvoke: unknown;
+    const preparedPlan = {
+      argv: ["/bin/sh", "-lc", "echo cron-node-ok"],
+      cwd: null,
+      commandText: "/bin/sh -lc 'echo cron-node-ok'",
+      commandPreview: "echo cron-node-ok",
+      agentId: null,
+      sessionKey: null,
+      mutableFileOperand: {
+        argvIndex: 2,
+        path: "/tmp/cron-node-ok.sh",
+        sha256: "deadbeef",
+      },
+    };
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "exec.approval.request") {
         return { id: "approval-id", decision: null };
@@ -1263,7 +1274,11 @@ describe("exec approvals", () => {
       if (method === "node.invoke") {
         const invoke = params as { command?: string };
         if (invoke.command === "system.run.prepare") {
-          return buildPreparedSystemRunPayload(params);
+          return {
+            payload: {
+              plan: preparedPlan,
+            },
+          };
         }
         if (invoke.command === "system.run") {
           systemRunInvoke = params;
@@ -1292,6 +1307,7 @@ describe("exec approvals", () => {
       params: {
         approved: true,
         approvalDecision: "allow-once",
+        systemRunPlan: preparedPlan,
       },
     });
     expect((systemRunInvoke as { params?: { runId?: string } }).params?.runId).toEqual(

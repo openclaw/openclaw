@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
   XAI_TOOL_SCHEMA_PROFILE,
-} from "../plugin-sdk/xai.js";
+} from "../../extensions/xai/api.js";
 import { __testing } from "./pi-tools.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
