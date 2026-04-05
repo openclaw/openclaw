@@ -24,7 +24,7 @@ const ABORT_TRIGGERS = new Set([
   "abortar",
   "arrete",
   "arrête",
-  "avorter",
+  "abandonner",
   "interrompre",
   "停止",
   "やめて",
