@@ -25,7 +25,11 @@ import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shar
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { readClaudeCliCredentialsForRuntime } from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
-import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
+import {
+  buildAnthropicCliMigrationResult,
+  buildClaudeCliRuntimeAuthProfile,
+  hasClaudeCliAuth,
+} from "./cli-migration.js";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
@@ -311,12 +315,18 @@ async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<Provi
       ].join("\n"),
     );
   }
-  return buildAnthropicCliMigrationResult(ctx.config);
+  const result = buildAnthropicCliMigrationResult(ctx.config);
+  const runtimeProfile = buildClaudeCliRuntimeAuthProfile();
+  return {
+    ...result,
+    profiles: runtimeProfile ? [...result.profiles, runtimeProfile] : result.profiles,
+  };
 }
 
 async function runAnthropicCliMigrationNonInteractive(ctx: {
   config: ProviderAuthContext["config"];
   runtime: ProviderAuthContext["runtime"];
+  agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
   if (!hasClaudeCliAuth()) {
     ctx.runtime.error(
@@ -327,6 +337,15 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
     );
     ctx.runtime.exit(1);
     return null;
+  }
+
+  const runtimeProfile = buildClaudeCliRuntimeAuthProfile();
+  if (runtimeProfile) {
+    upsertAuthProfile({
+      profileId: runtimeProfile.profileId,
+      credential: runtimeProfile.credential,
+      agentDir: ctx.agentDir,
+    });
   }
 
   const result = buildAnthropicCliMigrationResult(ctx.config);
@@ -407,6 +426,7 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
           await runAnthropicCliMigrationNonInteractive({
             config: ctx.config,
             runtime: ctx.runtime,
+            agentDir: ctx.agentDir,
           }),
       },
       {
