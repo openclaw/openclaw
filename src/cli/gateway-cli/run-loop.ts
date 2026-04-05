@@ -12,6 +12,7 @@ import {
   markGatewaySigusr1RestartHandled,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
+import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getActiveTaskCount,
@@ -23,6 +24,7 @@ import { createRestartIterationHook } from "../../process/restart-recovery.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
+const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 
 type GatewayRunSignalAction = "stop" | "restart";
 
@@ -77,6 +79,16 @@ export async function runGatewayLoop(params: {
           ? `spawned pid ${respawn.pid ?? "unknown"}`
           : "supervisor restart";
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
+      if (
+        respawn.mode === "supervised" &&
+        detectRespawnSupervisor(process.env, process.platform) === "launchd"
+      ) {
+        // A short clean-exit pause keeps rapid SIGUSR1/config restarts from
+        // tripping launchd crash-loop throttling before KeepAlive relaunches.
+        await new Promise((resolve) => {
+          setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
+        });
+      }
       exitProcess(0);
       return;
     }
