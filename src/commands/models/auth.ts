@@ -110,8 +110,7 @@ async function resolveModelsAuthContext(): Promise<ResolvedModelsAuthContext> {
   const providers = resolvePluginProviders({
     config,
     workspaceDir,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
   });
   return { config, agentDir, workspaceDir, providers };
 }

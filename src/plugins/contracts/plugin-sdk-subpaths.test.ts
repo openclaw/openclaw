@@ -363,15 +363,15 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceContains(
       "memory-core-host-runtime-core",
-      'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
+      'export * from "../memory-host-sdk/runtime-core.js";',
     );
     expectSourceContains(
       "memory-core-host-runtime-cli",
-      'export * from "../../packages/memory-host-sdk/src/runtime-cli.js";',
+      'export * from "../memory-host-sdk/runtime-cli.js";',
     );
     expectSourceContains(
       "memory-core-host-runtime-files",
-      'export * from "../../packages/memory-host-sdk/src/runtime-files.js";',
+      'export * from "../memory-host-sdk/runtime-files.js";',
     );
   });
 

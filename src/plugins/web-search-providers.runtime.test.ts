@@ -345,6 +345,32 @@ describe("resolvePluginWebSearchProviders", () => {
     expectLoaderCallCount(1);
   });
 
+  it("loads manifest-declared web-search providers in setup mode", () => {
+    const providers = resolvePluginWebSearchProviders({
+      config: {
+        plugins: {
+          allow: ["perplexity"],
+        },
+      },
+      mode: "setup",
+    });
+
+    expect(toRuntimeProviderKeys(providers)).toEqual(["brave:brave"]);
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["brave"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["perplexity", "brave"],
+            entries: {
+              brave: { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
+  });
+
   it("loads plugin web-search providers from the auto-enabled config snapshot", () => {
     const rawConfig = createBraveAllowConfig();
     const autoEnabledConfig = {

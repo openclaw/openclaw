@@ -99,7 +99,7 @@ import {
 } from "./compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
-import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "./extra-params.js";
+import { applyExtraParamsToAgent } from "./extra-params.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -787,7 +787,7 @@ export async function compactEmbeddedPiSessionDirect(
         resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
         authStorage,
       });
-      const { effectiveExtraParams } = applyExtraParamsToAgent(
+      applyExtraParamsToAgent(
         session.agent,
         params.config,
         provider,
@@ -799,10 +799,6 @@ export async function compactEmbeddedPiSessionDirect(
         effectiveModel,
         agentDir,
       );
-      resolveAgentTransportOverride({
-        settingsManager,
-        effectiveExtraParams,
-      });
 
       try {
         const prior = await sanitizeSessionHistory({

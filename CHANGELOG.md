@@ -14,10 +14,10 @@ Docs: https://docs.openclaw.ai
 - Channels/context visibility: add configurable `contextVisibility` per channel (`all`, `allowlist`, `allowlist_quote`) so supplemental quote, thread, and fetched history context can be filtered by sender allowlists instead of always passing through as received.
 - Matrix/exec approvals: add Matrix-native exec approval prompts with account-scoped approvers, channel-or-DM delivery, and room-thread aware resolution handling. (#58635) Thanks @gumadeiras.
 - Providers/StepFun: add the bundled StepFun provider plugin with standard and Step Plan endpoints, China/global onboarding choices, `step-3.5-flash` on both catalogs, and `step-3.5-flash-2603` currently exposed on Step Plan. (#60032) Thanks @hengm3467.
+- Providers/Fireworks: add a bundled Fireworks AI provider plugin with `FIREWORKS_API_KEY` onboarding, Fire Pass Kimi defaults, and dynamic Fireworks model-id support.
 - Providers/config: add `models.providers.*.request` overrides for headers and auth on model-provider paths, and full request transport overrides for media provider HTTP paths.
 - MiniMax/TTS: add a bundled MiniMax speech provider backed by the T2A v2 API so speech synthesis can run through MiniMax-native voices and auth. (#55921) Thanks @duncanita.
 - Control UI/skills: add ClawHub search, detail, and install flows directly in the Skills panel. (#60134) Thanks @samzong.
-- Providers/StepFun: add the bundled StepFun provider plugin with standard and Step Plan endpoints, China/global onboarding choices, `step-3.5-flash` on both catalogs, and `step-3.5-flash-2603` currently exposed on Step Plan. (#60032) Thanks @hengm3467.
 - Providers/Ollama: add a bundled Ollama Web Search provider for key-free `web_search` via your configured Ollama host and `ollama signin`. (#59318) Thanks @BruceMacD.
 - Plugins/onboarding: add plugin config TUI prompts to onboard and configure wizards so more plugin setup can stay in the guided flow. (#60590)
 - Plugins/install: add `openclaw plugins install --force` to overwrite existing plugin and hook-pack install targets without using the dangerous-code override flag. (#60544) Thanks @gumadeiras.
@@ -33,15 +33,15 @@ Docs: https://docs.openclaw.ai
 - Agents/cache: diagnostics: add prompt-cache break diagnostics, trace live cache scenarios through embedded runner paths, and show cache reuse explicitly in `openclaw status --verbose`. Thanks @vincentkoc.
 - Agents/cache: stabilize cache-relevant system prompt fingerprints by normalizing equivalent structured prompt whitespace, line endings, hook-added system context, and runtime capability ordering so semantically unchanged prompts reuse KV/cache more reliably. Thanks @vincentkoc.
 - Config/schema: enrich the exported `openclaw config schema` JSON Schema with field titles and descriptions so editors, agents, and other schema consumers receive the same config help metadata. (#60067) Thanks @solavrc.
+- Providers/StepFun: add the bundled StepFun provider plugin with standard and Step Plan endpoints, China/global onboarding choices, `step-3.5-flash` on both catalogs, and `step-3.5-flash-2603` currently exposed on Step Plan. (#60032) Thanks @hengm3467.
 
 ### Fixes
 
+- Gateway/macOS: let launchd `KeepAlive` own in-process gateway restarts again, adding a short supervised-exit delay so rapid restarts avoid launchd crash-loop unloads while `openclaw gateway restart` still reports real LaunchAgent errors synchronously.
 - Synology Chat/security: route webhook token comparison through the shared constant-time secret helper for consistency with other bundled plugins.
 - Models/MiniMax: honor `MINIMAX_API_HOST` for implicit bundled MiniMax provider catalogs so China-hosted API-key setups pick `api.minimaxi.com/anthropic` without manual provider config. (#34524) Thanks @caiqinghua.
 - Usage/MiniMax: invert remaining-style `usage_percent` fields when MiniMax reports only remaining percentage data, so usage bars stop showing nearly-full remaining quota as nearly-exhausted usage. (#60254) Thanks @jwchmodx.
 - MiniMax: advertise image input on bundled `MiniMax-M2.7` and `MiniMax-M2.7-highspeed` model definitions so image-capable flows can route through the M2.7 family correctly. (#54843) Thanks @MerlinMiao88888888.
-- Agents/exec approvals: let `exec-approvals.json` agent security override stricter gateway tool defaults so approved subagents can use `security: "full"` without falling back to allowlist enforcement again. (#60310) Thanks @lml2468.
-- Tasks/maintenance: mark stale cron runs and CLI tasks backed only by long-lived chat sessions as lost again so task cleanup does not keep dead work alive indefinitely. (#60310) Thanks @lml2468.
 - Media understanding: auto-register image-capable config providers for vision routing, so custom GLM-style provider ids with image models stop failing with “no media-understanding provider registered”. (#51418) Thanks @xydt-610.
 - Providers/OpenAI: preserve native `reasoning.effort: "none"` and strict tool schemas on direct OpenAI-family endpoints, keep compat routes on compat shaping, fix Responses WebSocket warm-up behavior, keep stable session and turn metadata, and fall back more gracefully after early WebSocket failures.
 - Providers/OpenAI Codex: split native `contextWindow` from runtime `contextTokens`, keep the default effective cap at `272000`, and expose a per-model `contextTokens` override on `models.providers.*.models[]`.
@@ -66,6 +66,7 @@ Docs: https://docs.openclaw.ai
 - Control UI: keep Stop visible during tool-only execution, preserve pending-send busy state, and clear stale ClawHub search results as soon as the query changes. (#54528, #59800, #60267)
 - MS Teams: download inline DM images via Graph API and preserve channel reply threading in proactive fallback. (#52212, #55198)
 - Agents/Claude CLI: persist explicit `openclaw agent --session-id` runs under a stable session key so follow-ups can reuse the stored CLI binding and resume the same underlying Claude session.
+- Agents/CLI backends: invalidate stored CLI session reuse when local CLI login state or the selected auth profile credential changes, so relogin and token rotation stop resuming stale sessions.
 - Auth/failover: persist selected fallback overrides before retrying, shorten `auth_permanent` lockouts, and refresh websocket/shared-auth sessions only when real auth changes occur so retries and secret rotations behave predictably. (#60404, #60323, #60387)
 - Cron: replay interrupted recurring jobs on the first gateway restart instead of waiting for a second restart. (#60583) Thanks @joelnishanth.
 - Plugins/media understanding: enable bundled Groq and Deepgram providers by default so configured transcription models work without extra plugin activation config. (#59982) Thanks @yxjsxy.
@@ -97,6 +98,7 @@ Docs: https://docs.openclaw.ai
 - Mobile pairing/bootstrap: keep QR bootstrap handoff tokens bounded to the mobile-safe contract so node handoff stays unscoped and operator handoff drops mixed `node.*`, `operator.admin`, and `operator.pairing` scopes.
 - Gateway/auth: serialize async shared-secret auth attempts per client so concurrent Tailscale-capable failures cannot overrun the intended auth rate-limit budget. Thanks @Telecaster2147.
 - Doctor/config: compare normalized `talk` configs by deep structural equality instead of key-order-sensitive serialization so `openclaw doctor --fix` stops repeatedly reporting/applying no-op `talk.provider/providers` normalization. (#59911) Thanks @ejames-dev.
+- Providers/Anthropic Vertex: honor `cacheRetention: "long"` with the real 1-hour prompt-cache TTL on Vertex AI endpoints, and default `anthropic-vertex` cache retention like direct Anthropic. (#60888) Thanks @affsantos.
 - Gateway/device auth: reuse cached device-token scopes only for cached-token reconnects, while keeping explicit `deviceToken` scope requests and empty-cache fallbacks intact so reconnects preserve `operator.read` without breaking explicit auth flows. (#46032) Thanks @caicongyang.
 - Agents/scheduling: steer background-now work toward automatic completion wake and treat `process` polling as on-demand inspection or intervention instead of default completion handling. (#60877) Thanks @vincentkoc.
 - Google Gemini CLI auth: improve OAuth credential discovery across Windows nvm and Homebrew libexec installs, and align Code Assist metadata so Gemini login stops failing on packaged CLI layouts. (#40729) Thanks @hughcube.
@@ -110,16 +112,18 @@ Docs: https://docs.openclaw.ai
 - Agents/exec: restore `host=node` routing for node-pinned and `host=auto` sessions, while still blocking sandboxed `auto` sessions from jumping to gateway. (#60788) Thanks @openperf.
 - Agents/compaction: keep assistant tool calls and displaced tool results in the same compaction chunk so strict summarization providers stop rejecting orphaned tool pairs. (#58849) Thanks @openperf.
 - Outbound/sanitizer: strip leaked `<tool_call>`, `<function_calls>`, and model special tokens from shared user-visible assistant text, including truncated tool-call streams, so internal scaffolding no longer bleeds into replies across surfaces. (#60619) Thanks @oliviareid-svg.
+- Telegram: restore DM voice-note preflight transcription so direct-message audio stops arriving as raw `<media:audio>` placeholders. (#61008) Thanks @manueltarouca.
 - Control UI/avatar: honor `ui.assistant.avatar` when serving `/avatar/:agentId` so Appearance UI avatar paths stop falling back to initials placeholders. (#60778) Thanks @hannasdev.
 - Control UI/Overview: prevent gateway access token/password visibility toggle buttons from overlapping their inputs at narrow widths. (#56924) Thanks @bbddbb1.
 - Control UI/cron: highlight the Cron refresh button while refresh is in flight so the page's loading state stays visible even when prior data remains on screen. (#60394) Thanks @coder-zhuzm.
 - MS Teams: replace the deprecated Teams SDK HttpPlugin stub with `httpServerAdapter` so recurring gateway deprecation warnings stop firing and the Express 5 compatibility workaround stays on the supported SDK path. (#60939) Thanks @coolramukaka-sys.
 - CLI/Commander: preserve Commander-computed exit codes for argument and help-error paths, and cover the user-argv parse mode in the regression tests so invalid CLI invocations no longer report success when exits are intercepted. (#60923) Thanks @Linux2010.
 - Telegram/native command menu: trim long menu descriptions before dropping commands so sub-100 command sets can still fit Telegram's payload budget and keep more `/` entries visible. (#61129) Thanks @neeravmakwana.
-- Agents/Claude CLI: keep non-interactive `--permission-mode bypassPermissions` when custom `cliBackends.claude-cli.args` override defaults, so cron and heartbeat Claude CLI runs do not regress to interactive approval mode. (#61114) Thanks @cathrynlavery and @thewilloftheshadow.
+- Agents/Claude CLI: keep non-interactive `--permission-mode bypassPermissions` when custom `cliBackends.claude-cli.args` override defaults, including fallback resolution before the runtime plugin registry is active, so cron and heartbeat Claude CLI runs do not regress to interactive approval mode. (#61114) Thanks @cathrynlavery and @thewilloftheshadow.
 - Agents/skills: skip `.git` and `node_modules` when mirroring skills into sandbox workspaces so read-only sandboxes do not copy repo history or dependency trees. (#61090) Thanks @joelnishanth.
 - Android/Talk Mode: cancel in-flight `talk.speak` playback when speech is explicitly stopped, so stale replies stop starting after barge-in or manual stop. (#61164) Thanks @obviyus.
 - Plugins/onboarding: write dotted plugin uiHint paths like Brave `webSearch.mode` as nested plugin config so `llm-context` setup stops failing validation. (#61159) Thanks @obviyus.
+- Android/Talk Mode: restore voice replies on gateway-backed talk mode sessions by updating embedded runner transport overrides to the current agent transport API. (#61214) Thanks @obviyus.
 
 ## 2026.4.2
 

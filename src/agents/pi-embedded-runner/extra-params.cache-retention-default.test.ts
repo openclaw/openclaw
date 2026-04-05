@@ -237,6 +237,39 @@ describe("cacheRetention default behavior", () => {
       ),
     ).toBe("long");
   });
+
+  it("defaults to 'short' for anthropic-vertex without explicit config", () => {
+    expect(
+      resolveCacheRetention(
+        undefined,
+        "anthropic-vertex",
+        "anthropic-messages",
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("short");
+  });
+
+  it("respects explicit 'long' for anthropic-vertex", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "anthropic-vertex",
+        "anthropic-messages",
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("long");
+  });
+
+  it("respects explicit 'none' for anthropic-vertex", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "none" },
+        "anthropic-vertex",
+        "anthropic-messages",
+        "claude-sonnet-4-6",
+      ),
+    ).toBe("none");
+  });
 });
 
 describe("anthropic-family cache semantics", () => {

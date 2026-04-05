@@ -268,6 +268,9 @@ const createStubPluginRegistry = (): PluginRegistry => ({
           ...(trimString(params.outputFormat) == null
             ? {}
             : { outputFormat: trimString(params.outputFormat) }),
+          ...(asNumber(params.latencyTier) == null
+            ? {}
+            : { latencyTier: asNumber(params.latencyTier) }),
         }),
         synthesize: async (req) => {
           const config = req.providerConfig as Record<string, unknown>;
@@ -282,7 +285,12 @@ const createStubPluginRegistry = (): PluginRegistry => ({
             {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ text: req.text }),
+              body: JSON.stringify({
+                text: req.text,
+                ...(asNumber(overrides.latencyTier) == null
+                  ? {}
+                  : { latency_optimization_level: asNumber(overrides.latencyTier) }),
+              }),
             },
             "elevenlabs",
           );

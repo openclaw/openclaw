@@ -542,7 +542,11 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
     msg.includes("no allowed providers are available") ||
     msg.includes("provider unavailable") ||
     msg.includes("upstream provider unavailable") ||
-    msg.includes("upstream error from google")
+    msg.includes("upstream error from google") ||
+    msg.includes("temporarily rate-limited upstream") ||
+    msg.includes("unable to access non-serverless model") ||
+    msg.includes("create and start a new dedicated endpoint") ||
+    msg.includes("no available capacity was found for the model")
   );
 }
 
@@ -553,6 +557,21 @@ function isOllamaUnavailableErrorMessage(raw: string): boolean {
     (msg.includes("127.0.0.1:11434") && msg.includes("econnrefused")) ||
     (msg.includes("localhost:11434") && msg.includes("econnrefused"))
   );
+}
+
+function isAudioOnlyModelErrorMessage(raw: string): boolean {
+  return /requires that either input content or output modality contain audio/i.test(raw);
+}
+
+function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
+  return (
+    /does not support parameter reasoningeffort/i.test(raw) ||
+    /unsupported value:\s*'low'.*reasoning\.effort.*supported values are:\s*'medium'/i.test(raw)
+  );
+}
+
+function isUnsupportedThinkingToggleErrorMessage(raw: string): boolean {
+  return /does not support parameter [`"]?enable_thinking[`"]?/i.test(raw);
 }
 
 function isInstructionsRequiredError(error: string): boolean {
@@ -1670,6 +1689,21 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           if (isProviderUnavailableErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (provider unavailable)`);
+            break;
+          }
+          if (isAudioOnlyModelErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (audio-only model)`);
+            break;
+          }
+          if (isUnsupportedReasoningEffortErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (reasoning unsupported)`);
+            break;
+          }
+          if (isUnsupportedThinkingToggleErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (thinking toggle unsupported)`);
             break;
           }
           if (model.provider === "openrouter" && isPromptProbeMiss(message)) {
