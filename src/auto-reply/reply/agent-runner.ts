@@ -194,9 +194,6 @@ export async function runReplyAgent(params: {
 
   if (shouldSteer && isActive) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
-    console.debug(
-      `[steer] sessionId=${followupRun.run.sessionId} steered=${steered} shouldFollowup=${shouldFollowup} isActive=${isActive}`,
-    );
     if (steered && !shouldFollowup) {
       await touchActiveSessionEntry();
       typing.cleanup();

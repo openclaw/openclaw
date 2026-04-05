@@ -63,9 +63,6 @@ export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueS
     params.sessionEntry?.queueDrop ??
     normalizeQueueDropPolicy(queueCfg?.drop) ??
     DEFAULT_QUEUE_DROP;
-  console.debug(
-    `[queue] channel=${channelKey} inlineMode=${params.inlineMode} sessionQueueMode=${params.sessionEntry?.queueMode} cfgMode=${queueCfg?.mode} resolvedMode=${resolvedMode}`,
-  );
   return {
     mode: resolvedMode,
     debounceMs: typeof debounceRaw === "number" ? Math.max(0, debounceRaw) : undefined,

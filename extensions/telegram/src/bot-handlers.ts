@@ -247,9 +247,6 @@ export const registerTelegramHandlers = ({
       // so steer messages arrive immediately between tool calls.
       if (entry.conversationKey) {
         const streaming = isEmbeddedRunStreamingForSessionKey(entry.conversationKey);
-        console.debug(
-          `[steer-debounce] conversationKey=${entry.conversationKey} streaming=${streaming}`,
-        );
         if (streaming) {
           return false;
         }

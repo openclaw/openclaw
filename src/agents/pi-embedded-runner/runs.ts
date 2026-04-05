@@ -37,7 +37,6 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
-    console.debug(`[steer] queue message failed: sessionId=${sessionId} reason=no_active_run`);
     return false;
   }
   if (handle.isCompacting()) {
@@ -46,7 +45,6 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
   }
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });
   diag.debug(`steer inject: sessionId=${sessionId} text=${text.slice(0, 80)}`);
-  console.debug(`[steer] inject ok: sessionId=${sessionId} text=${text.slice(0, 60)}`);
   void handle.queueMessage(text);
   return true;
 }
@@ -239,9 +237,6 @@ export function setActiveEmbeddedRun(
   if (sessionKey) {
     SESSION_KEY_INDEX.set(sessionKey, sessionId);
   }
-  console.debug(
-    `[run-register] sessionId=${sessionId} sessionKey=${sessionKey ?? "undefined"} indexSize=${SESSION_KEY_INDEX.size}`,
-  );
   logSessionStateChange({
     sessionId,
     sessionKey,

@@ -442,8 +442,12 @@ export async function getReplyFromConfig(
           loopIteration: nextIter,
         });
 
-        // Emit iteration progress marker in verbose mode only.
-        if (resolvedVerboseLevel === "on" || resolvedVerboseLevel === "full") {
+        // Emit iteration progress marker in verbose mode only, and only when
+        // there is another iteration to come (avoids showing "Loop 3/2" on the last).
+        if (
+          (resolvedVerboseLevel === "on" || resolvedVerboseLevel === "full") &&
+          nextIter < maxIter
+        ) {
           await resolvedOpts?.onBlockReply?.({ text: `🔁 Loop ${nextIter + 1}/${maxIter}` });
         }
 
