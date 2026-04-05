@@ -16,6 +16,9 @@ import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
+type DispatcherCompatibleFetch = FetchLike & {
+  __openclawAcceptsDispatcher?: boolean;
+};
 
 export const GUARDED_FETCH_MODE = {
   STRICT: "strict",
@@ -291,11 +294,14 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         ...(signal ? { signal } : {}),
       };
 
+      const supportsDispatcherInit =
+        params.fetchImpl !== undefined ||
+        (defaultFetch as DispatcherCompatibleFetch).__openclawAcceptsDispatcher === true;
       // Use caller-provided fetch stubs when present; otherwise fall back to
       // undici's fetch whenever we attach a dispatcher because the global fetch
       // path will not honor per-request dispatchers.
       const response =
-        dispatcher && !params.fetchImpl
+        dispatcher && !supportsDispatcherInit
           ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
           : await defaultFetch(parsedUrl.toString(), init);
 
