@@ -24,6 +24,7 @@ const messagingActions = new Set([
   "unpinMessage",
   "listPins",
   "searchMessages",
+  "uploadFile",
 ]);
 
 const guildActions = new Set([

@@ -564,6 +564,31 @@ export async function handleDiscordMessagingAction(
         : await discordMessagingActionRuntime.listPinsDiscord(channelId, cfgOptions);
       return jsonResult({ ok: true, pins: pins.map((pin) => normalizeMessage(pin)) });
     }
+    case "uploadFile": {
+      if (!isActionEnabled("messages")) {
+        throw new Error("Discord file uploads are disabled.");
+      }
+      const to = readStringParam(params, "to", { required: true });
+      const filePath =
+        readStringParam(params, "filePath", { trim: false }) ??
+        readStringParam(params, "path", { trim: false }) ??
+        readStringParam(params, "media", { trim: false });
+      if (!filePath) {
+        throw new Error("upload-file requires filePath, path, or media");
+      }
+      assertMediaNotDataUrl(filePath);
+      const initialComment = readStringParam(params, "initialComment", { allowEmpty: true }) ?? "";
+      const filename = readStringParam(params, "filename");
+      const result = await discordMessagingActionRuntime.sendMessageDiscord(to, initialComment, {
+        ...cfgOptions,
+        ...(accountId ? { accountId } : {}),
+        mediaUrl: filePath,
+        filename: filename ?? undefined,
+        mediaLocalRoots: options?.mediaLocalRoots,
+        mediaReadFile: options?.mediaReadFile,
+      });
+      return jsonResult({ ok: true, result });
+    }
     case "searchMessages": {
       if (!isActionEnabled("search")) {
         throw new Error("Discord search is disabled.");

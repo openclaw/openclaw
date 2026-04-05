@@ -204,6 +204,34 @@ export async function handleDiscordMessageAction(
     );
   }
 
+  if (action === "upload-file") {
+    const to = readStringParam(params, "to", { required: true });
+    const filePath =
+      readStringParam(params, "filePath", { trim: false }) ??
+      readStringParam(params, "path", { trim: false }) ??
+      readStringParam(params, "media", { trim: false });
+    if (!filePath) {
+      throw new Error("upload-file requires filePath, path, or media");
+    }
+    const initialComment =
+      readStringParam(params, "initialComment", { allowEmpty: true }) ??
+      readStringParam(params, "message", { allowEmpty: true }) ??
+      "";
+    const filename = readStringParam(params, "filename");
+    return await handleDiscordAction(
+      {
+        action: "uploadFile",
+        accountId: accountId ?? undefined,
+        to,
+        filePath,
+        initialComment,
+        filename: filename ?? undefined,
+      },
+      cfg,
+      actionOptions,
+    );
+  }
+
   if (action === "pin" || action === "unpin" || action === "list-pins") {
     const messageId =
       action === "list-pins" ? undefined : readStringParam(params, "messageId", { required: true });

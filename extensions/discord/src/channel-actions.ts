@@ -89,6 +89,7 @@ function describeDiscordMessageTool({
     actions.add("read");
     actions.add("edit");
     actions.add("delete");
+    actions.add("upload-file");
   }
   if (discovery.isEnabled("pins")) {
     actions.add("pin");
