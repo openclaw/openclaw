@@ -34,19 +34,19 @@ jobs:
 
       - name: Ensure translation provider secrets exist
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENCLAW_CONTROL_UI_I18N_OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.OPENCLAW_CONTROL_UI_I18N_ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            echo "Missing control UI i18n provider secret."
+            echo "Missing OPENAI_API_KEY or ANTHROPIC_API_KEY secret."
             exit 1
           fi
 
       - name: Refresh control UI locale files
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENCLAW_CONTROL_UI_I18N_OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.OPENCLAW_CONTROL_UI_I18N_ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: pnpm ui:i18n:sync
 
       - name: Commit and push locale updates
