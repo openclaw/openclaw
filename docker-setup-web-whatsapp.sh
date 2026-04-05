@@ -79,7 +79,7 @@ export OPENCLAW_EXTRA_MOUNTS=""
 
 CONTROL_UI_URL="http://127.0.0.1:18789/"
 if [[ "$OPENCLAW_GATEWAY_BIND" == "lan" ]]; then
-  HOST_LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  HOST_LAN_IP="$( (hostname -I 2>/dev/null || true) | awk '{print $1}' )"
   if [[ -n "$HOST_LAN_IP" ]]; then
     CONTROL_UI_URL="http://$HOST_LAN_IP:18789/"
   else
