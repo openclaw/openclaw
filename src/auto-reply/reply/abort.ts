@@ -152,9 +152,16 @@ export function stopSubagentsForRequester(params: {
       continue;
     }
     const latest = abortDeps.getLatestSubagentRunByChildSessionKey(childKey);
+    if (!latest) {
+      const existing = dedupedRunsByChildKey.get(childKey);
+      if (!existing || run.createdAt >= existing.createdAt) {
+        dedupedRunsByChildKey.set(childKey, run);
+      }
+      continue;
+    }
     const latestControllerSessionKey =
       latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
-    if (!latest || latest.runId !== run.runId || latestControllerSessionKey !== requesterKey) {
+    if (latest.runId !== run.runId || latestControllerSessionKey !== requesterKey) {
       continue;
     }
     const existing = dedupedRunsByChildKey.get(childKey);
