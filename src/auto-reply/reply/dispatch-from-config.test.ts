@@ -56,8 +56,19 @@ const internalHookMocks = vi.hoisted(() => ({
 }));
 const acpMocks = vi.hoisted(() => ({
   listAcpSessionEntries: vi.fn(async () => []),
-  readAcpSessionEntry: vi.fn<() => unknown>(() => null),
-  upsertAcpSessionMeta: vi.fn(async () => null),
+  readAcpSessionEntry: vi.fn<(params: { sessionKey: string; cfg?: OpenClawConfig }) => unknown>(
+    () => null,
+  ),
+  upsertAcpSessionMeta: vi.fn<
+    (params: {
+      sessionKey: string;
+      cfg?: OpenClawConfig;
+      mutate: (
+        current: Record<string, unknown> | undefined,
+        entry: { acp?: Record<string, unknown> } | undefined,
+      ) => Record<string, unknown> | null | undefined;
+    }) => Promise<unknown>
+  >(async () => null),
   requireAcpRuntimeBackend: vi.fn<() => unknown>(),
 }));
 const sessionBindingMocks = vi.hoisted(() => ({
@@ -317,7 +328,13 @@ function createAcpRuntime(events: Array<Record<string, unknown>>) {
           runtimeSessionName: `${input.sessionKey}:${input.mode}`,
         }) as { sessionKey: string; backend: string; runtimeSessionName: string },
     ),
-    runTurn: vi.fn(async function* (_params: { text?: string }) {
+    runTurn: vi.fn(async function* (_params: {
+      text?: string;
+      attachments?: unknown[];
+      mode?: string;
+      requestId?: string;
+      signal?: AbortSignal;
+    }) {
       for (const event of events) {
         yield event;
       }

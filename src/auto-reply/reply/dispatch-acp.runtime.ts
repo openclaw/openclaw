@@ -1,5 +1,6 @@
-import type { shouldBypassAcpDispatchForCommand as ShouldBypassAcpDispatchForCommand } from "./dispatch-acp-command-bypass.js";
-import type { tryDispatchAcpReply as TryDispatchAcpReply } from "./dispatch-acp.js";
+type ShouldBypassAcpDispatchForCommand =
+  (typeof import("./dispatch-acp-command-bypass.js"))["shouldBypassAcpDispatchForCommand"];
+type TryDispatchAcpReply = (typeof import("./dispatch-acp.js"))["tryDispatchAcpReply"];
 
 let dispatchAcpPromise: Promise<typeof import("./dispatch-acp.js")> | null = null;
 let dispatchAcpCommandBypassPromise: Promise<
@@ -18,14 +19,14 @@ function loadDispatchAcpCommandBypass() {
 
 export async function shouldBypassAcpDispatchForCommand(
   ...args: Parameters<ShouldBypassAcpDispatchForCommand>
-): Promise<ReturnType<ShouldBypassAcpDispatchForCommand>> {
+): Promise<Awaited<ReturnType<ShouldBypassAcpDispatchForCommand>>> {
   const mod = await loadDispatchAcpCommandBypass();
   return mod.shouldBypassAcpDispatchForCommand(...args);
 }
 
 export async function tryDispatchAcpReply(
   ...args: Parameters<TryDispatchAcpReply>
-): ReturnType<TryDispatchAcpReply> {
+): Promise<Awaited<ReturnType<TryDispatchAcpReply>>> {
   const mod = await loadDispatchAcp();
   return await mod.tryDispatchAcpReply(...args);
 }

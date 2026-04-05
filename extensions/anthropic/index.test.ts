@@ -1,5 +1,5 @@
+import { capturePluginRegistration } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
-import { createCapturedPluginRegistration } from "../../src/test-utils/plugin-registration.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 
 const { readClaudeCliCredentialsForSetupMock, readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(
@@ -20,8 +20,7 @@ import anthropicPlugin from "./index.js";
 
 describe("anthropic provider replay hooks", () => {
   it("registers the claude-cli backend", async () => {
-    const captured = createCapturedPluginRegistration();
-    await anthropicPlugin.register(captured.api);
+    const captured = capturePluginRegistration({ register: anthropicPlugin.register });
 
     expect(captured.cliBackends).toContainEqual(
       expect.objectContaining({
