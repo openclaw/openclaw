@@ -10,15 +10,21 @@ export function getA2uiPaths(env = process.env) {
   return { srcDir, outDir };
 }
 
+export function shouldSkipMissingA2uiAssets(env = process.env): boolean {
+  return env.OPENCLAW_A2UI_SKIP_MISSING === "1" || Boolean(env.OPENCLAW_SPARSE_PROFILE);
+}
+
 export async function copyA2uiAssets({ srcDir, outDir }: { srcDir: string; outDir: string }) {
-  const skipMissing = process.env.OPENCLAW_A2UI_SKIP_MISSING === "1";
+  const skipMissing = shouldSkipMissingA2uiAssets(process.env);
   try {
     await fs.stat(path.join(srcDir, "index.html"));
     await fs.stat(path.join(srcDir, "a2ui.bundle.js"));
   } catch (err) {
     const message = 'Missing A2UI bundle assets. Run "pnpm canvas:a2ui:bundle" and retry.';
     if (skipMissing) {
-      console.warn(`${message} Skipping copy (OPENCLAW_A2UI_SKIP_MISSING=1).`);
+      console.warn(
+        `${message} Skipping copy because OPENCLAW_A2UI_SKIP_MISSING=1 or OPENCLAW_SPARSE_PROFILE is set.`,
+      );
       return;
     }
     throw new Error(message, { cause: err });
