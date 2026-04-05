@@ -1,4 +1,7 @@
+import fs from "node:fs/promises";
+import readline from "node:readline";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -15,6 +18,53 @@ import {
 
 export type BootstrapContextMode = "full" | "lightweight";
 export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
+
+export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
+  return config?.agents?.defaults?.contextInjection ?? "always";
+}
+
+export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(sessionFile);
+    if (stat.isSymbolicLink()) {
+      return false;
+    }
+
+    const fh = await fs.open(sessionFile, "r");
+    try {
+      const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
+      let hasAssistant = false;
+      let compactedAfterLastAssistant = false;
+
+      for await (const line of rl) {
+        if (!line.trim()) {
+          continue;
+        }
+        let entry: unknown;
+        try {
+          entry = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const record = entry as { type?: string; message?: { role?: string } } | null | undefined;
+        if (record?.type === "message" && record.message?.role === "assistant") {
+          hasAssistant = true;
+          compactedAfterLastAssistant = false;
+          continue;
+        }
+        if (hasAssistant && record?.type === "compaction") {
+          compactedAfterLastAssistant = true;
+        }
+      }
+
+      return hasAssistant && !compactedAfterLastAssistant;
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return false;
+  }
+}
 
 export function makeBootstrapWarn(params: {
   sessionLabel: string;

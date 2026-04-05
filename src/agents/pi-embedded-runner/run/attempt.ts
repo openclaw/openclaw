@@ -38,7 +38,12 @@ import {
   buildBootstrapInjectionStats,
   prependBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
+import {
+  hasCompletedBootstrapTurn,
+  makeBootstrapWarn,
+  resolveBootstrapContextForRun,
+  resolveContextInjectionMode,
+} from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
@@ -367,16 +372,25 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
-      await resolveBootstrapContextForRun({
-        workspaceDir: effectiveWorkspace,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
-        contextMode: params.bootstrapContextMode,
-        runKind: params.bootstrapContextRunKind,
-      });
+    const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const isContinuationTurn =
+      contextInjectionMode === "continuation-skip" &&
+      params.bootstrapContextRunKind !== "heartbeat" &&
+      (await hasCompletedBootstrapTurn(params.sessionFile));
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = isContinuationTurn
+      ? {
+          bootstrapFiles: [],
+          contextFiles: [],
+        }
+      : await resolveBootstrapContextForRun({
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+          contextMode: params.bootstrapContextMode,
+          runKind: params.bootstrapContextRunKind,
+        });
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
