@@ -445,4 +445,37 @@ describe("canvas host", () => {
       }
     }
   });
+
+  it("includes baseline security headers on responses", async () => {
+    const dir = await createCaseDir();
+    await fs.writeFile(path.join(dir, "index.html"), "<html><body>sec</body></html>", "utf8");
+    let server: Awaited<ReturnType<typeof startFixtureCanvasHost>>;
+    try {
+      server = await startFixtureCanvasHost(dir);
+    } catch (error) {
+      if (isLoopbackBindDenied(error)) {
+        return;
+      }
+      throw error;
+    }
+
+    try {
+      const res = await realFetch(`http://127.0.0.1:${server.port}${CANVAS_HOST_PATH}/`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(res.headers.get("x-frame-options")).toBe("DENY");
+
+      // 404 responses should also carry security headers.
+      const notFound = await realFetch(
+        `http://127.0.0.1:${server.port}${CANVAS_HOST_PATH}/does-not-exist.txt`,
+      );
+      expect(notFound.status).toBe(404);
+      expect(notFound.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(notFound.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(notFound.headers.get("x-frame-options")).toBe("DENY");
+    } finally {
+      await server.close();
+    }
+  });
 });

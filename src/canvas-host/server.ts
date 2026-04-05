@@ -464,6 +464,14 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
 
   const bindHost = opts.listenHost?.trim() || "127.0.0.1";
   const server: Server = http.createServer((req, res) => {
+    // Baseline security headers for all responses served by the standalone
+    // canvas host (defense-in-depth even though it typically binds to
+    // loopback).  The gateway HTTP handler applies its own set; these cover
+    // the standalone server path that the gateway does not wrap.
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("X-Frame-Options", "DENY");
+
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
       return;
     }
