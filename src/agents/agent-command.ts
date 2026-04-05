@@ -21,6 +21,7 @@ import {
 } from "../config/config.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import { emitActivityEvent, summarizeForMetadata } from "../infra/activity-events.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -162,6 +163,29 @@ async function prepareAgentCommandExecution(
     throw new Error("Message (--message) is required");
   }
   const body = prependInternalEventContext(message, opts.internalEvents);
+
+  // Emit activity events for subagent completion results delivered to parent.
+  if (opts.internalEvents?.length) {
+    for (const evt of opts.internalEvents) {
+      if (evt.type === "task_completion") {
+        emitActivityEvent(
+          opts.runId ?? "",
+          {
+            kind: "subagent.completed",
+            metadata: {
+              outcome: evt.status,
+              task: evt.taskLabel,
+              result: summarizeForMetadata(evt.result),
+              childSessionKey: evt.childSessionKey,
+              source: evt.source,
+            },
+          },
+          opts.sessionKey,
+        );
+      }
+    }
+  }
+
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
