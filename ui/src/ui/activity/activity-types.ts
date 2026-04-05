@@ -22,6 +22,8 @@ export type ActivityNode = {
 export type ActivityTree = {
   rootNodes: string[];
   nodeById: Map<string, ActivityNode>;
+  /** Maps child session keys to the subagent node ID that spawned them. */
+  sessionKeyToSpawner: Map<string, string>;
   totalNodes: number;
 };
 

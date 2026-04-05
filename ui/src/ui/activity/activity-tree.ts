@@ -13,6 +13,7 @@ export function createActivityTree(): ActivityTree {
   return {
     rootNodes: [],
     nodeById: new Map(),
+    sessionKeyToSpawner: new Map(),
     totalNodes: 0,
   };
 }
@@ -87,6 +88,11 @@ function resolveLabel(data: ActivityEventData): string {
     const argsSummary = summarizeToolArgs(data.metadata?.args);
     return argsSummary ? `${data.toolName}  ${argsSummary}` : data.toolName;
   }
+  if (data.kind.startsWith("subagent.") && data.agentId) {
+    const task = typeof data.metadata?.task === "string" ? data.metadata.task : "";
+    const taskPreview = task.length > 60 ? `${task.slice(0, 57)}…` : task;
+    return taskPreview ? `${data.agentId}: ${taskPreview}` : data.agentId;
+  }
   if (data.agentId) {
     return data.agentId;
   }
@@ -130,9 +136,15 @@ export function applyActivityEvent(tree: ActivityTree, event: IncomingEvent): Ac
       metadata: data.metadata ?? {},
     };
 
+    const nodeKind = resolveKind(kind);
+
+    // Register subagent session key → spawner mapping.
+    if (nodeKind === "subagent" && typeof data.metadata?.childSessionKey === "string") {
+      tree.sessionKeyToSpawner.set(data.metadata.childSessionKey, nodeId);
+    }
+
     // Link tool, thinking, and subagent nodes to their parent run.
     // For these kinds, event.runId is the parent run's ID.
-    const nodeKind = resolveKind(kind);
     if (nodeKind !== "run") {
       const parentRun = tree.nodeById.get(event.runId);
       if (parentRun) {
@@ -140,6 +152,21 @@ export function applyActivityEvent(tree: ActivityTree, event: IncomingEvent): Ac
         node.depth = parentRun.depth + 1;
         if (!parentRun.children.includes(nodeId)) {
           parentRun.children.push(nodeId);
+        }
+      }
+    }
+
+    // For run nodes, check if this session was spawned by a subagent.
+    if (nodeKind === "run" && event.sessionKey) {
+      const spawnerNodeId = tree.sessionKeyToSpawner.get(event.sessionKey);
+      if (spawnerNodeId) {
+        const spawner = tree.nodeById.get(spawnerNodeId);
+        if (spawner) {
+          node.parentId = spawnerNodeId;
+          node.depth = spawner.depth + 1;
+          if (!spawner.children.includes(nodeId)) {
+            spawner.children.push(nodeId);
+          }
         }
       }
     }
@@ -239,6 +266,7 @@ export function filterTree(tree: ActivityTree, filters: ActivityFilterCriteria):
   const filtered: ActivityTree = {
     rootNodes: [],
     nodeById: new Map(),
+    sessionKeyToSpawner: new Map(tree.sessionKeyToSpawner),
     totalNodes: 0,
   };
 

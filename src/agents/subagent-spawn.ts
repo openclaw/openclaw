@@ -728,6 +728,11 @@ export async function spawnSubagentDirect(
       kind: "subagent.start",
       agentId: targetAgentId,
       depth: callerDepth + 1,
+      metadata: {
+        childSessionKey,
+        parentSessionKey: ctx.agentSessionKey,
+        task: typeof task === "string" && task.length > 200 ? `${task.slice(0, 197)}…` : task,
+      },
     },
     ctx.agentSessionKey,
   );
@@ -926,6 +931,7 @@ export async function spawnSubagentDirect(
       agentId: targetAgentId,
       depth: callerDepth + 1,
       durationMs: Date.now() - spawnStartTime,
+      metadata: { childSessionKey },
     },
     ctx.agentSessionKey,
   );
