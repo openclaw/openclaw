@@ -7,6 +7,7 @@ vi.mock("../../../config/sessions.js", () => ({
   loadSessionStore: vi.fn(),
   resolveStorePath: vi.fn(),
   resolveSessionFilePath: vi.fn(),
+  resolveSessionFilePathOptions: vi.fn(),
 }));
 vi.mock("../../../agents/agent-scope.js", () => ({
   resolveAgentDir: vi.fn(),
@@ -30,16 +31,17 @@ vi.mock("../../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: vi.fn().mockReturnValue(false),
 }));
 
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
+import { resolveDefaultModelForAgent } from "../../../agents/model-selection.js";
+import { resolveAgentTimeoutMs } from "../../../agents/timeout.js";
 import { loadConfig } from "../../../config/config.js";
 import {
   loadSessionStore,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveStorePath,
 } from "../../../config/sessions.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
-import { resolveAgentTimeoutMs } from "../../../agents/timeout.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
-import { resolveDefaultModelForAgent } from "../../../agents/model-selection.js";
 import { buildFollowupRunForSession } from "./build-followup-run.js";
 
 const SESSION_KEY = "agent:main:telegram:direct:123";
@@ -74,6 +76,10 @@ beforeEach(() => {
     model: "claude-opus-4-6",
   } as ReturnType<typeof resolveDefaultModelForAgent>);
   vi.mocked(resolveSessionFilePath).mockReturnValue("/tmp/store/main/session-abc.jsonl");
+  vi.mocked(resolveSessionFilePathOptions).mockReturnValue({
+    agentId: "main",
+    sessionsDir: "/tmp/store",
+  });
 });
 
 describe("buildFollowupRunForSession", () => {
@@ -227,5 +233,31 @@ describe("buildFollowupRunForSession", () => {
       prompt: "hello",
     });
     expect(result?.run.sessionFile).toBe("/fallback/session.jsonl");
+  });
+
+  it("passes store path to resolveSessionFilePathOptions for correct fallback dir", async () => {
+    vi.mocked(loadSessionStore).mockReturnValue({
+      [SESSION_KEY]: makeSessionEntry(),
+    });
+    vi.mocked(resolveStorePath).mockReturnValue("/custom/store/main");
+    vi.mocked(resolveSessionFilePathOptions).mockReturnValue({
+      agentId: "main",
+      sessionsDir: "/custom/store",
+    });
+    vi.mocked(resolveSessionFilePath).mockReturnValue("/custom/store/session-abc.jsonl");
+
+    await buildFollowupRunForSession({
+      sessionKey: SESSION_KEY,
+      prompt: "hello",
+    });
+
+    expect(resolveSessionFilePathOptions).toHaveBeenCalledWith({
+      agentId: "main",
+      storePath: "/custom/store/main",
+    });
+    expect(resolveSessionFilePath).toHaveBeenCalledWith("session-abc", expect.anything(), {
+      agentId: "main",
+      sessionsDir: "/custom/store",
+    });
   });
 });
