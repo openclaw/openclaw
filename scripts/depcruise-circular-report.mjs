@@ -8,6 +8,7 @@ const TOP_SCOPE_COUNT = 15;
 const TOP_DIRECTORY_COUNT = 20;
 const TOP_SCC_COUNT = 8;
 const TOP_PIE_COUNT = 10;
+const TOP_SELF_IMPORT_COUNT = 10;
 
 function parseArgs(argv) {
   let outputDir = DEFAULT_OUTPUT_DIR;
@@ -166,6 +167,13 @@ function summarizeSccs(components) {
     .toSorted((left, right) => right.moduleCount - left.moduleCount || left.id - right.id);
 }
 
+function findSelfImportModules(graph) {
+  return [...graph.entries()]
+    .filter(([moduleName, dependencies]) => dependencies.includes(moduleName))
+    .map(([moduleName]) => moduleName)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function renderScopePie(scopeRows) {
   const slices = scopeRows.slice(0, TOP_PIE_COUNT);
   const otherCount = scopeRows.slice(TOP_PIE_COUNT).reduce((sum, row) => sum + row.moduleCount, 0);
@@ -239,7 +247,12 @@ function main() {
     (violation) => violation.type === "cycle" && violation.rule?.name === "no-circular",
   );
   const { graph, runtimeEdgeCount } = buildGraph(depcruiseJson.modules ?? []);
-  const cyclicComponents = tarjan(graph).filter((component) => component.length > 1);
+  const selfImportModules = findSelfImportModules(graph);
+  const selfImportModuleSet = new Set(selfImportModules);
+  const cyclicComponents = tarjan(graph).filter(
+    // Treat self-imports as one-module SCCs so they still show up in the cycle summaries.
+    (component) => component.length > 1 || selfImportModuleSet.has(component[0]),
+  );
   const sortedSccs = summarizeSccs(cyclicComponents);
   const cycleModules = new Set(sortedSccs.flatMap((component) => component.modules));
 
@@ -260,6 +273,8 @@ function main() {
     cycleViolationCount: cycleViolations.length,
     cyclicComponentCount: sortedSccs.length,
     cycleModuleCount: cycleModules.size,
+    selfImportModuleCount: selfImportModules.length,
+    selfImportModules,
     cruisedModuleCount: depcruiseJson.modules?.length ?? 0,
     runtimeEdgeCount,
     largestSccSizes,
@@ -299,6 +314,10 @@ function main() {
       component.modules.slice(0, 4).join("<br>"),
     ]),
   );
+  const fullSelfImportTable = renderTable(
+    ["Module", "Scope"],
+    selfImportModules.map((moduleName) => [moduleName, scopeOf(moduleName)]),
+  );
 
   const reportLines = [
     "# Circular Dependency Report",
@@ -309,8 +328,35 @@ function main() {
     `- dependency-cruiser cycle violations: ${cycleViolations.length}`,
     `- Distinct cyclic strongly connected components: ${sortedSccs.length}`,
     `- Modules participating in cycles: ${cycleModules.size}`,
+    `- Self-import cycles (super weird): ${selfImportModules.length}`,
     `- Largest SCC sizes: ${largestSccSizes.join(", ") || "none"}`,
     "",
+    "## Self-Import Cycles (Super Weird)",
+    "",
+    "These are modules that resolve an import back to themselves. They are rare and usually worth investigating first.",
+    "",
+    ...(selfImportModules.length > 0
+      ? [
+          renderTable(
+            ["Module", "Scope"],
+            selfImportModules
+              .slice(0, TOP_SELF_IMPORT_COUNT)
+              .map((moduleName) => [moduleName, scopeOf(moduleName)]),
+          ),
+          "",
+          ...(selfImportModules.length > TOP_SELF_IMPORT_COUNT
+            ? [
+                "<details>",
+                "<summary>Full self-import list</summary>",
+                "",
+                fullSelfImportTable,
+                "",
+                "</details>",
+                "",
+              ]
+            : []),
+        ]
+      : ["None detected in this run.", ""]),
     "## Scope Distribution",
     "",
     renderScopePie(sortedScopes),
@@ -380,7 +426,19 @@ function main() {
     `- Cycle violations: ${cycleViolations.length}`,
     `- Distinct cyclic SCCs: ${sortedSccs.length}`,
     `- Modules in cycles: ${cycleModules.size}`,
+    `- Self-import cycles (super weird): ${selfImportModules.length}`,
     `- Largest SCC sizes: ${largestSccSizes.join(", ") || "none"}`,
+    "",
+    ...(selfImportModules.length > 0
+      ? [
+          renderTable(
+            ["Module", "Scope"],
+            selfImportModules
+              .slice(0, TOP_SELF_IMPORT_COUNT)
+              .map((moduleName) => [moduleName, scopeOf(moduleName)]),
+          ),
+        ]
+      : ["No self-import cycles detected."]),
     "",
     renderScopePie(sortedScopes),
     "",
