@@ -10,7 +10,6 @@ describe("exec allowlist matching", () => {
 
   it("handles wildcard and path matching semantics", () => {
     const cases: Array<{ entries: ExecAllowlistEntry[]; expectedPattern: string | null }> = [
-      { entries: [{ pattern: "RG" }], expectedPattern: null },
       { entries: [{ pattern: "/opt/**/rg" }], expectedPattern: "/opt/**/rg" },
       { entries: [{ pattern: "/opt/*/rg" }], expectedPattern: null },
     ];
@@ -18,6 +17,25 @@ describe("exec allowlist matching", () => {
       const match = matchAllowlist(entries, baseResolution);
       expect(match?.pattern ?? null).toBe(expectedPattern);
     }
+  });
+
+  it("matches bare executable name patterns without path separators", () => {
+    // Exact bare name match
+    expect(matchAllowlist([{ pattern: "rg" }], baseResolution)?.pattern).toBe("rg");
+
+    // Bare name should be case-sensitive (no match for wrong case)
+    expect(matchAllowlist([{ pattern: "RG" }], baseResolution)?.pattern ?? null).toBe(null);
+
+    // Bare name matches regardless of resolved path
+    const pythonResolution = {
+      rawExecutable: "python3",
+      resolvedPath: "/usr/bin/python3",
+      executableName: "python3",
+    };
+    expect(matchAllowlist([{ pattern: "python3" }], pythonResolution)?.pattern).toBe("python3");
+
+    // Bare name does not match a different executable
+    expect(matchAllowlist([{ pattern: "node" }], pythonResolution)?.pattern ?? null).toBe(null);
   });
 
   it("matches bare wildcard patterns against arbitrary resolved executables", () => {
