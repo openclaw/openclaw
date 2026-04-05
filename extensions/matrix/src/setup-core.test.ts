@@ -158,6 +158,19 @@ describe("matrixSetupAdapter", () => {
     });
   });
 
+  it("rejects unsupported avatar URL schemes during setup validation", () => {
+    const validationError = matrixSetupAdapter.validateInput?.({
+      accountId: "ops",
+      input: {
+        homeserver: "https://matrix.example.org",
+        accessToken: "ops-token",
+        avatarUrl: "file:///tmp/avatar.png",
+      },
+    });
+
+    expect(validationError).toBe("Matrix avatar URL must be an mxc:// URI or an http(s) URL.");
+  });
+
   it("stores canonical dangerous private-network opt-in from setup input", () => {
     const next = matrixSetupAdapter.applyAccountConfig({
       cfg: {} as CoreConfig,

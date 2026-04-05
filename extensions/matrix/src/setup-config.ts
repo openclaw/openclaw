@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
+import { isSupportedMatrixAvatarSource } from "./matrix/profile.js";
 import {
   matrixNamedAccountPromotionKeys,
   matrixSingleAccountKeysToMove,
@@ -138,6 +139,10 @@ export function validateMatrixSetupInput(params: {
   accountId: string;
   input: ChannelSetupInput;
 }): string | null {
+  const avatarUrl = resolveSetupAvatarUrl(params.input);
+  if (avatarUrl && !isSupportedMatrixAvatarSource(avatarUrl)) {
+    return "Matrix avatar URL must be an mxc:// URI or an http(s) URL.";
+  }
   if (params.input.useEnv) {
     const envReadiness = resolveMatrixEnvAuthReadiness(params.accountId, process.env);
     return envReadiness.ready ? null : envReadiness.missingMessage;
