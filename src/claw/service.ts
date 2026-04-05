@@ -308,7 +308,7 @@ function parseRunnerDecision(text: string): ClawRunnerDecision {
     summary,
     currentStep,
     nextStep: typeof parsed.nextStep === "string" ? parsed.nextStep.trim() : null,
-    progress: parsed.progress === false ? false : true,
+    progress: parsed.progress !== false,
     blockerSummary:
       typeof parsed.blockerSummary === "string" ? parsed.blockerSummary.trim() : null,
     blockerDetail: typeof parsed.blockerDetail === "string" ? parsed.blockerDetail.trim() : null,

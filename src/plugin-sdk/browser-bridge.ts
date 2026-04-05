@@ -1,5 +1,5 @@
 import type { Server } from "node:http";
-import type { ResolvedBrowserConfig } from "./browser-profiles.js";
+import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./browser-config.js";
 import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 export type BrowserBridge = {
@@ -18,7 +18,10 @@ type BrowserBridgeFacadeModule = {
     port?: number;
     authToken?: string;
     authPassword?: string;
-    onEnsureAttachTarget?: (profile: unknown) => Promise<void>;
+    onEnsureAttachTarget?: (
+      profile: ResolvedBrowserProfile,
+      signal?: AbortSignal,
+    ) => Promise<void>;
     resolveSandboxNoVncToken?: (token: string) => { noVncPort: number; password?: string } | null;
   }): Promise<BrowserBridge>;
   stopBrowserBridgeServer(server: Server): Promise<void>;
