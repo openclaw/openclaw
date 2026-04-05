@@ -1,3 +1,8 @@
+import {
+  getChannelStreamingConfigObject,
+  resolveChannelStreamingNativeTransport,
+} from "openclaw/plugin-sdk/channel-streaming";
+
 export type StreamingMode = "off" | "partial" | "block" | "progress";
 export type SlackLegacyDraftStreamMode = "replace" | "status_final" | "append";
 
@@ -56,7 +61,9 @@ export function resolveSlackStreamingMode(
     streaming?: unknown;
   } = {},
 ): StreamingMode {
-  const parsedStreaming = parseStreamingMode(params.streaming);
+  const parsedStreaming = parseStreamingMode(
+    getChannelStreamingConfigObject(params)?.mode ?? params.streaming,
+  );
   if (parsedStreaming) {
     return parsedStreaming;
   }
@@ -76,8 +83,9 @@ export function resolveSlackNativeStreaming(
     streaming?: unknown;
   } = {},
 ): boolean {
-  if (typeof params.nativeStreaming === "boolean") {
-    return params.nativeStreaming;
+  const canonical = resolveChannelStreamingNativeTransport(params);
+  if (typeof canonical === "boolean") {
+    return canonical;
   }
   if (typeof params.streaming === "boolean") {
     return params.streaming;

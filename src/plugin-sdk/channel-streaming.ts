@@ -1,7 +1,21 @@
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
+  ChannelDeliveryStreamingConfig,
+  ChannelPreviewStreamingConfig,
   ChannelStreamingConfig,
+  SlackChannelStreamingConfig,
+  TextChunkMode,
+} from "../config/types.base.js";
+
+export type {
+  ChannelDeliveryStreamingConfig,
+  ChannelPreviewStreamingConfig,
+  ChannelStreamingBlockConfig,
+  ChannelStreamingConfig,
+  ChannelStreamingPreviewConfig,
+  SlackChannelStreamingConfig,
+  StreamingMode,
   TextChunkMode,
 } from "../config/types.base.js";
 

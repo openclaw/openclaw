@@ -66,6 +66,18 @@ export type ChannelStreamingConfig = {
   block?: ChannelStreamingBlockConfig;
 };
 
+export type ChannelDeliveryStreamingConfig = Pick<ChannelStreamingConfig, "chunkMode" | "block">;
+
+export type ChannelPreviewStreamingConfig = Pick<
+  ChannelStreamingConfig,
+  "mode" | "chunkMode" | "preview" | "block"
+>;
+
+export type SlackChannelStreamingConfig = Pick<
+  ChannelStreamingConfig,
+  "mode" | "chunkMode" | "preview" | "block" | "nativeTransport"
+>;
+
 export type MarkdownTableMode = "off" | "bullets" | "code" | "block";
 
 export type MarkdownConfig = {
