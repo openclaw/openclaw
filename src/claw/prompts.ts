@@ -57,9 +57,9 @@ export function buildClawRunnerPrompt(params: {
     "",
     "Cycle contract:",
     "- Use tools if needed and make the strongest real progress you can in this cycle.",
-    "- If the goal appears complete, return outcome \"verify\" instead of claiming success.",
-    "- If truly blocked, return outcome \"blocked\" with the concrete blocker summary.",
-    "- If the cycle encountered a meaningful failure but the mission should keep trying, return outcome \"continue\" with progress=false.",
+    '- If the goal appears complete, return outcome "verify" instead of claiming success.',
+    '- If truly blocked, return outcome "blocked" with the concrete blocker summary.',
+    '- If the cycle encountered a meaningful failure but the mission should keep trying, return outcome "continue" with progress=false.',
     "",
     "Return exactly one JSON object with this shape:",
     '```json\n{"outcome":"continue|verify|blocked|failed","summary":"what happened","currentStep":"current mission step","nextStep":"optional next step","progress":true,"blockerSummary":"optional","blockerDetail":"optional","evidence":["short evidence item"]}\n```',
@@ -72,6 +72,7 @@ export function buildClawVerifierExtraSystemPrompt(): string {
     "You are a fresh-context verification pass and must not trust the runner by default.",
     "Inspect the current mission files and repository state directly.",
     "Judge completion only against the explicit done criteria.",
+    "Use tools only as needed to prove or reject completion; do not assume verification is read-only just because it is a verifier phase.",
     "End the turn with exactly one JSON object and no extra prose.",
   ].join("\n");
 }
@@ -127,9 +128,9 @@ export function buildClawHelperExtraSystemPrompt(): string {
 
 export function buildClawPlanningExtraSystemPrompt(): string {
   return [
-    "You are producing a one-shot mission packet plan for Claw before execution begins.",
+    "You are producing a one-shot mission packet plan for Claw before unattended continuation is approved.",
     "Stay bounded: inspect only what you need to create a useful mission-specific scope, plan, tasks, and done criteria.",
-    "Do not start executing the mission itself.",
+    "Bounded pre-start inspection or mutation is allowed when it materially improves the packet or proves readiness, but do not assume approval for open-ended autonomous continuation yet.",
     "Return structured planning output only.",
     "End the turn with exactly one JSON object and no extra prose.",
   ].join("\n");
@@ -153,6 +154,7 @@ export function buildClawPlanningPrompt(params: {
     "",
     "Planning contract:",
     "- Inspect the repository only as needed to produce a useful mission-specific packet.",
+    "- Bounded pre-start work may already inspect or change state if that is the best way to make the packet or readiness picture truthful.",
     "- Keep the plan bounded and execution-oriented.",
     "- Scope should describe what is in and out.",
     "- Phases should describe the high-level sequence.",
@@ -201,7 +203,7 @@ export function buildClawHelperPrompt(params: {
     "Helper contract:",
     "- Use tools if needed to inspect repository state and propose the next best recovery step.",
     "- Prefer a concrete next step the runner can execute immediately.",
-    "- If the mission is truly blocked, return outcome \"blocked\" with the blocker summary.",
+    '- If the mission is truly blocked, return outcome "blocked" with the blocker summary.',
     "",
     "Return exactly one JSON object with this shape:",
     '```json\n{"outcome":"continue|blocked","summary":"helper result","nextStep":"optional next step","blockerSummary":"optional","evidence":["short evidence item"]}\n```',

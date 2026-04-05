@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveAuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.js";
@@ -82,6 +83,8 @@ describe("createClawMissionService", () => {
 
     expect(created.mission?.status).toBe("awaiting_approval");
     expect(created.mission?.decisions).toHaveLength(1);
+    expect(created.mission?.decisions[0]?.title).toBe("Approve unattended continuation");
+    expect(created.mission?.decisions[0]?.summary).toContain("continue autonomously");
     expect(created.inbox).toHaveLength(1);
     expect(created.missions).toHaveLength(1);
 
@@ -133,7 +136,7 @@ describe("createClawMissionService", () => {
     );
   });
 
-  it("blocks mission start when the default model is missing", async () => {
+  it("blocks unattended continuation when the default model is missing", async () => {
     const service = createClawMissionService({
       resolveWorkspaceDir: () => workspaceDir,
       loadConfig: () =>
@@ -156,7 +159,7 @@ describe("createClawMissionService", () => {
     expect(created.inbox[0]?.title).toBe("Resolve preflight blockers");
   });
 
-  it("blocks mission start when exec/process tool exposure is missing", async () => {
+  it("blocks unattended continuation when exec/process tool exposure is missing", async () => {
     const service = createClawMissionService({
       resolveWorkspaceDir: () => workspaceDir,
       loadConfig: () =>
@@ -199,6 +202,68 @@ describe("createClawMissionService", () => {
       created.mission?.preflight.find((check) => check.id === "browser-runtime")?.detail,
     ).toContain("CDP handshake failed");
     expect(inspectBrowserReadiness).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks unattended continuation until required external readiness is proven and reuses it later", async () => {
+    const agentDir = path.join(workspaceDir, "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    const config = createConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            agentDir,
+          },
+        ],
+      },
+    });
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => config,
+    });
+
+    const blocked = await service.createMission({
+      goal: "Push the branch to GitHub and open a pull request for this change.",
+    });
+    expect(blocked.mission?.status).toBe("awaiting_setup");
+    expect(blocked.mission?.blockedSummary).toContain("GitHub");
+    expect(
+      blocked.mission?.preflight.find((check) => check.id === "likely-auth")?.detail,
+    ).toContain("GitHub: credentials are not proven");
+
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "github:default": {
+            type: "api_key",
+            provider: "github",
+            key: "ghp_test_token",
+          },
+        },
+      },
+      agentDir,
+    );
+
+    const rerun = await service.rerunPreflight(blocked.mission!.id);
+    expect(rerun.mission?.status).toBe("awaiting_approval");
+    expect(rerun.mission?.blockedSummary).toBeNull();
+    expect(rerun.mission?.preflight.find((check) => check.id === "likely-auth")?.status).toBe(
+      "ready",
+    );
+
+    const second = await service.createMission({
+      goal: "Push the current branch to GitHub and open a pull request with a summary.",
+    });
+    expect(second.mission?.status).toBe("awaiting_approval");
+    expect(second.mission?.blockedSummary).toBeNull();
+    expect(
+      second.mission?.preflight.find((check) => check.id === "likely-auth")?.summary,
+    ).toContain("GitHub");
   });
 
   it("applies global pause to active missions", async () => {
@@ -362,16 +427,24 @@ describe("createClawMissionService", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
 
     const firstDashboard = await service.buildDashboard();
-    expect(firstDashboard.missions.filter((mission) => mission.status === "running")).toHaveLength(2);
-    expect(firstDashboard.missions.filter((mission) => mission.status === "queued")).toHaveLength(1);
+    expect(firstDashboard.missions.filter((mission) => mission.status === "running")).toHaveLength(
+      2,
+    );
+    expect(firstDashboard.missions.filter((mission) => mission.status === "queued")).toHaveLength(
+      1,
+    );
 
     const secondDrain = await service.runMissionCycles();
     expect(secondDrain).toHaveLength(2);
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(4);
 
     const secondDashboard = await service.buildDashboard();
-    expect(secondDashboard.missions.filter((mission) => mission.status === "running")).toHaveLength(2);
-    expect(secondDashboard.missions.filter((mission) => mission.status === "queued")).toHaveLength(1);
+    expect(secondDashboard.missions.filter((mission) => mission.status === "running")).toHaveLength(
+      2,
+    );
+    expect(secondDashboard.missions.filter((mission) => mission.status === "queued")).toHaveLength(
+      1,
+    );
   });
 
   it("uses a bounded planning pass to generate a mission-specific packet", async () => {
@@ -432,9 +505,17 @@ describe("createClawMissionService", () => {
     expect(tasks).toContain("Inspect the existing Claw runtime and Control UI surfaces.");
     expect(done).toContain("fresh verifier");
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(mission.status).toBe("awaiting_approval");
+    expect(mission.decisions[0]?.summary).toContain("continue autonomously");
 
     const audit = await service.getAudit(mission.id);
-    expect(audit.map((entry) => entry.type)).toContain("mission.packetPlanned");
+    expect(audit.map((entry) => entry.type)).toEqual(
+      expect.arrayContaining([
+        "mission.packetPlanned",
+        "mission.preflighting",
+        "decision.requested",
+      ]),
+    );
   });
 
   it("keeps plan and task files in sync with mission progress", async () => {
@@ -472,7 +553,7 @@ describe("createClawMissionService", () => {
     expect(tasks).toContain("Continue implementing the next repository change.");
   });
 
-  it("auto-resumes safe verifier recoveries after restart", async () => {
+  it("blocks interrupted verifier recoveries when prior mission evidence exists", async () => {
     const runEmbeddedPiAgent = vi
       .fn()
       .mockResolvedValueOnce(
@@ -504,11 +585,59 @@ describe("createClawMissionService", () => {
     });
 
     const created = await service.createMission({
-      goal: "Resume an interrupted mission safely after startup recovery.",
+      goal: "Require operator confirmation before replaying interrupted verifier work.",
     });
     const missionId = created.mission!.id;
     await service.approveMissionStart(missionId);
     await service.runNextMissionCycle();
+
+    const recovered = await service.recoverInterruptedMissions();
+    expect(recovered?.mission?.status).toBe("blocked");
+    expect(
+      recovered?.mission?.decisions.some(
+        (decision) => decision.kind === "recovery_uncertain" && decision.status === "pending",
+      ),
+    ).toBe(true);
+    expect(recovered?.mission?.blockedSummary).toContain("partially applied side effects");
+  });
+
+  it("auto-resumes untouched active missions after restart", async () => {
+    const runEmbeddedPiAgent = vi.fn().mockResolvedValueOnce(
+      agentResult(
+        JSON.stringify({
+          outcome: "continue",
+          summary: "Runner picked up the initial mission cycle after recovery.",
+          currentStep: "Continue mission execution.",
+          nextStep: "Advance the next task.",
+          progress: true,
+          evidence: ["Resumed the first active cycle after recovery."],
+        }),
+      ),
+    );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Auto-resume untouched active missions after a restart.",
+    });
+    const missionId = created.mission!.id;
+    const approved = await service.approveMissionStart(missionId);
+    const statePath = path.join(approved.mission!.missionDir, "mission-state.json");
+    const rawState = JSON.parse(await fs.readFile(statePath, "utf-8")) as Record<string, unknown>;
+    rawState.status = "running";
+    rawState.currentStep = "Mission execution cycle started.";
+    rawState.startedAt = rawState.startedAt ?? new Date().toISOString();
+    rawState.runCycleCount = 0;
+    rawState.verifyCycleCount = 0;
+    rawState.recentEvidence = [];
+    rawState.lastFailureSummary = null;
+    rawState.lastVerifierRejectionSignature = null;
+    rawState.blockedSummary = null;
+    await fs.writeFile(statePath, `${JSON.stringify(rawState, null, 2)}\n`, "utf-8");
 
     const recovered = await service.recoverInterruptedMissions();
     expect(recovered?.mission?.status).toBe("recovering");
@@ -519,8 +648,8 @@ describe("createClawMissionService", () => {
     ).toBe(false);
 
     const resumed = await service.runNextMissionCycle();
-    expect(resumed?.mission?.status).toBe("done");
-    expect(resumed?.mission?.endedAt).toBeTruthy();
+    expect(resumed?.mission?.status).toBe("running");
+    expect(resumed?.mission?.currentStep).toBe("Advance the next task.");
   });
 
   it("blocks uncertain running recoveries and creates a recovery decision", async () => {
@@ -619,9 +748,9 @@ describe("createClawMissionService", () => {
       action: "continue",
     });
     expect(continued.mission?.status).toBe("queued");
-    expect(
-      continued.mission?.decisions.find((entry) => entry.id === decision!.id)?.status,
-    ).toBe("resolved");
+    expect(continued.mission?.decisions.find((entry) => entry.id === decision!.id)?.status).toBe(
+      "resolved",
+    );
 
     const resumed = await service.runNextMissionCycle();
     expect(resumed?.mission?.status).toBe("running");

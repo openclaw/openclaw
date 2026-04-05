@@ -44,7 +44,7 @@ Minimum fields in the list view:
 Purpose:
 
 - show the mission packet and live state for one mission
-- review and approve a mission start
+- review the packet and approve unattended continuation
 - inspect progress, tasks, artifacts, blockers, decisions, and verification status
 
 Minimum panels:
@@ -66,7 +66,7 @@ Purpose:
 
 Inbox item classes:
 
-- mission start approvals
+- unattended continuation approvals
 - setup requests
 - blocker questions
 - recovery-uncertain decisions
@@ -151,7 +151,7 @@ Required fields:
 
 The `Inbox` view is the canonical UI for unresolved decisions.
 
-## Mission review and start approval flow
+## Mission review and continuation approval flow
 
 The start-approval experience must be:
 
@@ -166,14 +166,14 @@ The start-approval experience must be:
    - preflight findings
    - expected side-effect domains
 4. if setup is missing, the mission is not approvable yet and the UI shows an `awaiting_setup` item in the inbox
-5. once setup is satisfied, the UI shows a single `Approve start` action
+5. once setup is satisfied, the UI shows a single `Approve continuation` action
 6. approval resolves the inbox item, moves the mission to `queued`, and records an audit event
 
 The UI must never fake readiness locally. If the gateway says a mission is still `awaiting_setup`, the approve action must remain unavailable.
 
 ## UI-closed behavior
 
-The UI is optional at runtime after mission start.
+The UI is optional at runtime after unattended continuation is approved.
 
 - Missions continue while the UI is closed.
 - Inbox items are persisted by the gateway.
@@ -203,7 +203,7 @@ The gateway must expose the following Claw RPC methods.
 | `claw.missions.create`       | Create a new mission from a goal.                             |
 | `claw.missions.list`         | List missions with filtering and pagination.                  |
 | `claw.missions.get`          | Get one mission with current state, files, and summary views. |
-| `claw.missions.approveStart` | Resolve the one-time start approval.                          |
+| `claw.missions.approveStart` | Resolve the one-time unattended continuation approval.        |
 | `claw.missions.pause`        | Pause a mission.                                              |
 | `claw.missions.resume`       | Resume a paused or blocked mission when appropriate.          |
 | `claw.missions.cancel`       | Cancel a mission.                                             |

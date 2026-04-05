@@ -71,7 +71,7 @@ describe("claw smoke", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it("covers create, preflight, approve, run, verify, and control actions", async () => {
+  it("covers packet review, approval for unattended continuation, run, verify, and control actions", async () => {
     const runEmbeddedPiAgent = vi
       .fn()
       .mockResolvedValueOnce(
@@ -106,6 +106,7 @@ describe("claw smoke", () => {
       goal: "Pause, resume, and cancel an approved Claw mission from the operator controls.",
     });
     expect(controlMission.mission?.preflight.length).toBeGreaterThan(0);
+    expect(controlMission.mission?.decisions[0]?.summary).toContain("continue autonomously");
     const controlMissionId = controlMission.mission!.id;
     await service.approveMissionStart(controlMissionId);
 
@@ -122,6 +123,10 @@ describe("claw smoke", () => {
       goal: "Implement the requested Claw mission flow and verify the outcome.",
     });
     const missionId = executableMission.mission!.id;
+    const preApprovalAudit = await service.getAudit(missionId);
+    expect(preApprovalAudit.map((entry) => entry.type)).toEqual(
+      expect.arrayContaining(["mission.preflighting", "decision.requested"]),
+    );
     await service.approveMissionStart(missionId);
 
     const firstCycle = await service.runNextMissionCycle();
@@ -147,30 +152,27 @@ describe("claw smoke", () => {
     );
   });
 
-  it("covers the recovery_uncertain path and operator continuation", async () => {
+  it("covers verifier recovery uncertainty and operator continuation", async () => {
     const runEmbeddedPiAgent = vi
       .fn()
       .mockResolvedValueOnce(
         agentResult(
           JSON.stringify({
-            outcome: "continue",
-            summary: "Runner changed repository state before restart.",
-            currentStep: "Continue mission execution.",
-            nextStep: "Advance the next repository change.",
+            outcome: "verify",
+            summary: "Runner completed the requested work and asked for verification.",
+            currentStep: "Ready for verification.",
+            nextStep: "Run the required verifier pass.",
             progress: true,
-            evidence: ["Changed files before restart."],
+            evidence: ["Prepared verification-ready repository state before restart."],
           }),
         ),
       )
       .mockResolvedValueOnce(
         agentResult(
           JSON.stringify({
-            outcome: "continue",
-            summary: "Runner resumed after operator confirmation.",
-            currentStep: "Continue mission execution.",
-            nextStep: "Continue after confirmed recovery.",
-            progress: true,
-            evidence: ["Resumed after operator confirmation."],
+            outcome: "done",
+            summary: "Verifier completed successfully after operator-confirmed recovery.",
+            evidence: ["Verifier confirmed the done criteria after recovery."],
           }),
         ),
       );
@@ -182,7 +184,7 @@ describe("claw smoke", () => {
     });
 
     const created = await service.createMission({
-      goal: "Resume an interrupted Claw mission only after operator confirmation when recovery is uncertain.",
+      goal: "Resume an interrupted verifier pass only after operator confirmation when recovery is uncertain.",
     });
     const missionId = created.mission!.id;
     await service.approveMissionStart(missionId);
@@ -203,7 +205,6 @@ describe("claw smoke", () => {
     expect(continued.mission?.status).toBe("queued");
 
     const resumed = await service.runNextMissionCycle();
-    expect(resumed?.mission?.status).toBe("running");
-    expect(resumed?.mission?.currentStep).toBe("Continue after confirmed recovery.");
+    expect(resumed?.mission?.status).toBe("done");
   });
 });
