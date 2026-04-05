@@ -12,6 +12,7 @@ import {
   resolveContextEngineMock,
   resolveMemorySearchConfigMock,
   resolveModelMock,
+  resolveBootstrapContextForRunMock,
   resolveSessionAgentIdMock,
   resetCompactHooksHarnessMocks,
   sanitizeSessionHistoryMock,
@@ -194,6 +195,27 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowGatewaySubagentBinding: true,
+      }),
+    );
+  });
+
+  it("passes lightweight bootstrap context settings into compaction bootstrap resolution", async () => {
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "cron:job-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
+    });
+
+    expect(resolveBootstrapContextForRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        sessionKey: "cron:job-1",
+        sessionId: "session-1",
+        contextMode: "lightweight",
+        runKind: "cron",
       }),
     );
   });

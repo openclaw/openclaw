@@ -1294,6 +1294,8 @@ export function buildAfterTurnRuntimeContext(params: {
     | "modelId"
     | "thinkLevel"
     | "reasoningLevel"
+    | "bootstrapContextMode"
+    | "bootstrapContextRunKind"
     | "bashElevated"
     | "extraSystemPrompt"
     | "ownerNumbers"
@@ -1321,6 +1323,8 @@ export function buildAfterTurnRuntimeContext(params: {
     modelId: params.attempt.modelId,
     thinkLevel: params.attempt.thinkLevel,
     reasoningLevel: params.attempt.reasoningLevel,
+    bootstrapContextMode: params.attempt.bootstrapContextMode,
+    bootstrapContextRunKind: params.attempt.bootstrapContextRunKind,
     bashElevated: params.attempt.bashElevated,
     extraSystemPrompt: params.attempt.extraSystemPrompt,
     ownerNumbers: params.attempt.ownerNumbers,

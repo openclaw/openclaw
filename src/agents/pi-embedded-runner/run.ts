@@ -1161,6 +1161,8 @@ export async function runEmbeddedPiAgent(
                       modelId,
                       thinkLevel,
                       reasoningLevel: params.reasoningLevel,
+                      bootstrapContextMode: params.bootstrapContextMode,
+                      bootstrapContextRunKind: params.bootstrapContextRunKind,
                       bashElevated: params.bashElevated,
                       extraSystemPrompt: params.extraSystemPrompt,
                       ownerNumbers: params.ownerNumbers,

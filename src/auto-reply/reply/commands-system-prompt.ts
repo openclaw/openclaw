@@ -33,6 +33,8 @@ export async function resolveCommandsSystemPromptBundle(
     config: params.cfg,
     sessionKey: params.sessionKey,
     sessionId: params.sessionEntry?.sessionId,
+    contextMode: params.opts?.bootstrapContextMode,
+    runKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
   });
   const skillsSnapshot = (() => {
     try {

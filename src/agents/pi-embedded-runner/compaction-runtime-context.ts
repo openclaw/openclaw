@@ -22,6 +22,8 @@ export type EmbeddedCompactionRuntimeContext = {
   model?: string;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
+  bootstrapContextMode?: "full" | "lightweight";
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
@@ -46,6 +48,8 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   modelId?: string | null;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
+  bootstrapContextMode?: "full" | "lightweight";
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
@@ -69,6 +73,8 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     model: params.modelId ?? undefined,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
+    bootstrapContextMode: params.bootstrapContextMode,
+    bootstrapContextRunKind: params.bootstrapContextRunKind,
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,

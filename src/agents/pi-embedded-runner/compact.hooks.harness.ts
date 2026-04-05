@@ -69,6 +69,7 @@ export const resolveSessionAgentIdMock = vi.fn(() => "main");
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
+export const resolveBootstrapContextForRunMock = vi.fn(async () => ({ contextFiles: [] }));
 
 export function resetCompactHooksHarnessMocks(): void {
   hookRunner.hasHooks.mockReset();
@@ -137,6 +138,8 @@ export function resetCompactHooksHarnessMocks(): void {
   sessionAbortCompactionMock.mockReset();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
+  resolveBootstrapContextForRunMock.mockReset();
+  resolveBootstrapContextForRunMock.mockResolvedValue({ contextFiles: [] });
 }
 
 export async function loadCompactHooksHarness(): Promise<{
@@ -267,7 +270,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../bootstrap-files.js", () => ({
     makeBootstrapWarn: vi.fn(() => () => {}),
-    resolveBootstrapContextForRun: vi.fn(async () => ({ contextFiles: [] })),
+    resolveBootstrapContextForRun: resolveBootstrapContextForRunMock,
   }));
 
   vi.doMock("../docs-path.js", () => ({

@@ -1,15 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const { createOpenClawCodingToolsMock } = vi.hoisted(() => ({
+const { createOpenClawCodingToolsMock, resolveBootstrapContextForRunMock } = vi.hoisted(() => ({
   createOpenClawCodingToolsMock: vi.fn(() => []),
-}));
-
-vi.mock("../../agents/bootstrap-files.js", () => ({
-  resolveBootstrapContextForRun: vi.fn(async () => ({
+  resolveBootstrapContextForRunMock: vi.fn(async () => ({
     bootstrapFiles: [],
     contextFiles: [],
   })),
+}));
+
+vi.mock("../../agents/bootstrap-files.js", () => ({
+  resolveBootstrapContextForRun: resolveBootstrapContextForRunMock,
 }));
 
 vi.mock("../../agents/pi-tools.js", () => ({
@@ -110,6 +111,11 @@ describe("resolveCommandsSystemPromptBundle", () => {
   beforeEach(() => {
     createOpenClawCodingToolsMock.mockClear();
     createOpenClawCodingToolsMock.mockReturnValue([]);
+    resolveBootstrapContextForRunMock.mockClear();
+    resolveBootstrapContextForRunMock.mockResolvedValue({
+      bootstrapFiles: [],
+      contextFiles: [],
+    });
   });
 
   it("opts command tool builds into gateway subagent binding", async () => {
@@ -121,6 +127,26 @@ describe("resolveCommandsSystemPromptBundle", () => {
         sessionKey: "agent:main:default",
         workspaceDir: "/tmp/workspace",
         messageProvider: "telegram",
+      }),
+    );
+  });
+
+  it("forwards lightweight heartbeat bootstrap context options", async () => {
+    const params = makeParams();
+    params.opts = {
+      isHeartbeat: true,
+      bootstrapContextMode: "lightweight",
+    };
+
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(resolveBootstrapContextForRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        sessionKey: "agent:main:default",
+        sessionId: "session-1",
+        contextMode: "lightweight",
+        runKind: "heartbeat",
       }),
     );
   });

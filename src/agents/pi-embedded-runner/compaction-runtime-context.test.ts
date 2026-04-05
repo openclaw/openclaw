@@ -23,6 +23,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
         modelId: "gpt-5.3-codex",
         thinkLevel: "off",
         reasoningLevel: "on",
+        bootstrapContextMode: "lightweight",
+        bootstrapContextRunKind: "cron",
         extraSystemPrompt: "extra",
         ownerNumbers: ["+15555550123"],
       }),
@@ -40,6 +42,8 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       senderId: "user-123",
       provider: "openai-codex",
       model: "gpt-5.3-codex",
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
     });
   });
 
