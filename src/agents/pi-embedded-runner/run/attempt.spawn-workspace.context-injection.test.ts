@@ -35,6 +35,25 @@ describe("runEmbeddedAttempt context injection", () => {
     expect(hoisted.resolveBootstrapContextForRunMock).not.toHaveBeenCalled();
   });
 
+  it("checks continuation state only after taking the session lock", async () => {
+    hoisted.resolveContextInjectionModeMock.mockReturnValue("continuation-skip");
+    hoisted.hasCompletedBootstrapTurnMock.mockResolvedValue(true);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey: "agent:main",
+      tempPaths,
+    });
+
+    expect(hoisted.acquireSessionWriteLockMock).toHaveBeenCalled();
+    expect(hoisted.hasCompletedBootstrapTurnMock).toHaveBeenCalled();
+    const lockCallOrder = hoisted.acquireSessionWriteLockMock.mock.invocationCallOrder[0];
+    const continuationCallOrder = hoisted.hasCompletedBootstrapTurnMock.mock.invocationCallOrder[0];
+    expect(lockCallOrder).toBeLessThan(continuationCallOrder);
+  });
+
   it("still resolves bootstrap context when continuation-skip has no completed assistant turn yet", async () => {
     hoisted.resolveContextInjectionModeMock.mockReturnValue("continuation-skip");
     hoisted.hasCompletedBootstrapTurnMock.mockResolvedValue(false);
