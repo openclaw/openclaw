@@ -21,7 +21,7 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
-import { readModeState } from "../../plugins/mind-memory/intensive-mode.js";
+import { readModeState } from "../../plugins/mind-memory/agent-mode.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status.js";
@@ -217,7 +217,7 @@ export async function buildStatusReply(params: {
   const narrativeDir = resolveAgentNarrativeDir(cfg, statusAgentId);
   const modeState = await readModeState(narrativeDir).catch(() => ({ mode: "normal" as const }));
   const intensiveLine =
-    modeState.mode === "intensive" ? "🧠 Hyperfocus mode: on" : "🧠 Hyperfocus mode: off";
+    modeState.mode === "hyperfocus" ? "🧠 Hyperfocus mode: on" : "🧠 Hyperfocus mode: off";
 
   return { text: `${statusText}\n${intensiveLine}` };
 }

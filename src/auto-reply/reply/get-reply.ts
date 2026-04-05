@@ -12,7 +12,7 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
-import { readModeState, writeModeState } from "../../plugins/mind-memory/intensive-mode.js";
+import { readModeState, writeModeState } from "../../plugins/mind-memory/agent-mode.js";
 import { getQueueSize } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";

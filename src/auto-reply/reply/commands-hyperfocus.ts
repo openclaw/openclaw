@@ -1,5 +1,5 @@
 import { resolveAgentNarrativeDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { readModeState, writeModeState } from "../../plugins/mind-memory/intensive-mode.js";
+import { readModeState, writeModeState } from "../../plugins/mind-memory/agent-mode.js";
 import type { CommandHandler } from "./commands-types.js";
 
 export const handleHyperfocusCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -43,11 +43,11 @@ export const handleHyperfocusCommand: CommandHandler = async (params, allowTextC
     }
 
     // wantsOn
-    if (current.mode === "intensive") {
+    if (current.mode === "hyperfocus") {
       return { reply: { text: "Hyperfocus mode is already active." }, shouldContinue: false };
     }
     await writeModeState(narrativeDir, {
-      mode: "intensive",
+      mode: "hyperfocus",
       activatedAt: new Date().toISOString(),
     });
     return {

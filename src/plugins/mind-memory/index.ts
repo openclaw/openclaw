@@ -27,8 +27,8 @@ import {
   type LLMClient,
   type RecentMessage,
 } from "../../services/memory/SubconsciousService.js";
+import { readModeState, writeModeState } from "./agent-mode.js";
 import { ensureGraphitiDocker, installDocker } from "./docker.js";
-import { readModeState, writeModeState } from "./intensive-mode.js";
 import type { LlamaCppServerConfig, MindMemoryPluginConfig } from "./types.js";
 
 // Use the real plugin API type so api.on() is available
@@ -270,7 +270,7 @@ export default function register(api: PluginApi) {
       const modeAgentId = resolveDefaultAgentId(api.config);
       const modeNarrativeDir = resolveAgentNarrativeDir(api.config, modeAgentId);
       const modeState = await readModeState(modeNarrativeDir);
-      if (modeState.mode === "intensive" || modeState.mode === "loop") {
+      if (modeState.mode === "hyperfocus" || modeState.mode === "loop") {
         respond(true, { flashbacks: null });
         return;
       }
@@ -643,7 +643,7 @@ export default function register(api: PluginApi) {
         await mkdir(narrativeDir, { recursive: true });
 
         const current = await readModeState(narrativeDir);
-        if (current.mode === "intensive") {
+        if (current.mode === "hyperfocus") {
           return {
             content: [{ type: "text", text: "Hyperfocus mode is already active." }],
             details: null,
@@ -700,7 +700,7 @@ export default function register(api: PluginApi) {
         }
 
         await writeModeState(narrativeDir, {
-          mode: "intensive",
+          mode: "hyperfocus",
           activatedAt: new Date().toISOString(),
           goal: params.goal?.trim() || undefined,
         });
@@ -1244,7 +1244,7 @@ export default function register(api: PluginApi) {
 
     // Read mode state to determine context injection strategy.
     const modeState = await readModeState(narrativeDir);
-    const isIntensive = modeState.mode === "intensive";
+    const isHyperfocus = modeState.mode === "hyperfocus";
     const isLoop = modeState.mode === "loop";
 
     // Read STORY.md, SUMMARY.md and GLOSSARY.md for context injection.
@@ -1265,7 +1265,7 @@ export default function register(api: PluginApi) {
     }
 
     // In intensive mode: use SUMMARY (fallback to STORY), suppress peripheral files, skip flashbacks.
-    if (isIntensive) {
+    if (isHyperfocus) {
       const agents = await resolveNarrativeAgents();
       if (agents) {
         // Fire-and-forget: keep SUMMARY and QUICK up to date
@@ -1464,7 +1464,7 @@ export default function register(api: PluginApi) {
         const agentId = ctx.agentId ?? resolveDefaultAgentId(api.config);
         const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
         const modeState = await readModeState(narrativeDir);
-        if (modeState.mode === "intensive") {
+        if (modeState.mode === "hyperfocus") {
           if (debug) {
             api.logger.info(
               `🎯 [MIND] intensive model override: ${intensiveProvider}/${intensiveModelId}`,
@@ -1504,7 +1504,7 @@ export default function register(api: PluginApi) {
 
         // Skip narrative updates during intensive/hyperfocus or loop mode
         const modeState = await readModeState(narrativeDir);
-        if (modeState.mode === "intensive" || modeState.mode === "loop") {
+        if (modeState.mode === "hyperfocus" || modeState.mode === "loop") {
           if (debug) {
             api.logger.info(
               `🎯 [MIND] before_compaction: skipping narrative update (${modeState.mode} mode)`,
@@ -1604,7 +1604,7 @@ export default function register(api: PluginApi) {
 
         // Skip narrative updates during intensive/hyperfocus or loop mode
         const modeState = await readModeState(narrativeDir);
-        if (modeState.mode === "intensive" || modeState.mode === "loop") {
+        if (modeState.mode === "hyperfocus" || modeState.mode === "loop") {
           if (debug) {
             api.logger.info(
               `🎯 [MIND] after_compaction: skipping narrative update (${modeState.mode} mode)`,

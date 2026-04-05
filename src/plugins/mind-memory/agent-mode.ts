@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withFileLock, type FileLockOptions } from "../../infra/file-lock.js";
 
-export type IntensiveMode = "normal" | "intensive" | "loop";
+export type AgentMode = "normal" | "hyperfocus" | "loop";
 
 export type ModeState = {
-  mode: IntensiveMode;
+  mode: AgentMode;
   activatedAt?: string;
   /** Optional goal for the hyperfocus/loop session, injected into the system prompt each message. */
   goal?: string;

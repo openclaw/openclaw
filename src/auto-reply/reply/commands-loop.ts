@@ -1,5 +1,5 @@
 import { resolveAgentNarrativeDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { readModeState, writeModeState } from "../../plugins/mind-memory/intensive-mode.js";
+import { readModeState, writeModeState } from "../../plugins/mind-memory/agent-mode.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const LOOP_MAX_ITERATIONS_CAP = 100;
