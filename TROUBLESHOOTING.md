@@ -1,18 +1,20 @@
 # Troubleshooting
 
-## vLLM (WSL2) Connection
-vLLM запускается в WSL2 Ubuntu и обслуживает модели через OpenAI-compatible HTTP API.
+## OpenRouter API Connection
+
+Бот использует OpenRouter API для облачного LLM-инференса.
 
 **Конфигурация:**
-- vLLM URL: `http://172.27.192.1:8000/v1` (WSL2 IP)
-- Модели: AWQ-квантизированные (хранятся в `/mnt/d/vllm_models`)
-- Запуск: vLLM Manager автоматически стартует и мониторит процесс
+
+- OpenRouter API: настраивается в `config/openclaw_config.json` (секция `system.openrouter`)
+- Модели: облачные (multi-model routing через SmartModelRouter)
 
 **Возможные проблемы:**
-1. WSL2 IP изменился → обновить `vllm_url` в `config/openclaw_config.json`
-2. CUDA/GPU не видна → проверить `nvidia-smi` в WSL2
-3. vLLM не стартует → проверить лог: `logs/vllm_startup.log`
-4. Порт занят → `ss -ltnp | grep 8000` в WSL2
 
-## Legacy: Ollama Windows to WSL Connection (deprecated)
-Данная секция сохранена для справки. Ollama больше не используется — миграция на vLLM завершена 2026-03-15.
+1. Rate limit exceeded → включается retry с exponential backoff
+2. API key невалидный → проверить `OPENROUTER_API_KEY` в `.env`
+3. Модель недоступна → SmartModelRouter переключится на fallback модель
+
+## Legacy: Local Inference (deprecated)
+
+Локальный инференс больше не используется — миграция на cloud-only (OpenRouter) завершена.

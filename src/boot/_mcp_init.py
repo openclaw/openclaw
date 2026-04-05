@@ -20,7 +20,7 @@ async def configure_llm_and_pipeline(gateway) -> None:
     _tg_log = getattr(gateway, '_tg_init_log', None)
 
     # 1. Unified LLM Gateway (must run before pipeline.initialize)
-    from src.llm_gateway import configure as configure_llm_gateway
+    from src.llm.gateway import configure as configure_llm_gateway
     configure_llm_gateway(gateway.config)
     if _tg_log:
         await _tg_log.stage("🛠", "LLM Gateway", "Настроен. Модели подключены.")
@@ -32,7 +32,7 @@ async def configure_llm_and_pipeline(gateway) -> None:
 
     # 3. HITL Approval Gate
     if gateway.config.get("hitl", {}).get("enabled", False):
-        from src.llm_gateway import set_approval_callback
+        from src.llm.gateway import set_approval_callback
         from src.handlers.tg_approval import create_approval_notifier, handle_hitl_callback
 
         notifier = create_approval_notifier(gateway.bot, gateway.admin_id)
@@ -94,14 +94,14 @@ async def configure_llm_and_pipeline(gateway) -> None:
         sync_task.add_done_callback(gateway._bg_tasks.discard)
 
     # 7. Scheduler (APScheduler cron jobs)
-    from src.scheduler import OpenClawScheduler
+    from src.core.scheduler import OpenClawScheduler
     gateway._scheduler = OpenClawScheduler(gateway.config, gateway.pipeline, gateway.bot)
     await gateway._scheduler.start()
 
     # 8. Discord handler (optional)
     discord_cfg = gateway.config.get("discord", {})
     if discord_cfg.get("token") or os.getenv("DISCORD_BOT_TOKEN"):
-        from src.discord_handler import DiscordHandler
+        from src.integrations.discord_handler import DiscordHandler
         gateway._discord = DiscordHandler(gateway.config, gateway.pipeline)
         gateway._discord.run_in_background()
         logger.info("Discord handler started in background")
@@ -109,7 +109,7 @@ async def configure_llm_and_pipeline(gateway) -> None:
     # 9. Brigade REST API
     brigade_port = int(os.environ.get("BRIGADE_API_PORT", "8765"))
     try:
-        from src.brigade_api import run_brigade_api
+        from src.integrations.brigade_api import run_brigade_api
         brigade_task = asyncio.create_task(
             run_brigade_api(gateway.config, port=brigade_port)
         )

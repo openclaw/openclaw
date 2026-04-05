@@ -1,0 +1,34 @@
+# Exclude non-documentation directories from Obsidian indexing
+node_modules/
+dist/
+coverage/
+rust_core/target/
+unsloth_compiled_cache/
+logs/
+patches/
+apps/
+test/
+tests/
+.venv/
+.git/
+.github/
+.pi/
+bin/
+vendor/
+__pycache__/
+
+# Exclude non-markdown files (Obsidian only cares about .md)
+*.json
+*.yaml
+*.yml
+*.toml
+*.ts
+*.mjs
+*.js
+*.py
+*.sh
+*.css
+*.lock
+*.pyc
+*.log
+*.bak

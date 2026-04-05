@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import sys
 
 from dotenv import load_dotenv
@@ -13,7 +14,7 @@ from aiogram.types import BotCommand
 from prometheus_client import start_http_server
 from watchdog.observers import Observer
 
-from src.archivist_telegram import TelegramArchivist
+from src.integrations.archivist_telegram import TelegramArchivist
 from src.boot import (
     ConfigReloader,
     acquire_lock,
@@ -29,10 +30,11 @@ from src.bot_commands import (
     handle_unknown_command, handle_video, handle_voice,
 )
 from src.handlers.prompt_handler import handle_prompt
-from src.memory_gc import MemoryGarbageCollector
+from src.handlers.tg_schemas import TelegramConfig
+from src.memory_system.gc import MemoryGarbageCollector
 from src.pipeline_executor import PipelineExecutor
-from src.safety_guardrails import HallucinationDetector, PromptInjectionDefender
-from src.tailscale_monitor import TailscaleMonitor
+from src.safety import HallucinationDetector, PromptInjectionDefender
+from src.integrations.tailscale_monitor import TailscaleMonitor
 
 setup_structlog()
 logger = structlog.get_logger("OpenClawGateway")
@@ -44,16 +46,15 @@ class OpenClawGateway:
         with open(config_path, "r", encoding="utf-8") as f:
             raw = os.path.expandvars(f.read())
 
-        # Validate that no ${...} env vars remain unexpanded
-        import re
+        # Warn about unresolved ${...} env vars (mask values to prevent secret leakage)
         unresolved = re.findall(r'\$\{([^}]+)\}', raw)
         if unresolved:
-            logger.warning("Unresolved env vars in config", vars=unresolved)
+            masked = [v[:3] + "***" if len(v) > 3 else "***" for v in unresolved]
+            logger.warning("Unresolved env vars in config", count=len(masked), hints=masked)
 
         self.config = json.loads(raw)
 
         # Pydantic-validated Telegram config (strips ${} wrappers, validates format)
-        from src.handlers.tg_schemas import TelegramConfig
         _tg_raw = self.config["system"]["telegram"]
         _tg = TelegramConfig(**_tg_raw)
         self.bot_token = _tg.bot_token
@@ -89,50 +90,63 @@ class OpenClawGateway:
         # Start Prometheus metrics server on port 9090
         try:
             start_http_server(9090)
-            logger.info("Prometheus metrics server started on port 9090")
+            logger.info("Prometheus metrics server started", port=9090)
         except Exception as e:
-            logger.error(f"Failed to start Prometheus server: {e}")
+            logger.error("Failed to start Prometheus server", error=str(e))
 
-        # Register Handlers (delegating to gateway_commands module)
-        # NOTE: async wrappers required — plain lambdas returning coroutines are NOT awaited by aiogram
-        def _aw(fn):
-            async def wrapper(event):
-                await fn(self, event)
-            return wrapper
-
-        self.dp.message.register(_aw(cmd_start), Command("start"))
-        self.dp.message.register(_aw(cmd_help), Command("help"))
-        self.dp.message.register(_aw(cmd_status), Command("status"))
-        self.dp.message.register(_aw(cmd_models), Command("models"))
-        self.dp.message.register(_aw(cmd_test), Command("test"))
-        self.dp.message.register(_aw(cmd_test_all_models), Command("test_all_models"))
-        self.dp.message.register(_aw(cmd_research), Command("research"))
-        self.dp.message.register(_aw(cmd_tailscale), Command("tailscale"))
-        self.dp.message.register(_aw(handle_photo), F.photo)
-        self.dp.message.register(_aw(handle_voice), F.voice)
-        self.dp.message.register(_aw(handle_document), F.document)
-        self.dp.message.register(_aw(handle_video), F.video)
-        self.dp.message.register(_aw(handle_video), F.video_note)
-        self.dp.message.register(_aw(cmd_history), Command("history"))
-        self.dp.message.register(_aw(cmd_perf), Command("perf"))
-        self.dp.message.register(_aw(cmd_agents), Command("agents"))
-        self.dp.message.register(_aw(cmd_agent), Command("agent"))
-        self.dp.message.register(_aw(cmd_openrouter_test), Command("openrouter_test"))
-        self.dp.message.register(_aw(cmd_diag), Command("diag"))
-        
-        # Заглушка для неизвестных команд
-        self.dp.message.register(_aw(handle_unknown_command), F.text.startswith('/'))
-        
-        # Перехват только текста, который НЕ является командой
-        async def _prompt_handler(msg):
-            await handle_prompt(self, msg)
-        self.dp.message.register(_prompt_handler, F.text & ~F.text.startswith('/'))
-        
-        # Callback query handler for inline buttons
-        self.dp.callback_query.register(_aw(handle_callback_query))
+        # Register Handlers (async wrappers inject `self` as first arg)
+        self._register_handlers()
 
         # Background logic
         self._bg_tasks = set()
+
+    def _make_handler(self, fn):
+        """Wrap a command handler so `self` (gateway) is injected as first arg."""
+        async def wrapper(event):
+            await fn(self, event)
+        return wrapper
+
+    def _register_handlers(self):
+        """Register all aiogram message/callback handlers."""
+        _h = self._make_handler
+
+        # Command handlers
+        _commands = [
+            (cmd_start, "start"),
+            (cmd_help, "help"),
+            (cmd_status, "status"),
+            (cmd_models, "models"),
+            (cmd_test, "test"),
+            (cmd_test_all_models, "test_all_models"),
+            (cmd_research, "research"),
+            (cmd_tailscale, "tailscale"),
+            (cmd_history, "history"),
+            (cmd_perf, "perf"),
+            (cmd_agents, "agents"),
+            (cmd_agent, "agent"),
+            (cmd_openrouter_test, "openrouter_test"),
+            (cmd_diag, "diag"),
+        ]
+        for fn, name in _commands:
+            self.dp.message.register(_h(fn), Command(name))
+
+        # Media handlers
+        self.dp.message.register(_h(handle_photo), F.photo)
+        self.dp.message.register(_h(handle_voice), F.voice)
+        self.dp.message.register(_h(handle_document), F.document)
+        self.dp.message.register(_h(handle_video), F.video)
+        self.dp.message.register(_h(handle_video), F.video_note)
+
+        # Unknown commands catch-all
+        self.dp.message.register(_h(handle_unknown_command), F.text.startswith('/'))
+
+        # Text messages that are NOT commands -> prompt handler
+        async def _prompt_handler(msg):
+            await handle_prompt(self, msg)
+        self.dp.message.register(_prompt_handler, F.text & ~F.text.startswith('/'))
+
+        # Callback query handler for inline buttons
+        self.dp.callback_query.register(_h(handle_callback_query))
 
     async def reload_config(self):
         try:
@@ -152,7 +166,7 @@ class OpenClawGateway:
             except Exception:
                 pass
         except Exception as e:
-            logger.error(f"Failed to reload config: {e}")
+            logger.error("Failed to reload config", error=str(e))
 
     async def run(self):
         logger.info("Starting OpenClaw Gateway...")

@@ -1,0 +1,44 @@
+{
+  "rl": {
+    "enabled": true,
+    "data_dir": "data/rl",
+    "supermemory_db": "data/supermemory/supermemory.db",
+    "reward_model": {
+      "success_penalty": -0.5,
+      "custom_weights": null
+    },
+    "experience_buffer": {
+      "max_size": 50000,
+      "db_name": "experiences.db"
+    },
+    "feedback": {
+      "db_name": "feedback.db",
+      "telegram_buttons_enabled": true,
+      "discord_reactions_enabled": true
+    },
+    "goals": {
+      "db_name": "goals.db",
+      "max_pending": 200,
+      "auto_analyze_interval_sec": 7200
+    },
+    "consolidation": {
+      "db_name": "consolidation.db",
+      "interval_sec": 3600,
+      "similarity_threshold": 0.85,
+      "min_episode_reward": 0.3,
+      "max_facts_per_run": 50
+    },
+    "metrics": {
+      "prometheus_enabled": false,
+      "prometheus_port": 9090,
+      "snapshot_log_interval_sec": 300
+    },
+    "training": {
+      "auto_export": false,
+      "export_dir": "data/rl/training_export",
+      "sft_min_reward": 0.5,
+      "dpo_min_gap": 0.3,
+      "max_export_samples": 10000
+    }
+  }
+}

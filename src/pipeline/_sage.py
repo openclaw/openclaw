@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 
-from src.llm_gateway import route_llm
+from src.llm.gateway import route_llm
 
 logger = structlog.get_logger("SAGE")
 

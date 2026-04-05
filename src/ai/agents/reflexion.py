@@ -7,7 +7,7 @@ Reinforcement Learning", arXiv:2303.11366.
 import time
 from typing import List
 
-from src.llm_gateway import route_llm
+from src.llm.gateway import route_llm
 
 from src.ai.agents._shared import (
     EvaluationResult,

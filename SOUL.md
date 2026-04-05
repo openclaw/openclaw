@@ -31,7 +31,7 @@ The OpenClaw multi-agent framework operates on strictly defined workflows where 
 
 To maintain secure boundaries and prevent the system from destroying itself ("Бот не чинит молоток, которым его забивают"):
 
-1. **OpenClaw Brigade (The Tool):** Acts exclusively as the IDE/Engine. It is the only brigade permitted to modify framework files, vLLM configurations, and memory constraints within `d:\openclaw_bot\openclaw_bot\`.
+1. **OpenClaw Brigade (The Tool):** Acts exclusively as the IDE/Engine. It is the only brigade permitted to modify framework files, cloud LLM configurations, and memory constraints within `d:\openclaw_bot\openclaw_bot\`.
 2. **Contextual Sandboxing & Scope Rule:** A master Planner intercepts incoming user requests and handles framework tasks locally. Individual bot logic lives in `D:\Dmarket_bot`.
 3. **Provider Model:** If a downstream brigade (like Dmarket) requires a new capability, OpenClaw's _Tool Smith_ develops, isolates, tests, and deploys the script (usually in `scripts/`).
 4. **OpenClaw Security Auditor:** Acts as a strict Sandbox Warden. It monitors code execution specifically attempting unauthorized System/OS calls (`os.system`, `subprocess`) trying to escape constraints.
@@ -121,9 +121,9 @@ To maintain secure boundaries and prevent the system from destroying itself ("Б
 
 ### 6. Hardware Conservation Directive (NVIDIA CUDA 16GB)
 
-- **Rule 1: Sequential Heavy Loading (Model Thrashing Prevention).** Тяжёлые модели (Qwen2.5-14B-AWQ, DeepSeek-R1-14B-AWQ) загружаются СТРОГО ПОСЛЕДОВАТЕЛЬНО. Перед загрузкой тяжёлой модели предыдущая ОБЯЗАНА быть выгружена через vLLM manager.
-- **Rule 2: Purge on Exit.** vLLM manages model lifecycle automatically. When using sequential loading, models are unloaded before loading the next one via the vLLM manager's health monitor.
-- **Rule 3: Quantization Discipline.** All models use AWQ quantization (auto-detected by vLLM Marlin kernel). Qwen2.5-14B-AWQ (~10GB), DeepSeek-R1-14B-AWQ (~10GB).
+- **Rule 1: Sequential Heavy Loading (Model Thrashing Prevention).** Тяжёлые модели маршрутизируются через OpenRouter SmartModelRouter с tier-based routing.
+- **Rule 2: Cloud-Only.** Весь инференс выполняется через OpenRouter API. Локальные модели удалены.
+- **Rule 3: Model Selection.** SmartModelRouter автоматически выбирает оптимальную модель по task_type (fast/balanced/premium/reasoning).
 - **Rule 4: Context Bridge.** При переключении модели (Qwen↔DeepSeek), Context Bridge автоматически сохраняет состояние pipeline в SQLite и восстанавливает его для новой модели. KV cache уничтожается, но текстовый контекст переживает swap.
 - **Rule 5: Speculative Decoding.** N-gram speculative decoding включён по умолчанию (5 tokens, lookup max 8). Нулевой overhead VRAM. Ускорение +20-40% для повторяющихся/кодовых паттернов.
 
@@ -144,8 +144,8 @@ Pipeline for continuous framework augmentation and memory safety:
 
 To maintain the 16GB VRAM constraint, transitions between nodes in a Workflow Chain must enforce **Smart Swapping** with CUDA-specific anti-thrashing:
 
-- **Текущие модели**: Qwen2.5-Coder-14B-AWQ (primary, все 20 ролей), DeepSeek-R1-distill-Qwen-14B-AWQ (research).
-- **Implementation Mechanism**: vLLM manager's `ensure_model_loaded()` with `pre_swap_callback` / `post_swap_callback` hooks. Context Bridge автоматически сериализует pipeline state в SQLite перед swap.
+- **Текущие модели**: Облачные модели через OpenRouter (fast/balanced/premium/reasoning tiers).
+- **Implementation Mechanism**: SmartModelRouter в `src/ai/inference/router.py` с tier-based routing. route_llm() в `src/llm/gateway.py` — единая точка входа.
 - **Cross-Brigade Shift**: При переключении между бригадами или моделями, VRAM полностью очищается через `_stop_server()` → `_start_server()`.
 - **Context Handling**: Context Bridge (3-layer) — Summary Layer → SQLite Fact Store → ChromaDB Embeddings — обеспечивает передачу контекста между несовместимыми KV cache.
 - **Speculative Decoding**: N-gram speculative decoding (zero VRAM) ускоряет генерацию на +20-40% для кодовых и повторяющихся паттернов.

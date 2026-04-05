@@ -1,0 +1,35 @@
+===============================================================================================
+Model                                         Role                 Tool Parse   Time(ms)   Status
+-----------------------------------------------------------------------------------------------
+local                                         ToolParser           Pass         0          ✅ PASS
+nvidia/nemotron-3-super-120b-a12b:free        Router:risk_analysis Pass         843        ✅ PASS
+arcee-ai/trinity-large-preview:free           Router:tool_execution Pass         527        ✅ PASS
+arcee-ai/trinity-mini:free                    Router:data_parsing  Pass         430        ✅ PASS
+nvidia/nemotron-3-super-120b-a12b:free        Router:general       Pass         617        ✅ PASS
+nvidia/nemotron-3-super-120b-a12b:free        Router:code          Pass         590        ✅ PASS
+arcee-ai/trinity-large-preview:free           Router:research      Pass         1705       ✅ PASS
+nvidia/nemotron-nano-12b-v2-vl:free           Router:vision        Pass         1261       ✅ PASS
+nvidia/nemotron-nano-12b-v2-vl:free           Router:video_analyst Pass         643        ✅ PASS
+arcee-ai/trinity-mini:free                    Router:expand        Pass         403        ✅ PASS
+nvidia/nemotron-3-super-120b-a12b:free        Planner              N/A          498        ✅ PASS
+nvidia/nemotron-3-super-120b-a12b:free        Coder                Pass         536        ✅ PASS
+nvidia/nemotron-3-super-120b-a12b:free        Auditor              N/A          618        ✅ PASS
+nvidia/nemotron-3-super-120b-a12b:free        Planner              N/A          526        ❌ FAIL
+  └─ Error: No structured plan returned
+nvidia/nemotron-3-super-120b-a12b:free        Foreman              Pass         945        ✅ PASS
+nvidia/nemotron-3-super-120b-a12b:free        Executor_Architect   Pass         639        ✅ PASS
+nvidia/nemotron-3-super-120b-a12b:free        Executor_Tools       Pass         546        ✅ PASS
+arcee-ai/trinity-large-preview:free           Executor_Integration Pass         430        ✅ PASS
+nvidia/nemotron-3-super-120b-a12b:free        Auditor              N/A          619        ✅ PASS
+arcee-ai/trinity-mini:free                    Archivist            Pass         825        ✅ PASS
+arcee-ai/trinity-mini:free                    State_Manager        Pass         473        ✅ PASS
+nvidia/nemotron-3-super-120b-a12b:free        Test_Writer          Pass         1216       ✅ PASS
+arcee-ai/trinity-large-preview:free           Researcher           N/A          425        ✅ PASS
+nvidia/nemotron-3-super-120b-a12b:free        Analyst              Pass         642        ✅ PASS
+arcee-ai/trinity-mini:free                    Summarizer           Pass         430        ✅ PASS
+yt-dlp                                        YouTube              N/A          0          ❌ FAIL
+  └─ Error: yt-dlp not installed. Install with: pip install yt-dlp
+-----------------------------------------------------------------------------------------------
+Total: 24 PASS / 2 FAIL / 26 checks
+YouTube: ❌ FAIL — error: yt-dlp not installed. Install with: pip install yt-dl
+===============================================================================================

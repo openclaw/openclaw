@@ -5,7 +5,6 @@
 1. **READ** `BRAIN.md` to understand current context and active components
 2. **OBSERVE** system state:
    - Check OpenRouter API health (rate-limit headers, model availability)
-   - Check vLLM fallback status (if needed)
    - Check SuperMemory integrity (hot/warm/cold tier sizes, RAG index freshness)
    - Check ClawHub connection status
    - Monitor agent task queue and MAS orchestrator state
@@ -16,7 +15,7 @@
 4. **EXECUTE** via MAS orchestrator:
    - AgentOrchestrator dispatches tasks to registered agents
    - Each agent runs its pipeline chain (Planner → Foreman → Executors → Auditor)
-   - OpenRouter handles primary inference; vLLM used as fallback
+   - OpenRouter handles all inference via cloud API
    - Tool calls processed through MCP client (6 servers)
 5. **PERSIST** results:
    - SuperMemory stores conversation facts, tool outputs, verified knowledge

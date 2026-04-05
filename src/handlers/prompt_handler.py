@@ -16,7 +16,7 @@ import structlog
 from aiogram.types import ForceReply, Message
 
 from src.boot import PROMPT_COUNTER
-from src.intent_classifier import classify_intent
+from src.core.intent_classifier import classify_intent
 
 logger = structlog.get_logger("PromptHandler")
 

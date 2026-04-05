@@ -65,7 +65,7 @@ async def cmd_test_all_models(gateway, message: Message):
 
     final_report = "📊 *Отчет: Парад Планет (20 Ролей)*\n\n"
 
-    from src.llm_gateway import route_llm
+    from src.llm.gateway import route_llm
 
     async def fetch_hello(role_name, model_name, sys_prompt):
         try:
@@ -187,7 +187,7 @@ async def cmd_openrouter_test(gateway, message: Message):
 
     status_msg = await message.reply("🔄 Тестирую OpenRouter...")
 
-    from src.openrouter_client import check_openrouter
+    from src.llm.openrouter import check_openrouter
     result = await check_openrouter(or_cfg.get("api_key", ""))
 
     if result["status"] == "ok":
@@ -283,7 +283,7 @@ async def cmd_diag(gateway, message: Message):
 
     # --- Last API Error ---
     try:
-        from src.llm_gateway import get_last_api_error
+        from src.llm.gateway import get_last_api_error
         api_err = get_last_api_error()
         if api_err and api_err.get("status"):
             lines.append(f"\n<b>Last API Error:</b>")
@@ -300,7 +300,7 @@ async def cmd_diag(gateway, message: Message):
     # --- Nemotron VL Readiness ---
     lines.append(f"\n<b>NVIDIA Nemotron VL:</b>")
     try:
-        from src.llm_gateway import _VISION_MODELS
+        from src.llm.gateway import _VISION_MODELS
         nemotron = [m for m in _VISION_MODELS if "nemotron" in m.lower()]
         if nemotron:
             lines.append(f"  Registered: <code>{', '.join(nemotron)}</code> ✅")

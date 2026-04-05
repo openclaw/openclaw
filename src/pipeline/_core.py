@@ -19,9 +19,9 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 import structlog
 
-from src.auto_rollback import AutoRollback
-from src.mcp_client import OpenClawMCPClient
-from src.task_queue import ModelTaskQueue
+from src.core.auto_rollback import AutoRollback
+from src.mcp_tools.client import OpenClawMCPClient
+from src.core.task_queue import ModelTaskQueue
 from src.ai.inference.metrics import InferenceMetricsCollector
 from src.utils.async_utils import taskgroup_gather
 from src.ai.inference.budget import AdaptiveTokenBudget
@@ -45,9 +45,9 @@ from src.pipeline_utils import (
     group_chain,
     sanitize_file_content,
 )
-from src.code_validator import CodeValidator
-from src.llm_gateway import route_llm
-from src.openrouter_client import call_openrouter, reset_circuit_breakers
+from src.validators.code_validator import CodeValidator
+from src.llm.gateway import route_llm
+from src.llm.openrouter import call_openrouter, reset_circuit_breakers
 from src.ai.agents.react import ReActReasoner
 from src.ai.agents.constitutional import ConstitutionalChecker
 from src.tools.dynamic_sandbox import DynamicSandbox
@@ -599,7 +599,7 @@ class PipelineExecutor:
         # v16.1: Deep Source Injection (NotebookLM simulation)
         if complexity == "extreme":
             try:
-                from src.memory_mcp import export_vault_content
+                from src.mcp_tools.memory_search import export_vault_content
                 _mega_source = export_vault_content()
                 if _mega_source and "No markdown files" not in _mega_source:
                     memory_context = (_mega_source + "\n\n" + memory_context) if memory_context else _mega_source

@@ -1,0 +1,302 @@
+[
+  {
+    "title": "I built an open-source automated trading system using DRL and LLMs from my PhD research",
+    "url": "https://www.reddit.com/r/algotrading/comments/1ixv8rx/i_built_an_opensource_automated_trading_system/",
+    "source": "reddit",
+    "summary": "Hey everyone,\n\nI'm excited to share the source code for an automated trading system I developed as part of my PhD dissertation (the defense will be on 28th April). The system combines deep reinforcement learning (DRL) with large language models (LLMs) to generate trading signals that outperform existing solutions (FinRL).\n\n**My scientific contribution**\n\n1. RAG approach - I generate specialized feature sets that feed into DRL models\n2. PrimoGPT - A fine-tuned LLM inspired by FinGPT that generate",
+    "authors": ["TechPrimo"],
+    "tags": ["Strategy"],
+    "score": 506.0,
+    "published": "",
+    "extra": {
+      "subreddit": "algotrading",
+      "num_comments": 108,
+      "created_utc": 1740490862.0
+    }
+  },
+  {
+    "title": "[D] Some thoughts about an elephant in the room no one talks about",
+    "url": "https://www.reddit.com/r/MachineLearning/comments/1qo6sai/d_some_thoughts_about_an_elephant_in_the_room_no/",
+    "source": "reddit",
+    "summary": "*Using a throwaway account for obvious reasons.*\n\nI am going to say something uncomfortable. A large fraction of senior researchers today care almost exclusively about publications, and they have quietly outsourced their educational/mentorship responsibility to social media. This year’s ICLR has been a bit of a mess, and while there are multiple reasons, this is clearly part of it. The issue is not just OpenReview leak or AC overload. It is that we have systematically failed to train researchers",
+    "authors": ["DrXiaoZ"],
+    "tags": ["Discussion"],
+    "score": 495.0,
+    "published": "",
+    "extra": {
+      "subreddit": "MachineLearning",
+      "num_comments": 104,
+      "created_utc": 1769497336.0
+    }
+  },
+  {
+    "title": "Practical (online &amp; offline) RAG Setups for Long Documents on Consumer Laptops with &lt;16GB RAM",
+    "url": "https://www.reddit.com/r/LocalLLaMA/comments/1hq36dn/practical_online_offline_rag_setups_for_long/",
+    "source": "reddit",
+    "summary": "## Motivation\nAs an academic, I work with very long dense documents literally all the time. Decades ago, I dreamt to be able to interact, to converse with such documents using AI, and now I was wondering if it was possible at all. After testing regularly since about a year, the answer is finally yes, although it is clunky and only a few tools allow it from my tests. The challenge being that it needed to run on my consumer-grade, albeit premium, laptop.\n\nI am going to explain what I found as I be",
+    "authors": ["lrq3000"],
+    "tags": ["Discussion"],
+    "score": 364.0,
+    "published": "",
+    "extra": {
+      "subreddit": "LocalLLaMA",
+      "num_comments": 58,
+      "created_utc": 1735608154.0
+    }
+  },
+  {
+    "title": "After about 4 years of exploration and 1.5 year of persistent effort, I think we finally have a \"system\"",
+    "url": "https://www.reddit.com/r/algotrading/comments/1qklj4o/after_about_4_years_of_exploration_and_15_year_of/",
+    "source": "reddit",
+    "summary": "I would say that about 80% of the first 12 months of working on this had little involvement from LLMs. We got something working, paper-traded it from Mar 2025 to July 2025, then live traded from Aug 2025 to Dec 2025. Made some big mistakes while experimenting (two accidental sells with huge losses) and ended up with an OK return of 4.5% on 5 months (but still behind just market BAH by 4.5%).\n\nAlong the way we kept working on better TSL, better stop-losses, better keep-outs, regime detection, etc",
+    "authors": ["MormonMoron"],
+    "tags": ["Infrastructure"],
+    "score": 350.0,
+    "published": "",
+    "extra": {
+      "subreddit": "algotrading",
+      "num_comments": 58,
+      "created_utc": 1769157359.0
+    }
+  },
+  {
+    "title": "Leveraging AI to build a fully automated trading assistant — no human intervention needed,  just monitoring. looking for feedback &amp; ideas",
+    "url": "https://www.reddit.com/r/algotrading/comments/1l9g6s5/leveraging_ai_to_build_a_fully_automated_trading/",
+    "source": "reddit",
+    "summary": "Hello guys,\n\nI’ve been working on a project to build a fully **AI personal trading assistant** — something that can handle everything from **market analysis** to **risk management** and even **order execution**, all **without any human intervention**. the human only do monitoring position and reviewing performance.\n\nI’m combining several AI techniques:\n\n* **RAG** (Retrieval-Augmented Generation) to access real-time financial insights and news\n* **LSTM** for sequential pattern recognition in hist",
+    "authors": ["iam_warrior"],
+    "tags": ["Strategy"],
+    "score": 253.0,
+    "published": "",
+    "extra": {
+      "subreddit": "algotrading",
+      "num_comments": 193,
+      "created_utc": 1749712709.0
+    }
+  },
+  {
+    "title": "After 6 months of testing, I’m taking my EA Live.",
+    "url": "https://www.reddit.com/r/algotrading/comments/1rwk6bt/after_6_months_of_testing_im_taking_my_ea_live/",
+    "source": "reddit",
+    "summary": "Been working on this for a while and I’m finally about to take it live.\n\nBuilt an EA around divergences but not in the typical “RSI divergence = buy/sell” way. It’s combining structure, momentum, and volatility so it’s not just firing signals like hell \n\nWhat’s going into it:\n\n• Market structure (trend / BOS context)\n\n• Regular + hidden divergence\n\n• RSI / MFI / TSI combined for momentum\n\n• ATR filters to avoid garbage setups\n\n• Walk-forward testing, not just backtests\n\nI’ve got about 15+ years ",
+    "authors": ["Practical_Nebula4090"],
+    "tags": ["Strategy"],
+    "score": 222.0,
+    "published": "",
+    "extra": {
+      "subreddit": "algotrading",
+      "num_comments": 139,
+      "created_utc": 1773783206.0
+    }
+  },
+  {
+    "title": "This week in AI - all the Major AI developments in a nutshell",
+    "url": "https://www.reddit.com/r/artificial/comments/1c2b63b/this_week_in_ai_all_the_major_ai_developments_in/",
+    "source": "reddit",
+    "summary": "1. **Cohere** introduced ***Rerank 3,***  a new foundation model purpose built for efficient enterprise search  and Retrieval Augmented Generation (RAG) systems. It enables search over  multi-aspect and semi-structured data like emails, invoices, JSON  documents, code, and tables in 100+ languages \\[*Details*\\].\n2. **Google DeepMind**  used deep reinforcement learning (deep RL) to train humanoid robots to  play a simplified one-versus-one soccer game. The agents learnt by trial  and error and co",
+    "authors": ["wyem"],
+    "tags": ["News"],
+    "score": 193.0,
+    "published": "",
+    "extra": {
+      "subreddit": "artificial",
+      "num_comments": 10,
+      "created_utc": 1712933616.0
+    }
+  },
+  {
+    "title": "Building a multi-agent LLM system for live crypto trading.",
+    "url": "https://www.reddit.com/r/algotrading/comments/1o3i1ry/building_a_multiagent_llm_system_for_live_crypto/",
+    "source": "reddit",
+    "summary": "I'm currently building a **multi-agent LLM system** for **live trading**. Initial, limited testing shows **great promise and profitability** . I am running 4 agents using gemini flash and deterministic rule that classify market profiles. The only downside is that the system is expensive to run therefore not suitable for small timeframes. I testing on 15m and 1h with backtrader (data fetched from binance).  **Sharpe ratio currently returns 'NaN'** due to insufficient data but  I've monitored the ",
+    "authors": ["iamz_th"],
+    "tags": ["Strategy"],
+    "score": 73.0,
+    "published": "",
+    "extra": {
+      "subreddit": "algotrading",
+      "num_comments": 25,
+      "created_utc": 1760143505.0
+    }
+  },
+  {
+    "title": "Wrote a detailed walkthrough on LLM inference system design with RAG, for anyone prepping for MLOps interviews",
+    "url": "https://www.reddit.com/r/mlops/comments/1rkij9r/wrote_a_detailed_walkthrough_on_llm_inference/",
+    "source": "reddit",
+    "summary": "I've been writing about the DevOps-to-MLOps transition for a while now, and one question that keeps coming up is the system design side. Specifically, what actually happens when a user sends a prompt to an LLM app.\n\nSo I wrote a detailed Medium post that walks through the full architecture, the way I'd explain it in an interview. Covers the end-to-end flow: API gateway, FastAPI orchestrator, embedding models, hybrid search (Elasticsearch + vector DB), reranking, vLLM inference, response streamin",
+    "authors": ["Extension_Key_5970"],
+    "tags": [""],
+    "score": 33.0,
+    "published": "",
+    "extra": {
+      "subreddit": "mlops",
+      "num_comments": 3,
+      "created_utc": 1772622055.0
+    }
+  },
+  {
+    "title": "Building a RAG Chatbot for Company — Need Advice on Expansion &amp; Architecture",
+    "url": "https://www.reddit.com/r/mlops/comments/1i5vzlf/building_a_rag_chatbot_for_company_need_advice_on/",
+    "source": "reddit",
+    "summary": "Hi everyone,\n\nI’m a fresh graduate and currently working on a project at my company to build a Retrieval-Augmented Generation (RAG) chatbot. My initial prototype is built with Llama and Streamlit, and I’ve shared a very rough PoC on GitHub: [support-chatbot repo](https://github.com/Subatomail/support-chatbot). Right now, the prototype is pretty bare-bones and designed mainly for our support team. I’m using internal call transcripts, past customer-service chat logs, and PDF procedure documents to",
+    "authors": ["Subatomail"],
+    "tags": [""],
+    "score": 19.0,
+    "published": "",
+    "extra": {
+      "subreddit": "mlops",
+      "num_comments": 19,
+      "created_utc": 1737395000.0
+    }
+  },
+  {
+    "title": "[D] Interview experience for LLM inference systems position",
+    "url": "https://www.reddit.com/r/MachineLearning/comments/1r5vncj/d_interview_experience_for_llm_inference_systems/",
+    "source": "reddit",
+    "summary": "Hi I am preparing for a interview at an AI Lab for LLM inference team with a systems role, not MLE. I have been told I will have an LLM inference related coding round, a design round and an inference optimization related discussion. I have been extensively preparing for these. My Prep for coding is learning to code from scratch the following: SelfAttention, Transformer block, BPE tokenizer, Sampling methods, LV Cache, Bean Search. For other two interviews, I am just studying all the inference de",
+    "authors": ["dividebyzero74"],
+    "tags": ["Discussion"],
+    "score": 18.0,
+    "published": "",
+    "extra": {
+      "subreddit": "MachineLearning",
+      "num_comments": 10,
+      "created_utc": 1771203855.0
+    }
+  },
+  {
+    "title": "We released MiRAGE: An open-source, multi-agent &amp; multimodal framework for generating RAG eval datasets from complex PDFs (Model-Agnostic)",
+    "url": "https://www.reddit.com/r/LocalLLaMA/comments/1qqo06u/we_released_mirage_an_opensource_multiagent/",
+    "source": "reddit",
+    "summary": "Hi everyone,\n\nMy team at ABB just open-sourced a framework called MiRAGE (A Multiagent Framework for Generating Multimodal Multihop Question-Answer Dataset for RAG Evaluation).\n\nWe were trying to evaluate RAG systems on heavy technical documentation (industrial manuals, financial reports). We found (as many have) that existing synthetic dataset generators (linear pipelines) were failing hard. They would either hallucinate QA pairs or generate simple look-up questions that didn't actually test re",
+    "authors": ["Socaplaya21"],
+    "tags": ["Resources"],
+    "score": 15.0,
+    "published": "",
+    "extra": {
+      "subreddit": "LocalLLaMA",
+      "num_comments": 4,
+      "created_utc": 1769727532.0
+    }
+  },
+  {
+    "title": "[P] LLM Economist: Large Population Models and Mechanism Design via Multi‑Agent Language Simulacra",
+    "url": "https://www.reddit.com/r/MachineLearning/comments/1ma6rle/p_llm_economist_large_population_models_and/",
+    "source": "reddit",
+    "summary": "Co-author here. We’ve released a new preprint, **LLM Economist**, which explores how LLM-based agents can learn and optimize economic policy through multi-agent simulation.\n\nIn our setup, a planner agent proposes marginal tax schedules, while a population of 100 worker agents respond by choosing how much labor to supply based on their individual personas. All agents are instantiated from a calibrated skill and demographic prior and operate entirely through language—interacting via in-context mes",
+    "authors": ["PokeAgentChallenge"],
+    "tags": ["Research"],
+    "score": 14.0,
+    "published": "",
+    "extra": {
+      "subreddit": "MachineLearning",
+      "num_comments": 8,
+      "created_utc": 1753570442.0
+    }
+  },
+  {
+    "title": "Built an Customized LLM with RAG for Singaporean laws and acts.",
+    "url": "https://www.reddit.com/r/LocalLLaMA/comments/1r138bn/built_an_customized_llm_with_rag_for_singaporean/",
+    "source": "reddit",
+    "summary": "Hello everyone,\n\nI have always loved coding and in the couple I was thinking of making an open source project and it turned out to be awesome I hope you guys like it.☺️\n\nI present Explore Singapore which I created as an open-source intelligence engine to execute retrieval-augmented generation (RAG) on Singapore's public policy documents and legal statutes and historical archives.\n\nThe objective required building a domain-specific search engine which enables LLM systems to decrease errors by usin",
+    "authors": ["Fantastic_suit143"],
+    "tags": ["Discussion"],
+    "score": 12.0,
+    "published": "",
+    "extra": {
+      "subreddit": "LocalLLaMA",
+      "num_comments": 11,
+      "created_utc": 1770736070.0
+    }
+  },
+  {
+    "title": "NCP-AAI vs NCP-GENL vs NCA-GENL: NVIDIA AI Certificates Comparison",
+    "url": "https://www.reddit.com/r/mlops/comments/1ppx4nq/ncpaai_vs_ncpgenl_vs_ncagenl_nvidia_ai/",
+    "source": "reddit",
+    "summary": "If you are wondering which NVIDIA AI certification to pursue - here is a short comparison table between them. \n\n  \nIf you want to learn more about preparation for any of them, here are complete guides for those as well\n\nComplete Guide for NCP-GENL: [https://preporato.com/certifications/nvidia/generative-ai-llm-professional/articles/nvidia-ncp-genl-certification-complete-guide-2025#comparison-with-other-certifications](https://preporato.com/certifications/nvidia/generative-ai-llm-professional/art",
+    "authors": ["MicroManagerNFT"],
+    "tags": ["MLOps Education :snoo_hearteyes:"],
+    "score": 12.0,
+    "published": "",
+    "extra": {
+      "subreddit": "mlops",
+      "num_comments": 6,
+      "created_utc": 1766080001.0
+    }
+  },
+  {
+    "title": "🔥 Stop Building Dumb RAG Systems - Here's How to Make Them Actually Smart",
+    "url": "https://www.reddit.com/r/artificial/comments/1njlrm7/stop_building_dumb_rag_systems_heres_how_to_make/",
+    "source": "reddit",
+    "summary": "Your RAG pipeline is probably doing this right now: throw documents at an LLM and pray it works. That's like asking someone to write a research paper with their eyes closed.\n\n**Enter Self-Reflective RAG** \\- the system that actually *thinks* before it responds.\n\n**Here's what separates it from basic RAG:**\n\n**Document Intelligence** → Grades retrieved docs before using them  \n**Smart Retrieval** → Knows when to search vs. rely on training data  \n**Self-Correction** → Catches its own mistakes and",
+    "authors": ["Best-Information2493"],
+    "tags": ["Tutorial"],
+    "score": 10.0,
+    "published": "",
+    "extra": {
+      "subreddit": "artificial",
+      "num_comments": 15,
+      "created_utc": 1758134995.0
+    }
+  },
+  {
+    "title": "A 16-mode failure map for LLM / RAG pipelines (open source checklist)",
+    "url": "https://www.reddit.com/r/mlops/comments/1r8nnui/a_16mode_failure_map_for_llm_rag_pipelines_open/",
+    "source": "reddit",
+    "summary": "If you are running LLM / RAG / agent systems in production, this might be relevant. If you mostly work on classic ML training pipelines (tabular, CV etc.), this map probably does not match your day-to-day pain points.\n\nIn the last year I kept getting pulled into the same kind of fire drills: RAG pipelines that pass benchmarks, but behave strangely in real traffic. Agents that look fine in a notebook, then go off the rails in prod. Incidents where everyone says “the model hallucinated”, but nobod",
+    "authors": ["Over-Ad-6085"],
+    "tags": ["Freemium :snoo_tableflip:"],
+    "score": 7.0,
+    "published": "",
+    "extra": {
+      "subreddit": "mlops",
+      "num_comments": 0,
+      "created_utc": 1771469711.0
+    }
+  },
+  {
+    "title": "A practical 2026 roadmap for modern AI search &amp; RAG systems",
+    "url": "https://www.reddit.com/r/artificial/comments/1q87y8e/a_practical_2026_roadmap_for_modern_ai_search_rag/",
+    "source": "reddit",
+    "summary": "I kept seeing RAG tutorials that stop at “vector DB + prompt” and break down in real systems.\n\nI put together a roadmap that reflects how modern AI search actually works:\n\n– semantic + hybrid retrieval (sparse + dense)  \n– explicit reranking layers  \n– query understanding &amp; intent  \n– agentic RAG (query decomposition, multi-hop)  \n– data freshness &amp; lifecycle  \n– grounding / hallucination control  \n– evaluation beyond “does it sound right”  \n– production concerns: latency, cost, access c",
+    "authors": ["ReverseBlade"],
+    "tags": ["Tutorial"],
+    "score": 4.0,
+    "published": "",
+    "extra": {
+      "subreddit": "artificial",
+      "num_comments": 2,
+      "created_utc": 1767964514.0
+    }
+  },
+  {
+    "title": "Curious about multi-agent critique setups for improving LLM reasoning",
+    "url": "https://www.reddit.com/r/LanguageTechnology/comments/1rp7j8q/curious_about_multiagent_critique_setups_for/",
+    "source": "reddit",
+    "summary": "I’ve been experimenting with different ways to reduce reasoning errors in LLM outputs, especially for prompts that require structured explanations rather than straightforward text generation.\n\nOne approach I tried recently was splitting the reasoning process across multiple roles instead of relying on a single model response. The idea is that one agent produces an initial answer, another agent reviews the reasoning and points out potential issues or weak assumptions, and a final step synthesizes",
+    "authors": ["AccomplishedPine4602"],
+    "tags": [""],
+    "score": 3.0,
+    "published": "",
+    "extra": {
+      "subreddit": "LanguageTechnology",
+      "num_comments": 1,
+      "created_utc": 1773079199.0
+    }
+  },
+  {
+    "title": "Building a self-hosted AI Knowledge System with automated ingestion, GraphRAG, and proactive briefings - looking for feedback",
+    "url": "https://www.reddit.com/r/LocalLLaMA/comments/1r5jrti/building_a_selfhosted_ai_knowledge_system_with/",
+    "source": "reddit",
+    "summary": "I've spent the last few weeks researching how to build a personal AI-powered knowledge system and wanted to share where I landed and get feedback before I commit to building it.\n\n**The Problem**\n\nI consume a lot of AI content: \\~20 YouTube channels, \\~10 podcasts, \\~8 newsletters, plus papers and articles. The problem isn't finding information, it's that insights get buried. Speaker A says something on Monday that directly contradicts what Speaker B said last week, and I only notice if I happen ",
+    "authors": ["EmergencyAddition433"],
+    "tags": ["Question | Help"],
+    "score": 2.0,
+    "published": "",
+    "extra": {
+      "subreddit": "LocalLLaMA",
+      "num_comments": 9,
+      "created_utc": 1771174963.0
+    }
+  }
+]

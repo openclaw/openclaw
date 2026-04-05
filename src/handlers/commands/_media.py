@@ -6,7 +6,7 @@ import io
 import structlog
 from aiogram.types import Message
 from src.bot_commands.media import PHOTO_PROMPT_COUNTER
-from src.llm_gateway import route_llm
+from src.llm.gateway import route_llm
 
 logger = structlog.get_logger("GatewayCommands.Media")
 

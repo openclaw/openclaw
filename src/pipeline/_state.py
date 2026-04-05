@@ -101,7 +101,7 @@ def init_smart_router(config: Dict[str, Any], force_cloud: bool) -> Optional[Sma
 
     profiles: Dict[str, ModelProfile] = {}
     for task_type, model_name in router_cfg.items():
-        # Skip local quantized models — cloud-only mode (no local vLLM)
+        # Skip local quantized models — cloud-only mode (OpenRouter)
         if any(tag in model_name.upper() for tag in ("AWQ", "GPTQ", "GGUF")):
             continue
         if model_name not in profiles:
@@ -129,7 +129,7 @@ def init_supermemory(executor) -> None:
         return
 
     try:
-        from src.supermemory import SuperMemory
+        from src.memory_system.legacy import SuperMemory
 
         mem_dir = os.path.join(executor._framework_root, "data", "supermemory")
         index_dirs = [
@@ -145,7 +145,7 @@ def init_supermemory(executor) -> None:
         executor._supermemory = None
 
     try:
-        from src.rag_engine import RAGEngine
+        from src.integrations.rag_engine import RAGEngine
 
         rag_dir = os.path.join(executor._framework_root, "data", "rag_db")
         executor._rag_engine = RAGEngine(

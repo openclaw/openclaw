@@ -11,7 +11,7 @@ Model Capabilities", arXiv:2406.04692.
 import time
 from typing import List, Optional
 
-from src.llm_gateway import route_llm
+from src.llm.gateway import route_llm
 
 from src.ai.agents._shared import (
     MoAResult,

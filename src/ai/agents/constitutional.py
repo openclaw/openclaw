@@ -9,7 +9,7 @@ Principles (from Bai et al., arXiv:2212.08073 + TruthRL extensions):
 
 from typing import Dict, List, Optional, Tuple
 
-from src.llm_gateway import route_llm
+from src.llm.gateway import route_llm
 
 from src.ai.agents._shared import (
     ConstitutionalResult,

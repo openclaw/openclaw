@@ -30,7 +30,7 @@ async def handle_photo(gateway, message: Message):
         prompt = message.caption or "Опиши это изображение подробно. Что ты видишь?"
 
         # Use Unified LLM Gateway with vision support (auto-selects vision model)
-        from src.llm_gateway import route_llm
+        from src.llm.gateway import route_llm
 
         result = await route_llm(
             prompt,
@@ -248,7 +248,7 @@ async def handle_video(gateway, message: Message):
         )
 
         # Route to video_analyst model via llm_gateway
-        from src.llm_gateway import route_llm
+        from src.llm.gateway import route_llm
 
         # Use first frame for single-image vision API (multi-frame via system prompt context)
         frame_descriptions = []

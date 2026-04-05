@@ -3,7 +3,6 @@
 ## Architecture Guidelines
 
 - **Primary inference:** OpenRouter API (cloud multi-model) with tier-based routing
-- **Fallback inference:** vLLM (local GPU) — activated on rate-limit or network failure
 - **Orchestration:** MAS (Multi-Agent System) — agents run autonomously via AgentOrchestrator
 - **Memory stack:** SuperMemory = RAG (ChromaDB) + TieredMemory (hot/warm/cold) + EpisodicMemory
 - **Brigades:** Dmarket (11 roles), OpenClaw (9 roles) — each with unique system prompts
@@ -20,7 +19,7 @@
 
 ## Historical Decisions
 
-- 2026-03-25: Migrated from vLLM-only to OpenRouter-primary architecture (latency + model variety)
+- 2026-03-25: Migrated to OpenRouter-primary cloud-only architecture (latency + model variety)
 - 2026-03-25: Introduced MAS orchestrator for autonomous agent lifecycle management
 - 2026-03-25: Created SuperMemory system (supersedes separate RAGEngine + TieredMemory)
 - 2026-03-25: Added ClawHub platform integration for external skills/tasks
@@ -30,7 +29,7 @@
 
 ## Core Lessons
 
-- OpenRouter free-tier models have rate limits — always implement fallback to local vLLM
+- OpenRouter free-tier models have rate limits — always implement retry + model fallback logic
 - Multi-agent orchestration requires clear task isolation to prevent context contamination
 - RAG indexing must use content hashing to avoid re-indexing unchanged documents
 - Tiered memory (hot/warm/cold) reduces token usage while preserving critical context

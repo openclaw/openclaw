@@ -133,7 +133,7 @@ async def get_status() -> JSONResponse:
 
     metrics_summary = {}
     try:
-        from src.llm_gateway import get_metrics_collector
+        from src.llm.gateway import get_metrics_collector
         mc = get_metrics_collector()
         if mc and hasattr(mc, "summary"):
             metrics_summary = mc.summary()
@@ -142,7 +142,7 @@ async def get_status() -> JSONResponse:
 
     pending_approvals = {}
     try:
-        from src.llm_gateway import _pending_approvals
+        from src.llm.gateway import _pending_approvals
         pending_approvals = {
             rid: {"status": r.status, "reasons": r.risk_reasons}
             for rid, r in _pending_approvals.items()

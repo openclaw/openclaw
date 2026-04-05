@@ -1,0 +1,575 @@
+[
+  {
+    "title": "FoundationAgents/MetaGPT",
+    "url": "https://github.com/FoundationAgents/MetaGPT",
+    "source": "github",
+    "summary": "🌟 The Multi-Agent Framework: First AI Software Company, Towards Natural Language Programming",
+    "authors": [],
+    "tags": ["agent", "gpt", "llm", "metagpt", "multi-agent"],
+    "score": 66358.0,
+    "published": "2023-06-30T09:04:55Z",
+    "extra": {
+      "language": "Python",
+      "stars": 66358,
+      "forks": 8378,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "bytedance/deer-flow",
+    "url": "https://github.com/bytedance/deer-flow",
+    "source": "github",
+    "summary": "An open-source long-horizon SuperAgent harness that researches, codes, and creates. With the help of sandboxes, memories, tools, skill, subagents and message gateway, it handles different levels of tasks that could take minutes to hours.",
+    "authors": [],
+    "tags": [
+      "agent",
+      "agentic",
+      "agentic-framework",
+      "agentic-workflow",
+      "ai",
+      "ai-agents",
+      "deep-research",
+      "harness",
+      "langchain",
+      "langgraph",
+      "langmanus",
+      "llm",
+      "multi-agent",
+      "nodejs",
+      "podcast",
+      "python",
+      "superagent",
+      "typescript"
+    ],
+    "score": 50847.0,
+    "published": "2025-05-07T02:50:19Z",
+    "extra": {
+      "language": "Python",
+      "stars": 50847,
+      "forks": 6079,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "zhayujie/chatgpt-on-wechat",
+    "url": "https://github.com/zhayujie/chatgpt-on-wechat",
+    "source": "github",
+    "summary": "CowAgent是基于大模型的超级AI助理，能主动思考和任务规划、访问操作系统和外部资源、创造和执行Skills、拥有长期记忆并不断成长，比OpenClaw更轻量和便捷。同时支持微信、飞书、钉钉、企微、QQ、公众号、网页等接入，可选择OpenAI/Claude/Gemini/DeepSeek/ Qwen/GLM/Kimi/LinkAI，能处理文本、语音、图片和文件，可快速搭建个人AI助理和企业数字员工。",
+    "authors": [],
+    "tags": [
+      "ai",
+      "ai-agent",
+      "chatgpt",
+      "claude",
+      "deepseek",
+      "dingtalk",
+      "feishu-bot",
+      "gemini",
+      "kimi",
+      "linkai",
+      "llm",
+      "mcp",
+      "multi-agent",
+      "openai",
+      "openclaw",
+      "python3",
+      "qwen",
+      "skills",
+      "wechat",
+      "weixin"
+    ],
+    "score": 42603.0,
+    "published": "2022-08-07T08:33:41Z",
+    "extra": {
+      "language": "Python",
+      "stars": 42603,
+      "forks": 9863,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "agentscope-ai/agentscope",
+    "url": "https://github.com/agentscope-ai/agentscope",
+    "source": "github",
+    "summary": "Build and run agents you can see, understand and trust.",
+    "authors": [],
+    "tags": [
+      "agent",
+      "chatbot",
+      "large-language-models",
+      "llm",
+      "llm-agent",
+      "mcp",
+      "multi-agent",
+      "multi-modal",
+      "react-agent"
+    ],
+    "score": 21397.0,
+    "published": "2024-01-12T03:41:59Z",
+    "extra": {
+      "language": "Python",
+      "stars": 21397,
+      "forks": 2106,
+      "license": "Apache-2.0"
+    }
+  },
+  {
+    "title": "google/adk-python",
+    "url": "https://github.com/google/adk-python",
+    "source": "github",
+    "summary": "An open-source, code-first Python toolkit for building, evaluating, and deploying sophisticated AI agents with flexibility and control.",
+    "authors": [],
+    "tags": [
+      "agent",
+      "agentic",
+      "agentic-ai",
+      "agents",
+      "agents-sdk",
+      "ai",
+      "ai-agents",
+      "aiagentframework",
+      "genai",
+      "genai-chatbot",
+      "llm",
+      "llms",
+      "multi-agent",
+      "multi-agent-systems",
+      "multi-agents",
+      "multi-agents-collaboration"
+    ],
+    "score": 18637.0,
+    "published": "2025-04-01T20:44:40Z",
+    "extra": {
+      "language": "Python",
+      "stars": 18637,
+      "forks": 3139,
+      "license": "Apache-2.0"
+    }
+  },
+  {
+    "title": "cft0808/edict",
+    "url": "https://github.com/cft0808/edict",
+    "source": "github",
+    "summary": "🏛️ 三省六部制 · OpenClaw Multi-Agent Orchestration System — 9 specialized AI agents with real-time dashboard, model config, and full audit trails",
+    "authors": [],
+    "tags": [
+      "ai-agents",
+      "ai-orchestration",
+      "autonomous-agents",
+      "claude",
+      "dashboard",
+      "kanban",
+      "llm",
+      "multi-agent",
+      "openai",
+      "openclaw",
+      "orchestration",
+      "python",
+      "workflow-automation"
+    ],
+    "score": 13307.0,
+    "published": "2026-02-23T14:35:04Z",
+    "extra": {
+      "language": "Python",
+      "stars": 13307,
+      "forks": 1342,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "microsoft/agent-framework",
+    "url": "https://github.com/microsoft/agent-framework",
+    "source": "github",
+    "summary": "A framework for building, orchestrating and deploying AI agents and multi-agent workflows with support for Python and .NET.",
+    "authors": [],
+    "tags": [
+      "agent-framework",
+      "agentic-ai",
+      "agents",
+      "ai",
+      "dotnet",
+      "multi-agent",
+      "orchestration",
+      "python",
+      "sdk",
+      "workflows"
+    ],
+    "score": 8250.0,
+    "published": "2025-04-28T19:40:42Z",
+    "extra": {
+      "language": "Python",
+      "stars": 8250,
+      "forks": 1377,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "MervinPraison/PraisonAI",
+    "url": "https://github.com/MervinPraison/PraisonAI",
+    "source": "github",
+    "summary": "PraisonAI 🦞 - Your 24/7 AI employee team. Automate and solve complex challenges with low-code multi-agent AI that plans, researches, codes, and delivers to Telegram, Discord, and WhatsApp. Handoffs, guardrails, memory, RAG, 100+ LLMs.",
+    "authors": [],
+    "tags": [
+      "agents",
+      "ai",
+      "ai-agent-framework",
+      "ai-agent-sdk",
+      "ai-agents",
+      "ai-agents-framework",
+      "ai-agents-sdk",
+      "ai-framwork",
+      "aiagent",
+      "aiagentframework",
+      "aiagents",
+      "aiagentsframework",
+      "claw",
+      "framework",
+      "multi-agent",
+      "multi-agent-system",
+      "multi-agent-systems",
+      "multi-agents",
+      "multi-ai-agents",
+      "openclaw"
+    ],
+    "score": 5741.0,
+    "published": "2024-03-19T16:45:25Z",
+    "extra": {
+      "language": "Python",
+      "stars": 5741,
+      "forks": 783,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "ModelEngine-Group/nexent",
+    "url": "https://github.com/ModelEngine-Group/nexent",
+    "source": "github",
+    "summary": "Nexent is a zero-code platform for auto-generating production-grade AI agents using Harness Engineering principles — unified tools, skills, memory, and orchestration with built-in constraints, feedback loops, and control planes.",
+    "authors": [],
+    "tags": [
+      "agent",
+      "agentic-ai",
+      "agentic-framework",
+      "agentic-rag",
+      "agentic-workflow",
+      "ai",
+      "harness",
+      "harness-engineering",
+      "llm",
+      "mcp",
+      "multi-agent",
+      "rag"
+    ],
+    "score": 4368.0,
+    "published": "2025-04-28T10:44:33Z",
+    "extra": {
+      "language": "Python",
+      "stars": 4368,
+      "forks": 545,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "ag2ai/ag2",
+    "url": "https://github.com/ag2ai/ag2",
+    "source": "github",
+    "summary": "AG2 (formerly AutoGen): The Open-Source AgentOS.Join us at: https://discord.gg/sNGSwQME3x",
+    "authors": [],
+    "tags": [
+      "a2a",
+      "ag2",
+      "agent-framework",
+      "agentic",
+      "agentic-ai",
+      "ai",
+      "ai-agents-framework",
+      "aiagents",
+      "genai",
+      "llm",
+      "llms",
+      "mcp",
+      "multi-agent",
+      "multi-agent-system",
+      "open-source",
+      "python"
+    ],
+    "score": 4330.0,
+    "published": "2024-11-11T20:43:34Z",
+    "extra": {
+      "language": "Python",
+      "stars": 4330,
+      "forks": 568,
+      "license": "Apache-2.0"
+    }
+  },
+  {
+    "title": "datamllab/rlcard",
+    "url": "https://github.com/datamllab/rlcard",
+    "source": "github",
+    "summary": "Reinforcement Learning / AI Bots in Card (Poker) Games - Blackjack, Leduc, Texas, DouDizhu, Mahjong, UNO.",
+    "authors": [],
+    "tags": [
+      "ai",
+      "blackjack",
+      "card-game",
+      "card-games",
+      "deep-reinforcement-learning",
+      "doudizhu",
+      "game",
+      "game-ai",
+      "game-bot",
+      "gym-environment",
+      "mahjong",
+      "multi-agent",
+      "openai-gym",
+      "poker",
+      "poker-game",
+      "reinforcement-learning",
+      "texas",
+      "uno"
+    ],
+    "score": 3430.0,
+    "published": "2019-09-05T12:48:01Z",
+    "extra": {
+      "language": "Python",
+      "stars": 3430,
+      "forks": 734,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "SolaceLabs/solace-agent-mesh",
+    "url": "https://github.com/SolaceLabs/solace-agent-mesh",
+    "source": "github",
+    "summary": "An event-driven framework designed to build and orchestrate multi-agent AI systems. It enables seamless integration of AI agents with real-world data sources and systems, facilitating complex, multi-step workflows.",
+    "authors": [],
+    "tags": [
+      "a2a",
+      "agentframework",
+      "agentic",
+      "agentic-ai",
+      "agentic-framework",
+      "agentic-workflow",
+      "agenticai",
+      "agents",
+      "ai",
+      "ai-agents",
+      "aiagentframework",
+      "aiframework",
+      "enterprise",
+      "event-driven-architecture",
+      "framework",
+      "mcp",
+      "multi-agent",
+      "multi-agent-systems",
+      "multiagent",
+      "rag"
+    ],
+    "score": 2595.0,
+    "published": "2025-01-10T17:11:47Z",
+    "extra": {
+      "language": "Python",
+      "stars": 2595,
+      "forks": 143,
+      "license": "Apache-2.0"
+    }
+  },
+  {
+    "title": "agentuniverse-ai/agentUniverse",
+    "url": "https://github.com/agentuniverse-ai/agentUniverse",
+    "source": "github",
+    "summary": "agentUniverse is a LLM multi-agent framework that allows developers to easily build multi-agent applications. ",
+    "authors": [],
+    "tags": [
+      "agent",
+      "ai",
+      "ai-agents",
+      "autonomous",
+      "awesome",
+      "awesome-list",
+      "llm",
+      "multi-agent",
+      "python"
+    ],
+    "score": 2176.0,
+    "published": "2024-04-23T11:28:18Z",
+    "extra": {
+      "language": "Python",
+      "stars": 2176,
+      "forks": 373,
+      "license": "Apache-2.0"
+    }
+  },
+  {
+    "title": "marlbenchmark/on-policy",
+    "url": "https://github.com/marlbenchmark/on-policy",
+    "source": "github",
+    "summary": "This is the official implementation of Multi-Agent PPO (MAPPO).",
+    "authors": [],
+    "tags": ["algorithms", "hanabi", "mappo", "mpes", "multi-agent", "ppo", "smac", "starcraftii"],
+    "score": 1938.0,
+    "published": "2021-02-23T07:59:10Z",
+    "extra": {
+      "language": "Python",
+      "stars": 1938,
+      "forks": 373,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "utiasDSL/gym-pybullet-drones",
+    "url": "https://github.com/utiasDSL/gym-pybullet-drones",
+    "source": "github",
+    "summary": "PyBullet Gymnasium environments for single and multi-agent reinforcement learning of quadcopter control",
+    "authors": [],
+    "tags": [
+      "betaflight",
+      "control",
+      "crazyflie",
+      "gym",
+      "gymnasium",
+      "multi-agent",
+      "pybullet",
+      "quadcopter",
+      "quadrotor",
+      "reinforcement-learning",
+      "robotics",
+      "sitl",
+      "stable-baselines3",
+      "uav"
+    ],
+    "score": 1928.0,
+    "published": "2020-08-10T07:38:09Z",
+    "extra": {
+      "language": "Python",
+      "stars": 1928,
+      "forks": 530,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "Q00/ouroboros",
+    "url": "https://github.com/Q00/ouroboros",
+    "source": "github",
+    "summary": "Stop prompting. Start specifying.",
+    "authors": [],
+    "tags": [
+      "ai-agent",
+      "claude-code",
+      "codex-cli",
+      "devtools",
+      "evaluation",
+      "llm",
+      "mcp",
+      "multi-agent",
+      "prompt-engineering",
+      "python",
+      "spec-driven-development",
+      "workflow-automation"
+    ],
+    "score": 1891.0,
+    "published": "2026-01-14T01:14:04Z",
+    "extra": {
+      "language": "Python",
+      "stars": 1891,
+      "forks": 167,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "geek-ai/MAgent",
+    "url": "https://github.com/geek-ai/MAgent",
+    "source": "github",
+    "summary": "A Platform for Many-Agent Reinforcement Learning",
+    "authors": [],
+    "tags": ["deep-learning", "multi-agent", "reinforcement-learning"],
+    "score": 1760.0,
+    "published": "2017-11-06T10:09:14Z",
+    "extra": {
+      "language": "Python",
+      "stars": 1760,
+      "forks": 333,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "showlab/Code2Video",
+    "url": "https://github.com/showlab/Code2Video",
+    "source": "github",
+    "summary": "Video generation via code",
+    "authors": [],
+    "tags": ["coding", "education", "multi-agent", "video-generation"],
+    "score": 1605.0,
+    "published": "2025-09-29T08:15:44Z",
+    "extra": {
+      "language": "Python",
+      "stars": 1605,
+      "forks": 217,
+      "license": "MIT"
+    }
+  },
+  {
+    "title": "doobidoo/mcp-memory-service",
+    "url": "https://github.com/doobidoo/mcp-memory-service",
+    "source": "github",
+    "summary": "Open-source persistent memory for AI agent pipelines (LangGraph, CrewAI, AutoGen) and Claude. REST API + knowledge graph + autonomous consolidation.",
+    "authors": [],
+    "tags": [
+      "agent-memory",
+      "agentic-ai",
+      "ai-agents",
+      "autogen",
+      "claude",
+      "crewai",
+      "knowledge-graph",
+      "langgraph",
+      "long-term-memory",
+      "mcp",
+      "mcp-server",
+      "memory",
+      "model-context-protocol",
+      "multi-agent",
+      "open-source",
+      "rag",
+      "semantic-search",
+      "sqlite-vec",
+      "vector-database",
+      "vector-storage"
+    ],
+    "score": 1563.0,
+    "published": "2024-12-26T10:15:44Z",
+    "extra": {
+      "language": "Python",
+      "stars": 1563,
+      "forks": 222,
+      "license": "Apache-2.0"
+    }
+  },
+  {
+    "title": "Farama-Foundation/chatarena",
+    "url": "https://github.com/Farama-Foundation/chatarena",
+    "source": "github",
+    "summary": "ChatArena (or Chat Arena) is a Multi-Agent Language Game Environments for LLMs. The goal is to develop communication and collaboration capabilities of AIs.",
+    "authors": [],
+    "tags": [
+      "ai",
+      "artificial-intelligence",
+      "chatgpt",
+      "gpt-4",
+      "large-language-models",
+      "multi-agent",
+      "multi-agent-reinforcement-learning",
+      "multi-agent-simulation",
+      "natural-language-processing",
+      "python"
+    ],
+    "score": 1540.0,
+    "published": "2023-03-06T21:47:05Z",
+    "extra": {
+      "language": "Python",
+      "stars": 1540,
+      "forks": 146,
+      "license": "Apache-2.0"
+    }
+  }
+]

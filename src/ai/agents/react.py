@@ -7,7 +7,7 @@ in Language Models", arXiv:2210.03629.
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.llm_gateway import route_llm
+from src.llm.gateway import route_llm
 
 from src.ai.agents._shared import (
     ReActStep,

@@ -170,7 +170,7 @@ async def finance_summary() -> JSONResponse:
     """Token costs by model + monthly forecast."""
     try:
         from src.ai.inference.metrics import InferenceMetricsCollector
-        from src.llm_gateway import get_metrics_collector
+        from src.llm.gateway import get_metrics_collector
         mc = get_metrics_collector()
         if not mc:
             return JSONResponse({"models": [], "totals": {}})

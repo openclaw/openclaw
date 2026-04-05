@@ -1,0 +1,392 @@
+[
+  {
+    "title": "Learning Rollout from Sampling:An R1-Style Tokenized Traffic Simulation Model",
+    "url": "https://arxiv.org/abs/2603.24989v1",
+    "source": "arxiv",
+    "summary": "Learning diverse and high-fidelity traffic simulations from human driving demonstrations is crucial for autonomous driving evaluation. The recent next-token prediction (NTP) paradigm, widely adopted in large language models (LLMs), has been applied to traffic simulation and achieves iterative improvements via supervised fine-tuning (SFT). However, such methods limit active exploration of potentially valuable motion tokens, particularly in suboptimal regions. Entropy patterns provide a promising ",
+    "authors": [
+      "Ziyan Wang",
+      "Peng Chen",
+      "Ding Li",
+      "Chiwei Li",
+      "Qichao Zhang",
+      "Zhongpu Xia",
+      "Guizhen Yu"
+    ],
+    "tags": ["cs.RO", "cs.AI"],
+    "score": 0.0,
+    "published": "2026-03-26T03:29:46Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.24989v1",
+      "primary_category": "cs.RO",
+      "arxiv_id": "2603.24989v1"
+    }
+  },
+  {
+    "title": "MARCH: Multi-Agent Reinforced Self-Check for LLM Hallucination",
+    "url": "https://arxiv.org/abs/2603.24579v1",
+    "source": "arxiv",
+    "summary": "Hallucination remains a critical bottleneck for large language models (LLMs), undermining their reliability in real-world applications, especially in Retrieval-Augmented Generation (RAG) systems. While existing hallucination detection methods employ LLM-as-a-judge to verify LLM outputs against retrieved evidence, they suffer from inherent confirmation bias, where the verifier inadvertently reproduces the errors of the original generation. To address this, we introduce Multi-Agent Reinforced Self",
+    "authors": [
+      "Zhuo Li",
+      "Yupeng Zhang",
+      "Pengyu Cheng",
+      "Jiajun Song",
+      "Mengyu Zhou",
+      "Hao Li",
+      "Shujie Hu",
+      "Yu Qin",
+      "Erchao Zhao",
+      "Xiaoxi Jiang",
+      "Guanjun Jiang"
+    ],
+    "tags": ["cs.CL"],
+    "score": 0.0,
+    "published": "2026-03-25T17:54:10Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.24579v1",
+      "primary_category": "cs.CL",
+      "arxiv_id": "2603.24579v1"
+    }
+  },
+  {
+    "title": "LATS: Large Language Model Assisted Teacher-Student Framework for Multi-Agent Reinforcement Learning in Traffic Signal Control",
+    "url": "https://arxiv.org/abs/2603.24361v1",
+    "source": "arxiv",
+    "summary": "Adaptive Traffic Signal Control (ATSC) aims to optimize traffic flow and minimize delays by adjusting traffic lights in real time. Recent advances in Multi-agent Reinforcement Learning (MARL) have shown promise for ATSC, yet existing approaches still suffer from limited representational capacity, often leading to suboptimal performance and poor generalization in complex and dynamic traffic environments. On the other hand, Large Language Models (LLMs) excel at semantic representation, reasoning, ",
+    "authors": [
+      "Yifeng Zhang",
+      "Peizhuo Li",
+      "Tingguang Zhou",
+      "Mingfeng Fan",
+      "Guillaume Sartoretti"
+    ],
+    "tags": ["cs.RO"],
+    "score": 0.0,
+    "published": "2026-03-25T14:42:32Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.24361v1",
+      "primary_category": "cs.RO",
+      "arxiv_id": "2603.24361v1"
+    }
+  },
+  {
+    "title": "From Pixels to Digital Agents: An Empirical Study on the Taxonomy and Technological Trends of Reinforcement Learning Environments",
+    "url": "https://arxiv.org/abs/2603.23964v1",
+    "source": "arxiv",
+    "summary": "The remarkable progress of reinforcement learning (RL) is intrinsically tied to the environments used to train and evaluate artificial agents. Moving beyond traditional qualitative reviews, this work presents a large-scale, data-driven empirical investigation into the evolution of RL environments. By programmatically processing a massive corpus of academic literature and rigorously distilling over 2,000 core publications, we propose a quantitative methodology to map the transition from isolated ",
+    "authors": [
+      "Lijing Luo",
+      "Yiben Luo",
+      "Alexey Gorbatovski",
+      "Sergey Kovalchuk",
+      "Xiaodan Liang"
+    ],
+    "tags": ["cs.AI"],
+    "score": 0.0,
+    "published": "2026-03-25T05:56:54Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.23964v1",
+      "primary_category": "cs.AI",
+      "arxiv_id": "2603.23964v1"
+    }
+  },
+  {
+    "title": "ProcureGym: A Multi-Agent Markov Game Framework for Modeling National Volume-based Drug Procurement",
+    "url": "https://arxiv.org/abs/2603.23880v1",
+    "source": "arxiv",
+    "summary": "In this paper, we introduce ProcureGym, an data-driven multi-agent simulation platform that models China's National Volume-Based drug Procurement (NVBP) as a Markov Game. Based on real-world data from 7 rounds of NVBP (covering 325 drugs and 2,267 firms), the platform establishes a high-fidelity simulation environment. Within this framework, we evaluate diverse agent models, including Reinforcement Learning (RL), Large Language Model (LLM), and Rule-based algorithms. Experimental results demonst",
+    "authors": [
+      "Jia Wang",
+      "Qian Xu",
+      "Xuanwen Ding",
+      "Zhuangqi Li",
+      "Chao He",
+      "Bao Liu",
+      "Zhongyu Wei"
+    ],
+    "tags": ["cs.SI"],
+    "score": 0.0,
+    "published": "2026-03-25T03:13:33Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.23880v1",
+      "primary_category": "cs.SI",
+      "arxiv_id": "2603.23880v1"
+    }
+  },
+  {
+    "title": "Demystifying Reinforcement Learning for Long-Horizon Tool-Using Agents: A Comprehensive Recipe",
+    "url": "https://arxiv.org/abs/2603.21972v1",
+    "source": "arxiv",
+    "summary": "Reinforcement Learning (RL) is essential for evolving Large Language Models (LLMs) into autonomous agents capable of long-horizon planning, yet a practical recipe for scaling RL in complex, multi-turn environments remains elusive. This paper presents a systematic empirical study using TravelPlanner, a challenging testbed requiring tool orchestration to satisfy multifaceted constraints. We decompose the agentic RL design space along 5 axes: reward shaping, model scaling, data composition, algorit",
+    "authors": [
+      "Xixi Wu",
+      "Qianguo Sun",
+      "Ruiyang Zhang",
+      "Chao Song",
+      "Junlong Wu",
+      "Yiyan Qi",
+      "Hong Cheng"
+    ],
+    "tags": ["cs.LG", "cs.CL"],
+    "score": 0.0,
+    "published": "2026-03-23T13:40:08Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.21972v1",
+      "primary_category": "cs.LG",
+      "arxiv_id": "2603.21972v1"
+    }
+  },
+  {
+    "title": "Counterfactual Credit Policy Optimization for Multi-Agent Collaboration",
+    "url": "https://arxiv.org/abs/2603.21563v1",
+    "source": "arxiv",
+    "summary": "Collaborative multi-agent large language models (LLMs) can solve complex reasoning tasks by decomposing roles and aggregating diverse hypotheses. Yet, reinforcement learning (RL) for such systems is often undermined by credit assignment: a shared global reward obscures individual contributions, inflating update variance and encouraging free-riding. We introduce Counterfactual Credit Policy Optimization (CCPO), a framework that assigns agent-specific learning signals by estimating each agent's ma",
+    "authors": [
+      "Zhongyi Li",
+      "Wan Tian",
+      "Yikun Ban",
+      "Jinju Chen",
+      "Huiming Zhang",
+      "Yang Liu",
+      "Fuzhen Zhuang"
+    ],
+    "tags": ["cs.AI"],
+    "score": 0.0,
+    "published": "2026-03-23T04:35:02Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.21563v1",
+      "primary_category": "cs.AI",
+      "arxiv_id": "2603.21563v1"
+    }
+  },
+  {
+    "title": "AI-Driven Multi-Agent Simulation of Stratified Polyamory Systems: A Computational Framework for Optimizing Social Reproductive Efficiency",
+    "url": "https://arxiv.org/abs/2603.20678v1",
+    "source": "arxiv",
+    "summary": "Contemporary societies face a severe crisis of demographic reproduction. Global fertility rates continue to decline precipitously, with East Asian nations exhibiting the most dramatic trends -- China's total fertility rate (TFR) fell to approximately 1.0 in 2023, while South Korea's dropped below 0.72. Simultaneously, the institution of marriage is undergoing structural disintegration: educated women rationally reject unions lacking both emotional fulfillment and economic security, while a growi",
+    "authors": ["Yicai Xing"],
+    "tags": ["cs.AI", "econ.GN"],
+    "score": 0.0,
+    "published": "2026-03-21T06:38:17Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.20678v1",
+      "primary_category": "cs.AI",
+      "arxiv_id": "2603.20678v1"
+    }
+  },
+  {
+    "title": "Cooperation and Exploitation in LLM Policy Synthesis for Sequential Social Dilemmas",
+    "url": "https://arxiv.org/abs/2603.19453v1",
+    "source": "arxiv",
+    "summary": "We study LLM policy synthesis: using a large language model to iteratively generate programmatic agent policies for multi-agent environments. Rather than training neural policies via reinforcement learning, our framework prompts an LLM to produce Python policy functions, evaluates them in self-play, and refines them using performance feedback across iterations. We investigate feedback engineering (the design of what evaluation information is shown to the LLM during refinement) comparing sparse f",
+    "authors": ["Víctor Gallego"],
+    "tags": ["cs.CL", "cs.GT"],
+    "score": 0.0,
+    "published": "2026-03-19T20:27:48Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.19453v1",
+      "primary_category": "cs.CL",
+      "arxiv_id": "2603.19453v1"
+    }
+  },
+  {
+    "title": "ProRL Agent: Rollout-as-a-Service for RL Training of Multi-Turn LLM Agents",
+    "url": "https://arxiv.org/abs/2603.18815v1",
+    "source": "arxiv",
+    "summary": "Multi-turn LLM agents are increasingly important for solving complex, interactive tasks, and reinforcement learning (RL) is a key ingredient for improving their long-horizon behavior. However, RL training requires generating large numbers of sandboxed rollout trajectories, and existing infrastructures often couple rollout orchestration with the training loop, making systems hard to migrate and maintain. Under the rollout-as-a-service philosophy, we present ProRL Agent , a scalable infrastructure",
+    "authors": [
+      "Hao Zhang",
+      "Mingjie Liu",
+      "Shaokun Zhang",
+      "Songyang Han",
+      "Jian Hu",
+      "Zhenghui Jin",
+      "Yuchi Zhang",
+      "Shizhe Diao",
+      "Ximing Lu",
+      "Binfeng Xu",
+      "Zhiding Yu",
+      "Jan Kautz",
+      "Yi Dong"
+    ],
+    "tags": ["cs.AI"],
+    "score": 0.0,
+    "published": "2026-03-19T12:08:51Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.18815v1",
+      "primary_category": "cs.AI",
+      "arxiv_id": "2603.18815v1"
+    }
+  },
+  {
+    "title": "Mi:dm K 2.5 Pro",
+    "url": "https://arxiv.org/abs/2603.18788v2",
+    "source": "arxiv",
+    "summary": "The evolving LLM landscape requires capabilities beyond simple text generation, prioritizing multi-step reasoning, long-context understanding, and agentic workflows. This shift challenges existing models in enterprise environments, especially in Korean-language and domain-specific scenarios where scaling is insufficient. We introduce Mi:dm K 2.5 Pro, a 32B parameter flagship LLM designed to address enterprise-grade complexity through reasoning-focused optimization.   Our methodology builds a rob",
+    "authors": ["KT Tech innovation Group"],
+    "tags": ["cs.CL", "cs.AI"],
+    "score": 0.0,
+    "published": "2026-03-19T11:37:06Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.18788v2",
+      "primary_category": "cs.CL",
+      "arxiv_id": "2603.18788v2"
+    }
+  },
+  {
+    "title": "Insight-V++: Towards Advanced Long-Chain Visual Reasoning with Multimodal Large Language Models",
+    "url": "https://arxiv.org/abs/2603.18118v1",
+    "source": "arxiv",
+    "summary": "Large Language Models (LLMs) have achieved remarkable reliability and advanced capabilities through extended test-time reasoning. However, extending these capabilities to Multi-modal Large Language Models (MLLMs) remains a significant challenge due to a critical scarcity of high-quality, long-chain reasoning data and optimized training pipelines. To bridge this gap, we present a unified multi-agent visual reasoning framework that systematically evolves from our foundational image-centric model, ",
+    "authors": ["Yuhao Dong", "Zuyan Liu", "Shulin Tian", "Yongming Rao", "Ziwei Liu"],
+    "tags": ["cs.CV", "cs.AI", "cs.LG"],
+    "score": 0.0,
+    "published": "2026-03-18T15:28:07Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.18118v1",
+      "primary_category": "cs.CV",
+      "arxiv_id": "2603.18118v1"
+    }
+  },
+  {
+    "title": "Post-Training Local LLM Agents for Linux Privilege Escalation with Verifiable Rewards",
+    "url": "https://arxiv.org/abs/2603.17673v1",
+    "source": "arxiv",
+    "summary": "LLM agents are increasingly relevant to research domains such as vulnerability discovery. Yet, the strongest systems remain closed and cloud-only, making them resource-intensive, difficult to reproduce, and unsuitable for work involving proprietary code or sensitive data. Consequently, there is an urgent need for small, local models that can perform security tasks under strict resource budgets, but methods for developing them remain underexplored. In this paper, we address this gap by proposing ",
+    "authors": ["Philipp Normann", "Andreas Happe", "Jürgen Cito", "Daniel Arp"],
+    "tags": ["cs.CR", "cs.AI"],
+    "score": 0.0,
+    "published": "2026-03-18T12:52:54Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.17673v1",
+      "primary_category": "cs.CR",
+      "arxiv_id": "2603.17673v1"
+    }
+  },
+  {
+    "title": "Complementary Reinforcement Learning",
+    "url": "https://arxiv.org/abs/2603.17621v1",
+    "source": "arxiv",
+    "summary": "Reinforcement Learning (RL) has emerged as a powerful paradigm for training LLM-based agents, yet remains limited by low sample efficiency, stemming not only from sparse outcome feedback but also from the agent's inability to leverage prior experience across episodes. While augmenting agents with historical experience offers a promising remedy, existing approaches suffer from a critical weakness: the experience distilled from history is either stored statically or fail to coevolve with the impro",
+    "authors": [
+      "Dilxat Muhtar",
+      "Jiashun Liu",
+      "Wei Gao",
+      "Weixun Wang",
+      "Shaopan Xiong",
+      "Ju Huang",
+      "Siran Yang",
+      "Wenbo Su",
+      "Jiamang Wang",
+      "Ling Pan",
+      "Bo Zheng"
+    ],
+    "tags": ["cs.LG", "cs.CL"],
+    "score": 0.0,
+    "published": "2026-03-18T11:38:01Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.17621v1",
+      "primary_category": "cs.LG",
+      "arxiv_id": "2603.17621v1"
+    }
+  },
+  {
+    "title": "SLEA-RL: Step-Level Experience Augmented Reinforcement Learning for Multi-Turn Agentic Training",
+    "url": "https://arxiv.org/abs/2603.18079v1",
+    "source": "arxiv",
+    "summary": "Large Language Model (LLM) agents have shown strong results on multi-turn tool-use tasks, yet they operate in isolation during training, failing to leverage experiences accumulated across episodes. Existing experience-augmented methods address this by organizing trajectories into retrievable libraries, but they retrieve experiences only once based on the initial task description and hold them constant throughout the episode. In multi-turn settings where observations change at every step, this st",
+    "authors": ["Prince Zizhuang Wang", "Shuli Jiang"],
+    "tags": ["cs.LG", "cs.AI"],
+    "score": 0.0,
+    "published": "2026-03-18T07:16:18Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.18079v1",
+      "primary_category": "cs.LG",
+      "arxiv_id": "2603.18079v1"
+    }
+  },
+  {
+    "title": "Learning to Present: Inverse Specification Rewards for Agentic Slide Generation",
+    "url": "https://arxiv.org/abs/2603.16839v1",
+    "source": "arxiv",
+    "summary": "Automated presentation generation remains a challenging task requiring coherent content creation, visual design, and audience-aware communication. This work proposes an OpenEnv-compatible reinforcement learning environment where LLM agents learn to research topics, plan content, and generate professional HTML slide presentations through tool use. We introduce a multi-component reward system combining structural validation, render quality assessment, LLM-based aesthetic scoring, content quality m",
+    "authors": ["Karthik Ragunath Ananda Kumar", "Subrahmanyam Arunachalam"],
+    "tags": ["cs.AI"],
+    "score": 0.0,
+    "published": "2026-03-17T17:45:53Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.16839v1",
+      "primary_category": "cs.AI",
+      "arxiv_id": "2603.16839v1"
+    }
+  },
+  {
+    "title": "MAC: Multi-Agent Constitution Learning",
+    "url": "https://arxiv.org/abs/2603.15968v1",
+    "source": "arxiv",
+    "summary": "Constitutional AI is a method to oversee and control LLMs based on a set of rules written in natural language. These rules are typically written by human experts, but could in principle be learned automatically given sufficient training data for the desired behavior. Existing LLM-based prompt optimizers attempt this but are ineffective at learning constitutions since (i) they require many labeled examples and (ii) lack structure in the optimized prompts, leading to diminishing improvements as pr",
+    "authors": ["Rushil Thareja", "Gautam Gupta", "Francesco Pinto", "Nils Lukas"],
+    "tags": ["cs.AI", "cs.CL", "cs.LG", "cs.MA"],
+    "score": 0.0,
+    "published": "2026-03-16T22:42:07Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.15968v1",
+      "primary_category": "cs.AI",
+      "arxiv_id": "2603.15968v1"
+    }
+  },
+  {
+    "title": "SAGE: Multi-Agent Self-Evolution for LLM Reasoning",
+    "url": "https://arxiv.org/abs/2603.15255v2",
+    "source": "arxiv",
+    "summary": "Reinforcement learning with verifiable rewards improves reasoning in large language models (LLMs), but many methods still rely on large human-labeled datasets. While self-play reduces this dependency, it often lacks explicit planning and strong quality control, limiting stability in long-horizon multi-step reasoning. We present SAGE (Self-evolving Agents for Generalized reasoning Evolution), a closed-loop framework where four agents: Challenger, Planner, Solver, and Critic, co-evolve from a shar",
+    "authors": [
+      "Yulin Peng",
+      "Xinxin Zhu",
+      "Chenxing Wei",
+      "Nianbo Zeng",
+      "Leilei Wang",
+      "Ying Tiffany He",
+      "F. Richard Yu"
+    ],
+    "tags": ["cs.AI", "cs.MA"],
+    "score": 0.0,
+    "published": "2026-03-16T13:24:20Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.15255v2",
+      "primary_category": "cs.AI",
+      "arxiv_id": "2603.15255v2"
+    }
+  },
+  {
+    "title": "Writer-R1: Enhancing Generative Writing in LLMs via Memory-augmented Replay Policy Optimization",
+    "url": "https://arxiv.org/abs/2603.15061v1",
+    "source": "arxiv",
+    "summary": "As a typical open-ended generation task, creative writing lacks verifiable reference answers, which has long constrained reward modeling and automatic evaluation due to high human annotation costs, evaluative bias, and coarse feedback signals. To address these challenges, this paper first designs a multi-agent collaborative workflow based on Grounded Theory, performing dimensional decomposition and hierarchical induction of the problem to dynamically produce interpretable and reusable fine-grain",
+    "authors": ["Jihao Zhao", "Shuaishuai Zu", "Zhiyuan Ji", "Chunlai Zhou", "Biao Qin"],
+    "tags": ["cs.CL"],
+    "score": 0.0,
+    "published": "2026-03-16T10:18:20Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.15061v1",
+      "primary_category": "cs.CL",
+      "arxiv_id": "2603.15061v1"
+    }
+  },
+  {
+    "title": "Shopping Companion: A Memory-Augmented LLM Agent for Real-World E-Commerce Tasks",
+    "url": "https://arxiv.org/abs/2603.14864v1",
+    "source": "arxiv",
+    "summary": "In e-commerce, LLM agents show promise for shopping tasks such as recommendations, budgeting, and bundle deals, where accurately capturing user preferences from long-term conversations is critical. However, two challenges hinder realizing this potential: (1) the absence of benchmarks for evaluating long-term preference-aware shopping tasks, and (2) the lack of end-to-end optimization due to existing designs that treat preference identification and shopping assistance as separate components. In t",
+    "authors": ["Zijian Yu", "Kejun Xiao", "Huaipeng Zhao", "Tao Luo", "Xiaoyi Zeng"],
+    "tags": ["cs.CL"],
+    "score": 0.0,
+    "published": "2026-03-16T06:07:52Z",
+    "extra": {
+      "pdf_url": "https://arxiv.org/pdf/2603.14864v1",
+      "primary_category": "cs.CL",
+      "arxiv_id": "2603.14864v1"
+    }
+  }
+]

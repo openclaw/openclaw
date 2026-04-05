@@ -1,0 +1,496 @@
+[
+  {
+    "title": "Explainable Artificial Intelligence (XAI): Concepts, taxonomies, opportunities and challenges toward responsible AI",
+    "url": "https://doi.org/10.1016/j.inffus.2019.12.012",
+    "source": "openalex",
+    "summary": "",
+    "authors": [
+      "Alejandro Barredo Arrieta",
+      "Natalia Díaz-Rodríguez",
+      "Javier Del Ser",
+      "Adrien Bennetot",
+      "Siham Tabik",
+      "Alberto Barbado",
+      "Salvador García",
+      "Sergio Gil-López",
+      "Daniel Molina",
+      "Richard Benjamins"
+    ],
+    "tags": [
+      "Computer science",
+      "Artificial intelligence",
+      "Taxonomy (biology)",
+      "Field (mathematics)",
+      "Software deployment"
+    ],
+    "score": 8324.0,
+    "published": "2019-12-26",
+    "extra": {
+      "citations": 8324,
+      "oa_url": "https://arxiv.org/pdf/1910.10045",
+      "venue": "Information Fusion",
+      "openalex_id": "https://openalex.org/W2981731882"
+    }
+  },
+  {
+    "title": "Review of deep learning: concepts, CNN architectures, challenges, applications, future directions",
+    "url": "https://doi.org/10.1186/s40537-021-00444-8",
+    "source": "openalex",
+    "summary": "",
+    "authors": [
+      "Laith Alzubaidi",
+      "Jinglan Zhang",
+      "Amjad J. Humaidi",
+      "Ayad Q. Al-Dujaili",
+      "Ye Duan",
+      "Omran Al-Shamma",
+      "José Santamaría",
+      "Mohammed A. Fadhel",
+      "Muthana Al‐Amidie",
+      "Laith Farhan"
+    ],
+    "tags": [
+      "Computer science",
+      "Artificial intelligence",
+      "Field (mathematics)",
+      "Deep learning",
+      "Convolutional neural network"
+    ],
+    "score": 7176.0,
+    "published": "2021-03-31",
+    "extra": {
+      "citations": 7176,
+      "oa_url": "https://journalofbigdata.springeropen.com/counter/pdf/10.1186/s40537-021-00444-8",
+      "venue": "Journal Of Big Data",
+      "openalex_id": "https://openalex.org/W3140854437"
+    }
+  },
+  {
+    "title": "Advances and Open Problems in Federated Learning",
+    "url": "https://doi.org/10.1561/2200000083",
+    "source": "openalex",
+    "summary": "",
+    "authors": [
+      "Peter Kairouz",
+      "H. Brendan McMahan",
+      "Brendan Avent",
+      "Aurélien Bellet",
+      "Mehdi Bennis",
+      "Arjun Nitin Bhagoji",
+      "Kallista Bonawitz",
+      "Zachary Charles",
+      "Graham Cormode",
+      "Rachel Cummings"
+    ],
+    "tags": [
+      "Orchestration",
+      "Computer science",
+      "Data collection",
+      "Federated learning",
+      "Open research"
+    ],
+    "score": 4353.0,
+    "published": "2020-12-02",
+    "extra": {
+      "citations": 4353,
+      "oa_url": "https://arxiv.org/pdf/1912.04977",
+      "venue": "Foundations and Trends® in Machine Learning",
+      "openalex_id": "https://openalex.org/W2995022099"
+    }
+  },
+  {
+    "title": "A Survey of Collaborative Filtering Techniques",
+    "url": "https://doi.org/10.1155/2009/421425",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Xiaoyuan Su", "Taghi M. Khoshgoftaar"],
+    "tags": [
+      "Computer science",
+      "Collaborative filtering",
+      "Scalability",
+      "Recommender system",
+      "Data science"
+    ],
+    "score": 3582.0,
+    "published": "2009-10-27",
+    "extra": {
+      "citations": 3582,
+      "oa_url": "https://downloads.hindawi.com/archive/2009/421425.pdf",
+      "venue": "Advances in Artificial Intelligence",
+      "openalex_id": "https://openalex.org/W2100235918"
+    }
+  },
+  {
+    "title": "Internet of things: Vision, applications and research challenges",
+    "url": "https://doi.org/10.1016/j.adhoc.2012.02.016",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Daniele Miorandi", "Sabrina Sicari", "Francesco De Pellegrini", "Imrich Chlamtac"],
+    "tags": [
+      "Software deployment",
+      "The Internet",
+      "Realm",
+      "Computer science",
+      "Internet of Things"
+    ],
+    "score": 3529.0,
+    "published": "2012-04-21",
+    "extra": {
+      "citations": 3529,
+      "oa_url": "https://www.sciencedirect.com/science/article/pii/S1570870512000674",
+      "venue": "Ad Hoc Networks",
+      "openalex_id": "https://openalex.org/W2119046642"
+    }
+  },
+  {
+    "title": "Opinion Paper: “So what if ChatGPT wrote it?” Multidisciplinary perspectives on opportunities, challenges and implications of generative conversational AI for research, practice and policy",
+    "url": "https://doi.org/10.1016/j.ijinfomgt.2023.102642",
+    "source": "openalex",
+    "summary": "",
+    "authors": [
+      "Yogesh K. Dwivedi",
+      "Nir Kshetri",
+      "Laurie Hughes",
+      "Emma Slade",
+      "Anand Jeyaraj",
+      "Arpan Kumar Kar",
+      "Abdullah M. Baabdullah",
+      "Alex Koohang",
+      "Vishnupriya Raghavan",
+      "Manju Ahuja"
+    ],
+    "tags": [
+      "Transformative learning",
+      "Generative grammar",
+      "Knowledge management",
+      "Hospitality",
+      "Engineering ethics"
+    ],
+    "score": 3348.0,
+    "published": "2023-03-11",
+    "extra": {
+      "citations": 3348,
+      "oa_url": "https://linkinghub.elsevier.com/science/article/pii/S0268401223000233/pdfft?md5=492895056a2fa29b1cb81876a1c57544&pid=1-s2.0-S0268401223000233-main.pdf",
+      "venue": "International Journal of Information Management",
+      "openalex_id": "https://openalex.org/W4360620450"
+    }
+  },
+  {
+    "title": "Text Classification from Labeled and Unlabeled Documents using EM",
+    "url": "https://doi.org/10.1023/a:1007692713085",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Kamal Nigam", "Andrew Kachites McCallum", "Sebastian Thrun", "Tom M. Mitchell"],
+    "tags": [
+      "Computer science",
+      "Classifier (UML)",
+      "Artificial intelligence",
+      "Iterated function",
+      "Weighting"
+    ],
+    "score": 2735.0,
+    "published": "2000-05-01",
+    "extra": {
+      "citations": 2735,
+      "oa_url": "https://link.springer.com/content/pdf/10.1023/A:1007692713085.pdf",
+      "venue": "Machine Learning",
+      "openalex_id": "https://openalex.org/W2097089247"
+    }
+  },
+  {
+    "title": "Unsupervised Learning by Probabilistic Latent Semantic Analysis",
+    "url": "https://doi.org/10.1023/a:1007617005950",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Thomas Hofmann"],
+    "tags": [
+      "Probabilistic latent semantic analysis",
+      "Computer science",
+      "Perplexity",
+      "Artificial intelligence",
+      "Probabilistic logic"
+    ],
+    "score": 2458.0,
+    "published": "2001-01-01",
+    "extra": {
+      "citations": 2458,
+      "oa_url": "https://link.springer.com/content/pdf/10.1023/A:1007617005950.pdf",
+      "venue": "Machine Learning",
+      "openalex_id": "https://openalex.org/W2134731454"
+    }
+  },
+  {
+    "title": "Machine learning and deep learning",
+    "url": "https://doi.org/10.1007/s12525-021-00475-2",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Christian Janiesch", "Patrick Zschech", "Kai Heinrich"],
+    "tags": [
+      "Artificial intelligence",
+      "Machine learning",
+      "Deep learning",
+      "Computer science",
+      "Field (mathematics)"
+    ],
+    "score": 2322.0,
+    "published": "2021-04-08",
+    "extra": {
+      "citations": 2322,
+      "oa_url": "https://link.springer.com/content/pdf/10.1007/s12525-021-00475-2.pdf",
+      "venue": "Electronic Markets",
+      "openalex_id": "https://openalex.org/W3153990350"
+    }
+  },
+  {
+    "title": "FGF-21 as a novel metabolic regulator",
+    "url": "https://doi.org/10.1172/jci23606",
+    "source": "openalex",
+    "summary": "",
+    "authors": [
+      "Alexei Kharitonenkov",
+      "Tatiyana L. Shiyanova",
+      "Anja Köester",
+      "Amy Ford",
+      "Radmila Micanovic",
+      "Elizabeth J. Galbreath",
+      "George E. Sandusky",
+      "Lisa J. Hammond",
+      "Julie S. Moyers",
+      "Rebecca A. Owens"
+    ],
+    "tags": [
+      "FGF21",
+      "Fibroblast growth factor",
+      "Diabetes mellitus",
+      "Regulator",
+      "Genetically modified mouse"
+    ],
+    "score": 2063.0,
+    "published": "2005-05-03",
+    "extra": {
+      "citations": 2063,
+      "oa_url": "http://www.jci.org/articles/view/23606/files/pdf",
+      "venue": "Journal of Clinical Investigation",
+      "openalex_id": "https://openalex.org/W2000665430"
+    }
+  },
+  {
+    "title": "A Diversity-Promoting Objective Function for Neural Conversation Models",
+    "url": "https://doi.org/10.18653/v1/n16-1014",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Jiwei Li", "Michel Galley", "Chris Brockett", "Jianfeng Gao", "Bill Dolan"],
+    "tags": [
+      "Conversation",
+      "Computer science",
+      "Function (biology)",
+      "Sequence (biology)",
+      "Artificial neural network"
+    ],
+    "score": 1998.0,
+    "published": "2016-01-01",
+    "extra": {
+      "citations": 1998,
+      "oa_url": "https://www.aclweb.org/anthology/N16-1014.pdf",
+      "venue": "",
+      "openalex_id": "https://openalex.org/W2963206148"
+    }
+  },
+  {
+    "title": "Automation and New Tasks: How Technology Displaces and Reinstates Labor",
+    "url": "https://doi.org/10.1257/jep.33.2.3",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Daron Acemoğlu", "Pascual Restrepo"],
+    "tags": [
+      "Productivity",
+      "Labour economics",
+      "Automation",
+      "Production (economics)",
+      "Economics"
+    ],
+    "score": 1985.0,
+    "published": "2019-05-01",
+    "extra": {
+      "citations": 1985,
+      "oa_url": "https://www.aeaweb.org/articles/pdf/doi/10.1257/jep.33.2.3",
+      "venue": "The Journal of Economic Perspectives",
+      "openalex_id": "https://openalex.org/W2922903482"
+    }
+  },
+  {
+    "title": "Adaptive Hypermedia",
+    "url": "https://doi.org/10.1023/a:1011143116306",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Peter Brusilovsky"],
+    "tags": [
+      "Adaptive hypermedia",
+      "Hypermedia",
+      "Computer science",
+      "User modeling",
+      "Human–computer interaction"
+    ],
+    "score": 1957.0,
+    "published": "2001-03-01",
+    "extra": {
+      "citations": 1957,
+      "oa_url": "https://link.springer.com/content/pdf/10.1023/A:1011143116306.pdf",
+      "venue": "User Modeling and User-Adapted Interaction",
+      "openalex_id": "https://openalex.org/W2913293464"
+    }
+  },
+  {
+    "title": "A Metaverse: Taxonomy, Components, Applications, and Open Challenges",
+    "url": "https://doi.org/10.1109/access.2021.3140175",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Sangmin Park", "Young‐Gab Kim"],
+    "tags": [
+      "Computer science",
+      "Taxonomy (biology)",
+      "Metaverse",
+      "Data science",
+      "World Wide Web"
+    ],
+    "score": 1697.0,
+    "published": "2022-01-01",
+    "extra": {
+      "citations": 1697,
+      "oa_url": "https://ieeexplore.ieee.org/ielx7/6287639/9668973/09667507.pdf",
+      "venue": "IEEE Access",
+      "openalex_id": "https://openalex.org/W4206484811"
+    }
+  },
+  {
+    "title": "Geographic information systems and science",
+    "url": "https://doi.org/10.1080/17538947.2011.582276",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Rocha, Jorge", "Abrantes, Patrícia"],
+    "tags": [
+      "Geovisualization",
+      "Geographic information system",
+      "Data science",
+      "Field (mathematics)",
+      "GIS and public health"
+    ],
+    "score": 1695.0,
+    "published": "2011-06-22",
+    "extra": {
+      "citations": 1695,
+      "oa_url": "https://www.tandfonline.com/doi/epdf/10.1080/17538947.2011.582276?needAccess=true&role=button",
+      "venue": "International Journal of Digital Earth",
+      "openalex_id": "https://openalex.org/W2512173100"
+    }
+  },
+  {
+    "title": "Natural language processing: state of the art, current trends and challenges",
+    "url": "https://doi.org/10.1007/s11042-022-13428-4",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Diksha Khurana", "Aditya Koli", "Kiran Khatter", "Sukhdev Singh"],
+    "tags": [
+      "Automatic summarization",
+      "Computer science",
+      "Natural language processing",
+      "Machine translation",
+      "Artificial intelligence"
+    ],
+    "score": 1652.0,
+    "published": "2022-07-14",
+    "extra": {
+      "citations": 1652,
+      "oa_url": "https://link.springer.com/content/pdf/10.1007/s11042-022-13428-4.pdf",
+      "venue": "Multimedia Tools and Applications",
+      "openalex_id": "https://openalex.org/W2747680751"
+    }
+  },
+  {
+    "title": "Text Data Augmentation for Deep Learning",
+    "url": "https://doi.org/10.1186/s40537-021-00492-0",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Connor Shorten", "Taghi M. Khoshgoftaar", "Borko Furht"],
+    "tags": [
+      "Computer science",
+      "Computational Science and Engineering",
+      "Deep learning",
+      "Artificial intelligence",
+      "Data science"
+    ],
+    "score": 1647.0,
+    "published": "2021-07-19",
+    "extra": {
+      "citations": 1647,
+      "oa_url": "https://journalofbigdata.springeropen.com/track/pdf/10.1186/s40537-021-00492-0",
+      "venue": "Journal Of Big Data",
+      "openalex_id": "https://openalex.org/W3176923149"
+    }
+  },
+  {
+    "title": "A Survey of Augmented Reality Technologies, Applications and Limitations",
+    "url": "https://doi.org/10.20870/ijvr.2010.9.2.2767",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["D. W. F. van Krevelen", "Ronald Poelman"],
+    "tags": ["Augmented reality", "Computer science", "Data science", "Human–computer interaction"],
+    "score": 1634.0,
+    "published": "2010-01-01",
+    "extra": {
+      "citations": 1634,
+      "oa_url": "https://ijvr.eu/article/download/2767/8825",
+      "venue": "International Journal of Virtual Reality",
+      "openalex_id": "https://openalex.org/W2944523811"
+    }
+  },
+  {
+    "title": "Digital Twin: Values, Challenges and Enablers From a Modeling Perspective",
+    "url": "https://doi.org/10.1109/access.2020.2970143",
+    "source": "openalex",
+    "summary": "",
+    "authors": ["Adil Rasheed", "Omer San", "Trond Kvamsdal"],
+    "tags": [
+      "Computer science",
+      "Data science",
+      "Big data",
+      "Perspective (graphical)",
+      "Data sharing"
+    ],
+    "score": 1594.0,
+    "published": "2020-01-01",
+    "extra": {
+      "citations": 1594,
+      "oa_url": "https://ieeexplore.ieee.org/ielx7/6287639/8948470/08972429.pdf",
+      "venue": "IEEE Access",
+      "openalex_id": "https://openalex.org/W3003667836"
+    }
+  },
+  {
+    "title": "Limbic-predominant age-related TDP-43 encephalopathy (LATE): consensus working group report",
+    "url": "https://doi.org/10.1093/brain/awz099",
+    "source": "openalex",
+    "summary": "",
+    "authors": [
+      "Peter T. Nelson",
+      "Dennis W. Dickson",
+      "John Q. Trojanowski",
+      "Clifford R. Jack",
+      "Patricia A. Boyle",
+      "Konstantinos Arfanakis",
+      "Rosa Rademakers",
+      "Irina Alafuzoff",
+      "Johannes Attems",
+      "Carol Brayne"
+    ],
+    "tags": ["Encephalopathy", "Psychology", "Medicine", "Neuroscience", "Psychiatry"],
+    "score": 1484.0,
+    "published": "2019-03-22",
+    "extra": {
+      "citations": 1484,
+      "oa_url": "https://academic.oup.com/brain/article-pdf/142/6/1503/28706531/awz099.pdf",
+      "venue": "Brain",
+      "openalex_id": "https://openalex.org/W2943828894"
+    }
+  }
+]

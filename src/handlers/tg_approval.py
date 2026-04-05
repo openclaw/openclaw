@@ -19,7 +19,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 if TYPE_CHECKING:
     from aiogram import Bot
 
-from src.llm_gateway import ApprovalRequest, resolve_approval
+from src.llm.gateway import ApprovalRequest, resolve_approval
 
 logger = structlog.get_logger("HITL.TelegramApproval")
 

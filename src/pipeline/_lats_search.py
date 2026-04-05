@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 
-from src.llm_gateway import route_llm
+from src.llm.gateway import route_llm
 from src.pipeline_utils import _CRITICAL_EXECUTION_DIRECTIVES
 
 logger = structlog.get_logger("LATS")

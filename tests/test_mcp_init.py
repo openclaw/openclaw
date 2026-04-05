@@ -7,7 +7,7 @@ from src.pipeline_executor import PipelineExecutor
 
 async def main():
     cfg = json.load(open("config/openclaw_config.json", encoding="utf-8"))
-    pipeline = PipelineExecutor(config=cfg, vllm_url="http://localhost:8000/v1")
+    pipeline = PipelineExecutor(config=cfg)
     
     print("Initializing...")
     await pipeline.initialize()
