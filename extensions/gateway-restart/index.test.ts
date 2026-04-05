@@ -1,3 +1,4 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 
@@ -21,7 +22,9 @@ vi.mock("node:child_process", () => ({
 }));
 
 // Suppress process.exit in tool execute
-vi.spyOn(global, "setTimeout").mockImplementation(() => 0 as unknown as ReturnType<typeof setTimeout>);
+vi.spyOn(global, "setTimeout").mockImplementation(
+  () => 0 as unknown as ReturnType<typeof setTimeout>,
+);
 
 import gatewayRestartPlugin from "./index.js";
 
@@ -46,7 +49,7 @@ function createApi() {
       state: {
         resolveStateDir: vi.fn().mockReturnValue(STATE_DIR),
       },
-    } as unknown as Parameters<typeof createTestPluginApi>[0]["runtime"],
+    } as unknown as OpenClawPluginApi["runtime"],
     registerTool,
     registerService,
   });
