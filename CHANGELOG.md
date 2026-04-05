@@ -37,7 +37,7 @@ Docs: https://docs.openclaw.ai
 - Providers/request overrides: add shared model and media request transport overrides across OpenAI-, Anthropic-, Google-, and compatible provider paths, including headers, auth, proxy, and TLS controls. (#60200)
 - Providers/StepFun: add the bundled StepFun provider plugin with standard and Step Plan endpoints, China/global onboarding choices, `step-3.5-flash` on both catalogs, and `step-3.5-flash-2603` currently exposed on Step Plan. (#60032) Thanks @hengm3467.
 - Tools/web_search: add a bundled MiniMax Search provider backed by the Coding Plan search API, with region reuse from `MINIMAX_API_HOST` and plugin-owned credential config. (#54648) Thanks @fengmk2.
-- ACPX/runtime: embed the ACP runtime directly in the bundled `acpx` plugin, remove the extra external ACP CLI hop, and harden live ACP session binding and reuse. (#61319) Thanks @steipete.
+- ACPX/runtime: embed the ACP runtime directly in the bundled `acpx` plugin, remove the extra external ACP CLI hop, and harden live ACP session binding and reuse. (#61319)
 
 ### Fixes
 
