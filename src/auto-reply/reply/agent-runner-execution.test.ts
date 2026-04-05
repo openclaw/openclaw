@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import { MAX_LIVE_SWITCH_RETRIES } from "./agent-runner-execution.js";
 import type { FollowupRun } from "./queue.js";
+import type { ReplyOperation } from "./reply-operation.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 const state = vi.hoisted(() => ({
@@ -179,6 +181,37 @@ function createFollowupRun(): FollowupRun {
       blockReplyBreak: "message_end",
     },
   } as unknown as FollowupRun;
+}
+
+function createMockReplyOperation(): {
+  replyOperation: ReplyOperation;
+  failMock: ReturnType<typeof vi.fn>;
+} {
+  const failMock = vi.fn();
+  return {
+    failMock,
+    replyOperation: {
+      sessionId: "session",
+      sessionKey: "main",
+      abortSignal: new AbortController().signal,
+      resetTriggered: false,
+      phase: "running",
+      result: null,
+      registryHandle: {
+        queueMessage: vi.fn(async () => {}),
+        isStreaming: () => false,
+        isCompacting: () => false,
+        abort: vi.fn(),
+      },
+      setPhase: vi.fn(),
+      moveSession: vi.fn(),
+      attachEmbeddedHandle: vi.fn(),
+      detachEmbeddedHandle: vi.fn(),
+      complete: vi.fn(),
+      fail: failMock,
+      abortByUser: vi.fn(),
+    },
+  };
 }
 
 describe("runAgentTurnWithFallback", () => {
@@ -730,6 +763,113 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.payload.text).toContain("Something went wrong while processing your request");
       expect(result.payload.text).not.toContain("Rate-limited");
     }
+  });
+
+  it("surfaces gateway restart text when fallback exhaustion wraps a drain error", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(new Error("fallback exhausted"), {
+        name: "FallbackSummaryError",
+        attempts: [
+          {
+            provider: "anthropic",
+            model: "claude",
+            error: new GatewayDrainingError(),
+          },
+        ],
+        soonestCooldownExpiry: null,
+        cause: new GatewayDrainingError(),
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      replyOperation,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+      );
+    }
+    expect(failMock).toHaveBeenCalledWith("gateway_draining", expect.any(GatewayDrainingError));
+  });
+
+  it("surfaces gateway restart text when fallback exhaustion wraps a cleared lane error", async () => {
+    const { replyOperation, failMock } = createMockReplyOperation();
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(new Error("fallback exhausted"), {
+        name: "FallbackSummaryError",
+        attempts: [
+          {
+            provider: "anthropic",
+            model: "claude",
+            error: new CommandLaneClearedError("session:main"),
+          },
+        ],
+        soonestCooldownExpiry: null,
+        cause: new CommandLaneClearedError("session:main"),
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      replyOperation,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+      );
+    }
+    expect(failMock).toHaveBeenCalledWith(
+      "command_lane_cleared",
+      expect.any(CommandLaneClearedError),
+    );
   });
 
   it("returns a friendly generic error on external chat channels", async () => {

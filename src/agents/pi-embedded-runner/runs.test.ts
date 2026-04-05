@@ -9,6 +9,7 @@ import {
   isEmbeddedPiRunActive,
   moveActiveEmbeddedRun,
   requestEmbeddedRunModelSwitch,
+  resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
   waitForActiveEmbeddedRuns,
@@ -205,6 +206,7 @@ describe("pi-embedded runner run registry", () => {
 
       expect(isEmbeddedPiRunActive("session-old")).toBe(false);
       expect(isEmbeddedPiRunActive("session-new")).toBe(true);
+      expect(resolveActiveEmbeddedRunSessionId("main")).toBe("session-new");
       expect(getActiveEmbeddedRunSnapshot("session-old")).toBeUndefined();
       expect(getActiveEmbeddedRunSnapshot("session-new")).toEqual({
         transcriptLeafId: "leaf-1",
@@ -233,5 +235,28 @@ describe("pi-embedded runner run registry", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("does not overwrite another active run when a rotated session id is already occupied", () => {
+    const oldHandle = createRunHandle();
+    const occupiedHandle = createRunHandle();
+
+    setActiveEmbeddedRun("session-old", oldHandle, "main");
+    setActiveEmbeddedRun("session-new", occupiedHandle, "other");
+
+    expect(
+      moveActiveEmbeddedRun({
+        fromSessionId: "session-old",
+        toSessionId: "session-new",
+        handle: oldHandle,
+        fromSessionKey: "main",
+        toSessionKey: "main",
+      }),
+    ).toBe(false);
+
+    expect(isEmbeddedPiRunActive("session-old")).toBe(true);
+    expect(isEmbeddedPiRunActive("session-new")).toBe(true);
+    expect(resolveActiveEmbeddedRunSessionId("main")).toBe("session-old");
+    expect(resolveActiveEmbeddedRunSessionId("other")).toBe("session-new");
   });
 });

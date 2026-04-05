@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
+import type { SessionEntry } from "../../config/sessions/types.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -9,6 +10,7 @@ vi.mock("../../agents/pi-embedded.runtime.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+  resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   resolveEmbeddedSessionLane: vi.fn().mockReturnValue("session:session-key"),
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(true),
 }));
@@ -105,6 +107,8 @@ let getActiveEmbeddedRunCount: typeof import("../../agents/pi-embedded-runner/ru
 let abortEmbeddedPiRun: typeof import("../../agents/pi-embedded-runner/runs.js").abortEmbeddedPiRun;
 let clearActiveEmbeddedRun: typeof import("../../agents/pi-embedded-runner/runs.js").clearActiveEmbeddedRun;
 let isEmbeddedPiRunActiveActual: typeof import("../../agents/pi-embedded-runner/runs.js").isEmbeddedPiRunActive;
+let moveActiveEmbeddedRun: typeof import("../../agents/pi-embedded-runner/runs.js").moveActiveEmbeddedRun;
+let resolveActiveEmbeddedRunSessionIdActual: typeof import("../../agents/pi-embedded-runner/runs.js").resolveActiveEmbeddedRunSessionId;
 let setActiveEmbeddedRun: typeof import("../../agents/pi-embedded-runner/runs.js").setActiveEmbeddedRun;
 let runsTesting: typeof import("../../agents/pi-embedded-runner/runs.js").__testing;
 let resetActiveEmbeddedRuns: typeof import("../../agents/pi-embedded-runner/runs.js").__testing.resetActiveEmbeddedRuns;
@@ -211,6 +215,8 @@ describe("runPreparedReply media-only handling", () => {
       abortEmbeddedPiRun,
       clearActiveEmbeddedRun,
       isEmbeddedPiRunActive: isEmbeddedPiRunActiveActual,
+      moveActiveEmbeddedRun,
+      resolveActiveEmbeddedRunSessionId: resolveActiveEmbeddedRunSessionIdActual,
       setActiveEmbeddedRun,
     } = await import("../../agents/pi-embedded-runner/runs.js"));
     resetActiveEmbeddedRuns = () => {
@@ -396,6 +402,9 @@ describe("runPreparedReply media-only handling", () => {
       isEmbeddedPiRunActiveActual(sessionId),
     );
     vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValue(false);
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockImplementation((sessionKey) =>
+      resolveActiveEmbeddedRunSessionIdActual(sessionKey),
+    );
     vi.mocked(piRuntime.waitForEmbeddedPiRunEnd).mockImplementationOnce(
       async () => await waitPromise,
     );
@@ -423,6 +432,91 @@ describe("runPreparedReply media-only handling", () => {
 
     await expect(runPromise).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+  });
+  it("re-resolves same-session ownership after session-id rotation during async prep", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const queueSettings = await import("./queue/settings.js");
+
+    let resolveAuth!: () => void;
+    const authPromise = new Promise<void>((resolve) => {
+      resolveAuth = resolve;
+    });
+    let resolveWait!: (value: boolean) => void;
+    const waitPromise = new Promise<boolean>((resolve) => {
+      resolveWait = resolve;
+    });
+    const rotatedHandle = {
+      queueMessage: vi.fn(async () => {}),
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": {
+        sessionId: "session-before-rotation",
+        sessionFile: "/tmp/session-before-rotation.jsonl",
+        updatedAt: 1,
+      },
+    };
+
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(
+      async () => await authPromise.then(() => undefined),
+    );
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockImplementation((sessionId) =>
+      isEmbeddedPiRunActiveActual(sessionId),
+    );
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValue(false);
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockImplementation((sessionKey) =>
+      resolveActiveEmbeddedRunSessionIdActual(sessionKey),
+    );
+    vi.mocked(piRuntime.waitForEmbeddedPiRunEnd).mockImplementationOnce(
+      async () => await waitPromise,
+    );
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-before-rotation",
+        sessionEntry: sessionStore["session-key"],
+        sessionStore,
+      }),
+    );
+
+    await Promise.resolve();
+    setActiveEmbeddedRun("session-before-rotation", rotatedHandle, "session-key");
+    sessionStore["session-key"] = {
+      ...sessionStore["session-key"],
+      sessionId: "session-after-rotation",
+      sessionFile: "/tmp/session-after-rotation.jsonl",
+      updatedAt: 2,
+    };
+    expect(
+      moveActiveEmbeddedRun({
+        fromSessionId: "session-before-rotation",
+        toSessionId: "session-after-rotation",
+        handle: rotatedHandle,
+        fromSessionKey: "session-key",
+        toSessionKey: "session-key",
+      }),
+    ).toBe(true);
+
+    resolveAuth();
+
+    await Promise.resolve();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+    expect(vi.mocked(piRuntime.waitForEmbeddedPiRunEnd)).toHaveBeenCalledWith(
+      "session-after-rotation",
+    );
+
+    clearActiveEmbeddedRun("session-after-rotation", rotatedHandle, "session-key");
+    resolveWait(true);
+
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
   });
   it("uses inbound origin channel for run messageProvider", async () => {
     await runPreparedReply(

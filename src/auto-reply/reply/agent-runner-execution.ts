@@ -414,6 +414,37 @@ function buildRestartLifecycleReplyText(): string {
   return "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 }
 
+function resolveRestartLifecycleError(
+  err: unknown,
+): GatewayDrainingError | CommandLaneClearedError | undefined {
+  const pending = [err];
+  const seen = new Set<unknown>();
+
+  while (pending.length > 0) {
+    const candidate = pending.shift();
+    if (!candidate || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+
+    if (candidate instanceof GatewayDrainingError || candidate instanceof CommandLaneClearedError) {
+      return candidate;
+    }
+
+    if (isFallbackSummaryError(candidate)) {
+      for (const attempt of candidate.attempts) {
+        pending.push(attempt.error);
+      }
+    }
+
+    if (candidate instanceof Error && "cause" in candidate) {
+      pending.push(candidate.cause);
+    }
+  }
+
+  return undefined;
+}
+
 function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
   return replyOperation?.result?.kind === "aborted";
 }
@@ -706,6 +737,7 @@ export async function runAgentTurnWithFallback(params: {
                   imageOrder: params.opts?.imageOrder,
                   messageProvider: params.followupRun.run.messageProvider,
                   agentAccountId: params.followupRun.run.agentAccountId,
+                  abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
@@ -1182,8 +1214,9 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (err instanceof GatewayDrainingError) {
-        params.replyOperation?.fail("gateway_draining", err);
+      const restartLifecycleError = resolveRestartLifecycleError(err);
+      if (restartLifecycleError instanceof GatewayDrainingError) {
+        params.replyOperation?.fail("gateway_draining", restartLifecycleError);
         return {
           kind: "final",
           payload: {
@@ -1192,8 +1225,8 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (err instanceof CommandLaneClearedError) {
-        params.replyOperation?.fail("command_lane_cleared", err);
+      if (restartLifecycleError instanceof CommandLaneClearedError) {
+        params.replyOperation?.fail("command_lane_cleared", restartLifecycleError);
         return {
           kind: "final",
           payload: {

@@ -32,6 +32,7 @@ export type RunCliAgentParams = {
   imageOrder?: PromptImageOrderEntry[];
   messageProvider?: string;
   agentAccountId?: string;
+  abortSignal?: AbortSignal;
 };
 
 export type CliPreparedBackend = {

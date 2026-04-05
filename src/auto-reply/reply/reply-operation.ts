@@ -117,7 +117,6 @@ export function createReplyOperation(params: {
       );
     }
   }
-
   setActiveEmbeddedRun(currentSessionId, registryHandle, currentSessionKey);
 
   const operation: ReplyOperation = {
@@ -167,12 +166,11 @@ export function createReplyOperation(params: {
         fromSessionKey: currentSessionKey,
         toSessionKey: cleanedSessionKey,
       });
+      if (!moved) {
+        return;
+      }
       currentSessionId = cleanedSessionId;
       currentSessionKey = cleanedSessionKey;
-      if (!moved) {
-        registryCleared = false;
-        setActiveEmbeddedRun(currentSessionId, registryHandle, currentSessionKey);
-      }
     },
     attachEmbeddedHandle(handle) {
       if (result) {

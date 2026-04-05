@@ -39,13 +39,38 @@ const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
 const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedPiQueueHandle>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
+  sessionIdsByKey: new Map<string, string>(),
   waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
   modelSwitchRequests: new Map<string, EmbeddedRunModelSwitchRequest>(),
 }));
 const ACTIVE_EMBEDDED_RUNS = embeddedRunState.activeRuns;
 const ACTIVE_EMBEDDED_RUN_SNAPSHOTS = embeddedRunState.snapshots;
+const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY = embeddedRunState.sessionIdsByKey;
 const EMBEDDED_RUN_WAITERS = embeddedRunState.waiters;
 const EMBEDDED_RUN_MODEL_SWITCH_REQUESTS = embeddedRunState.modelSwitchRequests;
+
+function setActiveRunSessionKey(sessionKey: string | undefined, sessionId: string): void {
+  const normalizedSessionKey = sessionKey?.trim();
+  if (!normalizedSessionKey) {
+    return;
+  }
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(normalizedSessionKey, sessionId);
+}
+
+function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void {
+  const normalizedSessionKey = sessionKey?.trim();
+  if (normalizedSessionKey) {
+    if (ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey) === sessionId) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(normalizedSessionKey);
+    }
+    return;
+  }
+  for (const [key, activeSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {
+    if (activeSessionId === sessionId) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(key);
+    }
+  }
+}
 
 export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
@@ -146,6 +171,14 @@ export function isEmbeddedPiRunStreaming(sessionId: string): boolean {
     return false;
   }
   return handle.isStreaming();
+}
+
+export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
+  const normalizedSessionKey = sessionKey.trim();
+  if (!normalizedSessionKey) {
+    return undefined;
+  }
+  return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
 }
 
 export function getActiveEmbeddedRunCount(): number {
@@ -278,6 +311,7 @@ export function setActiveEmbeddedRun(
 ) {
   const wasActive = ACTIVE_EMBEDDED_RUNS.has(sessionId);
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
+  setActiveRunSessionKey(sessionKey, sessionId);
   logSessionStateChange({
     sessionId,
     sessionKey,
@@ -318,9 +352,16 @@ export function moveActiveEmbeddedRun(params: {
     diag.debug(`run move skipped: sessionId=${fromSessionId} reason=handle_mismatch`);
     return false;
   }
+  const targetHandle = ACTIVE_EMBEDDED_RUNS.get(toSessionId);
+  if (targetHandle && targetHandle !== params.handle) {
+    diag.debug(`run move skipped: nextSessionId=${toSessionId} reason=target_occupied`);
+    return false;
+  }
 
   ACTIVE_EMBEDDED_RUNS.delete(fromSessionId);
   ACTIVE_EMBEDDED_RUNS.set(toSessionId, params.handle);
+  clearActiveRunSessionKeys(fromSessionId, params.fromSessionKey);
+  setActiveRunSessionKey(params.toSessionKey ?? params.fromSessionKey, toSessionId);
 
   const snapshot = ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(fromSessionId);
   if (snapshot) {
@@ -367,6 +408,7 @@ export function clearActiveEmbeddedRun(
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
+    clearActiveRunSessionKeys(sessionId, sessionKey);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
@@ -388,6 +430,7 @@ export const __testing = {
     EMBEDDED_RUN_WAITERS.clear();
     ACTIVE_EMBEDDED_RUNS.clear();
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.clear();
   },
 };

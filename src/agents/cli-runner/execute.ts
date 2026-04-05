@@ -36,6 +36,12 @@ export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDep
   Object.assign(executeDeps, overrides);
 }
 
+function createCliAbortError(): Error {
+  const error = new Error("CLI run aborted");
+  error.name = "AbortError";
+  return error;
+}
+
 function buildCliLogArgs(params: {
   args: string[];
   systemPromptArg?: string;
@@ -84,6 +90,9 @@ export async function executePreparedCliRun(
   cliSessionIdToUse?: string,
 ): Promise<CliOutput> {
   const params = context.params;
+  if (params.abortSignal?.aborted) {
+    throw createCliAbortError();
+  }
   const backend = context.preparedBackend.backend;
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
@@ -226,8 +235,23 @@ export async function executePreparedCliRun(
         input: stdinPayload,
         onStdout: streamingParser ? (chunk: string) => streamingParser.push(chunk) : undefined,
       });
-      const result = await managedRun.wait();
+      const abortManagedRun = () => {
+        managedRun.cancel("manual-cancel");
+      };
+      params.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
+      if (params.abortSignal?.aborted) {
+        abortManagedRun();
+      }
+      let result: Awaited<ReturnType<typeof managedRun.wait>>;
+      try {
+        result = await managedRun.wait();
+      } finally {
+        params.abortSignal?.removeEventListener("abort", abortManagedRun);
+      }
       streamingParser?.finish();
+      if (params.abortSignal?.aborted && result.reason === "manual-cancel") {
+        throw createCliAbortError();
+      }
 
       const stdout = result.stdout.trim();
       const stderr = result.stderr.trim();
