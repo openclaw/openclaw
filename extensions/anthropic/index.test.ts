@@ -1,15 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 
-const { readClaudeCliCredentialsCachedMock } = vi.hoisted(() => ({
-  readClaudeCliCredentialsCachedMock: vi.fn(),
+const { readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(() => ({
+  readClaudeCliCredentialsForRuntimeMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
+vi.mock("./cli-auth-seam.js", () => {
   return {
-    ...actual,
-    readClaudeCliCredentialsCached: readClaudeCliCredentialsCachedMock,
+    readClaudeCliCredentialsForRuntime: readClaudeCliCredentialsForRuntimeMock,
   };
 });
 
@@ -97,9 +95,9 @@ describe("anthropic provider replay hooks", () => {
     ).toBe("short");
   });
 
-  it("resolves claude-cli synthetic auth without allowing keychain prompts", async () => {
-    readClaudeCliCredentialsCachedMock.mockReset();
-    readClaudeCliCredentialsCachedMock.mockReturnValue({
+  it("resolves claude-cli synthetic oauth auth", async () => {
+    readClaudeCliCredentialsForRuntimeMock.mockReset();
+    readClaudeCliCredentialsForRuntimeMock.mockReturnValue({
       type: "oauth",
       provider: "anthropic",
       access: "access-token",
@@ -118,8 +116,28 @@ describe("anthropic provider replay hooks", () => {
       source: "Claude CLI native auth",
       mode: "oauth",
     });
-    expect(readClaudeCliCredentialsCachedMock).toHaveBeenCalledWith({
-      allowKeychainPrompt: false,
+    expect(readClaudeCliCredentialsForRuntimeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves claude-cli synthetic token auth", async () => {
+    readClaudeCliCredentialsForRuntimeMock.mockReset();
+    readClaudeCliCredentialsForRuntimeMock.mockReturnValue({
+      type: "token",
+      provider: "anthropic",
+      token: "bearer-token",
+      expires: 123,
+    });
+
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.resolveSyntheticAuth?.({
+        provider: "claude-cli",
+      } as never),
+    ).toEqual({
+      apiKey: "bearer-token",
+      source: "Claude CLI native auth",
+      mode: "token",
     });
   });
 });
