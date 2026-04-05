@@ -833,9 +833,7 @@ export async function runReplyAgent(params: {
     finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     throw error;
   } finally {
-    if (!replyOperation.result) {
-      replyOperation.complete();
-    }
+    replyOperation.complete();
     blockReplyPipeline?.stop();
     typing.markRunComplete();
     // Safety net: the dispatcher's onIdle callback normally fires

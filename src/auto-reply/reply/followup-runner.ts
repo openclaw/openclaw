@@ -410,9 +410,7 @@ export function createFollowupRunner(params: {
 
       await sendFollowupPayloads(finalPayloads, queued);
     } finally {
-      if (!replyOperation.result) {
-        replyOperation.complete();
-      }
+      replyOperation.complete();
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the
       // buffered dispatcher's finally block, but followup turns bypass the
