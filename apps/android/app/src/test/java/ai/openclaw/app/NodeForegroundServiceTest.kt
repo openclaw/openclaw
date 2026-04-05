@@ -37,7 +37,7 @@ class NodeForegroundServiceTest {
   fun foregroundServiceType_omitsLocationWhenPermissionMissing() {
     val service = Robolectric.buildService(NodeForegroundService::class.java).get()
 
-    val serviceType = foregroundServiceType(service, locationGranted = false)
+    val serviceType = foregroundServiceType(service, includeLocationType = false)
 
     assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, serviceType)
   }
@@ -46,7 +46,7 @@ class NodeForegroundServiceTest {
   fun foregroundServiceType_includesLocationWhenPermissionGranted() {
     val service = Robolectric.buildService(NodeForegroundService::class.java).get()
 
-    val serviceType = foregroundServiceType(service, locationGranted = true)
+    val serviceType = foregroundServiceType(service, includeLocationType = true)
 
     assertEquals(
       ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
@@ -103,6 +103,8 @@ class NodeForegroundServiceTest {
   @Test
   fun onStartCommand_refreshActionReevaluatesForegroundServiceType() {
     TestNodeForegroundService.locationGranted = true
+    TestNodeForegroundService.appForeground = true
+    TestNodeForegroundService.backgroundLocationAllowed = false
     val service = Robolectric.buildService(TestNodeForegroundService::class.java).get()
     setForegroundState(
       service = service,
@@ -122,6 +124,36 @@ class NodeForegroundServiceTest {
     )
   }
 
+  @Test
+  fun canUseLocationForegroundServiceType_requiresBackgroundCapabilityWhenAppIsBackgrounded() {
+    val service = Robolectric.buildService(TestNodeForegroundService::class.java).get()
+    TestNodeForegroundService.locationGranted = true
+    TestNodeForegroundService.appForeground = false
+    TestNodeForegroundService.backgroundLocationAllowed = false
+
+    assertFalse(service.canUseLocationForegroundServiceType())
+  }
+
+  @Test
+  fun canUseLocationForegroundServiceType_allowsForegroundPermissionWhileAppIsForeground() {
+    val service = Robolectric.buildService(TestNodeForegroundService::class.java).get()
+    TestNodeForegroundService.locationGranted = true
+    TestNodeForegroundService.appForeground = true
+    TestNodeForegroundService.backgroundLocationAllowed = false
+
+    assertTrue(service.canUseLocationForegroundServiceType())
+  }
+
+  @Test
+  fun canUseLocationForegroundServiceType_allowsBackgroundCapabilityWhileAppIsBackgrounded() {
+    val service = Robolectric.buildService(TestNodeForegroundService::class.java).get()
+    TestNodeForegroundService.locationGranted = true
+    TestNodeForegroundService.appForeground = false
+    TestNodeForegroundService.backgroundLocationAllowed = true
+
+    assertTrue(service.canUseLocationForegroundServiceType())
+  }
+
   private fun buildNotification(service: NodeForegroundService): Notification {
     val method =
       NodeForegroundService::class.java.getDeclaredMethod(
@@ -133,14 +165,14 @@ class NodeForegroundServiceTest {
     return method.invoke(service, "Title", "Text") as Notification
   }
 
-  private fun foregroundServiceType(service: NodeForegroundService, locationGranted: Boolean): Int {
+  private fun foregroundServiceType(service: NodeForegroundService, includeLocationType: Boolean): Int {
     val method =
       NodeForegroundService::class.java.getDeclaredMethod(
         "foregroundServiceType",
         Boolean::class.javaPrimitiveType,
       )
     method.isAccessible = true
-    return method.invoke(service, locationGranted) as Int
+    return method.invoke(service, includeLocationType) as Int
   }
 
   private fun shouldRestartForeground(
@@ -194,9 +226,13 @@ class NodeForegroundServiceTest {
 
   private class TestNodeForegroundService : NodeForegroundService() {
     override fun hasAnyLocationPermission(): Boolean = locationGranted
+    override fun isAppForeground(): Boolean = appForeground
+    override fun canUseBackgroundLocation(): Boolean = backgroundLocationAllowed
 
     companion object {
       var locationGranted: Boolean = false
+      var appForeground: Boolean = true
+      var backgroundLocationAllowed: Boolean = false
     }
   }
 }

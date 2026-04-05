@@ -52,6 +52,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -169,8 +170,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
       viewModel.setCameraEnabled(cameraOk)
     }
 
-  var pendingLocationSelection by remember { mutableStateOf<LocationMode?>(null) }
-  var previousLocationModeBeforeAlwaysPrompt by remember { mutableStateOf<LocationMode?>(null) }
+  var pendingLocationSelection by rememberSaveable { mutableStateOf<LocationMode?>(null) }
+  var previousLocationModeBeforeAlwaysPrompt by rememberSaveable { mutableStateOf<LocationMode?>(null) }
   var pendingPreciseToggle by remember { mutableStateOf(false) }
   val backgroundLocationOptionLabel =
     remember(context) {

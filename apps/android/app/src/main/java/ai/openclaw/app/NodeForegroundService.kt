@@ -140,7 +140,7 @@ open class NodeForegroundService : Service() {
 
   private fun startForegroundWithTypes(notification: Notification) {
     latestNotification = notification
-    val serviceType = foregroundServiceType(locationGranted = hasAnyLocationPermission())
+    val serviceType = foregroundServiceType(includeLocationType = canUseLocationForegroundServiceType())
     if (!shouldRestartForeground(serviceType)) {
       updateNotification(notification)
       return
@@ -167,9 +167,24 @@ open class NodeForegroundService : Service() {
       PackageManager.PERMISSION_GRANTED
   }
 
-  private fun foregroundServiceType(locationGranted: Boolean): Int {
+  internal open fun isAppForeground(): Boolean {
+    return (application as? NodeApp)?.peekRuntime()?.isForeground?.value == true
+  }
+
+  internal open fun canUseBackgroundLocation(): Boolean {
+    val runtime = (application as? NodeApp)?.peekRuntime() ?: return false
+    return runtime.locationMode.value == LocationMode.Always &&
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+      PackageManager.PERMISSION_GRANTED
+  }
+
+  internal open fun canUseLocationForegroundServiceType(): Boolean {
+    return hasAnyLocationPermission() && (isAppForeground() || canUseBackgroundLocation())
+  }
+
+  private fun foregroundServiceType(includeLocationType: Boolean): Int {
     return ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
-      if (locationGranted) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
+      if (includeLocationType) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
   }
 
   private fun shouldRestartForeground(serviceType: Int): Boolean {
