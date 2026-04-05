@@ -10,6 +10,7 @@ const resolveGatewayStartupPluginIds = vi.hoisted(() => vi.fn(() => ["discord", 
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn(({ config }) => ({ config, changes: [], autoEnabledReasons: {} })),
 );
+const setActivePluginRegistryMock = vi.hoisted(() => vi.fn());
 const primeConfiguredBindingRegistry = vi.hoisted(() =>
   vi.fn(() => ({ bindingCount: 0, channelCount: 0 })),
 );
@@ -30,6 +31,10 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable,
+}));
+
+vi.mock("../plugins/runtime.js", () => ({
+  setActivePluginRegistry: (...args: unknown[]) => setActivePluginRegistryMock(...args),
 }));
 
 vi.mock("../channels/plugins/binding-registry.js", async () => {
@@ -87,14 +92,12 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
 type ServerPluginsModule = typeof import("./server-plugins.js");
 type ServerPluginBootstrapModule = typeof import("./server-plugin-bootstrap.js");
 type PluginRuntimeModule = typeof import("../plugins/runtime/index.js");
-type PluginRegistryRuntimeModule = typeof import("../plugins/runtime.js");
 type GatewayRequestScopeModule = typeof import("../plugins/runtime/gateway-request-scope.js");
 type MethodScopesModule = typeof import("./method-scopes.js");
 
 let serverPluginsModule: ServerPluginsModule;
 let serverPluginBootstrapModule: ServerPluginBootstrapModule;
 let runtimeModule: PluginRuntimeModule;
-let pluginRegistryRuntimeModule: PluginRegistryRuntimeModule;
 let gatewayRequestScopeModule: GatewayRequestScopeModule;
 let methodScopesModule: MethodScopesModule;
 
@@ -131,7 +134,6 @@ async function loadTestModules() {
   serverPluginsModule = await import("./server-plugins.js");
   serverPluginBootstrapModule = await import("./server-plugin-bootstrap.js");
   runtimeModule = await import("../plugins/runtime/index.js");
-  pluginRegistryRuntimeModule = await import("../plugins/runtime.js");
   gatewayRequestScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
   methodScopesModule = await import("./method-scopes.js");
 }
@@ -204,6 +206,7 @@ beforeEach(() => {
   applyPluginAutoEnable
     .mockReset()
     .mockImplementation(({ config }) => ({ config, changes: [], autoEnabledReasons: {} }));
+  setActivePluginRegistryMock.mockReset();
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   handleGatewayRequest.mockReset();
   runtimeModule.clearGatewaySubagentRuntime();
@@ -351,7 +354,10 @@ describe("loadGatewayPlugins", () => {
       baseMethods: [],
     });
 
-    expect(pluginRegistryRuntimeModule.getActivePluginRegistryWorkspaceDir()).toBe(
+    expect(setActivePluginRegistryMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      undefined,
+      "gateway-bindable",
       "/tmp/gateway-workspace",
     );
   });
