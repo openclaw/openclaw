@@ -215,9 +215,12 @@
     "languages.en",
     "languages.es",
     "languages.fr",
+    "languages.id",
     "languages.jaJP",
     "languages.ko",
+    "languages.pl",
     "languages.ptBR",
+    "languages.tr",
     "languages.zhCN",
     "languages.zhTW",
     "login.passwordPlaceholder",
@@ -510,12 +513,12 @@
     "usage.sessions.title",
     "usage.sessions.total"
   ],
-  "generatedAt": "2026-04-05T11:44:58.733Z",
+  "generatedAt": "2026-04-05T13:36:39.796Z",
   "locale": "ko",
   "model": "",
   "provider": "",
-  "sourceHash": "e482fa23a5ebfb33fa807a476f14ddb196e51d099b046a19e9573d54acdcd931",
-  "totalKeys": 509,
+  "sourceHash": "5c00e96eb5dbb2481d3d336a262f39930688803e4abd230f5e858877724d3b2e",
+  "totalKeys": 512,
   "translatedKeys": 0,
   "workflow": 1
 }

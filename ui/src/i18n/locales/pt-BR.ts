@@ -405,6 +405,9 @@ export const pt_BR: TranslationMap = {
     jaJP: "日本語 (Japanese)",
     ko: "한국어 (Korean)",
     fr: "Français (French)",
+    tr: "Türkçe (Turkish)",
+    id: "Bahasa Indonesia (Indonesian)",
+    pl: "Polski (Polish)",
   },
   cron: {
     summary: {
