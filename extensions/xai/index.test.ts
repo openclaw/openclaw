@@ -84,7 +84,8 @@ describe("xai provider plugin", () => {
     expect(capturedModelId).toBe("grok-4-fast");
     expect(capturedPayload).toMatchObject({ tool_stream: true });
     expect(capturedPayload).not.toHaveProperty("reasoning");
-    expect((capturedPayload?.tools as Array<{ function?: Record<string, unknown> }>)[0]?.function)
-      .not.toHaveProperty("strict");
+    expect(
+      (capturedPayload?.tools as Array<{ function?: Record<string, unknown> }>)[0]?.function,
+    ).not.toHaveProperty("strict");
   });
 });

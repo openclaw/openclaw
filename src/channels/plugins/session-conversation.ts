@@ -152,10 +152,11 @@ function resolveBundledSessionConversationFallback(params: {
   }
   let resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"];
   try {
-    resolveSessionConversation = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
-      dirName,
-      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-    })?.resolveSessionConversation;
+    resolveSessionConversation =
+      tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
+        dirName,
+        artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
+      })?.resolveSessionConversation;
   } catch {
     return null;
   }

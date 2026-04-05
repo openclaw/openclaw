@@ -33,10 +33,10 @@ vi.mock("./program-context.js", () => ({
 describe("buildProgram", () => {
   function mockProcessOutput() {
     vi.spyOn(process.stdout, "write").mockImplementation(
-      ((() => true) as unknown) as typeof process.stdout.write,
+      (() => true) as unknown as typeof process.stdout.write,
     );
     vi.spyOn(process.stderr, "write").mockImplementation(
-      ((() => true) as unknown) as typeof process.stderr.write,
+      (() => true) as unknown as typeof process.stderr.write,
     );
   }
 

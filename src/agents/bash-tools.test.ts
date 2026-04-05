@@ -433,8 +433,12 @@ describe("tool descriptions", () => {
     expect(execTool.description).not.toContain("use cron instead");
     expect(processTool.description).not.toContain("scheduled follow-ups");
     expect(execTool.description).toContain("otherwise use process to confirm completion");
-    expect(processTool.description).toContain("completion confirmation when automatic completion wake is unavailable");
-    expect(processTool.description).toContain("Use write/send-keys/submit/paste/kill for input or intervention.");
+    expect(processTool.description).toContain(
+      "completion confirmation when automatic completion wake is unavailable",
+    );
+    expect(processTool.description).toContain(
+      "Use write/send-keys/submit/paste/kill for input or intervention.",
+    );
   });
 });
 
