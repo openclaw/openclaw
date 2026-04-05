@@ -107,7 +107,7 @@ export async function exportMetricsCommand(format: "json" | "csv" | "prometheus"
   const data = metrics.exportMetrics(format);
   
   if (outputFile) {
-    require("fs").writeFileSync(outputFile, data);
+    fs.writeFileSync(outputFile, data);
     console.log(`Metrics exported to: ${outputFile}`);
   } else {
     console.log(data);
