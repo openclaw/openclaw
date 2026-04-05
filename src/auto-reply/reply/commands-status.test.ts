@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -11,6 +11,8 @@ import {
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { buildStatusReply } from "./commands-status.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
+import { enqueueFollowupRun } from "./queue/enqueue.js";
+import { clearFollowupQueue } from "./queue/state.js";
 
 function resetSubagentRegistryForTests() {
   subagentRuns.clear();
@@ -65,6 +67,8 @@ describe("buildStatusReply subagent summary", () => {
   afterEach(() => {
     resetSubagentRegistryForTests();
     resetTaskRegistryForTests();
+    clearFollowupQueue("agent:main:main");
+    vi.unstubAllEnvs();
   });
 
   it("counts ended orchestrators with active descendants as active", async () => {
@@ -397,5 +401,65 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).not.toContain("hidden progress detail");
     expect(reply?.text).not.toContain("subagent");
     expect(reply?.text).not.toContain("cron");
+  });
+
+  it("shows auth labels resolved from environment-backed provider auth", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-status");
+
+    const commandParams = buildCommandTestParams("/status", baseCfg);
+    const reply = await buildStatusReply({
+      cfg: baseCfg,
+      command: commandParams.command,
+      sessionEntry: commandParams.sessionEntry,
+      sessionKey: commandParams.sessionKey,
+      parentSessionKey: commandParams.sessionKey,
+      sessionScope: commandParams.sessionScope,
+      storePath: commandParams.storePath,
+      workspaceDir: "/tmp",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      contextTokens: 0,
+      resolvedThinkLevel: commandParams.resolvedThinkLevel,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: commandParams.resolvedVerboseLevel,
+      resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
+      resolvedElevatedLevel: commandParams.resolvedElevatedLevel,
+      resolveDefaultThinkingLevel: commandParams.resolveDefaultThinkingLevel,
+      isGroup: commandParams.isGroup,
+      defaultGroupActivation: commandParams.defaultGroupActivation,
+    });
+
+    expect(reply?.text).toContain("ANTHROPIC_API_KEY");
+  });
+
+  it("shows the real follow-up queue depth in the status card", async () => {
+    enqueueFollowupRun(
+      "agent:main:main",
+      {
+        prompt: "queued follow-up",
+        enqueuedAt: Date.now(),
+        run: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          sessionId: "session-main",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session-main.jsonl",
+          workspaceDir: "/tmp",
+          config: baseCfg,
+          provider: "openai",
+          model: "gpt-5.4",
+          timeoutMs: 30_000,
+          blockReplyBreak: "text_end",
+        },
+      },
+      { mode: "collect" },
+      "none",
+      undefined,
+      false,
+    );
+
+    const reply = await buildStatusReplyForTest({});
+
+    expect(reply?.text).toContain("Queue: collect (depth 1)");
   });
 });

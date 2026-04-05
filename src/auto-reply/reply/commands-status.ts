@@ -4,6 +4,11 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import {
+  isKnownEnvApiKeyMarker,
+  isNonSecretApiKeyMarker,
+} from "../../agents/model-auth-markers.js";
+import { normalizeProviderId, normalizeProviderIdForAuth } from "../../agents/provider-id.js";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import { countPendingDescendantRunsFromRuns } from "../../agents/subagent-registry-queries.js";
 import {
@@ -14,8 +19,11 @@ import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
+import { getShellEnvAppliedKeys } from "../../infra/shell-env.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
+import { PROVIDER_AUTH_ENV_VAR_CANDIDATES } from "../../secrets/provider-env-vars.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
@@ -25,6 +33,7 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../../tasks/task-status.js";
+import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import { buildStatusMessage } from "../status-card.js";
@@ -49,6 +58,36 @@ async function loadProviderUsageModule() {
   return await providerUsageModulePromise;
 }
 
+let authProfileStoreModulePromise: Promise<
+  typeof import("../../agents/auth-profiles/store.js")
+> | null = null;
+async function loadAuthProfileStoreModule() {
+  authProfileStoreModulePromise ??= import("../../agents/auth-profiles/store.js");
+  return await authProfileStoreModulePromise;
+}
+
+let authProfileOrderModulePromise: Promise<
+  typeof import("../../agents/auth-profiles/order.js")
+> | null = null;
+async function loadAuthProfileOrderModule() {
+  authProfileOrderModulePromise ??= import("../../agents/auth-profiles/order.js");
+  return await authProfileOrderModulePromise;
+}
+
+let authProfileDisplayModulePromise: Promise<
+  typeof import("../../agents/auth-profiles/display.js")
+> | null = null;
+async function loadAuthProfileDisplayModule() {
+  authProfileDisplayModulePromise ??= import("../../agents/auth-profiles/display.js");
+  return await authProfileDisplayModulePromise;
+}
+
+let queueEnqueueModulePromise: Promise<typeof import("./queue/enqueue.js")> | null = null;
+async function loadQueueEnqueueModule() {
+  queueEnqueueModulePromise ??= import("./queue/enqueue.js");
+  return await queueEnqueueModulePromise;
+}
+
 function shouldLoadUsageSummary(params: {
   provider?: string;
   selectedModelAuth?: string;
@@ -61,6 +100,132 @@ function shouldLoadUsageSummary(params: {
   }
   const auth = params.selectedModelAuth?.trim().toLowerCase();
   return Boolean(auth?.startsWith("oauth") || auth?.startsWith("token"));
+}
+
+function resolveProviderConfigLight(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): Record<string, unknown> | undefined {
+  const providers = cfg?.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const providerKey = normalizeProviderId(provider);
+  for (const [key, value] of Object.entries(providers)) {
+    if (normalizeProviderId(key) === providerKey && value && typeof value === "object") {
+      return value as Record<string, unknown>;
+    }
+  }
+  return undefined;
+}
+
+function resolveEnvAuthLabelLight(
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const candidates = PROVIDER_AUTH_ENV_VAR_CANDIDATES[normalizeProviderIdForAuth(provider)];
+  if (!candidates?.length) {
+    return undefined;
+  }
+  const applied = new Set(getShellEnvAppliedKeys());
+  for (const envVar of candidates) {
+    const value = normalizeOptionalSecretInput(env[envVar]);
+    if (!value) {
+      continue;
+    }
+    const source = applied.has(envVar) ? `shell env: ${envVar}` : envVar;
+    if (envVar.includes("OAUTH_TOKEN")) {
+      return `oauth (${source})`;
+    }
+    return `api-key (${source})`;
+  }
+  return undefined;
+}
+
+function resolveUsableCustomProviderApiKeyLight(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  env?: NodeJS.ProcessEnv;
+}): { apiKey: string; source: string } | null {
+  const providerConfig = resolveProviderConfigLight(params.cfg, params.provider);
+  if (!providerConfig) {
+    return null;
+  }
+  const apiKey = normalizeOptionalSecretInput(providerConfig.apiKey);
+  if (!apiKey) {
+    if (coerceSecretRef(providerConfig.apiKey) || coerceSecretRef(providerConfig.apiKeyRef)) {
+      return null;
+    }
+    return null;
+  }
+  if (!isNonSecretApiKeyMarker(apiKey)) {
+    return { apiKey, source: "models.json" };
+  }
+  if (!isKnownEnvApiKeyMarker(apiKey)) {
+    return null;
+  }
+  const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[apiKey]);
+  if (!envValue) {
+    return null;
+  }
+  return { apiKey: envValue, source: `models.json:${apiKey}` };
+}
+
+async function resolveModelAuthLabelLight(params: {
+  provider?: string;
+  cfg?: OpenClawConfig;
+  sessionEntry?: SessionEntry;
+  agentDir?: string;
+}): Promise<string | undefined> {
+  const resolvedProvider = params.provider?.trim();
+  if (!resolvedProvider) {
+    return undefined;
+  }
+  const providerKey = normalizeProviderId(resolvedProvider);
+  const { ensureAuthProfileStore } = await loadAuthProfileStoreModule();
+  const { resolveAuthProfileOrder } = await loadAuthProfileOrderModule();
+  const { resolveAuthProfileDisplayLabel } = await loadAuthProfileDisplayModule();
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
+  const order = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store,
+    provider: providerKey,
+    preferredProfile: profileOverride,
+  });
+  const candidates = [profileOverride, ...order].filter(Boolean) as string[];
+  const providerAuthKey = normalizeProviderIdForAuth(providerKey);
+  for (const profileId of candidates) {
+    const profile = store.profiles[profileId];
+    if (!profile || normalizeProviderIdForAuth(profile.provider) !== providerAuthKey) {
+      continue;
+    }
+    const label = resolveAuthProfileDisplayLabel({
+      cfg: params.cfg,
+      store,
+      profileId,
+    });
+    if (profile.type === "oauth") {
+      return `oauth${label ? ` (${label})` : ""}`;
+    }
+    if (profile.type === "token") {
+      return `token${label ? ` (${label})` : ""}`;
+    }
+    return `api-key${label ? ` (${label})` : ""}`;
+  }
+
+  const envLabel = resolveEnvAuthLabelLight(providerKey);
+  if (envLabel) {
+    return envLabel;
+  }
+
+  if (resolveUsableCustomProviderApiKeyLight({ cfg: params.cfg, provider: providerKey })) {
+    return "api-key (models.json)";
+  }
+
+  return "unknown";
 }
 
 function formatSessionTaskLine(sessionKey: string): string | undefined {
@@ -89,39 +254,6 @@ function formatAgentTaskCountsLine(agentId: string): string | undefined {
   return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
 }
 
-function resolveModelAuthLabelLight(params: {
-  provider?: string;
-  cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-}): string | undefined {
-  const providerKey = params.provider?.trim().toLowerCase();
-  if (!providerKey) {
-    return undefined;
-  }
-  const providerConfig = (
-    params.cfg as
-      | {
-          models?: {
-            providers?: Record<string, { apiKey?: string; token?: string; oauthToken?: string }>;
-          };
-        }
-      | undefined
-  )?.models?.providers?.[providerKey];
-  if (providerConfig?.oauthToken?.trim()) {
-    return "oauth";
-  }
-  if (providerConfig?.token?.trim()) {
-    return "token";
-  }
-  if (providerConfig?.apiKey?.trim()) {
-    return "api-key";
-  }
-  if (params.sessionEntry?.authProfileOverride?.trim()) {
-    return "api-key";
-  }
-  return "unknown";
-}
-
 function resolveFastModeStateLight(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -148,10 +280,6 @@ function sortSubagentRunsLight(runs: SubagentRunRecord[]) {
 function resolveSubagentLabelLight(entry: SubagentRunRecord, fallback = "subagent") {
   const raw = entry.label?.trim() || entry.task?.trim() || "";
   return raw || fallback;
-}
-
-function getFollowupQueueDepthLight(_sessionKey: string): number {
-  return 0;
 }
 
 function listControlledSubagentRunsLight(controllerSessionKey: string) {
@@ -273,18 +401,20 @@ export async function buildStatusText(params: {
   });
   const selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
     ? params.modelAuthOverride
-    : resolveModelAuthLabelLight({
+    : await resolveModelAuthLabelLight({
         provider,
         cfg,
         sessionEntry,
+        agentDir: statusAgentDir,
       });
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
     : modelRefs.activeDiffers
-      ? resolveModelAuthLabelLight({
+      ? await resolveModelAuthLabelLight({
           provider: modelRefs.active.provider,
           cfg,
           sessionEntry,
+          agentDir: statusAgentDir,
         })
       : selectedModelAuth;
   const currentUsageProvider = (() => {
@@ -351,7 +481,9 @@ export async function buildStatusText(params: {
     sessionEntry,
   });
   const queueKey = sessionKey ?? sessionEntry?.sessionId;
-  const queueDepth = queueKey ? getFollowupQueueDepthLight(queueKey) : 0;
+  const queueDepth = queueKey
+    ? (await loadQueueEnqueueModule()).getFollowupQueueDepth(queueKey)
+    : 0;
   const queueOverrides = Boolean(
     sessionEntry?.queueDebounceMs ?? sessionEntry?.queueCap ?? sessionEntry?.queueDrop,
   );
