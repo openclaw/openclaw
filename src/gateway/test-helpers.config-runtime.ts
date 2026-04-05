@@ -1,23 +1,19 @@
-import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 import { testConfigRoot, testIsNixMode, testState } from "./test-helpers.runtime-state.js";
 
 type GatewayConfigModule = typeof import("../config/config.js");
 
 export function createGatewayConfigModuleMock(actual: GatewayConfigModule): GatewayConfigModule {
   const resolveConfigPath = () => path.join(testConfigRoot.value, "openclaw.json");
-  const hashConfigRaw = (raw: string | null) =>
-    crypto
-      .createHash("sha256")
-      .update(raw ?? "")
-      .digest("hex");
 
   const composeTestConfig = (baseConfig: Record<string, unknown>) => {
     const fileAgents =
@@ -152,66 +148,62 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     } as OpenClawConfig;
   };
 
-  const readConfigFileSnapshot = async () => {
+  const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => {
     if (testState.legacyIssues.length > 0) {
       const raw = JSON.stringify(testState.legacyParsed ?? {});
-      return {
+      return buildTestConfigSnapshot({
         path: resolveConfigPath(),
         exists: true,
         raw,
         parsed: testState.legacyParsed ?? {},
         valid: false,
-        config: {},
-        hash: hashConfigRaw(raw),
+        config: composeTestConfig({}),
         issues: testState.legacyIssues.map((issue) => ({
           path: issue.path,
           message: issue.message,
         })),
         legacyIssues: testState.legacyIssues,
-      };
+      });
     }
     const configPath = resolveConfigPath();
     try {
       await fs.access(configPath);
     } catch {
-      return {
+      return buildTestConfigSnapshot({
         path: configPath,
         exists: false,
         raw: null,
         parsed: {},
         valid: true,
         config: composeTestConfig({}),
-        hash: hashConfigRaw(null),
         issues: [],
         legacyIssues: [],
-      };
+      });
     }
     try {
       const raw = await fs.readFile(configPath, "utf-8");
       const parsed = JSON.parse(raw) as Record<string, unknown>;
-      return {
+      return buildTestConfigSnapshot({
         path: configPath,
         exists: true,
         raw,
         parsed,
         valid: true,
         config: composeTestConfig(parsed),
-        hash: hashConfigRaw(raw),
         issues: [],
         legacyIssues: [],
-      };
+      });
     } catch (err) {
-      return {
+      return buildTestConfigSnapshot({
         path: configPath,
         exists: true,
         raw: null,
         parsed: {},
         valid: false,
-        config: {},
-        hash: hashConfigRaw(null),
+        config: composeTestConfig({}),
         issues: [{ path: "", message: `read failed: ${String(err)}` }],
         legacyIssues: [],
-      };
+      });
     }
   };
 
@@ -223,12 +215,13 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     actual.resetConfigRuntimeState();
   });
 
-  const readConfigFileSnapshotForWrite = async () => ({
-    snapshot: await readConfigFileSnapshot(),
-    writeOptions: {
-      expectedConfigPath: resolveConfigPath(),
-    },
-  });
+  const readConfigFileSnapshotForWrite =
+    async (): Promise<ReadConfigFileSnapshotForWriteResult> => ({
+      snapshot: await readConfigFileSnapshot(),
+      writeOptions: {
+        expectedConfigPath: resolveConfigPath(),
+      },
+    });
 
   const loadTestConfig = () => {
     const configPath = resolveConfigPath();
@@ -268,10 +261,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     get isNixMode() {
       return testIsNixMode.value;
     },
-    migrateLegacyConfig: (raw: unknown) => ({
-      config: testState.migrationConfig ?? (raw as Record<string, unknown>),
-      changes: testState.migrationChanges,
-    }),
     applyConfigOverrides: (cfg: OpenClawConfig) =>
       composeTestConfig(cfg as Record<string, unknown>),
     loadConfig: loadRuntimeAwareTestConfig,

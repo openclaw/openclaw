@@ -66,6 +66,7 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS, 30_000),
 );
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
+  "google/gemini-2.5-flash",
   "google/gemini-3-flash-preview",
   "google/gemini-3-pro-preview",
   "google/gemini-3.1-flash-lite-preview",
@@ -421,6 +422,12 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
   it("strips scaffolding for Gemini preview models with known transcript wrappers", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
+        "<final>Visible</final>",
+        "google/gemini-2.5-flash",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
         "<think>hidden</think>Visible",
         "google/gemini-3.1-flash-preview",
       ),
@@ -448,7 +455,7 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
         "<think>hidden</think>Visible",
         "google/gemini-2.5-flash",
       ),
-    ).toBe("<think>hidden</think>Visible");
+    ).toBe("Visible");
   });
 
   it("strips scaffolding for known OpenAI transcript wrappers", () => {
@@ -1816,12 +1823,14 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     client.stop();
     await server.close({ reason: "live test complete" });
     await fs.rm(toolProbePath, { force: true });
-    await fs.rm(tempDir, { recursive: true, force: true });
+    // Give the filesystem a short retry window while agent/runtime teardown
+    // releases handles inside these temporary live-test directories.
+    await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     if (tempAgentDir) {
-      await fs.rm(tempAgentDir, { recursive: true, force: true });
+      await fs.rm(tempAgentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
     if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true });
+      await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 
     process.env.OPENCLAW_CONFIG_PATH = previous.configPath;

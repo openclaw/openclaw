@@ -10,6 +10,7 @@ import {
   invalidateMessageCharsCacheEntry,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
+import { truncateToolResultText } from "./tool-result-truncation.js";
 
 // Keep a conservative input budget to absorb tokenizer variance and provider framing overhead.
 const CONTEXT_INPUT_HEADROOM_RATIO = 0.75;
@@ -23,9 +24,19 @@ const CONTEXT_LIMIT_TRUNCATION_SUFFIX = `\n${CONTEXT_LIMIT_TRUNCATION_NOTICE}`;
 
 export const PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER =
   "[compacted: tool output removed to free context]";
+export const PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE =
+  "[compacted: tool output trimmed to free context]";
 
 export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
   "Preemptive context overflow: estimated context size exceeds safe threshold during tool loop";
+
+const PREEMPTIVE_TOOL_RESULT_COMPACTION_SUFFIX = `\n${PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE}`;
+const MIN_COMPACTED_TOOL_RESULT_TEXT_CHARS = 96;
+const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO =
+  CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
+const MIN_COMPACTED_TOOL_RESULT_ESTIMATE_CHARS = Math.ceil(
+  MIN_COMPACTED_TOOL_RESULT_TEXT_CHARS * TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO,
+);
 
 type GuardableTransformContext = (
   messages: AgentMessage[],
@@ -74,7 +85,11 @@ function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
   } as AgentMessage;
 }
 
-function truncateToolResultToChars(
+function estimateBudgetToTextBudget(maxChars: number): number {
+  return Math.max(0, Math.floor(maxChars / TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO));
+}
+
+function compactToolResultToEstimateBudget(
   msg: AgentMessage,
   maxChars: number,
   cache: MessageCharEstimateCache,
@@ -90,14 +105,36 @@ function truncateToolResultToChars(
 
   const rawText = getToolResultText(msg);
   if (!rawText) {
-    return replaceToolResultText(msg, CONTEXT_LIMIT_TRUNCATION_NOTICE);
+    return replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   }
 
-  const truncatedText = truncateTextToBudget(rawText, maxChars);
-  return replaceToolResultText(msg, truncatedText);
+  const textBudget = estimateBudgetToTextBudget(maxChars);
+  if (textBudget <= PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER.length) {
+    return replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+  }
+
+  const maxCompactedTextChars = Math.max(MIN_COMPACTED_TOOL_RESULT_TEXT_CHARS, textBudget);
+  if (maxCompactedTextChars <= PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER.length) {
+    return replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+  }
+
+  const minKeepChars = Math.max(
+    96,
+    Math.min(
+      MIN_COMPACTED_TOOL_RESULT_TEXT_CHARS,
+      maxCompactedTextChars - PREEMPTIVE_TOOL_RESULT_COMPACTION_SUFFIX.length - 1,
+    ),
+  );
+
+  const compactedText = truncateToolResultText(rawText, maxCompactedTextChars, {
+    suffix: PREEMPTIVE_TOOL_RESULT_COMPACTION_SUFFIX,
+    minKeepChars,
+  });
+
+  return replaceToolResultText(msg, compactedText);
 }
 
-function compactExistingToolResultsInPlace(params: {
+function compactToPlaceholderInPlace(params: {
   messages: AgentMessage[];
   charsNeeded: number;
   cache: MessageCharEstimateCache;
@@ -108,9 +145,6 @@ function compactExistingToolResultsInPlace(params: {
   }
 
   let reduced = 0;
-  // Compact newest-first so more of the cached prefix survives: rewriting
-  // messages[k] for small k invalidates the provider prompt cache from that point onward.
-  // Tradeoff: the model loses recent tool output instead of old.
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (!isToolResultMessage(msg)) {
@@ -136,6 +170,124 @@ function compactExistingToolResultsInPlace(params: {
   }
 
   return reduced;
+}
+
+function truncateToolResultToChars(
+  msg: AgentMessage,
+  maxChars: number,
+  cache: MessageCharEstimateCache,
+): AgentMessage {
+  if (!isToolResultMessage(msg)) {
+    return msg;
+  }
+
+  const estimatedChars = estimateMessageCharsCached(msg, cache);
+  if (estimatedChars <= maxChars) {
+    return msg;
+  }
+
+  const rawText = getToolResultText(msg);
+  if (!rawText) {
+    return replaceToolResultText(msg, CONTEXT_LIMIT_TRUNCATION_NOTICE);
+  }
+
+  const textBudget = estimateBudgetToTextBudget(maxChars);
+  if (textBudget <= 0) {
+    return replaceToolResultText(msg, CONTEXT_LIMIT_TRUNCATION_NOTICE);
+  }
+
+  if (rawText.length <= textBudget) {
+    return replaceToolResultText(msg, rawText);
+  }
+
+  const truncatedText = truncateTextToBudget(rawText, textBudget);
+  return replaceToolResultText(msg, truncatedText);
+}
+
+function compactExistingToolResultsInPlace(params: {
+  messages: AgentMessage[];
+  charsNeeded: number;
+  cache: MessageCharEstimateCache;
+}): number {
+  const { messages, charsNeeded, cache } = params;
+  if (charsNeeded <= 0) {
+    return 0;
+  }
+
+  let reduced = 0;
+  // Compact newest-first so more of the cached prefix survives: rewriting
+  // messages[k] for small k invalidates the provider prompt cache from that point onward.
+  // Keep a truncated slice of newer tool output before falling back to a
+  // full placeholder so recent, user-visible results remain readable when possible.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!isToolResultMessage(msg)) {
+      continue;
+    }
+
+    const before = estimateMessageCharsCached(msg, cache);
+    if (before <= PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER.length) {
+      continue;
+    }
+
+    const targetAfter = Math.max(
+      MIN_COMPACTED_TOOL_RESULT_ESTIMATE_CHARS,
+      before - (charsNeeded - reduced),
+    );
+
+    let compacted = compactToolResultToEstimateBudget(msg, targetAfter, cache);
+    let after = estimateMessageCharsCached(compacted, cache);
+    if (after >= before) {
+      compacted = replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+      after = estimateMessageCharsCached(compacted, cache);
+    }
+
+    applyMessageMutationInPlace(msg, compacted, cache);
+    if (after >= before) {
+      continue;
+    }
+
+    reduced += before - after;
+    if (reduced >= charsNeeded) {
+      break;
+    }
+  }
+
+  if (reduced < charsNeeded) {
+    reduced += compactToPlaceholderInPlace({
+      messages,
+      charsNeeded: charsNeeded - reduced,
+      cache,
+    });
+  }
+
+  return reduced;
+}
+
+function cloneMessagesForGuard(messages: AgentMessage[]): AgentMessage[] {
+  return messages.map(
+    (msg) => ({ ...(msg as unknown as Record<string, unknown>) }) as unknown as AgentMessage,
+  );
+}
+
+function contextNeedsToolResultCompaction(params: {
+  messages: AgentMessage[];
+  contextBudgetChars: number;
+  maxSingleToolResultChars: number;
+}): boolean {
+  const { messages, contextBudgetChars, maxSingleToolResultChars } = params;
+  const estimateCache = createMessageCharEstimateCache();
+  let sawToolResult = false;
+  for (const message of messages) {
+    if (!isToolResultMessage(message)) {
+      continue;
+    }
+    sawToolResult = true;
+    if (estimateMessageCharsCached(message, estimateCache) > maxSingleToolResultChars) {
+      return true;
+    }
+  }
+  return sawToolResult && estimateContextChars(messages, estimateCache) > contextBudgetChars;
 }
 
 function applyMessageMutationInPlace(
@@ -221,7 +373,14 @@ export function installToolResultContextGuard(params: {
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
 
-    const contextMessages = Array.isArray(transformed) ? transformed : messages;
+    const sourceMessages = Array.isArray(transformed) ? transformed : messages;
+    const contextMessages = contextNeedsToolResultCompaction({
+      messages: sourceMessages,
+      contextBudgetChars,
+      maxSingleToolResultChars,
+    })
+      ? cloneMessagesForGuard(sourceMessages)
+      : sourceMessages;
     enforceToolResultContextBudgetInPlace({
       messages: contextMessages,
       contextBudgetChars,

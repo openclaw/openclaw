@@ -85,7 +85,7 @@ export const MatrixConfigSchema = z.object({
   contextVisibility: ContextVisibilityModeSchema.optional(),
   blockStreaming: z.boolean().optional(),
   streaming: z.union([z.enum(["partial", "off"]), z.boolean()]).optional(),
-  replyToMode: z.enum(["off", "first", "all"]).optional(),
+  replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   textChunkLimit: z.number().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),

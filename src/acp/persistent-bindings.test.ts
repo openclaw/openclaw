@@ -1,8 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { ChannelConfiguredBindingProvider, ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { parseTelegramTopicConversation } from "../plugin-sdk/telegram.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { buildConfiguredAcpSessionKey } from "./persistent-bindings.types.js";
@@ -84,9 +83,44 @@ const discordBindings: ChannelConfiguredBindingProvider = {
   },
 };
 
+function parseTelegramTopicConversationForTest(params: {
+  conversationId: string;
+  parentConversationId?: string;
+}): {
+  canonicalConversationId: string;
+  chatId: string;
+  topicId?: string;
+} | null {
+  const conversationId = params.conversationId.trim();
+  const parentConversationId = params.parentConversationId?.trim() || undefined;
+  if (!conversationId) {
+    return null;
+  }
+  const canonicalTopicMatch = /^(-[^:]+):topic:([^:]+)$/.exec(conversationId);
+  if (canonicalTopicMatch) {
+    const [, chatId, topicId] = canonicalTopicMatch;
+    return {
+      canonicalConversationId: `${chatId}:topic:${topicId}`,
+      chatId,
+      topicId,
+    };
+  }
+  if (parentConversationId) {
+    return {
+      canonicalConversationId: `${parentConversationId}:topic:${conversationId}`,
+      chatId: parentConversationId,
+      topicId: conversationId,
+    };
+  }
+  return {
+    canonicalConversationId: conversationId,
+    chatId: conversationId,
+  };
+}
+
 const telegramBindings: ChannelConfiguredBindingProvider = {
   compileConfiguredBinding: ({ conversationId }) => {
-    const parsed = parseTelegramTopicConversation({ conversationId });
+    const parsed = parseTelegramTopicConversationForTest({ conversationId });
     if (!parsed || !parsed.chatId.startsWith("-")) {
       return null;
     }
@@ -96,7 +130,7 @@ const telegramBindings: ChannelConfiguredBindingProvider = {
     };
   },
   matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
-    const incoming = parseTelegramTopicConversation({
+    const incoming = parseTelegramTopicConversationForTest({
       conversationId,
       parentConversationId,
     });
@@ -376,8 +410,20 @@ function mockReadySession(params: {
   return sessionKey;
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
+  persistentBindingsResolveModule = await import("./persistent-bindings.resolve.js");
+  lifecycleBindingsModule = await import("./persistent-bindings.lifecycle.js");
+  persistentBindings = {
+    resolveConfiguredAcpBindingRecord:
+      persistentBindingsResolveModule.resolveConfiguredAcpBindingRecord,
+    resolveConfiguredAcpBindingSpecBySessionKey:
+      persistentBindingsResolveModule.resolveConfiguredAcpBindingSpecBySessionKey,
+    ensureConfiguredAcpBindingSession: lifecycleBindingsModule.ensureConfiguredAcpBindingSession,
+    resetAcpSessionInPlace: lifecycleBindingsModule.resetAcpSessionInPlace,
+  };
+});
+
+beforeEach(() => {
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -405,16 +451,6 @@ beforeEach(async () => {
   managerMocks.initializeSession.mockReset().mockResolvedValue(undefined);
   managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
   sessionMetaMocks.readAcpSessionEntry.mockReset().mockReturnValue(undefined);
-  persistentBindingsResolveModule = await import("./persistent-bindings.resolve.js");
-  lifecycleBindingsModule = await import("./persistent-bindings.lifecycle.js");
-  persistentBindings = {
-    resolveConfiguredAcpBindingRecord:
-      persistentBindingsResolveModule.resolveConfiguredAcpBindingRecord,
-    resolveConfiguredAcpBindingSpecBySessionKey:
-      persistentBindingsResolveModule.resolveConfiguredAcpBindingSpecBySessionKey,
-    ensureConfiguredAcpBindingSession: lifecycleBindingsModule.ensureConfiguredAcpBindingSession,
-    resetAcpSessionInPlace: lifecycleBindingsModule.resetAcpSessionInPlace,
-  };
 });
 
 describe("resolveConfiguredAcpBindingRecord", () => {

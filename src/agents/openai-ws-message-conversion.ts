@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { Context, Message, StopReason } from "@mariozechner/pi-ai";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import {
+  encodeAssistantTextSignature,
+  normalizeAssistantPhase,
+  parseAssistantTextSignature,
+} from "../shared/chat-message-content.js";
+import {
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIStrictToolFlagForInventory,
 } from "./openai-tool-schema.js";
@@ -36,46 +41,6 @@ function toNonEmptyString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function normalizeAssistantPhase(value: unknown): OpenAIResponsesAssistantPhase | undefined {
-  return value === "commentary" || value === "final_answer" ? value : undefined;
-}
-
-function encodeAssistantTextSignature(params: {
-  id: string;
-  phase?: OpenAIResponsesAssistantPhase;
-}): string {
-  return JSON.stringify({
-    v: 1,
-    id: params.id,
-    ...(params.phase ? { phase: params.phase } : {}),
-  });
-}
-
-function parseAssistantTextSignature(
-  value: unknown,
-): { id: string; phase?: OpenAIResponsesAssistantPhase } | null {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return null;
-  }
-  if (!value.startsWith("{")) {
-    return { id: value };
-  }
-  try {
-    const parsed = JSON.parse(value) as { v?: unknown; id?: unknown; phase?: unknown };
-    if (parsed.v !== 1 || typeof parsed.id !== "string") {
-      return null;
-    }
-    return {
-      id: parsed.id,
-      ...(normalizeAssistantPhase(parsed.phase)
-        ? { phase: normalizeAssistantPhase(parsed.phase) }
-        : {}),
-    };
-  } catch {
-    return null;
-  }
 }
 
 function supportsImageInput(modelOverride?: ReplayModelInfo): boolean {
@@ -497,19 +462,42 @@ export function buildAssistantMessageFromResponse(
   modelInfo: { api: string; provider: string; id: string },
 ): AssistantMessage {
   const content: AssistantMessage["content"] = [];
-  const assistantPhases = new Set<OpenAIResponsesAssistantPhase>();
-  let hasUnphasedAssistantText = false;
+  const assistantMessageOutputs = (response.output ?? []).filter(
+    (item): item is Extract<ResponseObject["output"][number], { type: "message" }> =>
+      item.type === "message",
+  );
+  const hasExplicitPhasedAssistantText = assistantMessageOutputs.some((item) => {
+    const itemPhase = normalizeAssistantPhase(item.phase);
+    return Boolean(
+      itemPhase && item.content?.some((part) => part.type === "output_text" && Boolean(part.text)),
+    );
+  });
+  const hasFinalAnswerText = assistantMessageOutputs.some((item) => {
+    if (normalizeAssistantPhase(item.phase) !== "final_answer") {
+      return false;
+    }
+    return item.content?.some((part) => part.type === "output_text" && Boolean(part.text)) ?? false;
+  });
+  const includedAssistantPhases = new Set<OpenAIResponsesAssistantPhase>();
+  let hasIncludedUnphasedAssistantText = false;
 
   for (const item of response.output ?? []) {
     if (item.type === "message") {
       const itemPhase = normalizeAssistantPhase(item.phase);
-      if (itemPhase) {
-        assistantPhases.add(itemPhase);
-      }
       for (const part of item.content ?? []) {
         if (part.type === "output_text" && part.text) {
-          if (!itemPhase) {
-            hasUnphasedAssistantText = true;
+          const shouldIncludeText = hasFinalAnswerText
+            ? itemPhase === "final_answer"
+            : hasExplicitPhasedAssistantText
+              ? itemPhase === undefined
+              : true;
+          if (!shouldIncludeText) {
+            continue;
+          }
+          if (itemPhase) {
+            includedAssistantPhases.add(itemPhase);
+          } else {
+            hasIncludedUnphasedAssistantText = true;
           }
           content.push({
             type: "text",
@@ -584,7 +572,9 @@ export function buildAssistantMessageFromResponse(
   });
 
   const finalAssistantPhase =
-    assistantPhases.size === 1 && !hasUnphasedAssistantText ? [...assistantPhases][0] : undefined;
+    includedAssistantPhases.size === 1 && !hasIncludedUnphasedAssistantText
+      ? [...includedAssistantPhases][0]
+      : undefined;
 
   return finalAssistantPhase
     ? ({ ...message, phase: finalAssistantPhase } as AssistantMessageWithPhase)

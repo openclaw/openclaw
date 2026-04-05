@@ -1986,7 +1986,7 @@ describe("matrix monitor handler draft streaming", () => {
   };
 
   function createStreamingHarness(opts?: {
-    replyToMode?: "off" | "first" | "all";
+    replyToMode?: "off" | "first" | "all" | "batched";
     blockStreamingEnabled?: boolean;
   }) {
     let capturedDeliver: DeliverFn | undefined;

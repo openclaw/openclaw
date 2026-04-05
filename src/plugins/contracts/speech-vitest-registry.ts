@@ -40,11 +40,11 @@ export type VideoGenerationProviderContractEntry = {
 };
 
 type ManifestContractKey =
+  | "imageGenerationProviders"
   | "speechProviders"
   | "mediaUnderstandingProviders"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
-  | "imageGenerationProviders"
   | "videoGenerationProviders";
 
 function loadVitestCapabilityContractEntries<T>(params: {

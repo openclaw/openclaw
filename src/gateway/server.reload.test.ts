@@ -229,6 +229,16 @@ describe("gateway hot reload", () => {
     });
   }
 
+  async function writeChannelEnvRefConfig() {
+    await writeConfigFile({
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    });
+  }
+
   async function writeConfigFile(config: unknown) {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
@@ -564,6 +574,13 @@ describe("gateway hot reload", () => {
     await expect(withGatewayServer(async () => {})).rejects.toThrow(
       "Startup failed: required secrets are unavailable",
     );
+  });
+
+  it("allows startup when unresolved channel refs exist but channels are skipped", async () => {
+    await writeChannelEnvRefConfig();
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    process.env.OPENCLAW_SKIP_CHANNELS = "1";
+    await expect(withGatewayServer(async () => {})).resolves.toBeUndefined();
   });
 
   it("fails startup when an active exec ref id contains traversal segments", async () => {
