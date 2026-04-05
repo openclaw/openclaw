@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
+import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import type { WizardPrompter } from "./prompts.js";
 
 /**
@@ -27,15 +28,18 @@ function resolveJsonSchemaProperty(
   if (!jsonSchema) {
     return undefined;
   }
-  const properties = jsonSchema.properties;
-  if (!properties || typeof properties !== "object") {
-    return undefined;
+  let cursor: unknown = jsonSchema;
+  for (const segment of fieldKey.split(".")) {
+    if (!cursor || typeof cursor !== "object") {
+      return undefined;
+    }
+    const properties = (cursor as Record<string, unknown>).properties;
+    if (!properties || typeof properties !== "object") {
+      return undefined;
+    }
+    cursor = (properties as Record<string, unknown>)[segment];
   }
-  const prop = (properties as Record<string, unknown>)[fieldKey];
-  if (!prop || typeof prop !== "object") {
-    return undefined;
-  }
-  return prop as JsonSchemaProperty;
+  return cursor && typeof cursor === "object" ? (cursor as JsonSchemaProperty) : undefined;
 }
 
 function getExistingPluginConfig(
@@ -43,6 +47,10 @@ function getExistingPluginConfig(
   pluginId: string,
 ): Record<string, unknown> {
   return (config.plugins?.entries?.[pluginId]?.config as Record<string, unknown>) ?? {};
+}
+
+function toPathSegments(fieldKey: string): string[] {
+  return fieldKey.split(".").filter(Boolean);
 }
 
 function formatCurrentValue(value: unknown): string {
@@ -117,7 +125,7 @@ export function discoverUnconfiguredPlugins(params: {
   return all.filter((plugin) => {
     const existing = getExistingPluginConfig(params.config, plugin.id);
     return Object.keys(plugin.uiHints).some((key) => {
-      const val = existing[key];
+      const val = getPath(existing, toPathSegments(key));
       return val === undefined || val === null || val === "";
     });
   });
@@ -136,11 +144,12 @@ async function promptPluginFields(params: {
 }): Promise<OpenClawConfig> {
   const { plugin, config, prompter } = params;
   const existing = getExistingPluginConfig(config, plugin.id);
-  const updatedConfig: Record<string, unknown> = { ...existing };
+  const updatedConfig = structuredClone(existing);
   let changed = false;
 
   for (const [key, hint] of Object.entries(plugin.uiHints)) {
-    const currentValue = existing[key];
+    const pathSegments = toPathSegments(key);
+    const currentValue = getPath(existing, pathSegments);
     const hasValue = currentValue !== undefined && currentValue !== null && currentValue !== "";
 
     // In onboard mode, skip already-configured fields
@@ -180,7 +189,7 @@ async function promptPluginFields(params: {
         initialValue: hasValue ? "__keep__" : undefined,
       });
       if (selected !== "__keep__") {
-        updatedConfig[key] = selected;
+        setPathCreateStrict(updatedConfig, pathSegments, selected);
         changed = true;
       }
       continue;
@@ -193,7 +202,7 @@ async function promptPluginFields(params: {
         initialValue: typeof currentValue === "boolean" ? currentValue : false,
       });
       if (confirmed !== currentValue) {
-        updatedConfig[key] = confirmed;
+        setPathCreateStrict(updatedConfig, pathSegments, confirmed);
         changed = true;
       }
       continue;
@@ -214,9 +223,9 @@ async function promptPluginFields(params: {
             .split(",")
             .map((v) => v.trim())
             .filter(Boolean);
-          updatedConfig[key] = values;
+          setPathCreateStrict(updatedConfig, pathSegments, values);
         } else {
-          updatedConfig[key] = undefined;
+          setPathCreateStrict(updatedConfig, pathSegments, undefined);
         }
         changed = true;
       }
@@ -235,17 +244,17 @@ async function promptPluginFields(params: {
       // Try to parse as number if schema says number
       if (schemaProp?.type === "number") {
         if (trimmed === "") {
-          updatedConfig[key] = undefined;
+          setPathCreateStrict(updatedConfig, pathSegments, undefined);
           changed = true;
         } else {
           const parsed = Number(trimmed);
           if (Number.isFinite(parsed)) {
-            updatedConfig[key] = parsed;
+            setPathCreateStrict(updatedConfig, pathSegments, parsed);
             changed = true;
           }
         }
       } else {
-        updatedConfig[key] = trimmed || undefined;
+        setPathCreateStrict(updatedConfig, pathSegments, trimmed || undefined);
         changed = true;
       }
     }
@@ -359,7 +368,7 @@ export async function configurePluginConfig(params: {
       ...configurable.map((p) => {
         const existing = getExistingPluginConfig(params.config, p.id);
         const configuredCount = Object.keys(p.uiHints).filter((k) => {
-          const val = existing[k];
+          const val = getPath(existing, toPathSegments(k));
           return val !== undefined && val !== null && val !== "";
         }).length;
         const totalCount = Object.keys(p.uiHints).length;

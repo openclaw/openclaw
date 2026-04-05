@@ -27,11 +27,12 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 ## Provider docs
 
 - [Amazon Bedrock](/providers/bedrock)
-- [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [DeepSeek](/providers/deepseek)
+- [Fireworks](/providers/fireworks)
 - [GitHub Copilot](/providers/github-copilot)
 - [GLM models](/providers/glm)
 - [Google (Gemini)](/providers/google)
@@ -51,7 +52,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Perplexity (web search)](/providers/perplexity-provider)
 - [Qianfan](/providers/qianfan)
 - [Qwen Cloud](/providers/qwen)
-- [Qwen / Model Studio (endpoint detail)](/providers/qwen_modelstudio)
+- [Qwen / Model Studio (endpoint detail; `qwen-*` canonical, `modelstudio-*` legacy)](/providers/qwen_modelstudio)
 - [SGLang (local models)](/providers/sglang)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)

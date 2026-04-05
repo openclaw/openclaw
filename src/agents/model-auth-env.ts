@@ -2,7 +2,7 @@ import { getEnvApiKey } from "@mariozechner/pi-ai";
 import { hasAnthropicVertexAvailableAuth } from "../../extensions/anthropic-vertex/api.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
+import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
 import { normalizeProviderIdForAuth } from "./provider-id.js";
 
@@ -26,7 +26,7 @@ export function resolveEnvApiKey(
     return { apiKey: value, source };
   };
 
-  const candidates = PROVIDER_ENV_API_KEY_CANDIDATES[normalized];
+  const candidates = resolveProviderEnvApiKeyCandidates()[normalized];
   if (candidates) {
     for (const envVar of candidates) {
       const resolved = pick(envVar);

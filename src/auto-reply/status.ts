@@ -921,6 +921,7 @@ const COMMANDS_PER_PAGE = 8;
 export type CommandsMessageOptions = {
   page?: number;
   surface?: string;
+  forcePaginatedList?: boolean;
 };
 
 export type CommandsMessageResult = {
@@ -1106,9 +1107,9 @@ export function buildCommandsMessagePaginated(
 ): CommandsMessageResult {
   const page = Math.max(1, options?.page ?? 1);
   const surface = options?.surface?.toLowerCase();
-  const prefersPaginatedList = Boolean(
-    surface && getChannelPlugin(surface)?.commands?.buildCommandsListChannelData,
-  );
+  const prefersPaginatedList =
+    options?.forcePaginatedList === true ||
+    Boolean(surface && getChannelPlugin(surface)?.commands?.buildCommandsListChannelData);
 
   const commands = cfg
     ? listChatCommandsForConfig(cfg, { skillCommands })

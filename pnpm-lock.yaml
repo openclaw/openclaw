@@ -515,8 +515,6 @@ importers:
 
   extensions/mistral: {}
 
-  extensions/modelstudio: {}
-
   extensions/moonshot: {}
 
   extensions/msteams:
@@ -594,6 +592,8 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/qwen: {}
+
   extensions/searxng: {}
 
   extensions/sglang: {}
@@ -667,6 +667,8 @@ importers:
   extensions/venice: {}
 
   extensions/vercel-ai-gateway: {}
+
+  extensions/video-generation-core: {}
 
   extensions/vllm: {}
 

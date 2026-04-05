@@ -419,6 +419,13 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
+- `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
+  strings or SecretRef objects.
+- Slack account snapshots expose per-credential source/status fields such as
+  `botTokenSource`, `botTokenStatus`, `appTokenStatus`, and, in HTTP mode,
+  `signingSecretStatus`. `configured_unavailable` means the account is
+  configured through SecretRef but the current command/runtime path could not
+  resolve the secret value.
 - `configWrites: false` blocks Slack-initiated config writes.
 - Optional `channels.slack.defaultAccount` overrides default account selection when it matches a configured account id.
 - `channels.slack.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
@@ -989,6 +996,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `videoGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the shared video-generation capability.
   - Typical values: `qwen/wan2.6-t2v`, `qwen/wan2.6-i2v`, `qwen/wan2.6-r2v`, `qwen/wan2.6-r2v-flash`, or `qwen/wan2.7-r2v`.
+  - Set this explicitly before using shared video generation. Unlike `imageGenerationModel`, the video-generation runtime does not infer a provider default yet.
   - If you select a provider/model directly, configure the matching provider auth/API key too.
   - The bundled Qwen video-generation provider currently supports up to 1 output video, 1 input image, 4 input videos, 10 seconds duration, and provider-level `size`, `aspectRatio`, `resolution`, `audio`, and `watermark` options.
 - `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
@@ -1112,7 +1120,7 @@ Periodic heartbeat runs.
           enabled: true,
           softThresholdTokens: 6000,
           systemPrompt: "Session nearing compaction. Store durable memories now.",
-          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
+          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with the exact silent token NO_REPLY if nothing to store.",
         },
       },
     },
@@ -1896,27 +1904,29 @@ Defaults for Talk mode (macOS/iOS/Android).
 
 Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
 
-| Profile     | Includes                                                                                  |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status` only                                                                     |
-| `coding`    | `group:fs`, `group:runtime`, `group:sessions`, `group:memory`, `image`                    |
-| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status` |
-| `full`      | No restriction (same as unset)                                                            |
+| Profile     | Includes                                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status` only                                                                                         |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate` |
+| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                     |
+| `full`      | No restriction (same as unset)                                                                                |
 
 ### Tool groups
 
-| Group              | Tools                                                                                    |
-| ------------------ | ---------------------------------------------------------------------------------------- |
-| `group:runtime`    | `exec`, `process` (`bash` is accepted as an alias for `exec`)                            |
-| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                   |
-| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status` |
-| `group:memory`     | `memory_search`, `memory_get`                                                            |
-| `group:web`        | `web_search`, `web_fetch`                                                                |
-| `group:ui`         | `browser`, `canvas`                                                                      |
-| `group:automation` | `cron`, `gateway`                                                                        |
-| `group:messaging`  | `message`                                                                                |
-| `group:nodes`      | `nodes`                                                                                  |
-| `group:openclaw`   | All built-in tools (excludes provider plugins)                                           |
+| Group              | Tools                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                         |
+| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                  |
+| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status` |
+| `group:memory`     | `memory_search`, `memory_get`                                                                                           |
+| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                   |
+| `group:ui`         | `browser`, `canvas`                                                                                                     |
+| `group:automation` | `cron`, `gateway`                                                                                                       |
+| `group:messaging`  | `message`                                                                                                               |
+| `group:nodes`      | `nodes`                                                                                                                 |
+| `group:agents`     | `agents_list`                                                                                                           |
+| `group:media`      | `image`, `image_generate`, `tts`                                                                                        |
+| `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                          |
 
 ### `tools.allow` / `tools.deny`
 
@@ -2034,10 +2044,14 @@ Settings can be defined globally in `tools.loopDetection` and overridden per-age
       },
       fetch: {
         enabled: true,
+        provider: "firecrawl", // optional; omit for auto-detect
         maxChars: 50000,
         maxCharsCap: 50000,
+        maxResponseBytes: 2000000,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
+        maxRedirects: 3,
+        readability: true,
         userAgent: "custom-ua",
       },
     },
@@ -2621,6 +2635,10 @@ See [Plugins](/tools/plugin).
 - `existing-session` profiles are host-only and use Chrome MCP instead of CDP.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
+- `existing-session` profiles keep the current Chrome MCP route limits:
+  snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
+  hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
+  `responsebody`, PDF export, download interception, or batch actions.
 - Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
   set `cdpUrl` explicitly for remote CDP.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
@@ -3150,9 +3168,9 @@ Notes:
 - `authPermanentBackoffMinutes`: base backoff in minutes for high-confidence `auth_permanent` failures (default: `10`).
 - `authPermanentMaxMinutes`: cap in minutes for `auth_permanent` backoff growth (default: `60`).
 - `failureWindowHours`: rolling window in hours used for backoff counters (default: `24`).
-- `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`).
+- `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`). Provider-busy shapes such as `ModelNotReadyException` land here.
 - `overloadedBackoffMs`: fixed delay before retrying an overloaded provider/profile rotation (default: `0`).
-- `rateLimitedProfileRotations`: maximum same-provider auth-profile rotations for rate-limit errors before switching to model fallback (default: `1`).
+- `rateLimitedProfileRotations`: maximum same-provider auth-profile rotations for rate-limit errors before switching to model fallback (default: `1`). That rate-limit bucket includes provider-shaped text such as `Too many concurrent requests`, `ThrottlingException`, `concurrency limit reached`, `workers_ai ... quota limit exceeded`, and `resource exhausted`.
 
 ---
 

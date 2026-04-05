@@ -981,8 +981,9 @@ export async function runEmbeddedAttempt(
       });
       const effectiveAgentTransport = agentTransportOverride ?? activeSession.agent.transport;
       if (agentTransportOverride && activeSession.agent.transport !== agentTransportOverride) {
+        const previousTransport = activeSession.agent.transport;
         log.debug(
-          `embedded agent transport override: ${activeSession.agent.transport} -> ${agentTransportOverride} ` +
+          `embedded agent transport override: ${previousTransport} -> ${agentTransportOverride} ` +
             `(${params.provider}/${params.modelId})`,
         );
       }

@@ -246,6 +246,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+    if (
+      result.ok &&
+      "ran" in result &&
+      !result.ran &&
+      "reason" in result &&
+      result.reason === "unsupported-spec"
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron sessionTarget session id"),
+      );
+      return;
+    }
     respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {

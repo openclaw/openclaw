@@ -1,4 +1,4 @@
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   createAllowlistSetupWizardProxy,
   createAccountScopedAllowFromSection,

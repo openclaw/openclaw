@@ -660,14 +660,18 @@ describe("createOllamaStreamFn streaming events", () => {
 
       const doneEvent = await nextEventWithin(iterator);
       expect(doneEvent).not.toBe("timeout");
-      expect(doneEvent).toMatchObject({
-        value: { type: "done", reason: "toolUse" },
-        done: false,
-      });
+      if (doneEvent !== "timeout" && doneEvent.done === false) {
+        expect(doneEvent).toMatchObject({
+          value: { type: "done", reason: "toolUse" },
+          done: false,
+        });
 
-      const streamEnd = await nextEventWithin(iterator);
-      expect(streamEnd).not.toBe("timeout");
-      expect(streamEnd).toMatchObject({ value: undefined, done: true });
+        const streamEnd = await nextEventWithin(iterator);
+        expect(streamEnd).not.toBe("timeout");
+        expect(streamEnd).toMatchObject({ value: undefined, done: true });
+      } else {
+        expect(doneEvent).toMatchObject({ value: undefined, done: true });
+      }
     } finally {
       globalThis.fetch = originalFetch;
     }

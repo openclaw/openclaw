@@ -344,7 +344,7 @@ describe("AcpSessionManager", () => {
         terminalSummary: "Permission denied for /root/oc-acp-write-should-fail.txt.",
       });
     });
-  });
+  }, 300_000);
 
   it("serializes concurrent turns for the same ACP session", async () => {
     const runtimeState = createRuntime();

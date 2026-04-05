@@ -198,7 +198,7 @@ Operational guidance:
   loops around `sessions_list`, `sessions_history`, `/subagents list`, or
   `exec` sleep commands.
 - If a child completion event arrives after you already sent the final answer,
-  the correct follow-up is `NO_REPLY`.
+  the correct follow-up is the exact silent token `NO_REPLY` / `no_reply`.
 
 ### Tool policy by depth
 
@@ -235,7 +235,8 @@ Sub-agents report back via an announce step:
 
 - The announce step runs inside the sub-agent session (not the requester session).
 - If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
-- If the latest assistant text is a silent token such as `NO_REPLY`, announce output is suppressed even if earlier visible progress existed.
+- If the latest assistant text is the exact silent token `NO_REPLY` / `no_reply`,
+  announce output is suppressed even if earlier visible progress existed.
 - Otherwise delivery depends on requester depth:
   - top-level requester sessions use a follow-up `agent` call with external delivery (`deliver=true`)
   - nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session
@@ -266,9 +267,13 @@ Announce payloads include a stats line at the end (even when wrapped):
 - assistant recall is normalized first:
   - thinking tags are stripped
   - `<relevant-memories>` / `<relevant_memories>` scaffolding blocks are stripped
-  - plain-text tool-call XML payload blocks such as `<tool_call>...</tool_call>` / `<function_calls>...</function_calls>` are stripped
+  - plain-text tool-call XML payload blocks such as `<tool_call>...</tool_call>`,
+    `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, and
+    `<function_calls>...</function_calls>` are stripped, including truncated
+    payloads that never close cleanly
   - downgraded tool-call/result scaffolding and historical-context markers are stripped
-  - leaked model control tokens such as `<|assistant|>` are stripped
+  - leaked model control tokens such as `<|assistant|>`, other ASCII
+    `<|...|>` tokens, and full-width `<｜...｜>` variants are stripped
   - malformed MiniMax tool-call XML is stripped
 - credential/token-like text is redacted
 - long blocks can be truncated
