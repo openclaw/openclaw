@@ -45,8 +45,8 @@ function createRegistryPluginIdNormalizer(
 
 interface BundledRuntimeRemap {
   remapped: string;
-  /** Package root that contains both dist-runtime/ and dist/ trees. */
-  packageRoot: string | null;
+  /** The built plugin root (e.g. <pkg>/dist/extensions/<id>) that the remapped path must stay inside. */
+  builtPluginRoot: string | null;
 }
 
 function maybeResolveBundledRuntimeSkillDir(candidate: string): BundledRuntimeRemap {
@@ -54,19 +54,24 @@ function maybeResolveBundledRuntimeSkillDir(candidate: string): BundledRuntimeRe
   const runtimeMarker = path.join("dist-runtime", "extensions") + path.sep;
   const markerIndex = normalized.lastIndexOf(runtimeMarker);
   if (markerIndex === -1) {
-    return { remapped: candidate, packageRoot: null };
+    return { remapped: candidate, builtPluginRoot: null };
   }
 
   const packageRoot = normalized.slice(0, markerIndex);
   const bundledLeaf = normalized.slice(markerIndex + runtimeMarker.length);
   if (!packageRoot || !bundledLeaf) {
-    return { remapped: candidate, packageRoot: null };
+    return { remapped: candidate, builtPluginRoot: null };
   }
 
   const builtCandidate = path.join(packageRoot, "dist", "extensions", bundledLeaf);
-  return fs.existsSync(builtCandidate)
-    ? { remapped: builtCandidate, packageRoot }
-    : { remapped: candidate, packageRoot: null };
+  if (!fs.existsSync(builtCandidate)) {
+    return { remapped: candidate, builtPluginRoot: null };
+  }
+
+  // Derive the built plugin root from the plugin id (first path segment of bundledLeaf).
+  const pluginId = bundledLeaf.split(path.sep)[0]!;
+  const builtPluginRoot = path.join(packageRoot, "dist", "extensions", pluginId);
+  return { remapped: builtCandidate, builtPluginRoot };
 }
 
 export function resolvePluginSkillDirs(params: {
@@ -140,14 +145,16 @@ export function resolvePluginSkillDirs(params: {
       if (seen.has(candidate)) {
         continue;
       }
-      const { remapped, packageRoot } = maybeResolveBundledRuntimeSkillDir(candidate);
+      const { remapped, builtPluginRoot } = maybeResolveBundledRuntimeSkillDir(candidate);
       const preferredCandidate = path.resolve(remapped);
-      if (packageRoot != null && preferredCandidate !== candidate) {
-        // Re-validate the remapped path against the package root to prevent
-        // symlink-based escapes through the dist/ overlay.
-        if (!isPathInsideWithRealpath(packageRoot, preferredCandidate, { requireRealpath: true })) {
+      if (builtPluginRoot != null && preferredCandidate !== candidate) {
+        // Re-validate the remapped path against the built plugin root to prevent
+        // symlink-based escapes (including to sibling plugins within the same package).
+        if (
+          !isPathInsideWithRealpath(builtPluginRoot, preferredCandidate, { requireRealpath: true })
+        ) {
           log.warn(
-            `remapped plugin skill path escapes plugin root (${record.id}): ${preferredCandidate}`,
+            `remapped plugin skill path escapes built plugin root (${record.id}): ${preferredCandidate}`,
           );
           continue;
         }
