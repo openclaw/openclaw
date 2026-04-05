@@ -371,10 +371,24 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     if (host.onboarding) {
       return;
     }
+    const payload = evt.payload as AgentEventPayload | undefined;
     handleAgentEvent(
       host as unknown as Parameters<typeof handleAgentEvent>[0],
-      evt.payload as AgentEventPayload | undefined,
+      payload,
     );
+    // Some non-UI clients (for example /v1/responses callers) finish runs without
+    // going through the local chat controller, so refresh the current transcript
+    // when the active session receives a lifecycle completion event.
+    if (
+      payload?.sessionKey === host.sessionKey &&
+      payload.runId !== host.chatRunId &&
+      payload.stream === "lifecycle"
+    ) {
+      const phase = typeof payload.data?.phase === "string" ? payload.data.phase : "";
+      if (phase === "end" || phase === "error") {
+        void loadChatHistory(host as unknown as OpenClawApp);
+      }
+    }
     return;
   }
 
