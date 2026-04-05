@@ -28,6 +28,8 @@ export type TaskFlowRecord = {
   requesterOrigin?: DeliveryContext;
   controllerId?: string;
   revision: number;
+  retryCount?: number;
+  lastRetryAt?: number;
   status: TaskFlowStatus;
   notifyPolicy: TaskNotifyPolicy;
   goal: string;

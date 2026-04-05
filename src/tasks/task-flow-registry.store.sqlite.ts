@@ -17,6 +17,8 @@ type FlowRegistryRow = {
   requester_origin_json: string | null;
   controller_id: string | null;
   revision: number | bigint | null;
+  retry_count: number | bigint | null;
+  last_retry_at: number | bigint | null;
   status: TaskFlowRecord["status"];
   notify_policy: TaskFlowRecord["notifyPolicy"];
   goal: string;
@@ -81,6 +83,8 @@ function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
 function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
   const endedAt = normalizeNumber(row.ended_at);
   const cancelRequestedAt = normalizeNumber(row.cancel_requested_at);
+  const retryCount = normalizeNumber(row.retry_count);
+  const lastRetryAt = normalizeNumber(row.last_retry_at);
   const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
   const stateJson = parseJsonValue<JsonValue>(row.state_json);
   const waitJson = parseJsonValue<JsonValue>(row.wait_json);
@@ -91,6 +95,8 @@ function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
     ...(requesterOrigin ? { requesterOrigin } : {}),
     ...(row.controller_id ? { controllerId: row.controller_id } : {}),
     revision: normalizeNumber(row.revision) ?? 0,
+    ...(retryCount != null ? { retryCount } : {}),
+    ...(lastRetryAt != null ? { lastRetryAt } : {}),
     status: row.status,
     notifyPolicy: row.notify_policy,
     goal: row.goal,
@@ -114,6 +120,8 @@ function bindFlowRecord(record: TaskFlowRecord) {
     requester_origin_json: serializeJson(record.requesterOrigin),
     controller_id: record.controllerId ?? null,
     revision: record.revision,
+    retry_count: record.retryCount ?? null,
+    last_retry_at: record.lastRetryAt ?? null,
     status: record.status,
     notify_policy: record.notifyPolicy,
     goal: record.goal,
@@ -140,6 +148,8 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         requester_origin_json,
         controller_id,
         revision,
+        retry_count,
+        last_retry_at,
         status,
         notify_policy,
         goal,
@@ -163,6 +173,8 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         requester_origin_json,
         controller_id,
         revision,
+        retry_count,
+        last_retry_at,
         status,
         notify_policy,
         goal,
@@ -182,6 +194,8 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         @requester_origin_json,
         @controller_id,
         @revision,
+        @retry_count,
+        @last_retry_at,
         @status,
         @notify_policy,
         @goal,
@@ -201,6 +215,8 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         requester_origin_json = excluded.requester_origin_json,
         controller_id = excluded.controller_id,
         revision = excluded.revision,
+        retry_count = excluded.retry_count,
+        last_retry_at = excluded.last_retry_at,
         status = excluded.status,
         notify_policy = excluded.notify_policy,
         goal = excluded.goal,
@@ -234,6 +250,8 @@ function ensureSchema(db: DatabaseSync) {
       requester_origin_json TEXT,
       controller_id TEXT,
       revision INTEGER NOT NULL DEFAULT 0,
+      retry_count INTEGER,
+      last_retry_at INTEGER,
       status TEXT NOT NULL,
       notify_policy TEXT NOT NULL,
       goal TEXT NOT NULL,
@@ -297,6 +315,12 @@ function ensureSchema(db: DatabaseSync) {
   }
   if (!hasFlowRunsColumn(db, "blocked_task_id")) {
     db.exec(`ALTER TABLE flow_runs ADD COLUMN blocked_task_id TEXT;`);
+  }
+  if (!hasFlowRunsColumn(db, "retry_count")) {
+    db.exec(`ALTER TABLE flow_runs ADD COLUMN retry_count INTEGER;`);
+  }
+  if (!hasFlowRunsColumn(db, "last_retry_at")) {
+    db.exec(`ALTER TABLE flow_runs ADD COLUMN last_retry_at INTEGER;`);
   }
   if (!hasFlowRunsColumn(db, "blocked_summary")) {
     db.exec(`ALTER TABLE flow_runs ADD COLUMN blocked_summary TEXT;`);

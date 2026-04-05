@@ -540,6 +540,62 @@ describe("task-flow-registry", () => {
     });
   });
 
+  it("delivers retry-started notifications when a managed flow re-enters waiting", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskFlowRegistryForTests();
+      setTaskFlowDeliveryRuntimeForTests({
+        sendMessage: hoisted.sendMessageMock,
+      });
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "discord",
+          to: "discord:123",
+        },
+        controllerId: "tests/notifications-retry",
+        goal: "Review repository",
+        status: "failed",
+        currentStep: "failed",
+        retryCount: 0,
+      });
+
+      const updated = updateFlowRecordByIdExpectedRevision({
+        flowId: created.flowId,
+        expectedRevision: created.revision,
+        patch: {
+          status: "waiting",
+          currentStep: "wait_worker",
+          retryCount: 1,
+          lastRetryAt: 200,
+          waitJson: { kind: "child_task", runId: "run-retry-1" },
+          blockedTaskId: null,
+          blockedSummary: null,
+          endedAt: null,
+          updatedAt: 200,
+        },
+      });
+      expect(updated).toMatchObject({
+        applied: true,
+        flow: expect.objectContaining({
+          status: "waiting",
+          retryCount: 1,
+          lastRetryAt: 200,
+        }),
+      });
+
+      await vi.waitFor(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            content:
+              "Background task retry started: Review repository. Waiting on child task again.",
+          }),
+        ),
+      );
+    });
+  });
+
   it("delivers blocked managed flow guidance when user action is required", async () => {
     await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

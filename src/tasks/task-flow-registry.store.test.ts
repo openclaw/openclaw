@@ -22,6 +22,8 @@ function createStoredFlow(): TaskFlowRecord {
     ownerKey: "agent:main:main",
     controllerId: "tests/restored-controller",
     revision: 4,
+    retryCount: 2,
+    lastRetryAt: 118,
     status: "blocked",
     notifyPolicy: "done_only",
     goal: "Restored flow",
@@ -81,6 +83,8 @@ describe("task-flow-registry store runtime", () => {
       stateJson: { lane: "triage", done: 3 },
       waitJson: { kind: "task", taskId: "task-restored" },
       cancelRequestedAt: 115,
+      retryCount: 2,
+      lastRetryAt: 118,
     });
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
 
@@ -112,6 +116,8 @@ describe("task-flow-registry store runtime", () => {
         status: "running",
         currentStep: "spawn_task",
         stateJson: { phase: "spawn" },
+        retryCount: 1,
+        lastRetryAt: 333,
       });
       const waiting = setFlowWaiting({
         flowId: created.flowId,
@@ -144,6 +150,8 @@ describe("task-flow-registry store runtime", () => {
         stateJson: { phase: "ask_user" },
         waitJson: { kind: "external_event", topic: "telegram" },
         cancelRequestedAt: 444,
+        retryCount: 1,
+        lastRetryAt: 333,
       });
     });
   });

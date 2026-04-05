@@ -181,7 +181,8 @@ describe("flows commands", () => {
       expect(output).toContain("currentStep: spawn_child");
       expect(output).toContain("owner: agent:main:main");
       expect(output).toContain("state: Waiting on child task output");
-      expect(output).toContain("retryCommand: openclaw tasks flow retry");
+      expect(output).toContain("retryEligible: no");
+      expect(output).toContain("retryReason: Flow has no stored child-task launch details.");
       expect(output).toContain("Linked tasks:");
       expect(output).toContain("run-child-2");
       expect(output).toContain("Collect logs");
@@ -265,6 +266,7 @@ describe("flows commands", () => {
       expect(vi.mocked(runtime.error)).not.toHaveBeenCalled();
       expect(vi.mocked(runtime.exit)).not.toHaveBeenCalled();
       expect(String(vi.mocked(runtime.log).mock.calls[0]?.[0])).toContain("Retried");
+      expect(String(vi.mocked(runtime.log).mock.calls[0]?.[0])).toContain("retryCount=1");
     });
   });
 

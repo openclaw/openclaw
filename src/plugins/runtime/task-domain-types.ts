@@ -65,6 +65,8 @@ export type TaskFlowView = {
   notifyPolicy: TaskNotifyPolicy;
   goal: string;
   currentStep?: string;
+  retryCount?: number;
+  lastRetryAt?: number;
   cancelRequestedAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -83,6 +85,12 @@ export type TaskFlowDetail = TaskFlowView & {
     retryable: boolean;
     needsUserAction: boolean;
     summary: string;
+  };
+  retry?: {
+    eligible: boolean;
+    needsUserAction: boolean;
+    reason: string;
+    command?: string;
   };
   tasks: TaskRunView[];
   taskSummary: TaskRunAggregateSummary;

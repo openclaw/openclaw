@@ -5,6 +5,7 @@ import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import {
   cancelFlowById,
   getFlowTaskSummary,
+  getManagedChildTaskFlowRetryEligibility,
   retryManagedChildTaskFlow,
 } from "../tasks/task-executor.js";
 import { getTaskFlowGuidance } from "../tasks/task-flow-guidance.js";
@@ -199,12 +200,26 @@ export async function flowsShowCommand(
   const tasks = listTasksForFlowId(flow.flowId);
   const taskSummary = getFlowTaskSummary(flow.flowId);
   const stateSummary = summarizeFlowState(flow);
+  const retry =
+    flow.syncMode === "managed" ? getManagedChildTaskFlowRetryEligibility(flow.flowId) : undefined;
 
   if (opts.json) {
     runtime.log(
       JSON.stringify(
         {
           ...flow,
+          ...(retry
+            ? {
+                retry: {
+                  eligible: retry.retryable,
+                  needsUserAction: retry.needsUserAction,
+                  reason: retry.reason,
+                  ...(retry.retryable
+                    ? { command: `openclaw tasks flow retry ${flow.flowId}` }
+                    : {}),
+                },
+              }
+            : {}),
           tasks,
           taskSummary,
         },
@@ -226,7 +241,9 @@ export async function flowsShowCommand(
     `notify: ${flow.notifyPolicy}`,
     ...(stateSummary ? [`state: ${safeFlowDisplayText(stateSummary)}`] : []),
     ...(guidance ? [`nextAction: ${safeFlowDisplayText(guidance.summary)}`] : []),
-    ...(guidance?.retryable ? [`retryCommand: openclaw tasks flow retry ${flow.flowId}`] : []),
+    ...(retry ? [`retryEligible: ${retry.retryable ? "yes" : "no"}`] : []),
+    ...(retry ? [`retryReason: ${safeFlowDisplayText(retry.reason)}`] : []),
+    ...(retry?.retryable ? [`retryCommand: openclaw tasks flow retry ${flow.flowId}`] : []),
     ...(flow.cancelRequestedAt
       ? [`cancelRequestedAt: ${new Date(flow.cancelRequestedAt).toISOString()}`]
       : []),
@@ -271,7 +288,9 @@ export async function flowsRetryCommand(opts: { lookup: string }, runtime: Runti
     return;
   }
   const updated = getTaskFlowById(flow.flowId) ?? result.flow ?? flow;
-  runtime.log(`Retried ${updated.flowId} (${updated.syncMode}) with status ${updated.status}.`);
+  runtime.log(
+    `Retried ${updated.flowId} (${updated.syncMode}) with status ${updated.status}. retryCount=${updated.retryCount ?? 0}${updated.lastRetryAt ? ` lastRetryAt=${new Date(updated.lastRetryAt).toISOString()}` : ""}`,
+  );
 }
 
 export async function flowsCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {

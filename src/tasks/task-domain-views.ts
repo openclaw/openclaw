@@ -5,6 +5,7 @@ import type {
   TaskRunDetail,
   TaskRunView,
 } from "../plugins/runtime/task-domain-types.js";
+import { getManagedChildTaskFlowRetryEligibility } from "./task-executor.js";
 import { getTaskFlowGuidance } from "./task-flow-guidance.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
@@ -64,6 +65,8 @@ export function mapTaskFlowView(flow: TaskFlowRecord): TaskFlowView {
     notifyPolicy: flow.notifyPolicy,
     goal: flow.goal,
     ...(flow.currentStep ? { currentStep: flow.currentStep } : {}),
+    ...(flow.retryCount !== undefined ? { retryCount: flow.retryCount } : {}),
+    ...(flow.lastRetryAt !== undefined ? { lastRetryAt: flow.lastRetryAt } : {}),
     ...(flow.cancelRequestedAt !== undefined ? { cancelRequestedAt: flow.cancelRequestedAt } : {}),
     createdAt: flow.createdAt,
     updatedAt: flow.updatedAt,
@@ -79,6 +82,10 @@ export function mapTaskFlowDetail(params: {
   const summary = params.summary ?? summarizeTaskRecords(params.tasks);
   const base = mapTaskFlowView(params.flow);
   const resolution = getTaskFlowGuidance(params.flow);
+  const retry =
+    params.flow.syncMode === "managed"
+      ? getManagedChildTaskFlowRetryEligibility(params.flow.flowId)
+      : undefined;
   return {
     ...base,
     ...(params.flow.stateJson !== undefined ? { state: params.flow.stateJson } : {}),
@@ -92,6 +99,18 @@ export function mapTaskFlowDetail(params: {
         }
       : {}),
     ...(resolution ? { resolution } : {}),
+    ...(retry
+      ? {
+          retry: {
+            eligible: retry.retryable,
+            needsUserAction: retry.needsUserAction,
+            reason: retry.reason,
+            ...(retry.retryable
+              ? { command: `openclaw tasks flow retry ${params.flow.flowId}` }
+              : {}),
+          },
+        }
+      : {}),
     tasks: params.tasks.map((task) => mapTaskRunView(task)),
     taskSummary: mapTaskRunAggregateSummary(summary),
   };

@@ -383,6 +383,8 @@ describe("task-executor", () => {
           flowId: flow.flowId,
           status: "waiting",
           currentStep: "wait_worker",
+          retryCount: 1,
+          lastRetryAt: expect.any(Number),
         }),
       });
       expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
@@ -396,6 +398,8 @@ describe("task-executor", () => {
       );
       expect(getTaskFlowById(flow.flowId)).toMatchObject({
         status: "waiting",
+        retryCount: 1,
+        lastRetryAt: expect.any(Number),
         waitJson: expect.objectContaining({
           kind: "child_task",
           runId: "run-managed-retry-subagent",
@@ -449,6 +453,8 @@ describe("task-executor", () => {
         flow: expect.objectContaining({
           flowId: flow.flowId,
           status: "waiting",
+          retryCount: 1,
+          lastRetryAt: expect.any(Number),
         }),
       });
       expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
@@ -462,6 +468,11 @@ describe("task-executor", () => {
           agentTo: "telegram:123",
         }),
       );
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        status: "waiting",
+        retryCount: 1,
+        lastRetryAt: expect.any(Number),
+      });
     });
   });
 

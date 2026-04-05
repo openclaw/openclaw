@@ -56,6 +56,8 @@ type FlowRecordPatch = Omit<
       | "blockedTaskId"
       | "blockedSummary"
       | "controllerId"
+      | "retryCount"
+      | "lastRetryAt"
       | "stateJson"
       | "waitJson"
       | "cancelRequestedAt"
@@ -67,6 +69,8 @@ type FlowRecordPatch = Omit<
   | "blockedTaskId"
   | "blockedSummary"
   | "controllerId"
+  | "retryCount"
+  | "lastRetryAt"
   | "stateJson"
   | "waitJson"
   | "cancelRequestedAt"
@@ -76,6 +80,8 @@ type FlowRecordPatch = Omit<
   blockedTaskId?: string | null;
   blockedSummary?: string | null;
   controllerId?: string | null;
+  retryCount?: number | null;
+  lastRetryAt?: number | null;
   stateJson?: JsonValue | null;
   waitJson?: JsonValue | null;
   cancelRequestedAt?: number | null;
@@ -117,6 +123,20 @@ function isTerminalFlowStatus(status: TaskFlowStatus): boolean {
   return (
     status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
   );
+}
+
+function normalizeRetryCount(value: number | null | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.trunc(value));
+}
+
+function normalizeTimestamp(value: number | null | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return value;
 }
 
 async function loadTaskFlowDeliveryRuntime(): Promise<TaskFlowDeliveryRuntime> {
@@ -222,10 +242,25 @@ function formatManagedFlowStatusMessage(params: {
       : "";
   const withAggregateSuffix = (message: string) =>
     aggregateSuffix ? `${message} ${aggregateSuffix}` : message;
+  const retryTransition =
+    flow.status === "waiting" &&
+    Boolean(previous) &&
+    (previous?.status === "blocked" ||
+      previous?.status === "failed" ||
+      previous?.status === "lost") &&
+    (flow.retryCount ?? 0) > (previous?.retryCount ?? 0);
   const firstWaitingTransition =
     flow.status === "waiting" &&
     (!previous ||
       (previous.revision === 0 && (previous.status === "queued" || previous.status === "running")));
+
+  if (retryTransition) {
+    return withAggregateSuffix(
+      summary
+        ? `Background task retry started: ${title}. Waiting on child task again. ${summary}`
+        : `Background task retry started: ${title}. Waiting on child task again.`,
+    );
+  }
 
   if (firstWaitingTransition) {
     return `Background task started: ${title}. Waiting on child task.`;
@@ -365,6 +400,14 @@ function shouldDebounceManagedFlowUpdate(next: TaskFlowRecord, previous?: TaskFl
   if (!isManagedChildTaskFlow(next) && !(previous && isManagedChildTaskFlow(previous))) {
     return false;
   }
+  if (
+    next.status === "waiting" &&
+    previous &&
+    (previous.status === "blocked" || previous.status === "failed" || previous.status === "lost") &&
+    (next.retryCount ?? 0) > (previous.retryCount ?? 0)
+  ) {
+    return false;
+  }
   if (next.status === "waiting") {
     const firstWaitingTransition =
       !previous ||
@@ -426,6 +469,12 @@ function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
       : {}),
     ...(record.waitJson !== undefined ? { waitJson: cloneStructuredValue(record.waitJson)! } : {}),
     revision: Math.max(0, record.revision),
+    ...(normalizeRetryCount(record.retryCount) !== undefined
+      ? { retryCount: normalizeRetryCount(record.retryCount)! }
+      : {}),
+    ...(normalizeTimestamp(record.lastRetryAt) !== undefined
+      ? { lastRetryAt: normalizeTimestamp(record.lastRetryAt)! }
+      : {}),
     cancelRequestedAt: record.cancelRequestedAt ?? undefined,
     endedAt: record.endedAt ?? undefined,
   };
@@ -574,6 +623,8 @@ function buildFlowRecord(params: {
   requesterOrigin?: TaskFlowRecord["requesterOrigin"];
   controllerId?: string | null;
   revision?: number;
+  retryCount?: number | null;
+  lastRetryAt?: number | null;
   status?: TaskFlowStatus;
   notifyPolicy?: TaskNotifyPolicy;
   goal: string;
@@ -599,6 +650,12 @@ function buildFlowRecord(params: {
       : {}),
     ...(controllerId ? { controllerId } : {}),
     revision: Math.max(0, params.revision ?? 0),
+    ...(normalizeRetryCount(params.retryCount) !== undefined
+      ? { retryCount: normalizeRetryCount(params.retryCount)! }
+      : {}),
+    ...(normalizeTimestamp(params.lastRetryAt) !== undefined
+      ? { lastRetryAt: normalizeTimestamp(params.lastRetryAt)! }
+      : {}),
     status: params.status ?? "queued",
     notifyPolicy: ensureNotifyPolicy(params.notifyPolicy),
     goal: params.goal,
@@ -630,6 +687,10 @@ function applyFlowPatch(current: TaskFlowRecord, patch: FlowRecordPatch): TaskFl
     ...(patch.notifyPolicy ? { notifyPolicy: patch.notifyPolicy } : {}),
     ...(patch.goal ? { goal: patch.goal } : {}),
     controllerId,
+    retryCount:
+      patch.retryCount === undefined ? current.retryCount : normalizeRetryCount(patch.retryCount),
+    lastRetryAt:
+      patch.lastRetryAt === undefined ? current.lastRetryAt : normalizeTimestamp(patch.lastRetryAt),
     currentStep:
       patch.currentStep === undefined ? current.currentStep : normalizeText(patch.currentStep),
     blockedTaskId:
@@ -671,6 +732,8 @@ export function createFlowRecord(params: {
   requesterOrigin?: TaskFlowRecord["requesterOrigin"];
   controllerId?: string | null;
   revision?: number;
+  retryCount?: number | null;
+  lastRetryAt?: number | null;
   status?: TaskFlowStatus;
   notifyPolicy?: TaskNotifyPolicy;
   goal: string;
@@ -702,6 +765,8 @@ export function createManagedTaskFlow(params: {
   stateJson?: JsonValue | null;
   waitJson?: JsonValue | null;
   cancelRequestedAt?: number | null;
+  retryCount?: number | null;
+  lastRetryAt?: number | null;
   createdAt?: number;
   updatedAt?: number;
   endedAt?: number | null;

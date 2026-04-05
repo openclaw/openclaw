@@ -261,6 +261,15 @@ type RetryBlockedFlowParams = {
   progressSummary?: string | null;
 };
 
+export type ManagedChildTaskFlowRetryEligibility = {
+  found: boolean;
+  retryable: boolean;
+  reason: string;
+  needsUserAction: boolean;
+  flow?: TaskFlowRecord;
+  previousTask?: TaskRecord;
+};
+
 type RetryManagedChildTaskFlowResult = {
   found: boolean;
   retried: boolean;
@@ -396,6 +405,7 @@ function buildManagedChildTaskRetryState(params: {
 function resolveRetryableManagedChildTaskFlow(flowId: string): {
   flowFound: boolean;
   retryable: boolean;
+  needsUserAction: boolean;
   flow?: TaskFlowRecord;
   latestTask?: TaskRecord;
   launch?: ManagedChildTaskRetryLaunch;
@@ -406,6 +416,7 @@ function resolveRetryableManagedChildTaskFlow(flowId: string): {
     return {
       flowFound: false,
       retryable: false,
+      needsUserAction: false,
       reason: "Flow not found.",
     };
   }
@@ -413,6 +424,7 @@ function resolveRetryableManagedChildTaskFlow(flowId: string): {
     return {
       flowFound: true,
       retryable: false,
+      needsUserAction: false,
       flow,
       reason: "Flow does not accept managed child-task retries.",
     };
@@ -421,6 +433,7 @@ function resolveRetryableManagedChildTaskFlow(flowId: string): {
     return {
       flowFound: true,
       retryable: false,
+      needsUserAction: false,
       flow,
       reason: "Flow cancellation has already been requested.",
     };
@@ -429,6 +442,7 @@ function resolveRetryableManagedChildTaskFlow(flowId: string): {
     return {
       flowFound: true,
       retryable: false,
+      needsUserAction: false,
       flow,
       reason: `Flow is not retryable from status ${flow.status}.`,
     };
@@ -438,6 +452,7 @@ function resolveRetryableManagedChildTaskFlow(flowId: string): {
     return {
       flowFound: true,
       retryable: false,
+      needsUserAction: false,
       flow,
       reason: "Flow already has an active child task.",
     };
@@ -448,6 +463,7 @@ function resolveRetryableManagedChildTaskFlow(flowId: string): {
     return {
       flowFound: true,
       retryable: false,
+      needsUserAction: flow.status === "blocked",
       flow,
       latestTask,
       reason: "Flow has no stored child-task launch details.",
@@ -456,9 +472,28 @@ function resolveRetryableManagedChildTaskFlow(flowId: string): {
   return {
     flowFound: true,
     retryable: true,
+    needsUserAction: flow.status === "blocked",
     flow,
     latestTask,
     launch,
+    reason:
+      flow.status === "blocked"
+        ? "Retry can relaunch the child task once the required user action is complete."
+        : "Retry can relaunch the child task with the stored spawn settings.",
+  };
+}
+
+export function getManagedChildTaskFlowRetryEligibility(
+  flowId: string,
+): ManagedChildTaskFlowRetryEligibility {
+  const resolved = resolveRetryableManagedChildTaskFlow(flowId);
+  return {
+    found: resolved.flowFound,
+    retryable: resolved.retryable,
+    reason: resolved.reason ?? (resolved.retryable ? "Retry available." : "Retry unavailable."),
+    needsUserAction: resolved.needsUserAction,
+    ...(resolved.flow ? { flow: resolved.flow } : {}),
+    ...(resolved.latestTask ? { previousTask: resolved.latestTask } : {}),
   };
 }
 
@@ -479,6 +514,7 @@ async function retryManagedChildTaskFlowUnchecked(params: {
   const flow = resolved.flow;
   const launch = resolved.launch;
   const updatedAt = Date.now();
+  const nextRetryCount = Math.max(0, flow.retryCount ?? 0) + 1;
 
   if (launch.runtime === "subagent") {
     const { spawnSubagentDirect } = await import("../agents/subagent-spawn.js");
@@ -519,6 +555,8 @@ async function retryManagedChildTaskFlowUnchecked(params: {
       patch: {
         status: "waiting",
         currentStep: "wait_worker",
+        retryCount: nextRetryCount,
+        lastRetryAt: updatedAt,
         stateJson: buildManagedChildTaskRetryState({
           flow: refreshed,
           launch,
@@ -591,6 +629,8 @@ async function retryManagedChildTaskFlowUnchecked(params: {
     patch: {
       status: "waiting",
       currentStep: "wait_worker",
+      retryCount: nextRetryCount,
+      lastRetryAt: updatedAt,
       stateJson: buildManagedChildTaskRetryState({
         flow: refreshed,
         launch,
