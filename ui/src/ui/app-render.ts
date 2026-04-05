@@ -534,7 +534,7 @@ export function renderApp(state: AppViewState) {
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
             <div class="topbar-status">
-              ${!state.connected && !showLoginGate
+              ${!state.connected
                 ? html`<div class="pill topbar-connection-pill" title="Gateway status: Connecting">
                     <span class="statusDot warn" aria-hidden="true"></span>
                     <span>Connecting...</span>

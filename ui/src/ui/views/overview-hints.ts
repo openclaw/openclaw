@@ -129,8 +129,8 @@ export function shouldRenderLoginGate(params: {
   if (!params.gatewayUrl.trim()) {
     return true;
   }
-  if (params.lastErrorCode) {
-    return LOGIN_REQUIRED_CODES.has(params.lastErrorCode);
+  if (params.lastErrorCode && LOGIN_REQUIRED_CODES.has(params.lastErrorCode)) {
+    return true;
   }
   if (!params.lastError) {
     return false;
