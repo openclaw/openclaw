@@ -9,12 +9,13 @@ title: "Text-to-Speech (legacy path)"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, Microsoft, MiniMax, or OpenAI.
+OpenClaw can convert outbound replies into audio using ElevenLabs, Inworld, Microsoft, MiniMax, or OpenAI.
 It works anywhere OpenClaw can send audio.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
+- **Inworld** (primary or fallback provider; uses the Inworld Voice API)
 - **Microsoft** (primary or fallback provider; current bundled implementation uses `node-edge-tts`)
 - **MiniMax** (primary or fallback provider; uses the T2A v2 API)
 - **OpenAI** (primary or fallback provider; also used for summaries)
@@ -34,9 +35,10 @@ or ElevenLabs.
 
 ## Optional keys
 
-If you want OpenAI, ElevenLabs, or MiniMax:
+If you want OpenAI, ElevenLabs, Inworld, or MiniMax:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
+- `INWORLD_API_KEY`
 - `MINIMAX_API_KEY`
 - `OPENAI_API_KEY`
 
@@ -52,6 +54,8 @@ so that provider must also be authenticated if you enable summaries.
 - [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
+- [Inworld Voice API](https://docs.inworld.ai/docs/tts-api/getting-started/)
+- [Inworld Voice API Reference](https://docs.inworld.ai/docs/tts-api/reference/)
 - [MiniMax T2A v2 API](https://platform.minimaxi.com/document/T2A%20V2)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
@@ -145,6 +149,33 @@ Full schema is in [Gateway configuration](/gateway/configuration).
   },
 }
 ```
+
+### Inworld primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "inworld",
+      providers: {
+        inworld: {
+          // Base64 API key copied from the Inworld Portal — do not re-encode.
+          apiKey: "your-base64-key-from-inworld-portal",
+          modelId: "inworld-tts-1.5-max",
+          voiceId: "Ashley",
+        },
+      },
+    },
+  },
+}
+```
+
+`apiKey`, `modelId`, and `voiceId` are all required — the provider will not report itself
+as configured if any of them is missing. `baseUrl` defaults to `https://api.inworld.ai`.
+
+**V1 scope**: non-streaming synthesis only. Telephony/talk paths, voice discovery, and
+streaming are not supported in V1. Only `voiceId` can be overridden via model directives.
 
 ### MiniMax primary
 

@@ -1,0 +1,11 @@
+{
+  "id": "inworld",
+  "contracts": {
+    "speechProviders": ["inworld"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
