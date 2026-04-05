@@ -940,8 +940,9 @@ describe("sanitizeSessionHistory", () => {
     const laterToolId = "toolu_01ZZZZZZ9999999999";
     const nativeAnthropicPolicy: TranscriptPolicy = {
       sanitizeMode: "full",
-      sanitizeToolCallIds: false,
-      toolCallIdMode: undefined,
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
       repairToolUseResultPairing: true,
       preserveSignatures: true,
       sanitizeThoughtSignatures: undefined,

@@ -37,7 +37,11 @@ export function buildOpenAICompatibleReplayPolicy(
 }
 
 export function buildStrictAnthropicReplayPolicy(
-  options: { dropThinkingBlocks?: boolean; sanitizeToolCallIds?: boolean } = {},
+  options: {
+    dropThinkingBlocks?: boolean;
+    sanitizeToolCallIds?: boolean;
+    preserveNativeAnthropicToolUseIds?: boolean;
+  } = {},
 ): ProviderReplayPolicy {
   const sanitizeToolCallIds = options.sanitizeToolCallIds ?? true;
   return {
@@ -46,6 +50,9 @@ export function buildStrictAnthropicReplayPolicy(
       ? {
           sanitizeToolCallIds: true,
           toolCallIdMode: "strict" as const,
+          ...(options.preserveNativeAnthropicToolUseIds
+            ? { preserveNativeAnthropicToolUseIds: true }
+            : {}),
         }
       : {}),
     preserveSignatures: true,
@@ -65,7 +72,8 @@ export function buildAnthropicReplayPolicyForModel(modelId?: string): ProviderRe
 export function buildNativeAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
   return buildStrictAnthropicReplayPolicy({
     dropThinkingBlocks: (modelId?.toLowerCase() ?? "").includes("claude"),
-    sanitizeToolCallIds: false,
+    sanitizeToolCallIds: true,
+    preserveNativeAnthropicToolUseIds: true,
   });
 }
 

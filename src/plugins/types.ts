@@ -583,6 +583,7 @@ export type ProviderReplayPolicy = {
   sanitizeMode?: ProviderReplaySanitizeMode;
   sanitizeToolCallIds?: boolean;
   toolCallIdMode?: ProviderReplayToolCallIdMode;
+  preserveNativeAnthropicToolUseIds?: boolean;
   preserveSignatures?: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;

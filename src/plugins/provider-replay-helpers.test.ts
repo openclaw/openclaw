@@ -44,21 +44,18 @@ describe("provider replay helpers", () => {
     );
   });
 
-  it("builds native Anthropic replay policy without tool-call id rewriting", () => {
+  it("builds native Anthropic replay policy with selective tool-call id preservation", () => {
     expect(buildNativeAnthropicReplayPolicyForModel("claude-sonnet-4-6")).toMatchObject({
       sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
       allowSyntheticToolResults: true,
       dropThinkingBlocks: true,
     });
-    expect(buildNativeAnthropicReplayPolicyForModel("claude-sonnet-4-6")).not.toHaveProperty(
-      "sanitizeToolCallIds",
-    );
-    expect(buildNativeAnthropicReplayPolicyForModel("claude-sonnet-4-6")).not.toHaveProperty(
-      "toolCallIdMode",
-    );
   });
 
   it("builds hybrid anthropic or openai replay policy", () => {
