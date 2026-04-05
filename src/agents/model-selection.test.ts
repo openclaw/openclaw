@@ -4,6 +4,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
+  isCliProvider,
   parseModelRef,
   buildModelAliasIndex,
   normalizeModelSelection,
@@ -127,6 +128,12 @@ describe("model-selection", () => {
       expect(normalizeProviderIdForAuth("volcengine-plan")).toBe("volcengine");
       expect(normalizeProviderIdForAuth("byteplus-plan")).toBe("byteplus");
       expect(normalizeProviderIdForAuth("openai")).toBe("openai");
+    });
+  });
+
+  describe("isCliProvider", () => {
+    it("treats claude-cli as a CLI provider even without explicit cliBackends config", () => {
+      expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
     });
   });
 

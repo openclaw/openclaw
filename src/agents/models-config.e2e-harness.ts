@@ -299,6 +299,12 @@ async function inferImplicitProviderTestPluginIds(params: {
       providerIds.add(pluginId);
     }
   }
+  const legacyGrokApiKey = (
+    params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined
+  )?.grok?.apiKey;
+  if (legacyGrokApiKey !== undefined) {
+    providerIds.add("xai");
+  }
   if (providerIds.size === 0) {
     // No config/env/auth hints: keep ambient local auto-discovery focused on the
     // one provider that is expected to probe localhost in tests.

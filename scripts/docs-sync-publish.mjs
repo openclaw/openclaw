@@ -66,6 +66,34 @@ const GENERATED_LOCALES = [
     tmFile: "ar.tm.jsonl",
     navMode: "clone-en",
   },
+  {
+    language: "it",
+    dir: "it",
+    navFile: "it-navigation.json",
+    tmFile: "it.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "tr",
+    dir: "tr",
+    navFile: "tr-navigation.json",
+    tmFile: "tr.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "id",
+    dir: "id",
+    navFile: "id-navigation.json",
+    tmFile: "id.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "pl",
+    dir: "pl",
+    navFile: "pl-navigation.json",
+    tmFile: "pl.tm.jsonl",
+    navMode: "clone-en",
+  },
 ];
 
 function parseArgs(argv) {

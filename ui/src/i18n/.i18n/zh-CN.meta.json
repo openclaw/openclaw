@@ -17,8 +17,11 @@
     "cron.jobs.schedule",
     "languages.en",
     "languages.fr",
+    "languages.id",
     "languages.jaJP",
     "languages.ko",
+    "languages.pl",
+    "languages.tr",
     "overview.access.wsUrl",
     "overview.notes.tailscaleTitle",
     "subtitles.dreams",
@@ -211,12 +214,12 @@
     "usage.sessions.title",
     "usage.sessions.total"
   ],
-  "generatedAt": "2026-04-05T11:44:58.662Z",
+  "generatedAt": "2026-04-05T13:36:35.294Z",
   "locale": "zh-CN",
   "model": "",
   "provider": "",
-  "sourceHash": "e482fa23a5ebfb33fa807a476f14ddb196e51d099b046a19e9573d54acdcd931",
-  "totalKeys": 509,
+  "sourceHash": "5c00e96eb5dbb2481d3d336a262f39930688803e4abd230f5e858877724d3b2e",
+  "totalKeys": 512,
   "translatedKeys": 299,
   "workflow": 1
 }

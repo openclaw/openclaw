@@ -87,6 +87,9 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "ja-JP", fileName: "ja-JP.ts", exportName: "ja_JP", languageKey: "jaJP" },
   { locale: "ko", fileName: "ko.ts", exportName: "ko", languageKey: "ko" },
   { locale: "fr", fileName: "fr.ts", exportName: "fr", languageKey: "fr" },
+  { locale: "tr", fileName: "tr.ts", exportName: "tr", languageKey: "tr" },
+  { locale: "id", fileName: "id.ts", exportName: "id", languageKey: "id" },
+  { locale: "pl", fileName: "pl.ts", exportName: "pl", languageKey: "pl" },
 ];
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
@@ -169,6 +172,12 @@ function prettyLanguageLabel(locale: string): string {
       return "Korean";
     case "fr":
       return "French";
+    case "tr":
+      return "Turkish";
+    case "id":
+      return "Indonesian";
+    case "pl":
+      return "Polish";
     case "de":
       return "German";
     case "es":

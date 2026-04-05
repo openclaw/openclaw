@@ -5,9 +5,12 @@ import { de } from "../locales/de.ts";
 import { en } from "../locales/en.ts";
 import { es } from "../locales/es.ts";
 import { fr } from "../locales/fr.ts";
+import { id } from "../locales/id.ts";
 import { ja_JP } from "../locales/ja-JP.ts";
 import { ko } from "../locales/ko.ts";
+import { pl } from "../locales/pl.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
+import { tr } from "../locales/tr.ts";
 import { zh_CN } from "../locales/zh-CN.ts";
 import { zh_TW } from "../locales/zh-TW.ts";
 
@@ -99,9 +102,12 @@ describe("i18n", () => {
     expect((de.common as { version?: string }).version).toBeTruthy();
     expect((es.common as { version?: string }).version).toBeTruthy();
     expect((fr.common as { version?: string }).version).toBeTruthy();
+    expect((id.common as { version?: string }).version).toBeTruthy();
     expect((ja_JP.common as { version?: string }).version).toBeTruthy();
     expect((ko.common as { version?: string }).version).toBeTruthy();
+    expect((pl.common as { version?: string }).version).toBeTruthy();
     expect((pt_BR.common as { version?: string }).version).toBeTruthy();
+    expect((tr.common as { version?: string }).version).toBeTruthy();
     expect((zh_CN.common as { version?: string }).version).toBeTruthy();
     expect((zh_TW.common as { version?: string }).version).toBeTruthy();
   });
@@ -112,9 +118,12 @@ describe("i18n", () => {
       de,
       es,
       fr,
+      id,
       ja_JP,
       ko,
+      pl,
       pt_BR,
+      tr,
       zh_CN,
       zh_TW,
     })) {
