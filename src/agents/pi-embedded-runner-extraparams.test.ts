@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createConfiguredOllamaCompatNumCtxWrapper } from "../../extensions/ollama/runtime-api.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -9,7 +10,6 @@ import {
   resolveAnthropicFastMode,
   resolveAnthropicServiceTier,
 } from "../../test/helpers/providers/anthropic-contract.js";
-import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
   createOpenRouterSystemCacheWrapper,
@@ -48,17 +48,17 @@ function createTestXaiFastModeWrapper(
   };
 }
 
-import {
-  applyExtraParamsToAgent,
-  resolveAgentTransportOverride,
-  resolveExtraParams,
-  resolvePreparedExtraParams,
-} from "./pi-embedded-runner.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "./pi-embedded-runner/anthropic-family-tool-payload-compat.js";
 import {
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
 } from "./pi-embedded-runner/bedrock-stream-wrappers.js";
+import {
+  applyExtraParamsToAgent,
+  resolveAgentTransportOverride,
+  resolveExtraParams,
+  resolvePreparedExtraParams,
+} from "./pi-embedded-runner/extra-params.js";
 import { createGoogleThinkingPayloadWrapper } from "./pi-embedded-runner/google-stream-wrappers.js";
 import { log } from "./pi-embedded-runner/logger.js";
 import { createMinimaxFastModeWrapper } from "./pi-embedded-runner/minimax-stream-wrappers.js";
@@ -250,6 +250,20 @@ describe("resolveExtraParams", () => {
     expect(result).toBeUndefined();
   });
 
+  it("applies default runtime params for OpenAI GPT-5 models", () => {
+    const result = resolveExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5.4",
+    });
+
+    expect(result).toEqual({
+      parallel_tool_calls: true,
+      text_verbosity: "low",
+      openaiWsWarmup: true,
+    });
+  });
+
   it("returns params for exact provider/model key", () => {
     const result = resolveExtraParams({
       cfg: {
@@ -413,6 +427,8 @@ describe("resolveExtraParams", () => {
     });
 
     expect(result).toEqual({
+      openaiWsWarmup: true,
+      parallel_tool_calls: true,
       text_verbosity: "low",
     });
   });
@@ -760,8 +776,10 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).toEqual({
       context_management: [{ type: "compaction", compact_threshold: 80000 }],
+      parallel_tool_calls: true,
       reasoning: { effort: "none", summary: "auto" },
       store: true,
+      text: { verbosity: "low" },
     });
   });
 
@@ -789,9 +807,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]).toEqual({
-      reasoning: { effort: "none", summary: "auto" },
-    });
+    expect(payloads[0]).not.toHaveProperty("reasoning");
   });
 
   it("injects parallel_tool_calls for openai-completions payloads when configured", () => {
@@ -1620,6 +1636,22 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
     expect(calls[0]?.openaiWsWarmup).toBe(true);
+  });
+
+  it("injects GPT-5 default parallel tool calls and low verbosity for OpenAI Responses payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as Model<"openai-responses">,
+      payload: {},
+    });
+
+    expect(payload.parallel_tool_calls).toBe(true);
+    expect(payload.text).toEqual({ verbosity: "low" });
   });
 
   it("injects native Codex web_search for direct openai-codex Responses models", () => {
@@ -2572,7 +2604,7 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
     expect(payload).not.toHaveProperty("reasoning");
-    expect(payload).not.toHaveProperty("text");
+    expect(payload.text).toEqual({ verbosity: "low" });
     expect(payload.service_tier).toBe("priority");
   });
 
@@ -2989,7 +3021,7 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
     expect(payload).not.toHaveProperty("reasoning");
-    expect(payload).not.toHaveProperty("text");
+    expect(payload.text).toEqual({ verbosity: "low" });
     expect(payload.service_tier).toBe("priority");
   });
 

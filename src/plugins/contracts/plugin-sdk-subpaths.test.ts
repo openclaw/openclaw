@@ -162,6 +162,14 @@ function expectSourceOmitsImportPattern(subpath: string, specifier: string) {
   expect(source).not.toMatch(new RegExp(`\\bimport\\(\\s*["']${escapedSpecifier}["']\\s*\\)`, "u"));
 }
 
+function isGeneratedBundledFacadeSubpath(subpath: string): boolean {
+  const source = readPluginSdkSource(subpath);
+  return (
+    source.startsWith("// Manual facade.") &&
+    sourceMentionsIdentifier(source, "loadBundledPluginPublicSurfaceModuleSync")
+  );
+}
+
 describe("plugin-sdk subpath exports", () => {
   it("keeps the curated public list free of internal implementation subpaths", () => {
     for (const deniedSubpath of [
@@ -185,14 +193,21 @@ describe("plugin-sdk subpath exports", () => {
     }
   });
 
-  it("keeps removed bundled-channel prefixes out of the public sdk list", () => {
+  it("keeps removed bundled-channel aliases out of the public sdk list", () => {
+    const removedChannelAliases = new Set(["discord", "signal", "slack", "telegram", "whatsapp"]);
+    const banned = pluginSdkSubpaths.filter((subpath) => removedChannelAliases.has(subpath));
+    expect(banned).toEqual([]);
+  });
+
+  it("keeps generated bundled-channel facades out of the public sdk list", () => {
     const bannedPrefixes = ["discord", "signal", "slack", "telegram", "whatsapp"];
     const banned = pluginSdkSubpaths.filter((subpath) =>
       bannedPrefixes.some(
         (prefix) =>
-          subpath === prefix ||
-          subpath.startsWith(`${prefix}-`) ||
-          subpath.startsWith(`${prefix}.`),
+          (subpath === prefix ||
+            subpath.startsWith(`${prefix}-`) ||
+            subpath.startsWith(`${prefix}.`)) &&
+          isGeneratedBundledFacadeSubpath(subpath),
       ),
     );
     expect(banned).toEqual([]);
@@ -328,13 +343,6 @@ describe("plugin-sdk subpath exports", () => {
       ],
     });
     expectSourceMentions("runtime", ["createLoggerBackedRuntime"]);
-    expectSourceMentions("huggingface", [
-      "buildHuggingfaceModelDefinition",
-      "buildHuggingfaceProvider",
-      "discoverHuggingfaceModels",
-      "HUGGINGFACE_MODEL_CATALOG",
-      "isHuggingfacePolicyLocked",
-    ]);
     expectSourceMentions("conversation-runtime", [
       "recordInboundSession",
       "recordInboundSessionMetaSafe",
@@ -348,15 +356,15 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceContains(
       "memory-core-host-runtime-core",
-      'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
+      'export * from "../memory-host-sdk/runtime-core.js";',
     );
     expectSourceContains(
       "memory-core-host-runtime-cli",
-      'export * from "../../packages/memory-host-sdk/src/runtime-cli.js";',
+      'export * from "../memory-host-sdk/runtime-cli.js";',
     );
     expectSourceContains(
       "memory-core-host-runtime-files",
-      'export * from "../../packages/memory-host-sdk/src/runtime-files.js";',
+      'export * from "../memory-host-sdk/runtime-files.js";',
     );
   });
 
@@ -654,6 +662,7 @@ describe("plugin-sdk subpath exports", () => {
       "resolvePinnedHostnameWithPolicy",
       "formatErrorMessage",
       "assertHttpUrlTargetsPrivateNetwork",
+      "ssrfPolicyFromDangerouslyAllowPrivateNetwork",
       "ssrfPolicyFromAllowPrivateNetwork",
     ]);
 
@@ -676,7 +685,6 @@ describe("plugin-sdk subpath exports", () => {
         "VLLM_DEFAULT_BASE_URL",
       ],
     });
-    expectSourceOmitsSnippet("provider-setup", "./ollama-surface.js");
     expectSourceOmitsImportPattern("provider-setup", "./vllm.js");
     expectSourceOmitsImportPattern("provider-setup", "./sglang.js");
     expectSourceMentions("provider-auth", [
@@ -804,7 +812,6 @@ describe("plugin-sdk subpath exports", () => {
       channelActionsSdk,
       globalSingletonSdk,
       textRuntimeSdk,
-      huggingfaceSdk,
       pluginEntrySdk,
       channelLifecycleSdk,
       channelPairingSdk,
@@ -815,7 +822,6 @@ describe("plugin-sdk subpath exports", () => {
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-actions"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/global-singleton"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/huggingface"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-lifecycle"),
       importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-pairing"),
@@ -835,12 +841,9 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof textRuntimeSdk.createScopedExpiringIdCache).toBe("function");
     expect(typeof textRuntimeSdk.resolveGlobalMap).toBe("function");
     expect(typeof textRuntimeSdk.resolveGlobalSingleton).toBe("function");
-    expect(typeof huggingfaceSdk.buildHuggingfaceProvider).toBe("function");
-    expect(typeof huggingfaceSdk.discoverHuggingfaceModels).toBe("function");
-    expect(Array.isArray(huggingfaceSdk.HUGGINGFACE_MODEL_CATALOG)).toBe(true);
-
     expectSourceMentions("infra-runtime", ["createRuntimeOutboundDelegates"]);
     expectSourceContains("infra-runtime", "../infra/outbound/send-deps.js");
+    expectSourceMentions("error-runtime", ["formatUncaughtError", "isApprovalNotFoundError"]);
 
     expect(typeof channelLifecycleSdk.createDraftStreamLoop).toBe("function");
     expect(typeof channelLifecycleSdk.createFinalizableDraftLifecycle).toBe("function");

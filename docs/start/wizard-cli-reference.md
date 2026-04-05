@@ -86,7 +86,7 @@ It does not install or modify anything on the remote host.
   </Step>
   <Step title="Health check">
     - Starts gateway (if needed) and runs `openclaw health`.
-    - `openclaw status --deep` adds gateway health probes to status output.
+    - `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported.
   </Step>
   <Step title="Skills">
     - Reads available skills and checks requirements.
@@ -131,10 +131,10 @@ What you set:
   </Accordion>
   <Accordion title="Anthropic Claude CLI">
     Reuses a local Claude CLI login on the gateway host and switches model
-    selection to `claude-cli/...`.
+    selection to a canonical `claude-cli/claude-*` ref.
 
-    This is the preferred interactive Anthropic path in `openclaw onboard` and
-    `openclaw configure`.
+    This is an available local fallback path in `openclaw onboard` and
+    `openclaw configure`. For production, prefer an Anthropic API key.
 
     - macOS: checks Keychain item "Claude Code-credentials"
     - Linux and Windows: reuses `~/.claude/.credentials.json` if present

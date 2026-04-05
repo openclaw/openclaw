@@ -539,6 +539,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(loadSessionStore).toHaveBeenCalledWith("/tmp/sessions.json", { skipCache: true });
   });
 
+  it("does not expose reasoning preview callbacks unless session reasoning is stream", async () => {
+    let seenReasoningCallback: unknown;
+    const answerDraftStream = createDraftStream(999);
+    createTelegramDraftStream.mockImplementationOnce(() => answerDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      seenReasoningCallback = replyOptions?.onReasoningStream;
+      await replyOptions?.onPartialReply?.({
+        text: "<think>internal chain of thought</think>Visible answer",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(seenReasoningCallback).toBeUndefined();
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Visible answer");
+  });
+
   it("does not overwrite finalized preview when additional final payloads are sent", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);

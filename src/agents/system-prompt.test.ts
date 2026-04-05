@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
@@ -125,6 +126,9 @@ describe("buildAgentSystemPrompt", () => {
       "Use exec/process only for commands that start now and continue running in the background.",
     );
     expect(prompt).toContain(
+      "For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion, and use it for logs, status, input, or intervention.",
+    );
+    expect(prompt).toContain(
       "Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.",
     );
     expect(prompt).toContain("You have no independent goals");
@@ -165,6 +169,33 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds stronger execution-bias guidance for actionable turns", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("## Execution Bias");
+    expect(prompt).toContain(
+      "If the user asks you to do the work, start doing it in the same turn.",
+    );
+    expect(prompt).toContain(
+      "Commentary-only turns are incomplete when tools are available and the next action is clear.",
+    );
+  });
+
+  it("narrows silent reply guidance to true no-delivery cases", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain(
+      `Use ${SILENT_REPLY_TOKEN} ONLY when no user-visible reply is required.`,
+    );
+    expect(prompt).toContain(
+      "Never use it to avoid doing requested work or to end an actionable turn early.",
+    );
+  });
+
   it("keeps manual /approve instructions for non-native approval channels", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -177,17 +208,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("allow-once|allow-always|deny");
   });
 
-  it("keeps manual /approve instructions for telegram runtime prompts", () => {
+  it("tells native approval channels not to duplicate plain chat /approve instructions", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: { channel: "telegram", capabilities: ["inlineButtons"] },
     });
 
     expect(prompt).toContain(
-      "When exec returns approval-pending, include the concrete /approve command from tool output",
+      "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
+    );
+    expect(prompt).toContain(
+      "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
     );
     expect(prompt).not.toContain(
-      "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear",
+      "When exec returns approval-pending, include the concrete /approve command from tool output",
     );
   });
 
@@ -294,6 +328,9 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain(
       "Use exec/process only for commands that start now and continue running in the background.",
+    );
+    expect(prompt).toContain(
+      "For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion, and use it for logs, status, input, or intervention.",
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
@@ -613,6 +650,54 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("# Project Context");
   });
 
+  it("orders stable project context before the cache boundary and moves HEARTBEAT below it", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        { path: "HEARTBEAT.md", content: "Check inbox." },
+        { path: "MEMORY.md", content: "Long-term notes." },
+        { path: "AGENTS.md", content: "Follow repo rules." },
+        { path: "SOUL.md", content: "Warm but direct." },
+        { path: "TOOLS.md", content: "Prefer rg." },
+      ],
+    });
+
+    const agentsIndex = prompt.indexOf("## AGENTS.md");
+    const soulIndex = prompt.indexOf("## SOUL.md");
+    const toolsIndex = prompt.indexOf("## TOOLS.md");
+    const memoryIndex = prompt.indexOf("## MEMORY.md");
+    const boundaryIndex = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const heartbeatHeadingIndex = prompt.indexOf("# Dynamic Project Context");
+    const heartbeatFileIndex = prompt.indexOf("## HEARTBEAT.md");
+
+    expect(agentsIndex).toBeGreaterThan(-1);
+    expect(soulIndex).toBeGreaterThan(agentsIndex);
+    expect(toolsIndex).toBeGreaterThan(soulIndex);
+    expect(memoryIndex).toBeGreaterThan(toolsIndex);
+    expect(boundaryIndex).toBeGreaterThan(memoryIndex);
+    expect(heartbeatHeadingIndex).toBeGreaterThan(boundaryIndex);
+    expect(heartbeatFileIndex).toBeGreaterThan(heartbeatHeadingIndex);
+    expect(prompt).toContain(
+      "The following frequently-changing project context files are kept below the cache boundary when possible:",
+    );
+  });
+
+  it("keeps heartbeat-only project context below the cache boundary", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "HEARTBEAT.md", content: "Check inbox." }],
+    });
+
+    const boundaryIndex = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const projectContextIndex = prompt.indexOf("# Project Context");
+    const heartbeatFileIndex = prompt.indexOf("## HEARTBEAT.md");
+
+    expect(boundaryIndex).toBeGreaterThan(-1);
+    expect(projectContextIndex).toBeGreaterThan(boundaryIndex);
+    expect(heartbeatFileIndex).toBeGreaterThan(projectContextIndex);
+    expect(prompt).not.toContain("# Dynamic Project Context");
+  });
+
   it("summarizes the message tool when available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -648,7 +733,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("channel=telegram");
-    expect(prompt.toLowerCase()).toContain("capabilities=inlinebuttons");
+    expect(prompt).toContain("capabilities=inlinebuttons");
   });
 
   it("includes agent id in runtime when provided", () => {

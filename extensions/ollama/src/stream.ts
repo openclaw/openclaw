@@ -23,8 +23,8 @@ import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
   streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime";
+} from "openclaw/plugin-sdk/provider-stream-shared";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   parseJsonObjectPreservingUnsafeIntegers,

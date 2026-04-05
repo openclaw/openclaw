@@ -31,19 +31,19 @@ describe("plugin activation boundary", () => {
     | undefined;
   let browserHelpersPromise:
     | Promise<{
-        DEFAULT_AI_SNAPSHOT_MAX_CHARS: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_AI_SNAPSHOT_MAX_CHARS;
-        DEFAULT_BROWSER_EVALUATE_ENABLED: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_BROWSER_EVALUATE_ENABLED;
-        DEFAULT_OPENCLAW_BROWSER_COLOR: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_OPENCLAW_BROWSER_COLOR;
-        DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
-        DEFAULT_UPLOAD_DIR: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_UPLOAD_DIR;
-        closeTrackedBrowserTabsForSessions: typeof import("./plugin-sdk/browser-runtime.js").closeTrackedBrowserTabsForSessions;
-        parseBrowserMajorVersion: typeof import("./plugin-sdk/browser-runtime.js").parseBrowserMajorVersion;
-        redactCdpUrl: typeof import("./plugin-sdk/browser-runtime.js").redactCdpUrl;
-        readBrowserVersion: typeof import("./plugin-sdk/browser-runtime.js").readBrowserVersion;
-        resolveBrowserConfig: typeof import("./plugin-sdk/browser-runtime.js").resolveBrowserConfig;
-        resolveBrowserControlAuth: typeof import("./plugin-sdk/browser-runtime.js").resolveBrowserControlAuth;
-        resolveGoogleChromeExecutableForPlatform: typeof import("./plugin-sdk/browser-runtime.js").resolveGoogleChromeExecutableForPlatform;
-        resolveProfile: typeof import("./plugin-sdk/browser-runtime.js").resolveProfile;
+        DEFAULT_AI_SNAPSHOT_MAX_CHARS: typeof import("./plugin-sdk/browser-config.js").DEFAULT_AI_SNAPSHOT_MAX_CHARS;
+        DEFAULT_BROWSER_EVALUATE_ENABLED: typeof import("./plugin-sdk/browser-config.js").DEFAULT_BROWSER_EVALUATE_ENABLED;
+        DEFAULT_OPENCLAW_BROWSER_COLOR: typeof import("./plugin-sdk/browser-config.js").DEFAULT_OPENCLAW_BROWSER_COLOR;
+        DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: typeof import("./plugin-sdk/browser-config.js").DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
+        DEFAULT_UPLOAD_DIR: typeof import("./plugin-sdk/browser-config.js").DEFAULT_UPLOAD_DIR;
+        closeTrackedBrowserTabsForSessions: typeof import("./plugin-sdk/browser-maintenance.js").closeTrackedBrowserTabsForSessions;
+        parseBrowserMajorVersion: typeof import("./plugin-sdk/browser-host-inspection.js").parseBrowserMajorVersion;
+        redactCdpUrl: typeof import("./plugin-sdk/browser-config.js").redactCdpUrl;
+        readBrowserVersion: typeof import("./plugin-sdk/browser-host-inspection.js").readBrowserVersion;
+        resolveBrowserConfig: typeof import("./plugin-sdk/browser-config.js").resolveBrowserConfig;
+        resolveBrowserControlAuth: typeof import("./plugin-sdk/browser-config.js").resolveBrowserControlAuth;
+        resolveGoogleChromeExecutableForPlatform: typeof import("./plugin-sdk/browser-host-inspection.js").resolveGoogleChromeExecutableForPlatform;
+        resolveProfile: typeof import("./plugin-sdk/browser-config.js").resolveProfile;
       }>
     | undefined;
   let browserAmbientImportsPromise: Promise<void> | undefined;
@@ -76,20 +76,24 @@ describe("plugin activation boundary", () => {
   }
 
   function importBrowserHelpers() {
-    browserHelpersPromise ??= import("./plugin-sdk/browser-runtime.js").then((module) => ({
-      DEFAULT_AI_SNAPSHOT_MAX_CHARS: module.DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-      DEFAULT_BROWSER_EVALUATE_ENABLED: module.DEFAULT_BROWSER_EVALUATE_ENABLED,
-      DEFAULT_OPENCLAW_BROWSER_COLOR: module.DEFAULT_OPENCLAW_BROWSER_COLOR,
-      DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: module.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-      DEFAULT_UPLOAD_DIR: module.DEFAULT_UPLOAD_DIR,
-      closeTrackedBrowserTabsForSessions: module.closeTrackedBrowserTabsForSessions,
-      parseBrowserMajorVersion: module.parseBrowserMajorVersion,
-      redactCdpUrl: module.redactCdpUrl,
-      readBrowserVersion: module.readBrowserVersion,
-      resolveBrowserConfig: module.resolveBrowserConfig,
-      resolveBrowserControlAuth: module.resolveBrowserControlAuth,
-      resolveGoogleChromeExecutableForPlatform: module.resolveGoogleChromeExecutableForPlatform,
-      resolveProfile: module.resolveProfile,
+    browserHelpersPromise ??= Promise.all([
+      import("./plugin-sdk/browser-config.js"),
+      import("./plugin-sdk/browser-host-inspection.js"),
+      import("./plugin-sdk/browser-maintenance.js"),
+    ]).then(([config, inspection, maintenance]) => ({
+      DEFAULT_AI_SNAPSHOT_MAX_CHARS: config.DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+      DEFAULT_BROWSER_EVALUATE_ENABLED: config.DEFAULT_BROWSER_EVALUATE_ENABLED,
+      DEFAULT_OPENCLAW_BROWSER_COLOR: config.DEFAULT_OPENCLAW_BROWSER_COLOR,
+      DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: config.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+      DEFAULT_UPLOAD_DIR: config.DEFAULT_UPLOAD_DIR,
+      closeTrackedBrowserTabsForSessions: maintenance.closeTrackedBrowserTabsForSessions,
+      parseBrowserMajorVersion: inspection.parseBrowserMajorVersion,
+      redactCdpUrl: config.redactCdpUrl,
+      readBrowserVersion: inspection.readBrowserVersion,
+      resolveBrowserConfig: config.resolveBrowserConfig,
+      resolveBrowserControlAuth: config.resolveBrowserControlAuth,
+      resolveGoogleChromeExecutableForPlatform: inspection.resolveGoogleChromeExecutableForPlatform,
+      resolveProfile: config.resolveProfile,
     }));
     return browserHelpersPromise;
   }

@@ -3,6 +3,7 @@ import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
@@ -83,6 +84,8 @@ export type ChannelSetupInput = {
   audience?: string;
   useEnv?: boolean;
   homeserver?: string;
+  dangerouslyAllowPrivateNetwork?: boolean;
+  /** Compatibility alias for legacy setup callers; prefer dangerouslyAllowPrivateNetwork. */
   allowPrivateNetwork?: boolean;
   proxy?: string;
   userId?: string;
@@ -404,10 +407,31 @@ export type ChannelThreadingToolContext = {
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  defaultMarkdownTableMode?: MarkdownTableMode;
   normalizeExplicitSessionKey?: (params: {
     sessionKey: string;
     ctx: MsgContext;
   }) => string | undefined;
+  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
+  isLegacyGroupSessionKey?: (key: string) => boolean;
+  canonicalizeLegacySessionKey?: (params: {
+    key: string;
+    agentId: string;
+  }) => string | null | undefined;
+  resolveLegacyGroupSessionKey?: (ctx: MsgContext) => {
+    key: string;
+    channel: string;
+    id: string;
+    chatType: "group" | "channel";
+  } | null;
+  resolveInboundAttachmentRoots?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => string[];
+  resolveRemoteInboundAttachmentRoots?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => string[];
   resolveInboundConversation?: (params: {
     from?: string;
     to?: string;
@@ -606,6 +630,14 @@ export type ChannelMessageActionAdapter = {
     action: ChannelMessageActionName;
     args: Record<string, unknown>;
   };
+  messageActionTargetAliases?: Partial<
+    Record<
+      ChannelMessageActionName,
+      {
+        aliases: string[];
+      }
+    >
+  >;
   requiresTrustedRequesterSender?: (params: {
     action: ChannelMessageActionName;
     toolContext?: ChannelThreadingToolContext;

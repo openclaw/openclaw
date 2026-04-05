@@ -213,7 +213,7 @@ export const dispatchTelegramMessage = async ({
   const previewStreamingEnabled = streamMode !== "off";
   const canStreamAnswerDraft =
     previewStreamingEnabled && !accountBlockStreamingEnabled && !forceBlockStreamingForReasoning;
-  const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
+  const canStreamReasoningDraft = streamReasoningDraft;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;

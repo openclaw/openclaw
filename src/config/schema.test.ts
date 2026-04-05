@@ -94,10 +94,18 @@ describe("config schema", () => {
   it("exports schema + hints", () => {
     const res = baseSchema;
     const schema = res.schema as { properties?: Record<string, unknown> };
+    const gatewaySchema = schema.properties?.gateway as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    const gatewayPortSchema = gatewaySchema?.properties?.port as
+      | { title?: string; description?: string }
+      | undefined;
     expect(schema.properties?.gateway).toBeTruthy();
     expect(schema.properties?.agents).toBeTruthy();
     expect(schema.properties?.acp).toBeTruthy();
     expect(schema.properties?.$schema).toBeUndefined();
+    expect(gatewayPortSchema?.title).toBe("Gateway Port");
+    expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.defaults.groupPolicy"]?.label).toBeTruthy();
@@ -329,7 +337,13 @@ describe("config schema", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
     expect(lookup?.path).toBe("agents.list.0.runtime");
     expect(lookup?.hintPath).toBe("agents.list[].runtime");
-    expect(lookup?.schema).toEqual({});
+    // The shallow lookup schema carries field docs, but should not expose
+    // nested composition keywords (allOf, oneOf, etc.).
+    expect(lookup?.schema).not.toHaveProperty("allOf");
+    expect(lookup?.schema).not.toHaveProperty("oneOf");
+    expect(lookup?.schema).not.toHaveProperty("anyOf");
+    expect(lookup?.schema).toHaveProperty("title", "Agent Runtime");
+    expect(lookup?.schema).toHaveProperty("description");
   });
 
   it("matches wildcard ui hints for concrete lookup paths", () => {
@@ -337,6 +351,10 @@ describe("config schema", () => {
     expect(lookup?.path).toBe("agents.list.0.identity.avatar");
     expect(lookup?.hintPath).toBe("agents.list.*.identity.avatar");
     expect(lookup?.hint?.help).toContain("workspace-relative path");
+    expect(lookup?.schema).toMatchObject({
+      title: "Identity Avatar",
+      description: expect.stringContaining("Agent avatar"),
+    });
   });
 
   it("normalizes bracketed lookup paths", () => {

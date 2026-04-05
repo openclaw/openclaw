@@ -594,6 +594,7 @@ function createPluginRecord(params: {
     realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
     gatewayMethods: [],
@@ -944,8 +945,9 @@ function activatePluginRegistry(
   registry: PluginRegistry,
   cacheKey: string,
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
+  workspaceDir?: string,
 ): void {
-  setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode);
+  setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
   initializeGlobalHookRunner(registry);
 }
 
@@ -985,7 +987,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         runtime: cached.memoryRuntime,
       });
       if (shouldActivate) {
-        activatePluginRegistry(cached.registry, cacheKey, runtimeSubagentMode);
+        activatePluginRegistry(
+          cached.registry,
+          cacheKey,
+          runtimeSubagentMode,
+          options.workspaceDir,
+        );
       }
       return cached.registry;
     }
@@ -1622,7 +1629,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
   }
   if (shouldActivate) {
-    activatePluginRegistry(registry, cacheKey, runtimeSubagentMode);
+    activatePluginRegistry(registry, cacheKey, runtimeSubagentMode, options.workspaceDir);
   }
   return registry;
 }
