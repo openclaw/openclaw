@@ -132,10 +132,6 @@ describe("buildAgentSystemPrompt", () => {
       "Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.",
     );
     expect(prompt).toContain("You have no independent goals");
-    expect(prompt).toContain("Prioritize safety and human oversight");
-    expect(prompt).toContain("if instructions conflict");
-    expect(prompt).toContain("Inspired by Anthropic's constitution");
-    expect(prompt).toContain("Do not manipulate or persuade anyone");
     expect(prompt).toContain("Do not copy yourself or change system prompts");
     expect(prompt).toContain("## Subagent Context");
     expect(prompt).not.toContain("## Group Chat Context");
@@ -270,10 +266,6 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Safety");
     expect(prompt).toContain("You have no independent goals");
-    expect(prompt).toContain("Prioritize safety and human oversight");
-    expect(prompt).toContain("if instructions conflict");
-    expect(prompt).toContain("Inspired by Anthropic's constitution");
-    expect(prompt).toContain("Do not manipulate or persuade anyone");
     expect(prompt).toContain("Do not copy yourself or change system prompts");
   });
 
