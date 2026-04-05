@@ -7290,6 +7290,21 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           },
           additionalProperties: false,
         },
+        groups: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              requireMention: {
+                type: "boolean",
+              },
+            },
+            additionalProperties: false,
+          },
+        },
         network: {
           type: "object",
           properties: {
@@ -7576,6 +7591,21 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 },
                 additionalProperties: false,
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                  },
+                  additionalProperties: false,
+                },
               },
               network: {
                 type: "object",

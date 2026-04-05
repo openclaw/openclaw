@@ -792,11 +792,15 @@ describe("legacy migrate bundled channel private-network aliases", () => {
       return;
     }
     expect(validated.config.channels?.mattermost).toEqual({
+      dmPolicy: "pairing",
+      groupPolicy: "allowlist",
       network: {
         dangerouslyAllowPrivateNetwork: true,
       },
       accounts: {
         work: {
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
           network: {
             dangerouslyAllowPrivateNetwork: false,
           },
@@ -810,11 +814,15 @@ describe("legacy migrate bundled channel private-network aliases", () => {
       return;
     }
     expect(rawValidated.config.channels?.mattermost).toEqual({
+      dmPolicy: "pairing",
+      groupPolicy: "allowlist",
       network: {
         dangerouslyAllowPrivateNetwork: true,
       },
       accounts: {
         work: {
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
           network: {
             dangerouslyAllowPrivateNetwork: false,
           },
