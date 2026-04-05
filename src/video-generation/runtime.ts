@@ -16,6 +16,7 @@ import { parseVideoGenerationModelRef } from "./model-ref.js";
 import { getVideoGenerationProvider, listVideoGenerationProviders } from "./provider-registry.js";
 import type {
   GeneratedVideoAsset,
+  VideoGenerationIgnoredOverride,
   VideoGenerationResolution,
   VideoGenerationResult,
   VideoGenerationSourceAsset,
@@ -45,6 +46,7 @@ export type GenerateVideoRuntimeResult = {
   model: string;
   attempts: FallbackAttempt[];
   metadata?: Record<string, unknown>;
+  ignoredOverrides: VideoGenerationIgnoredOverride[];
 };
 
 function resolveVideoGenerationCandidates(params: {
@@ -123,6 +125,57 @@ export function listRuntimeVideoGenerationProviders(params?: { config?: OpenClaw
   return listVideoGenerationProviders(params?.config);
 }
 
+function resolveProviderVideoGenerationOverrides(params: {
+  provider: NonNullable<ReturnType<typeof getVideoGenerationProvider>>;
+  size?: string;
+  aspectRatio?: string;
+  resolution?: VideoGenerationResolution;
+  audio?: boolean;
+  watermark?: boolean;
+}) {
+  const caps = params.provider.capabilities;
+  const ignoredOverrides: VideoGenerationIgnoredOverride[] = [];
+  let size = params.size;
+  let aspectRatio = params.aspectRatio;
+  let resolution = params.resolution;
+  let audio = params.audio;
+  let watermark = params.watermark;
+
+  if (size && !caps.supportsSize) {
+    ignoredOverrides.push({ key: "size", value: size });
+    size = undefined;
+  }
+
+  if (aspectRatio && !caps.supportsAspectRatio) {
+    ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
+    aspectRatio = undefined;
+  }
+
+  if (resolution && !caps.supportsResolution) {
+    ignoredOverrides.push({ key: "resolution", value: resolution });
+    resolution = undefined;
+  }
+
+  if (typeof audio === "boolean" && !caps.supportsAudio) {
+    ignoredOverrides.push({ key: "audio", value: audio });
+    audio = undefined;
+  }
+
+  if (typeof watermark === "boolean" && !caps.supportsWatermark) {
+    ignoredOverrides.push({ key: "watermark", value: watermark });
+    watermark = undefined;
+  }
+
+  return {
+    size,
+    aspectRatio,
+    resolution,
+    audio,
+    watermark,
+    ignoredOverrides,
+  };
+}
+
 export async function generateVideo(
   params: GenerateVideoParams,
 ): Promise<GenerateVideoRuntimeResult> {
@@ -151,6 +204,14 @@ export async function generateVideo(
     }
 
     try {
+      const sanitized = resolveProviderVideoGenerationOverrides({
+        provider,
+        size: params.size,
+        aspectRatio: params.aspectRatio,
+        resolution: params.resolution,
+        audio: params.audio,
+        watermark: params.watermark,
+      });
       const requestedDurationSeconds =
         typeof params.durationSeconds === "number" && Number.isFinite(params.durationSeconds)
           ? Math.max(1, Math.round(params.durationSeconds))
@@ -171,12 +232,12 @@ export async function generateVideo(
         cfg: params.cfg,
         agentDir: params.agentDir,
         authStore: params.authStore,
-        size: params.size,
-        aspectRatio: params.aspectRatio,
-        resolution: params.resolution,
+        size: sanitized.size,
+        aspectRatio: sanitized.aspectRatio,
+        resolution: sanitized.resolution,
         durationSeconds: normalizedDurationSeconds,
-        audio: params.audio,
-        watermark: params.watermark,
+        audio: sanitized.audio,
+        watermark: sanitized.watermark,
         inputImages: params.inputImages,
         inputVideos: params.inputVideos,
       });
@@ -188,6 +249,7 @@ export async function generateVideo(
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
+        ignoredOverrides: sanitized.ignoredOverrides,
         metadata:
           typeof requestedDurationSeconds === "number" &&
           typeof normalizedDurationSeconds === "number" &&

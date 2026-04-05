@@ -145,8 +145,10 @@ The bundled `openai` plugin also registers video generation through the shared
 - Default video model: `openai/sora-2`
 - Modes: text-to-video, image-to-video, and single-video reference/edit flows
 - Current limits: 1 image or 1 video reference input
-- Current OpenAI-specific caveat: OpenClaw does not forward `aspectRatio` or
-  `resolution` overrides to the native OpenAI video API today
+- Current OpenAI-specific caveat: OpenClaw currently only forwards `size`
+  overrides for native OpenAI video generation. Unsupported optional overrides
+  such as `aspectRatio`, `resolution`, `audio`, and `watermark` are ignored
+  and reported back as a tool warning.
 
 To use OpenAI as the default video provider:
 

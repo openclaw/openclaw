@@ -70,6 +70,7 @@ describe("createVideoGenerateTool", () => {
       provider: "qwen",
       model: "wan2.6-t2v",
       attempts: [],
+      ignoredOverrides: [],
       videos: [
         {
           buffer: Buffer.from("video-bytes"),
@@ -240,6 +241,7 @@ describe("createVideoGenerateTool", () => {
       provider: "google",
       model: "veo-3.1-fast-generate-preview",
       attempts: [],
+      ignoredOverrides: [],
       videos: [
         {
           buffer: Buffer.from("video-bytes"),
@@ -319,5 +321,86 @@ describe("createVideoGenerateTool", () => {
     const result = await tool.execute("call-1", { action: "list" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
     expect(text).toContain("supportedDurationSeconds=4/6/8");
+  });
+
+  it("warns when optional provider overrides are ignored", async () => {
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "sora-2",
+        models: ["sora-2"],
+        capabilities: {
+          supportsSize: true,
+        },
+        generateVideo: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "openai",
+      model: "sora-2",
+      attempts: [],
+      ignoredOverrides: [
+        { key: "resolution", value: "720P" },
+        { key: "audio", value: false },
+        { key: "watermark", value: false },
+      ],
+      videos: [
+        {
+          buffer: Buffer.from("video-bytes"),
+          mimeType: "video/mp4",
+          fileName: "lobster.mp4",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/tmp/generated-lobster.mp4",
+      id: "generated-lobster.mp4",
+      size: 11,
+      contentType: "video/mp4",
+    });
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "openai/sora-2" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    const result = await tool.execute("call-openai-generate", {
+      prompt: "A lobster on a neon bridge",
+      size: "1280x720",
+      resolution: "720P",
+      audio: false,
+      watermark: false,
+    });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("Generated 1 video with openai/sora-2.");
+    expect(text).toContain(
+      "Warning: Ignored unsupported overrides for openai/sora-2: resolution=720P, audio=false, watermark=false.",
+    );
+    expect(result).toMatchObject({
+      details: {
+        size: "1280x720",
+        warning:
+          "Ignored unsupported overrides for openai/sora-2: resolution=720P, audio=false, watermark=false.",
+        ignoredOverrides: [
+          { key: "resolution", value: "720P" },
+          { key: "audio", value: false },
+          { key: "watermark", value: false },
+        ],
+      },
+    });
+    expect(result.details).not.toHaveProperty("resolution");
+    expect(result.details).not.toHaveProperty("audio");
+    expect(result.details).not.toHaveProperty("watermark");
   });
 });
