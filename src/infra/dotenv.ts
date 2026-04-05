@@ -200,25 +200,37 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
 export function loadGlobalRuntimeDotEnvFiles(opts?: { quiet?: boolean; stateEnvPath?: string }) {
   const quiet = opts?.quiet ?? true;
   const stateEnvPath = opts?.stateEnvPath ?? path.join(resolveConfigDir(process.env), ".env");
-  const compatGatewayEnvPath = path.join(
+  const defaultStateEnvPath = path.join(
     resolveRequiredHomeDir(process.env, os.homedir),
-    ".config",
-    "openclaw",
-    "gateway.env",
+    ".openclaw",
+    ".env",
   );
+  const hasExplicitNonDefaultStateDir =
+    process.env.OPENCLAW_STATE_DIR?.trim() !== undefined &&
+    path.resolve(stateEnvPath) !== path.resolve(defaultStateEnvPath);
   const parsedFiles = [
     readDotEnvFile({
       filePath: stateEnvPath,
       shouldBlockKey: shouldBlockRuntimeDotEnvKey,
       quiet,
     }),
-    readDotEnvFile({
-      filePath: compatGatewayEnvPath,
-      shouldBlockKey: shouldBlockRuntimeDotEnvKey,
-      quiet,
-    }),
-  ].filter((file): file is LoadedDotEnvFile => file !== null);
-  loadParsedDotEnvFiles(parsedFiles);
+  ];
+  if (!hasExplicitNonDefaultStateDir) {
+    parsedFiles.push(
+      readDotEnvFile({
+        filePath: path.join(
+          resolveRequiredHomeDir(process.env, os.homedir),
+          ".config",
+          "openclaw",
+          "gateway.env",
+        ),
+        shouldBlockKey: shouldBlockRuntimeDotEnvKey,
+        quiet,
+      }),
+    );
+  }
+  const parsed = parsedFiles.filter((file): file is LoadedDotEnvFile => file !== null);
+  loadParsedDotEnvFiles(parsed);
 }
 
 export function loadDotEnv(opts?: { quiet?: boolean }) {

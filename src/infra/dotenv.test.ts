@@ -99,9 +99,11 @@ describe("loadDotEnv", () => {
 
   it("loads the Ubuntu gateway.env compatibility fallback after ~/.openclaw/.env", async () => {
     await withIsolatedEnvAndCwd(async () => {
-      await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
         process.env.HOME = base;
-        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+        await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
         await writeEnvFile(
           path.join(base, ".config", "openclaw", "gateway.env"),
           ["FOO=from-gateway", "BAR=from-gateway"].join("\n"),
@@ -476,9 +478,11 @@ describe("loadCliDotEnv", () => {
 
   it("loads the gateway.env compatibility fallback during CLI startup", async () => {
     await withIsolatedEnvAndCwd(async () => {
-      await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
         process.env.HOME = base;
-        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        const defaultStateDir = path.join(base, ".openclaw");
+        process.env.OPENCLAW_STATE_DIR = defaultStateDir;
+        await writeEnvFile(path.join(defaultStateDir, ".env"), "FOO=from-global\n");
         await writeEnvFile(
           path.join(base, ".config", "openclaw", "gateway.env"),
           "BAR=from-gateway\n",
@@ -492,6 +496,29 @@ describe("loadCliDotEnv", () => {
 
         expect(process.env.FOO).toBe("from-global");
         expect(process.env.BAR).toBe("from-gateway");
+      });
+    });
+  });
+
+  it("does not load gateway.env when OPENCLAW_STATE_DIR is explicitly set", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir }) => {
+        const customStateDir = path.join(base, "custom-state");
+        process.env.HOME = base;
+        process.env.OPENCLAW_STATE_DIR = customStateDir;
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          "FOO=from-gateway\n",
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBeUndefined();
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(customStateDir);
+        expect(process.env.BAR).toBeUndefined();
       });
     });
   });
