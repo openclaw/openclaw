@@ -216,6 +216,13 @@ final reply is done, set `streaming: "quiet"` and add a per-user push rule for f
 
 This is usually a recipient-user setup, not a homeserver-global config change:
 
+Quick map before you start:
+
+- recipient user = the person who should receive the notification
+- bot user = the OpenClaw Matrix account that sends the reply
+- use the recipient user's access token for the API calls below
+- match `sender` in the push rule against the bot user's full MXID
+
 1. Configure OpenClaw to use quiet previews:
 
 ```json5
@@ -303,7 +310,12 @@ Replace these values before you run the command:
 
 - `https://matrix.example.org`: your homeserver base URL
 - `$USER_ACCESS_TOKEN`: the receiving user's access token
-- `@bot:example.org`: your OpenClaw Matrix bot MXID
+- `@bot:example.org`: your OpenClaw Matrix bot MXID, not the receiving user's MXID
+
+The rule is evaluated against the event sender:
+
+- authenticate with the receiving user's token
+- match `sender` against the OpenClaw bot MXID
 
 6. Verify the rule exists:
 
