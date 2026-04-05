@@ -276,11 +276,14 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ): Promise<boolean> => {
-    if (kind === "block" && normalizeOptionalString(payload.text)) {
-      if (state.accumulatedBlockText.length > 0) {
-        state.accumulatedBlockText += "\n";
+    const blockText = normalizeOptionalString(payload.text);
+    if (kind === "block" && (blockText || payload.sticker?.raw)) {
+      if (blockText) {
+        if (state.accumulatedBlockText.length > 0) {
+          state.accumulatedBlockText += "\n";
+        }
+        state.accumulatedBlockText += blockText;
       }
-      state.accumulatedBlockText += payload.text;
       state.blockCount += 1;
     }
 
