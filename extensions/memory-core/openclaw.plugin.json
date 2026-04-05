@@ -15,7 +15,7 @@
     "dreaming.storage.mode": {
       "label": "Dreaming Storage Mode",
       "placeholder": "inline",
-      "help": "Write inline to MEMORY.md and daily notes, to separate reports, or both."
+      "help": "Write inline to dreams.md, to separate reports, or both."
     },
     "dreaming.phases.light.cron": {
       "label": "Light Sleep Cron",

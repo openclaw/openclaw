@@ -22,7 +22,8 @@ a distinct job, writes to a distinct target, and runs on its own schedule.
 
 Light dreaming sorts the recent mess. It scans recent memory traces, dedupes
 them by Jaccard similarity, clusters related entries, and stages candidate
-memories into the daily memory note (`memory/YYYY-MM-DD.md`).
+memories into the shared dreaming trail file (`dreams.md`) when inline storage
+is enabled.
 
 Light does **not** write anything into `MEMORY.md`. It only organizes and
 stages. Think: "what from today might matter later?"
@@ -41,18 +42,19 @@ threshold). Think: "what is true enough to keep?"
 
 REM dreaming looks for patterns and reflection. It examines recent material,
 identifies recurring themes through concept tag clustering, and writes
-higher-order notes and reflections into the daily note.
+higher-order notes and reflections into `dreams.md` when inline storage is
+enabled.
 
-REM writes to the daily note (`memory/YYYY-MM-DD.md`), **not** `MEMORY.md`.
+REM writes to `dreams.md` in inline mode, **not** `MEMORY.md`.
 Its output is interpretive, not canonical. Think: "what pattern am I noticing?"
 
 ## Hard boundaries
 
-| Phase | Job       | Writes to                  | Does NOT write to |
-| ----- | --------- | -------------------------- | ----------------- |
-| Light | Organize  | Daily note (YYYY-MM-DD.md) | MEMORY.md         |
-| Deep  | Preserve  | MEMORY.md                  | --                |
-| REM   | Interpret | Daily note (YYYY-MM-DD.md) | MEMORY.md         |
+| Phase | Job       | Writes to                 | Does NOT write to |
+| ----- | --------- | ------------------------- | ----------------- |
+| Light | Organize  | `dreams.md` (inline mode) | MEMORY.md         |
+| Deep  | Preserve  | MEMORY.md                 | --                |
+| REM   | Interpret | `dreams.md` (inline mode) | MEMORY.md         |
 
 ## Quick start
 
@@ -105,12 +107,12 @@ for the full key list.
 
 ### Global settings
 
-| Key              | Type      | Default    | Description                                      |
-| ---------------- | --------- | ---------- | ------------------------------------------------ |
-| `enabled`        | `boolean` | `true`     | Master switch for all phases                     |
-| `timezone`       | `string`  | unset      | Timezone for schedule evaluation and daily notes |
-| `verboseLogging` | `boolean` | `false`    | Emit detailed per-run dreaming logs              |
-| `storage.mode`   | `string`  | `"inline"` | `inline`, `separate`, or `both`                  |
+| Key              | Type      | Default    | Description                                                  |
+| ---------------- | --------- | ---------- | ------------------------------------------------------------ |
+| `enabled`        | `boolean` | `true`     | Master switch for all phases                                 |
+| `timezone`       | `string`  | unset      | Timezone for schedule evaluation and dreaming date bucketing |
+| `verboseLogging` | `boolean` | `false`    | Emit detailed per-run dreaming logs                          |
+| `storage.mode`   | `string`  | `"inline"` | Inline `dreams.md`, separate reports, or both                |
 
 ### Light phase config
 
@@ -231,7 +233,8 @@ See [memory CLI](/cli/memory) for the full flag reference.
 2. Filter entries within `lookbackDays` of the current time.
 3. Deduplicate by Jaccard similarity (configurable threshold).
 4. Sort by average recall score, take up to `limit` entries.
-5. Write staged candidates into the daily note under a `## Light Sleep` block.
+5. Write staged candidates into `dreams.md` under a `## Light Sleep` block when
+   inline storage is enabled.
 
 ### Deep phase pipeline
 
@@ -249,7 +252,8 @@ See [memory CLI](/cli/memory) for the full flag reference.
 1. Read recent memory traces within `lookbackDays`.
 2. Cluster concept tags by co-occurrence.
 3. Filter patterns by `minPatternStrength`.
-4. Write themes and reflections into the daily note under a `## REM Sleep` block.
+4. Write themes and reflections into `dreams.md` under a `## REM Sleep` block
+   when inline storage is enabled.
 
 ## Scheduling
 
