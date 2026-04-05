@@ -21,6 +21,58 @@ function formatCharsAndTokens(chars: number): string {
   return `${formatInt(chars)} chars (~${formatInt(estimateTokensFromChars(chars))} tok)`;
 }
 
+function resolveTrackedPrompt(report: SessionSystemPromptReport): {
+  chars: number;
+  estimatedTokens: number;
+  largestContributors: Array<{
+    name: string;
+    chars: number;
+    estimatedTokens: number;
+    sharePercent: number;
+  }>;
+} {
+  if (report.tracked) {
+    return report.tracked;
+  }
+  const chars = report.systemPrompt.chars + report.tools.schemaChars;
+  const largestContributors = [
+    { name: "Project Context", chars: report.systemPrompt.projectContextChars },
+    { name: "Non-project system prompt", chars: report.systemPrompt.nonProjectContextChars },
+    { name: "Tool schemas", chars: report.tools.schemaChars },
+  ]
+    .filter((entry) => entry.chars > 0)
+    .toSorted((a, b) => b.chars - a.chars)
+    .map((entry) => ({
+      ...entry,
+      estimatedTokens: estimateTokensFromChars(entry.chars),
+      sharePercent: chars > 0 ? Math.round((entry.chars / chars) * 1000) / 10 : 0,
+    }));
+  return {
+    chars,
+    estimatedTokens: estimateTokensFromChars(chars),
+    largestContributors,
+  };
+}
+
+function resolveTruncationSeverity(report: SessionSystemPromptReport): string {
+  if (report.truncationSeverity) {
+    return report.truncationSeverity;
+  }
+  const truncatedFiles = report.injectedWorkspaceFiles.filter((file) => file.truncated).length;
+  const nearLimitFiles = report.bootstrapTruncation?.nearLimitFiles ?? 0;
+  const totalNearLimit = report.bootstrapTruncation?.totalNearLimit ?? false;
+  if (truncatedFiles <= 0 && !totalNearLimit && nearLimitFiles <= 0) {
+    return "none";
+  }
+  if (truncatedFiles >= 5 || nearLimitFiles >= 5) {
+    return "high";
+  }
+  if (truncatedFiles >= 2 || totalNearLimit || nearLimitFiles >= 2) {
+    return "medium";
+  }
+  return "low";
+}
+
 function parseContextArgs(commandBodyNormalized: string): string {
   if (commandBodyNormalized === "/context") {
     return "";
@@ -118,6 +170,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     };
   }
 
+  const trackedPrompt = resolveTrackedPrompt(report);
+  const truncationSeverity = resolveTruncationSeverity(report);
   const fileLines = report.injectedWorkspaceFiles.map((f) => {
     const status = f.missing ? "MISSING" : f.truncated ? "TRUNCATED" : "OK";
     const raw = f.missing ? "0" : formatCharsAndTokens(f.rawChars);
@@ -143,6 +197,13 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     ? `Tools: ${formatNameList(toolNames, 30)}`
     : "Tools: (none)";
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
+  const promptHashLine = `Prompt hash: ${report.promptHash ?? "unknown"}`;
+  const trackedPromptLine = `Tracked prompt estimate: ${formatCharsAndTokens(trackedPrompt.chars)}`;
+  const truncationSeverityLine = `Truncation severity: ${truncationSeverity}`;
+  const contributorLines = trackedPrompt.largestContributors.map(
+    (entry) =>
+      `- ${entry.name}: ${formatCharsAndTokens(entry.chars)} (${entry.sharePercent.toFixed(1)}%)`,
+  );
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
   const bootstrapMaxChars =
     typeof report.bootstrapMaxChars === "number" &&
@@ -203,6 +264,10 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     `Bootstrap max/total: ${bootstrapTotalLabel}`,
     sandboxLine,
     systemPromptLine,
+    promptHashLine,
+    trackedPromptLine,
+    truncationSeverityLine,
+    ...(contributorLines.length ? ["Largest tracked contributors:", ...contributorLines] : []),
     ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
     "",
     "Injected workspace files:",
@@ -231,17 +296,13 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       .slice(0, 30)
       .map((t) => `- ${t.name}: ${t.propertiesCount} params`);
 
-    // `systemPrompt.chars` already includes injected files, skills, and tool-list text.
-    // Add only tool schemas here so the tracked estimate stays disjoint.
-    const trackedPromptChars = report.systemPrompt.chars + report.tools.schemaChars;
-    const trackedPromptLine = `Tracked prompt estimate: ${formatCharsAndTokens(trackedPromptChars)}`;
     const actualContextLine =
       cachedContextUsageTokens != null
         ? `Actual context usage (cached): ${formatInt(cachedContextUsageTokens)} tok`
         : "Actual context usage (cached): unavailable";
     const overheadTokens =
       cachedContextUsageTokens != null
-        ? cachedContextUsageTokens - estimateTokensFromChars(trackedPromptChars)
+        ? cachedContextUsageTokens - trackedPrompt.estimatedTokens
         : null;
     const overheadLine =
       overheadTokens == null

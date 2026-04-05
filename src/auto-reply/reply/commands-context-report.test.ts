@@ -76,6 +76,8 @@ describe("buildContextReply", () => {
   it("shows bootstrap truncation warning in list output when context exceeds configured limits", async () => {
     const result = await buildContextReply(makeParams("/context list", true));
     expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
+    expect(result.text).toContain("Truncation severity: low");
+    expect(result.text).toContain("Largest tracked contributors:");
     expect(result.text).toContain("⚠ Bootstrap context is over configured limits");
     expect(result.text).toContain("Causes: 1 file(s) exceeded max/file.");
   });
@@ -103,6 +105,7 @@ describe("buildContextReply", () => {
         totalTokens: 900,
       }),
     );
+    expect(result.text).toContain("Prompt hash: unknown");
     expect(result.text).toContain("Tracked prompt estimate: 1,020 chars (~255 tok)");
     expect(result.text).toContain("Actual context usage (cached): 900 tok");
     expect(result.text).toContain("Untracked provider/runtime overhead: ~645 tok");

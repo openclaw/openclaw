@@ -82,6 +82,24 @@ describe("buildSystemPromptReport", () => {
     expect(report.bootstrapTotalMaxChars).toBe(22_222);
   });
 
+  it("includes prompt hash, tracked totals, and truncation severity", () => {
+    const file = makeBootstrapFile({
+      path: "/tmp/workspace/policies/AGENTS.md",
+      content: "abcdefghijklmnopqrstuvwxyz",
+    });
+    const report = makeReport({
+      file,
+      injectedPath: "/tmp/workspace/policies/AGENTS.md",
+      injectedContent: "trimmed",
+    });
+
+    expect(report.promptHash).toMatch(/^[a-f0-9]{12}$/);
+    expect(report.tracked?.chars).toBeGreaterThan(report.systemPrompt.chars - 1);
+    expect(report.tracked?.estimatedTokens).toBeGreaterThan(0);
+    expect(report.tracked?.largestContributors.length).toBeGreaterThan(0);
+    expect(report.truncationSeverity).toBe("low");
+  });
+
   it("reports injectedChars=0 when injected file does not match by path or basename", () => {
     const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
     const report = makeReport({

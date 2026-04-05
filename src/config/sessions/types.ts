@@ -368,6 +368,18 @@ export type SessionSystemPromptReport = {
     mode?: string;
     sandboxed?: boolean;
   };
+  promptHash?: string;
+  tracked?: {
+    chars: number;
+    estimatedTokens: number;
+    largestContributors: Array<{
+      name: string;
+      chars: number;
+      estimatedTokens: number;
+      sharePercent: number;
+    }>;
+  };
+  truncationSeverity?: "none" | "low" | "medium" | "high";
   systemPrompt: {
     chars: number;
     projectContextChars: number;

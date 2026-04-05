@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
+import { estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -77,6 +79,23 @@ function extractToolListText(systemPrompt: string): string {
   return extracted.text.replace(markerA, "").trim();
 }
 
+function resolveTruncationSeverity(params: {
+  truncatedFiles: number;
+  nearLimitFiles?: number;
+  totalNearLimit?: boolean;
+}): NonNullable<SessionSystemPromptReport["truncationSeverity"]> {
+  if (params.truncatedFiles <= 0 && !params.totalNearLimit && (params.nearLimitFiles ?? 0) <= 0) {
+    return "none";
+  }
+  if (params.truncatedFiles >= 5 || (params.nearLimitFiles ?? 0) >= 5) {
+    return "high";
+  }
+  if (params.truncatedFiles >= 2 || params.totalNearLimit || (params.nearLimitFiles ?? 0) >= 2) {
+    return "medium";
+  }
+  return "low";
+}
+
 export function buildSystemPromptReport(params: {
   source: SessionSystemPromptReport["source"];
   generatedAt: number;
@@ -107,6 +126,35 @@ export function buildSystemPromptReport(params: {
   const toolsEntries = buildToolsEntries(params.tools);
   const toolsSchemaChars = toolsEntries.reduce((sum, t) => sum + (t.schemaChars ?? 0), 0);
   const skillsEntries = parseSkillBlocks(params.skillsPrompt);
+  const trackedChars = systemPrompt.length + toolsSchemaChars;
+  const trackedEstimatedTokens = estimateTokensFromChars(trackedChars);
+  const injectedWorkspaceFiles = buildBootstrapInjectionStats({
+    bootstrapFiles: params.bootstrapFiles,
+    injectedFiles: params.injectedFiles,
+  });
+  const largestContributorsSource = [
+    { name: "Project Context", chars: projectContextChars },
+    {
+      name: "Non-project system prompt",
+      chars: Math.max(0, systemPrompt.length - projectContextChars),
+    },
+    { name: "Tool schemas", chars: toolsSchemaChars },
+  ]
+    .filter((entry) => entry.chars > 0)
+    .toSorted((a, b) => b.chars - a.chars)
+    .map((entry) => ({
+      ...entry,
+      estimatedTokens: estimateTokensFromChars(entry.chars),
+      sharePercent: trackedChars > 0 ? Math.round((entry.chars / trackedChars) * 1000) / 10 : 0,
+    }));
+  const promptHash = createHash("sha256").update(systemPrompt).digest("hex").slice(0, 12);
+  const truncationSeverity = resolveTruncationSeverity({
+    truncatedFiles:
+      params.bootstrapTruncation?.truncatedFiles ??
+      injectedWorkspaceFiles.filter((file) => file.truncated).length,
+    nearLimitFiles: params.bootstrapTruncation?.nearLimitFiles,
+    totalNearLimit: params.bootstrapTruncation?.totalNearLimit,
+  });
 
   return {
     source: params.source,
@@ -120,15 +168,19 @@ export function buildSystemPromptReport(params: {
     bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
     ...(params.bootstrapTruncation ? { bootstrapTruncation: params.bootstrapTruncation } : {}),
     sandbox: params.sandbox,
+    promptHash,
+    tracked: {
+      chars: trackedChars,
+      estimatedTokens: trackedEstimatedTokens,
+      largestContributors: largestContributorsSource,
+    },
+    truncationSeverity,
     systemPrompt: {
       chars: systemPrompt.length,
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPrompt.length - projectContextChars),
     },
-    injectedWorkspaceFiles: buildBootstrapInjectionStats({
-      bootstrapFiles: params.bootstrapFiles,
-      injectedFiles: params.injectedFiles,
-    }),
+    injectedWorkspaceFiles,
     skills: {
       promptChars: params.skillsPrompt.length,
       entries: skillsEntries,
