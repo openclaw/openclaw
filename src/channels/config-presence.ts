@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { listBootstrapChannelPlugins } from "./plugins/bootstrap-registry.js";
 import { listBundledChannelPluginIds } from "./plugins/bundled-ids.js";
-import { listBundledChannelPlugins } from "./plugins/bundled.js";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
@@ -68,7 +68,7 @@ export function listPotentialConfiguredChannelIds(
   }
 
   if (options.includePersistedAuthState !== false && hasPersistedChannelState(env)) {
-    for (const plugin of listBundledChannelPlugins()) {
+    for (const plugin of listBootstrapChannelPlugins()) {
       if (plugin.config?.hasPersistedAuthState?.({ cfg, env })) {
         configuredChannelIds.add(plugin.id);
       }
@@ -95,7 +95,7 @@ function hasEnvConfiguredChannel(
   if (options.includePersistedAuthState === false || !hasPersistedChannelState(env)) {
     return false;
   }
-  return listBundledChannelPlugins().some((plugin) =>
+  return listBootstrapChannelPlugins().some((plugin) =>
     Boolean(plugin.config?.hasPersistedAuthState?.({ cfg, env })),
   );
 }

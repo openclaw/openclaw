@@ -1,22 +1,9 @@
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import { getBundledChannelContractSurfaces } from "./contract-surfaces.js";
-
-type ChannelLegacyConfigSurface = {
-  legacyConfigRules?: LegacyConfigRule[];
-  normalizeCompatibilityConfig?: (params: { cfg: OpenClawConfig }) => {
-    config: OpenClawConfig;
-    changes: string[];
-    warnings?: string[];
-  };
-};
-
-function getChannelLegacyConfigSurfaces(): ChannelLegacyConfigSurface[] {
-  return getBundledChannelContractSurfaces() as ChannelLegacyConfigSurface[];
-}
+import { listBootstrapChannelPlugins } from "./bootstrap-registry.js";
 
 export function collectChannelLegacyConfigRules(): LegacyConfigRule[] {
-  return getChannelLegacyConfigSurfaces().flatMap((surface) => surface.legacyConfigRules ?? []);
+  return listBootstrapChannelPlugins().flatMap((plugin) => plugin.doctor?.legacyConfigRules ?? []);
 }
 
 export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, unknown>): {
@@ -25,8 +12,8 @@ export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, un
 } {
   let nextCfg = cfg as OpenClawConfig & Record<string, unknown>;
   const changes: string[] = [];
-  for (const surface of getChannelLegacyConfigSurfaces()) {
-    const mutation = surface.normalizeCompatibilityConfig?.({ cfg: nextCfg });
+  for (const plugin of listBootstrapChannelPlugins()) {
+    const mutation = plugin.doctor?.normalizeCompatibilityConfig?.({ cfg: nextCfg });
     if (!mutation || mutation.changes.length === 0) {
       continue;
     }

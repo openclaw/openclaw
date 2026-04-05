@@ -14,6 +14,15 @@ import {
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
 import { DiscordChannelConfigSchema } from "./config-schema.js";
 import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
+import {
+  collectRuntimeConfigAssignments,
+  secretTargetRegistryEntries,
+} from "./secret-config-contract.js";
+import {
+  collectUnsupportedSecretRefConfigCandidates,
+  unsupportedSecretRefSurfacePatterns,
+} from "./security-contract.js";
+import { deriveLegacySessionChatType } from "./session-contract.js";
 
 export const DISCORD_CHANNEL = "discord" as const;
 
@@ -87,6 +96,8 @@ export function createDiscordPluginBase(params: {
   | "configSchema"
   | "config"
   | "setup"
+  | "messaging"
+  | "secrets"
 > {
   return {
     id: DISCORD_CHANNEL,
@@ -114,6 +125,8 @@ export function createDiscordPluginBase(params: {
     configSchema: DiscordChannelConfigSchema,
     config: {
       ...discordConfigAdapter,
+      hasConfiguredState: ({ env }) =>
+        typeof env?.DISCORD_BOT_TOKEN === "string" && env.DISCORD_BOT_TOKEN.trim().length > 0,
       isConfigured: (account) => Boolean(account.token?.trim()),
       describeAccount: (account) =>
         describeAccountSnapshot({
@@ -123,6 +136,15 @@ export function createDiscordPluginBase(params: {
             tokenSource: account.tokenSource,
           },
         }),
+    },
+    messaging: {
+      deriveLegacySessionChatType,
+    },
+    secrets: {
+      secretTargetRegistryEntries,
+      unsupportedSecretRefSurfacePatterns,
+      collectUnsupportedSecretRefConfigCandidates,
+      collectRuntimeConfigAssignments,
     },
     setup: params.setup,
   } as Pick<
@@ -138,5 +160,7 @@ export function createDiscordPluginBase(params: {
     | "configSchema"
     | "config"
     | "setup"
+    | "messaging"
+    | "secrets"
   >;
 }

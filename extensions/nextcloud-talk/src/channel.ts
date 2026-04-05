@@ -41,6 +41,7 @@ import {
 } from "./normalize.js";
 import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { sendMessageNextcloudTalk } from "./send.js";
 import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import { nextcloudTalkSetupAdapter } from "./setup-core.js";
@@ -172,6 +173,10 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           looksLikeId: looksLikeNextcloudTalkTargetId,
           hint: "<roomToken>",
         },
+      },
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
       },
       setup: nextcloudTalkSetupAdapter,
       status: createComputedAccountStatusAdapter<ResolvedNextcloudTalkAccount>({

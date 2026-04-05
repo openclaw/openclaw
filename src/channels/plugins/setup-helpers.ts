@@ -1,52 +1,9 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
 import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { getBootstrapChannelPlugin } from "./bootstrap-registry.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
-
-const SETUP_PROMOTION_SURFACE_MODULE_BASENAMES = [
-  "contract-surfaces.ts",
-  "contract-surfaces.js",
-] as const;
-
-type SetupPromotionRuntimeModule = Pick<
-  typeof import("./contract-surfaces.js"),
-  "getBundledChannelContractSurfaceEntries"
->;
-
-let cachedSetupPromotionRuntimeModule: SetupPromotionRuntimeModule | null = null;
-
-export function clearSetupPromotionRuntimeModuleCache(): void {
-  cachedSetupPromotionRuntimeModule = null;
-}
-
-function resolveSetupPromotionRuntimeModulePath(): string {
-  for (const basename of SETUP_PROMOTION_SURFACE_MODULE_BASENAMES) {
-    const candidatePath = fileURLToPath(new URL(basename, import.meta.url));
-    const resolvedPath = candidatePath.replace(
-      `${path.sep}dist-runtime${path.sep}`,
-      `${path.sep}dist${path.sep}`,
-    );
-    if (fs.existsSync(resolvedPath)) {
-      return resolvedPath;
-    }
-    if (fs.existsSync(candidatePath)) {
-      return candidatePath;
-    }
-  }
-  throw new Error("missing setup promotion runtime module");
-}
-
-function loadSetupPromotionRuntimeModule(): SetupPromotionRuntimeModule {
-  cachedSetupPromotionRuntimeModule ??= createJiti(import.meta.url)(
-    resolveSetupPromotionRuntimeModulePath(),
-  ) as SetupPromotionRuntimeModule;
-  return cachedSetupPromotionRuntimeModule;
-}
 
 type ChannelSectionBase = {
   name?: string;
@@ -192,6 +149,8 @@ export function prepareScopedSetupConfig(params: {
     alwaysUseAccounts: params.alwaysUseAccounts,
   });
 }
+
+export function clearSetupPromotionRuntimeModuleCache(): void {}
 
 export function applySetupAccountConfigPatch(params: {
   cfg: OpenClawConfig;
@@ -458,13 +417,11 @@ type ChannelSetupPromotionSurface = {
 };
 
 function getChannelSetupPromotionSurface(channelKey: string): ChannelSetupPromotionSurface | null {
-  const entry = loadSetupPromotionRuntimeModule()
-    .getBundledChannelContractSurfaceEntries()
-    .find((candidate) => candidate.pluginId === channelKey);
-  if (!entry || !entry.surface || typeof entry.surface !== "object") {
+  const setup = getBootstrapChannelPlugin(channelKey)?.setup;
+  if (!setup || typeof setup !== "object") {
     return null;
   }
-  return entry.surface as ChannelSetupPromotionSurface;
+  return setup as ChannelSetupPromotionSurface;
 }
 
 export function shouldMoveSingleAccountChannelKey(params: {
