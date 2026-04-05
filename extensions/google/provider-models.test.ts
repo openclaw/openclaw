@@ -66,7 +66,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       provider: "google-gemini-cli",
       id: "gemini-2.5-flash-lite",
       api: "google-generative-ai",
-      reasoning: true,
+      reasoning: false,
     });
   });
 
@@ -85,6 +85,29 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       provider: "google-vertex",
       id: "gemini-3.1-pro-preview",
       api: "google-gemini-cli",
+      reasoning: false,
+    });
+  });
+
+  it("preserves template reasoning metadata instead of forcing it on forward-compat clones", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      templateProviderId: "google-gemini-cli",
+      ctx: createContext({
+        provider: "google",
+        modelId: "gemini-3.1-flash-preview",
+        models: [
+          createTemplateModel("google-gemini-cli", "gemini-3-flash-preview", {
+            reasoning: true,
+          }),
+        ],
+      }),
+    });
+
+    expect(model).toMatchObject({
+      provider: "google",
+      id: "gemini-3.1-flash-preview",
+      api: "google-gemini-cli",
       reasoning: true,
     });
   });
@@ -96,7 +119,11 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       ctx: createContext({
         provider: "google",
         modelId: "gemini-3.1-flash-preview",
-        models: [createTemplateModel("google", "gemini-3-flash-preview")],
+        models: [
+          createTemplateModel("google", "gemini-3-flash-preview", {
+            reasoning: false,
+          }),
+        ],
       }),
     });
 
@@ -104,7 +131,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       provider: "google",
       id: "gemini-3.1-flash-preview",
       api: "google-generative-ai",
-      reasoning: true,
+      reasoning: false,
     });
   });
 
@@ -130,7 +157,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       provider: "google-vertex",
       id: "gemini-3.1-flash-lite-preview",
       contextWindow: 1_048_576,
-      reasoning: true,
+      reasoning: false,
     });
   });
 

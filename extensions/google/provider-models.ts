@@ -79,7 +79,6 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     modelId: trimmed,
     templateIds,
     ctx: params.ctx,
-    patch: { reasoning: true },
   });
 }
 
