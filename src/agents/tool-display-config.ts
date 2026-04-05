@@ -249,6 +249,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
+    update_plan: {
+      emoji: "🗺️",
+      title: "Update Plan",
+      detailKeys: ["explanation", "plan.0.step"],
+    },
     gateway: {
       emoji: "🔌",
       title: "Gateway",
