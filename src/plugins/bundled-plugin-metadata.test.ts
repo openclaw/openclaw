@@ -314,3 +314,35 @@ describe("bundled plugin metadata", () => {
     });
   });
 });
+
+describe("stripSchemaProperty in channel config collection", () => {
+  it(
+    "strips $schema from collected channel config schemas",
+    { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
+    () => {
+      // Verify that none of the bundled plugin metadata entries carry
+      // a $schema property, which would cause ajv to attempt compiling
+      // the self-referential JSON Schema meta-schema (#61259).
+      const entries = listBundledPluginMetadata({
+        rootDir: repoRoot,
+        includeChannelConfigs: true,
+        includeSyntheticChannelConfigs: true,
+      });
+      for (const entry of entries) {
+        const channelConfigs = entry.manifest.channelConfigs;
+        if (!channelConfigs) {
+          continue;
+        }
+        for (const [channelId, config] of Object.entries(channelConfigs)) {
+          const schema = (config as { schema?: Record<string, unknown> }).schema;
+          if (schema) {
+            expect(
+              schema,
+              `channel ${channelId} in plugin ${entry.manifest.id} should not have $schema`,
+            ).not.toHaveProperty("$schema");
+          }
+        }
+      }
+    },
+  );
+});

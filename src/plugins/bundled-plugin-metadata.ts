@@ -214,6 +214,20 @@ function resolveBundledPluginScanDir(packageRoot: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Remove the `$schema` meta-schema URI from a JSON Schema object so that ajv
+ * does not attempt to compile the self-referential JSON Schema meta-schema
+ * during `ajv.compile()`.  This avoids unnecessary recursive stack depth that
+ * contributes to the stack overflow described in #61259.
+ */
+function stripSchemaProperty(schema: Record<string, unknown>): Record<string, unknown> {
+  if (!("$schema" in schema)) {
+    return schema;
+  }
+  const { $schema: _, ...rest } = schema;
+  return rest;
+}
+
 function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurface {
   if (!value || typeof value !== "object") {
     return false;
@@ -341,7 +355,7 @@ function collectBundledChannelConfigs(params: {
     }
 
     existingChannelConfigs[channelId] = {
-      schema: surface?.schema ?? existing?.schema ?? {},
+      schema: stripSchemaProperty(surface?.schema ?? existing?.schema ?? {}),
       ...(uiHints && Object.keys(uiHints).length > 0 ? { uiHints } : {}),
       ...((surface?.runtime ?? existing?.runtime)
         ? { runtime: surface?.runtime ?? existing?.runtime }

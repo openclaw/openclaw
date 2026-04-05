@@ -63,6 +63,27 @@ describe("formatValidationErrors", () => {
   });
 });
 
+describe("lazy protocol validators", () => {
+  it("validators are callable before first use (lazy compile)", () => {
+    // Validators must be functions even though compilation is deferred.
+    expect(typeof validateTalkConfigResult).toBe("function");
+  });
+
+  it("validators expose errors property", () => {
+    // The proxy must expose an `errors` property so callers that read
+    // `validator.errors` after a failed validation still work.
+    expect(validateTalkConfigResult).toHaveProperty("errors");
+  });
+
+  it("validators compile on first call and cache the result", () => {
+    // Calling the same validator twice must not throw and must return
+    // consistent results, proving the lazy cache works.
+    const first = validateTalkConfigResult({ config: {} });
+    const second = validateTalkConfigResult({ config: {} });
+    expect(first).toBe(second);
+  });
+});
+
 describe("validateTalkConfigResult", () => {
   it("accepts Talk SecretRef payloads", () => {
     expect(

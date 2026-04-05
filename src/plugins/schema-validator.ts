@@ -32,6 +32,7 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
     allErrors: true,
     strict: false,
     removeAdditional: false,
+    validateSchema: false,
     ...(mode === "defaults" ? { useDefaults: true } : {}),
   });
   instance.addFormat("uri", {

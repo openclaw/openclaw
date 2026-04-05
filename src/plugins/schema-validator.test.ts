@@ -314,3 +314,23 @@ describe("schema validator", () => {
     },
   );
 });
+
+describe("validateSchema: false prevents meta-schema compilation", () => {
+  it("accepts schemas containing $schema without throwing", () => {
+    // With validateSchema: false, ajv must not attempt to compile the
+    // meta-schema referenced by $schema, which previously contributed to
+    // stack overflow during bundled channel plugin loading (#61259).
+    const result = validateJsonSchemaValue({
+      schema: {
+        $schema: "http://json-schema.org/draft-07/schema#",
+        type: "object",
+        properties: {
+          name: { type: "string" },
+        },
+      },
+      cacheKey: "test-meta-schema-bypass",
+      value: { name: "test" },
+    });
+    expect(result.ok).toBe(true);
+  });
+});

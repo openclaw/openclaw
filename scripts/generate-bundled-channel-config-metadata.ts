@@ -65,6 +65,18 @@ type BundledChannelConfigMetadata = {
   uiHints?: Record<string, unknown>;
 };
 
+/**
+ * Strip the `$schema` meta-schema URI so the generated output does not carry
+ * it into runtime ajv compilation, avoiding unnecessary recursive stack depth.
+ */
+function stripSchemaProperty(schema: Record<string, unknown>): Record<string, unknown> {
+  if (!("$schema" in schema)) {
+    return schema;
+  }
+  const { $schema: _, ...rest } = schema;
+  return rest;
+}
+
 function resolveChannelConfigSchemaModulePath(rootDir: string): string | null {
   const candidates = [
     path.join(rootDir, "src", "config-schema.ts"),
@@ -161,7 +173,7 @@ export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: 
         channelId,
         ...(label ? { label } : {}),
         ...(description ? { description } : {}),
-        schema: surface.schema,
+        schema: stripSchemaProperty(surface.schema),
         ...(Object.keys(surface.uiHints ?? {}).length > 0 ? { uiHints: surface.uiHints } : {}),
       });
     }
