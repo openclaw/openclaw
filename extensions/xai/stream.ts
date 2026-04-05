@@ -4,7 +4,7 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 import {
   composeProviderStreamWrappers,
   createToolStreamWrapper,
-} from "openclaw/plugin-sdk/provider-stream";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-3", "grok-3-fast"],

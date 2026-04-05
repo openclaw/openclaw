@@ -45,10 +45,6 @@ vi.mock("../../agents/system-prompt.js", () => ({
   buildAgentSystemPrompt: vi.fn(() => "system prompt"),
 }));
 
-vi.mock("../../agents/tool-summaries.js", () => ({
-  buildToolSummaryMap: vi.fn(() => ({})),
-}));
-
 vi.mock("../../infra/skills-remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => false),
 }));

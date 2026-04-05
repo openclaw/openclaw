@@ -36,6 +36,8 @@ type GetReplyFromConfigFn = (
 type CronIsolatedRunFn = (...args: unknown[]) => Promise<{ status: string; summary: string }>;
 type AgentCommandFn = (...args: unknown[]) => Promise<void>;
 type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
+type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
+type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
 
 const createStubOutboundAdapter = (channelId: ChannelPlugin["id"]): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
@@ -268,6 +270,9 @@ const createStubPluginRegistry = (): PluginRegistry => ({
           ...(trimString(params.outputFormat) == null
             ? {}
             : { outputFormat: trimString(params.outputFormat) }),
+          ...(asNumber(params.latencyTier) == null
+            ? {}
+            : { latencyTier: asNumber(params.latencyTier) }),
         }),
         synthesize: async (req) => {
           const config = req.providerConfig as Record<string, unknown>;
@@ -282,7 +287,12 @@ const createStubPluginRegistry = (): PluginRegistry => ({
             {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ text: req.text }),
+              body: JSON.stringify({
+                text: req.text,
+                ...(asNumber(overrides.latencyTier) == null
+                  ? {}
+                  : { latency_optimization_level: asNumber(overrides.latencyTier) }),
+              }),
             },
             "elevenlabs",
           );
@@ -336,6 +346,8 @@ const hoisted = vi.hoisted(() => {
       };
       cronIsolatedRun: Mock<CronIsolatedRunFn>;
       agentCommand: Mock<AgentCommandFn>;
+      runBtwSideQuestion: Mock<RunBtwSideQuestionFn>;
+      dispatchInboundMessage: Mock<DispatchInboundMessageFn>;
       testIsNixMode: { value: boolean };
       sessionStoreSaveDelayMs: { value: number };
       embeddedRunMock: {
@@ -384,6 +396,8 @@ const hoisted = vi.hoisted(() => {
     },
     cronIsolatedRun: vi.fn(async () => ({ status: "ok", summary: "ok" })),
     agentCommand: vi.fn().mockResolvedValue(undefined),
+    runBtwSideQuestion: vi.fn().mockResolvedValue(undefined),
+    dispatchInboundMessage: vi.fn(),
     testIsNixMode: { value: false },
     sessionStoreSaveDelayMs: { value: 0 },
     embeddedRunMock: {
@@ -449,6 +463,9 @@ export const testTailscaleWhois = hoisted.testTailscaleWhois;
 export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun: Mock<CronIsolatedRunFn> = hoisted.cronIsolatedRun;
 export const agentCommand: Mock<AgentCommandFn> = hoisted.agentCommand;
+export const runBtwSideQuestion: Mock<RunBtwSideQuestionFn> = hoisted.runBtwSideQuestion;
+export const dispatchInboundMessageMock: Mock<DispatchInboundMessageFn> =
+  hoisted.dispatchInboundMessage;
 export const getReplyFromConfig: Mock<GetReplyFromConfigFn> = hoisted.getReplyFromConfig;
 export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {
   getReplyFromConfig.mockImplementationOnce(impl);
@@ -930,15 +947,41 @@ vi.mock("../commands/agent.js", () => ({
   agentCommand,
   agentCommandFromIngress: agentCommand,
 }));
+vi.mock("../agents/btw.js", () => ({
+  runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
+    hoisted.runBtwSideQuestion(...args),
+}));
+vi.mock("/src/agents/btw.js", () => ({
+  runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
+    hoisted.runBtwSideQuestion(...args),
+}));
 vi.mock("../auto-reply/dispatch.js", async () => {
-  return await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
+  const actual = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
     "../auto-reply/dispatch.js",
   );
+  return {
+    ...actual,
+    dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
+      const impl = hoisted.dispatchInboundMessage.getMockImplementation();
+      return impl
+        ? hoisted.dispatchInboundMessage(...args)
+        : actual.dispatchInboundMessage(...args);
+    },
+  };
 });
 vi.mock("/src/auto-reply/dispatch.js", async () => {
-  return await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
+  const actual = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
     "../auto-reply/dispatch.js",
   );
+  return {
+    ...actual,
+    dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
+      const impl = hoisted.dispatchInboundMessage.getMockImplementation();
+      return impl
+        ? hoisted.dispatchInboundMessage(...args)
+        : actual.dispatchInboundMessage(...args);
+    },
+  };
 });
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>

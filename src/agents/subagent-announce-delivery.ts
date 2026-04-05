@@ -94,6 +94,22 @@ function summarizeDeliveryError(error: unknown): string {
   }
 }
 
+function normalizeTelegramAnnounceTarget(target: string | undefined): string | undefined {
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith("group:")) {
+    return `telegram:${trimmed.slice("group:".length)}`;
+  }
+  if (!trimmed.startsWith("telegram:")) {
+    return undefined;
+  }
+  const raw = trimmed.slice("telegram:".length);
+  const topicMatch = /^(.*):topic:[^:]+$/u.exec(raw);
+  return `telegram:${topicMatch?.[1] ?? raw}`;
+}
+
 function shouldStripThreadFromAnnounceEntry(
   normalizedRequester?: DeliveryContext,
   normalizedEntry?: DeliveryContext,
@@ -106,6 +122,13 @@ function shouldStripThreadFromAnnounceEntry(
     return false;
   }
   const requesterChannel = normalizedRequester.channel?.trim().toLowerCase();
+  if (requesterChannel === "telegram") {
+    const requesterTarget = normalizeTelegramAnnounceTarget(normalizedRequester.to);
+    const entryTarget = normalizeTelegramAnnounceTarget(normalizedEntry?.to);
+    if (requesterTarget && entryTarget) {
+      return requesterTarget !== entryTarget;
+    }
+  }
   const plugin = requesterChannel ? getChannelPlugin(requesterChannel) : undefined;
   return Boolean(
     plugin?.conversationBindings?.shouldStripThreadFromAnnounceOrigin?.({

@@ -1,5 +1,8 @@
 import type { OpenClawConfig, ProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
-import { readClaudeCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
+import {
+  readClaudeCliCredentialsForSetup,
+  readClaudeCliCredentialsForSetupNonInteractive,
+} from "./cli-auth-seam.js";
 
 const DEFAULT_CLAUDE_CLI_MODEL = "claude-cli/claude-sonnet-4-6";
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
@@ -93,8 +96,12 @@ function rewriteModelEntryMap(models: Record<string, unknown> | undefined): {
   };
 }
 
-export function hasClaudeCliAuth(): boolean {
-  return Boolean(readClaudeCliCredentialsCached());
+export function hasClaudeCliAuth(options?: { allowKeychainPrompt?: boolean }): boolean {
+  return Boolean(
+    options?.allowKeychainPrompt === false
+      ? readClaudeCliCredentialsForSetupNonInteractive()
+      : readClaudeCliCredentialsForSetup(),
+  );
 }
 
 export function buildAnthropicCliMigrationResult(config: OpenClawConfig): ProviderAuthResult {

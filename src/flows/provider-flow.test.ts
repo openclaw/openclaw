@@ -1,17 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  resolveManifestProviderSetupFlowContributions,
+  resolveProviderSetupFlowContributions,
   resolveProviderModelPickerFlowContributions,
 } from "./provider-flow.js";
 
-const resolveManifestProviderAuthChoices = vi.hoisted(() => vi.fn(() => []));
 const resolveProviderWizardOptions = vi.hoisted(() => vi.fn(() => []));
 const resolveProviderModelPickerEntries = vi.hoisted(() => vi.fn(() => []));
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
-
-vi.mock("../plugins/provider-auth-choices.js", () => ({
-  resolveManifestProviderAuthChoices,
-}));
 
 vi.mock("../plugins/provider-wizard.js", () => ({
   resolveProviderWizardOptions,
@@ -27,21 +22,20 @@ describe("provider flow", () => {
     vi.clearAllMocks();
   });
 
-  it("uses bundled compat when resolving docs for manifest-backed setup contributions", () => {
-    resolveManifestProviderAuthChoices.mockReturnValue([
+  it("uses setup mode when resolving docs for setup contributions", () => {
+    resolveProviderWizardOptions.mockReturnValue([
       {
-        pluginId: "sglang",
-        providerId: "sglang",
-        methodId: "custom",
-        choiceId: "provider-plugin:sglang:custom",
-        choiceLabel: "SGLang",
+        value: "provider-plugin:sglang:custom",
+        label: "SGLang",
+        groupId: "sglang",
+        groupLabel: "SGLang",
       },
     ] as never);
     resolvePluginProviders.mockReturnValue([
       { id: "sglang", docsPath: "/providers/sglang" },
     ] as never);
 
-    const contributions = resolveManifestProviderSetupFlowContributions({
+    const contributions = resolveProviderSetupFlowContributions({
       config: {},
       workspaceDir: "/tmp/workspace",
       env: process.env,
@@ -51,13 +45,13 @@ describe("provider flow", () => {
       config: {},
       workspaceDir: "/tmp/workspace",
       env: process.env,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
+      mode: "setup",
     });
     expect(contributions[0]?.option.docs).toEqual({ path: "/providers/sglang" });
+    expect(contributions[0]?.source).toBe("runtime");
   });
 
-  it("uses bundled compat when resolving docs for runtime model-picker contributions", () => {
+  it("uses setup mode when resolving docs for runtime model-picker contributions", () => {
     resolveProviderModelPickerEntries.mockReturnValue([
       {
         value: "provider-plugin:vllm:custom",
@@ -76,8 +70,7 @@ describe("provider flow", () => {
       config: {},
       workspaceDir: "/tmp/workspace",
       env: process.env,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
+      mode: "setup",
     });
     expect(contributions[0]?.option.docs).toEqual({ path: "/providers/vllm" });
   });

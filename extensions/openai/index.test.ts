@@ -252,6 +252,10 @@ describe("openai plugin", () => {
     expect(openaiResult).toEqual({
       appendSystemContext: OPENAI_FRIENDLY_PROMPT_OVERLAY,
     });
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("This is a live chat, not a memo.");
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Avoid walls of text, long preambles, and repetitive restatement.",
+    );
 
     const codexResult = await beforePromptBuild?.(
       { prompt: "hello", messages: [] },
@@ -266,6 +270,18 @@ describe("openai plugin", () => {
       { modelProviderId: "anthropic", modelId: "sonnet-4.6" },
     );
     expect(nonOpenAIResult).toBeUndefined();
+  });
+
+  it("includes stronger execution guidance in the OpenAI prompt overlay", () => {
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "If the user asks you to do the work, start in the same turn instead of restating the plan.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      'If the latest user message is a short approval like "ok do it" or "go ahead", skip the recap and start acting.',
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Commentary-only turns are incomplete when the next action is clear.",
+    );
   });
 
   it("supports opting out of the prompt overlay via plugin config", async () => {

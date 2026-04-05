@@ -94,12 +94,12 @@ import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
-import { resolveCacheRetention } from "../anthropic-cache-retention.js";
 import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
+import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
@@ -109,6 +109,7 @@ import {
   completePromptCacheObservation,
   type PromptCacheChange,
 } from "../prompt-cache-observability.js";
+import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import {
   clearActiveEmbeddedRun,
@@ -977,8 +978,9 @@ export async function runEmbeddedAttempt(
       });
       const effectiveAgentTransport = agentTransportOverride ?? activeSession.agent.transport;
       if (agentTransportOverride && activeSession.agent.transport !== agentTransportOverride) {
+        const previousTransport = activeSession.agent.transport;
         log.debug(
-          `embedded agent transport override: ${activeSession.agent.transport} -> ${agentTransportOverride} ` +
+          `embedded agent transport override: ${previousTransport} -> ${agentTransportOverride} ` +
             `(${params.provider}/${params.modelId})`,
         );
       }
@@ -1037,7 +1039,13 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(messages as AgentMessage[], mode);
+          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(
+            messages as AgentMessage[],
+            mode,
+            {
+              preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
+            },
+          );
           if (sanitized === messages) {
             return inner(model, context, options);
           }
@@ -1335,6 +1343,7 @@ export async function runEmbeddedAttempt(
         unsubscribe,
         waitForCompactionRetry,
         isCompactionInFlight,
+        getItemLifecycle,
         getMessagingToolSentTexts,
         getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
@@ -1540,6 +1549,25 @@ export async function runEmbeddedAttempt(
           });
         }
 
+        const googlePromptCacheStreamFn = await prepareGooglePromptCacheStreamFn({
+          apiKey: await resolveEmbeddedAgentApiKey({
+            provider: params.provider,
+            resolvedApiKey: params.resolvedApiKey,
+            authStorage: params.authStorage,
+          }),
+          extraParams: effectiveExtraParams,
+          model: params.model,
+          modelId: params.modelId,
+          provider: params.provider,
+          sessionManager,
+          signal: runAbortController.signal,
+          streamFn: activeSession.agent.streamFn,
+          systemPrompt: systemPromptText,
+        });
+        if (googlePromptCacheStreamFn) {
+          activeSession.agent.streamFn = googlePromptCacheStreamFn;
+        }
+
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {
           prompt: effectivePrompt,
@@ -1569,9 +1597,9 @@ export async function runEmbeddedAttempt(
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
 
         try {
-          // Idempotent cleanup for legacy sessions with persisted image payloads.
-          // Only mutates user turns older than a few assistant replies so recent
-          // history stays byte-identical for prompt-cache prefix matching.
+          // Idempotent cleanup: prune old image blocks to limit context
+          // growth. Only mutates turns older than a few assistant replies;
+          // the delay also reduces prompt-cache churn.
           const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
           if (didPruneImages) {
             activeSession.agent.state.messages = activeSession.messages;
@@ -1995,6 +2023,7 @@ export async function runEmbeddedAttempt(
           didSendViaMessagingTool: didSendViaMessagingTool(),
           successfulCronAdds: getSuccessfulCronAdds(),
         }),
+        itemLifecycle: getItemLifecycle(),
         aborted,
         timedOut,
         timedOutDuringCompaction,

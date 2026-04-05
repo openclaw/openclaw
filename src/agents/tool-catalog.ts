@@ -1,3 +1,14 @@
+import {
+  CRON_TOOL_DISPLAY_SUMMARY,
+  EXEC_TOOL_DISPLAY_SUMMARY,
+  PROCESS_TOOL_DISPLAY_SUMMARY,
+  SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
+  SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
+  SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
+  SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
+  SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+} from "./tool-description-presets.js";
+
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
 type ToolProfilePolicy = {
@@ -70,14 +81,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "exec",
     label: "exec",
-    description: "Run shell commands",
+    description: EXEC_TOOL_DISPLAY_SUMMARY,
     sectionId: "runtime",
     profiles: ["coding"],
   },
   {
     id: "process",
     label: "process",
-    description: "Manage background processes",
+    description: PROCESS_TOOL_DISPLAY_SUMMARY,
     sectionId: "runtime",
     profiles: ["coding"],
   },
@@ -132,7 +143,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions_list",
     label: "sessions_list",
-    description: "List sessions",
+    description: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -140,7 +151,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions_history",
     label: "sessions_history",
-    description: "Session history",
+    description: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -148,7 +159,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions_send",
     label: "sessions_send",
-    description: "Send to session",
+    description: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -156,7 +167,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions_spawn",
     label: "sessions_spawn",
-    description: "Spawn sub-agent",
+    description: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -180,7 +191,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "session_status",
     label: "session_status",
-    description: "Session status",
+    description: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["minimal", "coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -212,7 +223,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "cron",
     label: "cron",
-    description: "Schedule tasks",
+    description: CRON_TOOL_DISPLAY_SUMMARY,
     sectionId: "automation",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

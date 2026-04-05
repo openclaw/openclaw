@@ -1319,7 +1319,7 @@ List and manage [background task](/automation/tasks) runs across agents.
 - `tasks notify <id>` — change notification policy for a task run
 - `tasks cancel <id>` — cancel a running task
 - `tasks audit` — surface operational issues (stale, lost, delivery failures)
-- `tasks maintenance` — preview or apply tasks and TaskFlow cleanup/reconciliation (ACP/subagent child sessions, active cron jobs, live CLI runs)
+- `tasks maintenance [--apply] [--json]` — preview or apply tasks and TaskFlow cleanup/reconciliation (ACP/subagent child sessions, active cron jobs, live CLI runs)
 - `tasks flow list` — list active and recent Task Flow flows
 - `tasks flow show <lookup>` — inspect a flow by id or lookup key
 - `tasks flow cancel <lookup>` — cancel a running flow and its active tasks
@@ -1479,12 +1479,14 @@ Tip: the owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
-Billing note: Anthropic's public Claude Code docs still include direct Claude
-Code terminal usage in Claude plan limits. Separately, Anthropic notified
-OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the
-**OpenClaw** Claude-login path counts as third-party harness usage and
-requires **Extra Usage** billed separately from the subscription. For
-production, prefer an Anthropic API key or another supported
+Billing note: We believe Claude Code CLI fallback is likely allowed for local,
+user-managed automation based on Anthropic's public CLI docs. That said,
+Anthropic's third-party harness policy creates enough ambiguity around
+subscription-backed use in external products that we do not recommend it for
+production. Anthropic also notified OpenClaw users on **April 4, 2026 at
+12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as
+third-party harness usage and requires **Extra Usage** billed separately from
+the subscription. For production, prefer an Anthropic API key or another supported
 subscription-style provider such as OpenAI Codex, Alibaba Cloud Model Studio
 Coding Plan, MiniMax Coding Plan, or Z.AI / GLM Coding Plan.
 
