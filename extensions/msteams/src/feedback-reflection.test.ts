@@ -63,7 +63,7 @@ describe("buildReflectionPrompt", () => {
     });
 
     expect(prompt).toContain("...");
-    expect(prompt.length).toBeLessThan(longResponse.length + 500);
+    expect(prompt.length).toBeLessThan(longResponse.length + 1200);
   });
 
   it("includes user comment when provided", () => {

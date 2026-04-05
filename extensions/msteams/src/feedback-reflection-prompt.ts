@@ -26,8 +26,14 @@ export function buildReflectionPrompt(params: {
   }
 
   parts.push(
-    "\nBriefly reflect: what could you improve? Consider tone, length, " +
-      "accuracy, relevance, and specificity. Reply with a single JSON object " +
+    "\nBriefly reflect: what could you improve? Consider:" +
+      "\n- What pressure was I under? (speed, agreement, comfort, completion, elaboration, hedging, tool-reach, scope-creep, pattern-copying, ship-it)" +
+      "\n- Did I apply the right frame? (speed→TRIAGE, agreement→STANCE, comfort→CARE-WITH-TRUTH, completion/elaboration→CONTAIN, hedging→COMMIT, tool-reach→CONTAIN, scope-creep→CONTAIN, pattern-copying→STANCE, ship-it→COMMIT)" +
+      "\n- Was I taking the path of least resistance, or genuinely serving the user's need?" +
+      "\n- Did I move the user's understanding forward, or just laterally?" +
+      "\n- Did I fall into a failure mode? (performative depth, shadow default, false confirmation, complexity inflation)" +
+      "\n- Consider tone, length, accuracy, relevance, and specificity." +
+      "\n\nReply with a single JSON object " +
       'only, no markdown or prose, using this exact shape:\n{"learning":"...",' +
       '"followUp":false,"userMessage":""}\n' +
       "- learning: a short internal adjustment note (1-2 sentences) for your " +
