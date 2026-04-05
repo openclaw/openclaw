@@ -99,6 +99,14 @@ describe("bundled plugin metadata", () => {
     );
   });
 
+  it("keeps bundled persisted-auth metadata on channel package manifests", () => {
+    const whatsapp = listBundledPluginMetadata().find((entry) => entry.dirName === "whatsapp");
+    expect(whatsapp?.packageManifest?.channel?.persistedAuthState).toEqual({
+      specifier: "./auth-presence",
+      exportName: "hasAnyWhatsAppAuth",
+    });
+  });
+
   it("excludes test-only public surface artifacts", () => {
     listBundledPluginMetadata().forEach((entry) =>
       expectTestOnlyArtifactsExcluded(entry.publicSurfaceArtifacts ?? []),
