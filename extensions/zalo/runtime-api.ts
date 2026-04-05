@@ -1,7 +1,7 @@
 // Private runtime barrel for the bundled Zalo extension.
 // Keep this barrel thin and free of local plugin self-imports so the bundled
 // entry loader can resolve the channel plugin without re-entering this module.
-export * from "./api.js";
+export { zaloPlugin } from "./src/channel.js";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 export type { OpenClawConfig, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 export type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";

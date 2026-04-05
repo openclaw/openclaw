@@ -184,35 +184,30 @@ function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelE
   return entries;
 }
 
-function buildBundledChannelPluginsById(plugins: readonly ChannelPlugin[]) {
-  const byId = new Map<ChannelId, ChannelPlugin>();
-  for (const plugin of plugins) {
-    if (byId.has(plugin.id)) {
-      throw new Error(`duplicate bundled channel plugin id: ${plugin.id}`);
-    }
-    byId.set(plugin.id, plugin);
-  }
-  return byId;
-}
-
 type BundledChannelState = {
   entries: readonly GeneratedBundledChannelEntry[];
-  plugins: readonly ChannelPlugin[];
-  setupPlugins: readonly ChannelPlugin[];
+  entriesById: Map<ChannelId, BundledChannelEntryContract>;
+  setupEntriesById: Map<ChannelId, BundledChannelSetupEntryContract>;
+  sortedIds: readonly ChannelId[];
   pluginsById: Map<ChannelId, ChannelPlugin>;
+  setupPluginsById: Map<ChannelId, ChannelPlugin>;
   runtimeSettersById: Map<ChannelId, NonNullable<BundledChannelEntryContract["setChannelRuntime"]>>;
 };
 
 const EMPTY_BUNDLED_CHANNEL_STATE: BundledChannelState = {
   entries: [],
-  plugins: [],
-  setupPlugins: [],
+  entriesById: new Map(),
+  setupEntriesById: new Map(),
+  sortedIds: [],
   pluginsById: new Map(),
+  setupPluginsById: new Map(),
   runtimeSettersById: new Map(),
 };
 
 let cachedBundledChannelState: BundledChannelState | null = null;
 let bundledChannelStateLoadInProgress = false;
+const pluginLoadInProgressIds = new Set<ChannelId>();
+const setupPluginLoadInProgressIds = new Set<ChannelId>();
 
 function getBundledChannelState(): BundledChannelState {
   if (cachedBundledChannelState) {
@@ -223,27 +218,35 @@ function getBundledChannelState(): BundledChannelState {
   }
   bundledChannelStateLoadInProgress = true;
   const entries = loadGeneratedBundledChannelEntries();
-  const plugins = entries.map(({ entry }) => entry.loadChannelPlugin());
-  const setupPlugins = entries.flatMap(({ setupEntry }) => {
-    const plugin = setupEntry?.loadSetupPlugin();
-    return plugin ? [plugin] : [];
-  });
+  const entriesById = new Map<ChannelId, BundledChannelEntryContract>();
+  const setupEntriesById = new Map<ChannelId, BundledChannelSetupEntryContract>();
   const runtimeSettersById = new Map<
     ChannelId,
     NonNullable<BundledChannelEntryContract["setChannelRuntime"]>
   >();
   for (const { entry } of entries) {
+    if (entriesById.has(entry.id)) {
+      throw new Error(`duplicate bundled channel plugin id: ${entry.id}`);
+    }
+    entriesById.set(entry.id, entry);
     if (entry.setChannelRuntime) {
       runtimeSettersById.set(entry.id, entry.setChannelRuntime);
+    }
+  }
+  for (const { id, setupEntry } of entries) {
+    if (setupEntry) {
+      setupEntriesById.set(id, setupEntry);
     }
   }
 
   try {
     cachedBundledChannelState = {
       entries,
-      plugins,
-      setupPlugins,
-      pluginsById: buildBundledChannelPluginsById(plugins),
+      entriesById,
+      setupEntriesById,
+      sortedIds: [...entriesById.keys()].toSorted((left, right) => left.localeCompare(right)),
+      pluginsById: new Map(),
+      setupPluginsById: new Map(),
       runtimeSettersById,
     };
     return cachedBundledChannelState;
@@ -253,15 +256,65 @@ function getBundledChannelState(): BundledChannelState {
 }
 
 export function listBundledChannelPlugins(): readonly ChannelPlugin[] {
-  return getBundledChannelState().plugins;
+  const state = getBundledChannelState();
+  return state.sortedIds.flatMap((id) => {
+    const plugin = getBundledChannelPlugin(id);
+    return plugin ? [plugin] : [];
+  });
 }
 
 export function listBundledChannelSetupPlugins(): readonly ChannelPlugin[] {
-  return getBundledChannelState().setupPlugins;
+  const state = getBundledChannelState();
+  return state.sortedIds.flatMap((id) => {
+    const plugin = getBundledChannelSetupPlugin(id);
+    return plugin ? [plugin] : [];
+  });
 }
 
 export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  return getBundledChannelState().pluginsById.get(id);
+  const state = getBundledChannelState();
+  const cached = state.pluginsById.get(id);
+  if (cached) {
+    return cached;
+  }
+  if (pluginLoadInProgressIds.has(id)) {
+    return undefined;
+  }
+  const entry = state.entriesById.get(id);
+  if (!entry) {
+    return undefined;
+  }
+  pluginLoadInProgressIds.add(id);
+  try {
+    const plugin = entry.loadChannelPlugin();
+    state.pluginsById.set(id, plugin);
+    return plugin;
+  } finally {
+    pluginLoadInProgressIds.delete(id);
+  }
+}
+
+export function getBundledChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
+  const state = getBundledChannelState();
+  const cached = state.setupPluginsById.get(id);
+  if (cached) {
+    return cached;
+  }
+  if (setupPluginLoadInProgressIds.has(id)) {
+    return undefined;
+  }
+  const entry = state.setupEntriesById.get(id);
+  if (!entry) {
+    return undefined;
+  }
+  setupPluginLoadInProgressIds.add(id);
+  try {
+    const plugin = entry.loadSetupPlugin();
+    state.setupPluginsById.set(id, plugin);
+    return plugin;
+  } finally {
+    setupPluginLoadInProgressIds.delete(id);
+  }
 }
 
 export function requireBundledChannelPlugin(id: ChannelId): ChannelPlugin {

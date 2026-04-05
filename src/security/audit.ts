@@ -121,7 +121,9 @@ let auditChannelModulePromise:
 let pluginRegistryLoaderModulePromise:
   | Promise<typeof import("../plugins/runtime/runtime-registry-loader.js")>
   | undefined;
-let pluginLoaderModulePromise: Promise<typeof import("../plugins/loader.js")> | undefined;
+let pluginMetadataRegistryLoaderModulePromise:
+  | Promise<typeof import("../plugins/runtime/metadata-registry-loader.js")>
+  | undefined;
 let gatewayProbeDepsPromise:
   | Promise<{
       buildGatewayConnectionDetails: typeof import("../gateway/call.js").buildGatewayConnectionDetails;
@@ -155,9 +157,10 @@ async function loadPluginRegistryLoaderModule() {
   return await pluginRegistryLoaderModulePromise;
 }
 
-async function loadPluginLoaderModule() {
-  pluginLoaderModulePromise ??= import("../plugins/loader.js");
-  return await pluginLoaderModulePromise;
+async function loadPluginMetadataRegistryLoaderModule() {
+  pluginMetadataRegistryLoaderModulePromise ??=
+    import("../plugins/runtime/metadata-registry-loader.js");
+  return await pluginMetadataRegistryLoaderModulePromise;
 }
 
 async function loadGatewayProbeDeps() {
@@ -740,14 +743,12 @@ async function collectPluginSecurityAuditFindings(
     if (requestedPluginIds.size === 0) {
       return [];
     }
-    const snapshot = (await loadPluginLoaderModule()).loadOpenClawPlugins({
+    const snapshot = (
+      await loadPluginMetadataRegistryLoaderModule()
+    ).loadPluginMetadataRegistrySnapshot({
       config: autoEnabled.config,
       activationSourceConfig: context.sourceConfig,
-      autoEnabledReasons: autoEnabled.autoEnabledReasons,
       env: context.env,
-      activate: false,
-      cache: false,
-      mode: "validate",
       onlyPluginIds: [...requestedPluginIds],
     });
     collectors = snapshot.securityAuditCollectors ?? [];

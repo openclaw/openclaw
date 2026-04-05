@@ -1,4 +1,4 @@
-import { note } from "openclaw/plugin-sdk/browser-support";
+import { note } from "openclaw/plugin-sdk/browser-setup-tools";
 import {
   parseBrowserMajorVersion,
   readBrowserVersion,

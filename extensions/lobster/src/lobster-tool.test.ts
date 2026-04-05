@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../runtime-api.js";
 import {
   createWindowsCmdShimFixture,
@@ -29,49 +30,15 @@ vi.mock("node:child_process", async () => {
 let createLobsterTool: typeof import("./lobster-tool.js").createLobsterTool;
 
 function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi {
-  return {
+  return createTestPluginApi({
     id: "lobster",
     name: "lobster",
     source: "test",
-    registrationMode: "full",
-    config: {},
-    pluginConfig: {},
     // oxlint-disable-next-line typescript/no-explicit-any
     runtime: { version: "test" } as any,
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    registerTool() {},
-    registerChannel() {},
-    registerGatewayMethod() {},
-    registerCli() {},
-    registerService() {},
-    registerReload() {},
-    registerNodeHostCommand() {},
-    registerSecurityAuditCollector() {},
-    registerConfigMigration() {},
-    registerAutoEnableProbe() {},
-    registerProvider() {},
-    registerSpeechProvider() {},
-    registerRealtimeTranscriptionProvider() {},
-    registerRealtimeVoiceProvider() {},
-    registerMediaUnderstandingProvider() {},
-    registerImageGenerationProvider() {},
-    registerVideoGenerationProvider() {},
-    registerWebFetchProvider() {},
-    registerWebSearchProvider() {},
-    registerInteractiveHandler() {},
-    onConversationBindingResolved() {},
-    registerHook() {},
-    registerHttpRoute() {},
-    registerCommand() {},
-    registerContextEngine() {},
-    registerMemoryPromptSection() {},
-    registerMemoryFlushPlan() {},
-    registerMemoryRuntime() {},
-    registerMemoryEmbeddingProvider() {},
-    on() {},
     resolvePath: (p) => p,
     ...overrides,
-  };
+  });
 }
 
 function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPluginToolContext {
