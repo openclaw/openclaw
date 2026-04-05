@@ -232,6 +232,7 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
       maxInputImages: 1,
       maxInputVideos: 0,
       maxDurationSeconds: 10,
+      supportedDurationSecondsByModel: MINIMAX_MODEL_ALLOWED_DURATIONS,
       supportsResolution: true,
       supportsWatermark: false,
     },

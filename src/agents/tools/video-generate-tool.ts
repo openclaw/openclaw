@@ -6,6 +6,7 @@ import { loadWebMedia } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../../utils.js";
+import { resolveVideoGenerationSupportedDurations } from "../../video-generation/duration-support.js";
 import { parseVideoGenerationModelRef } from "../../video-generation/model-ref.js";
 import {
   generateVideo,
@@ -114,7 +115,8 @@ const VideoGenerateToolSchema = Type.Object({
   ),
   durationSeconds: Type.Optional(
     Type.Number({
-      description: "Optional target duration in seconds.",
+      description:
+        "Optional target duration in seconds. OpenClaw may round this to the nearest provider-supported duration.",
       minimum: 1,
     }),
   ),
@@ -329,6 +331,7 @@ function resolveSelectedVideoGenerationProvider(params: {
 
 function validateVideoGenerationCapabilities(params: {
   provider: VideoGenerationProvider | undefined;
+  model?: string;
   inputImageCount: number;
   inputVideoCount: number;
   size?: string;
@@ -371,6 +374,10 @@ function validateVideoGenerationCapabilities(params: {
   if (
     typeof params.durationSeconds === "number" &&
     Number.isFinite(params.durationSeconds) &&
+    !resolveVideoGenerationSupportedDurations({
+      provider,
+      model: params.model,
+    }) &&
     typeof caps.maxDurationSeconds === "number" &&
     params.durationSeconds > caps.maxDurationSeconds
   ) {
@@ -535,7 +542,7 @@ export function createVideoGenerateTool(options?: {
     name: "video_generate",
     displaySummary: "Generate videos",
     description:
-      "Generate videos using configured providers. Generated videos are saved under OpenClaw-managed media storage and delivered automatically as attachments.",
+      "Generate videos using configured providers. Generated videos are saved under OpenClaw-managed media storage and delivered automatically as attachments. Duration requests may be rounded to the nearest provider-supported value.",
     parameters: VideoGenerateToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
@@ -563,6 +570,17 @@ export function createVideoGenerateTool(options?: {
               : null,
             provider.capabilities.maxDurationSeconds
               ? `maxDurationSeconds=${provider.capabilities.maxDurationSeconds}`
+              : null,
+            provider.capabilities.supportedDurationSeconds?.length
+              ? `supportedDurationSeconds=${provider.capabilities.supportedDurationSeconds.join("/")}`
+              : null,
+            provider.capabilities.supportedDurationSecondsByModel &&
+            Object.keys(provider.capabilities.supportedDurationSecondsByModel).length > 0
+              ? `supportedDurationSecondsByModel=${Object.entries(
+                  provider.capabilities.supportedDurationSecondsByModel,
+                )
+                  .map(([modelId, durations]) => `${modelId}:${durations.join("/")}`)
+                  .join("; ")}`
               : null,
             provider.capabilities.supportsResolution ? "resolution" : null,
             provider.capabilities.supportsAspectRatio ? "aspectRatio" : null,
@@ -639,6 +657,8 @@ export function createVideoGenerateTool(options?: {
       });
       validateVideoGenerationCapabilities({
         provider: selectedProvider,
+        model:
+          parseVideoGenerationModelRef(model)?.model ?? model ?? selectedProvider?.defaultModel,
         inputImageCount: loadedReferenceImages.length,
         inputVideoCount: loadedReferenceVideos.length,
         size,
@@ -674,10 +694,30 @@ export function createVideoGenerateTool(options?: {
           ),
         ),
       );
+      const requestedDurationSeconds =
+        typeof result.metadata?.requestedDurationSeconds === "number" &&
+        Number.isFinite(result.metadata.requestedDurationSeconds)
+          ? result.metadata.requestedDurationSeconds
+          : durationSeconds;
+      const normalizedDurationSeconds =
+        typeof result.metadata?.normalizedDurationSeconds === "number" &&
+        Number.isFinite(result.metadata.normalizedDurationSeconds)
+          ? result.metadata.normalizedDurationSeconds
+          : requestedDurationSeconds;
+      const supportedDurationSeconds = Array.isArray(result.metadata?.supportedDurationSeconds)
+        ? result.metadata.supportedDurationSeconds.filter(
+            (entry): entry is number => typeof entry === "number" && Number.isFinite(entry),
+          )
+        : undefined;
       const lines = [
         `Generated ${savedVideos.length} video${savedVideos.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+        typeof requestedDurationSeconds === "number" &&
+        typeof normalizedDurationSeconds === "number" &&
+        requestedDurationSeconds !== normalizedDurationSeconds
+          ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${normalizedDurationSeconds}s.`
+          : null,
         ...savedVideos.map((video) => `MEDIA:${video.path}`),
-      ];
+      ].filter((entry): entry is string => Boolean(entry));
 
       return {
         content: [{ type: "text", text: lines.join("\n") }],
@@ -722,7 +762,17 @@ export function createVideoGenerateTool(options?: {
           ...(size ? { size } : {}),
           ...(aspectRatio ? { aspectRatio } : {}),
           ...(resolution ? { resolution } : {}),
-          ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
+          ...(typeof normalizedDurationSeconds === "number"
+            ? { durationSeconds: normalizedDurationSeconds }
+            : {}),
+          ...(typeof requestedDurationSeconds === "number" &&
+          typeof normalizedDurationSeconds === "number" &&
+          requestedDurationSeconds !== normalizedDurationSeconds
+            ? { requestedDurationSeconds }
+            : {}),
+          ...(supportedDurationSeconds && supportedDurationSeconds.length > 0
+            ? { supportedDurationSeconds }
+            : {}),
           ...(typeof audio === "boolean" ? { audio } : {}),
           ...(typeof watermark === "boolean" ? { watermark } : {}),
           ...(filename ? { filename } : {}),
