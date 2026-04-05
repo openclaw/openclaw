@@ -8,7 +8,12 @@ import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import {
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
+} from "../plugins/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { sleep } from "../utils.js";
 import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
@@ -20,6 +25,22 @@ const describeLive = LIVE && ACP_BIND_LIVE ? describe : describe.skip;
 
 const CONNECT_TIMEOUT_MS = 90_000;
 const LIVE_TIMEOUT_MS = 240_000;
+
+function createSlackCurrentConversationBindingRegistry() {
+  return createTestRegistry([
+    {
+      pluginId: "slack",
+      source: "test",
+      plugin: {
+        id: "slack",
+        meta: { aliases: [] },
+        conversationBindings: {
+          supportsCurrentConversationBinding: true,
+        },
+      },
+    },
+  ]);
+}
 
 function normalizeAcpAgent(raw: string | undefined): "claude" | "codex" {
   const normalized = raw?.trim().toLowerCase();
@@ -42,6 +63,11 @@ function extractAssistantTexts(messages: unknown[]): string[] {
       return extractFirstTextBlock(entry);
     })
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
+function extractLastAssistantText(messages: unknown[]): string | null {
+  const texts = extractAssistantTexts(messages);
+  return texts.at(-1) ?? null;
 }
 
 function extractSpawnedAcpSessionKey(texts: string[]): string | null {
@@ -320,7 +346,8 @@ describeLive("gateway live (ACP bind)", () => {
         skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
       };
       const liveAgent = normalizeAcpAgent(process.env.OPENCLAW_LIVE_ACP_BIND_AGENT);
-      const acpxCommand = process.env.OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND?.trim() || undefined;
+      const agentCommandOverride =
+        process.env.OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND?.trim() || undefined;
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-acp-bind-"));
       const tempStateDir = path.join(tempRoot, "state");
       const tempConfigPath = path.join(tempRoot, "openclaw.json");
@@ -331,6 +358,7 @@ describeLive("gateway live (ACP bind)", () => {
       const conversationId = `user:${slackUserId}`;
       const accountId = "default";
       const followupNonce = randomBytes(4).toString("hex").toUpperCase();
+      const memoryNonce = randomBytes(4).toString("hex").toUpperCase();
 
       clearRuntimeConfigSnapshot();
       process.env.OPENCLAW_STATE_DIR = tempStateDir;
@@ -343,6 +371,13 @@ describeLive("gateway live (ACP bind)", () => {
 
       const cfg = loadConfig();
       const acpxEntry = cfg.plugins?.entries?.acpx;
+      const existingAgentOverrides =
+        typeof acpxEntry?.config === "object" &&
+        acpxEntry.config &&
+        typeof acpxEntry.config.agents === "object" &&
+        acpxEntry.config.agents
+          ? acpxEntry.config.agents
+          : undefined;
       const nextCfg = {
         ...cfg,
         gateway: {
@@ -373,10 +408,14 @@ describeLive("gateway live (ACP bind)", () => {
                 ...acpxEntry?.config,
                 permissionMode: "approve-all",
                 nonInteractivePermissions: "deny",
-                ...(acpxCommand
+                ...(agentCommandOverride
                   ? {
-                      command: acpxCommand,
-                      expectedVersion: "any",
+                      agents: {
+                        ...existingAgentOverrides,
+                        [liveAgent]: {
+                          command: agentCommandOverride,
+                        },
+                      },
                     }
                   : {}),
               },
@@ -402,6 +441,8 @@ describeLive("gateway live (ACP bind)", () => {
         timeoutMs: CONNECT_TIMEOUT_MS,
       });
       logLiveStep("gateway websocket connected");
+      const channelRegistry = createSlackCurrentConversationBindingRegistry();
+      pinActivePluginChannelRegistry(channelRegistry);
 
       try {
         const { mainAssistantTexts, spawnedSessionKey } = await bindConversationAndWait({
@@ -421,21 +462,39 @@ describeLive("gateway live (ACP bind)", () => {
           client,
           sessionKey: originalSessionKey,
           idempotencyKey: `idem-followup-${randomUUID()}`,
-          message: `Please include the token ACP-BIND-${followupNonce} in your reply.`,
+          message: `Reply with exactly this token and nothing else: ACP-BIND-${followupNonce}`,
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,
         });
         logLiveStep("follow-up turn completed");
 
+        await sendChatAndWait({
+          client,
+          sessionKey: originalSessionKey,
+          idempotencyKey: `idem-memory-${randomUUID()}`,
+          message:
+            "Reply with exactly two uppercase tokens separated by a single space: " +
+            "first, the token from your immediately previous assistant reply; " +
+            `second, ACP-BIND-MEMORY-${memoryNonce}. No extra text.`,
+          originatingChannel: "slack",
+          originatingTo: conversationId,
+          originatingAccountId: accountId,
+        });
+        logLiveStep("memory follow-up turn completed");
+
         const boundHistory = await client.request<{ messages?: unknown[] }>("chat.history", {
           sessionKey: spawnedSessionKey,
-          limit: 12,
+          limit: 16,
         });
         const assistantTexts = extractAssistantTexts(boundHistory.messages ?? []);
+        const lastAssistantText = extractLastAssistantText(boundHistory.messages ?? []);
         expect(assistantTexts.join("\n\n")).toContain(`ACP-BIND-${followupNonce}`);
+        expect(lastAssistantText).toContain(`ACP-BIND-${followupNonce}`);
+        expect(lastAssistantText).toContain(`ACP-BIND-MEMORY-${memoryNonce}`);
         logLiveStep("bound session transcript contains follow-up token");
       } finally {
+        releasePinnedPluginChannelRegistry(channelRegistry);
         clearRuntimeConfigSnapshot();
         await client.stopAndWait({ timeoutMs: 2_000 }).catch(() => {});
         await server.close();
