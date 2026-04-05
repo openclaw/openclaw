@@ -29,6 +29,7 @@ model as `provider/model`.
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
+- [Fireworks](/providers/fireworks)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
 - [Mistral](/providers/mistral)

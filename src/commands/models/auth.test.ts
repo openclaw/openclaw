@@ -278,6 +278,60 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith("Default model set to claude-cli/claude-sonnet-4-6");
   });
 
+  it("loads the owning plugin for an explicit provider even in a clean config", async () => {
+    const runtime = createRuntime();
+    const runClaudeCliMigration = vi.fn().mockResolvedValue({
+      profiles: [],
+      defaultModel: "claude-cli/claude-sonnet-4-6",
+      configPatch: {
+        agents: {
+          defaults: {
+            models: {
+              "claude-cli/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      },
+    });
+    mocks.resolvePluginProviders.mockImplementation(
+      (params: { activate?: boolean; providerRefs?: string[] } | undefined) =>
+        params?.activate === true && params?.providerRefs?.[0] === "anthropic"
+          ? [
+              {
+                id: "anthropic",
+                label: "Anthropic",
+                auth: [
+                  {
+                    id: "cli",
+                    label: "Claude CLI",
+                    kind: "custom",
+                    run: runClaudeCliMigration,
+                  },
+                ],
+              },
+            ]
+          : [],
+    );
+
+    await modelsAuthLoginCommand(
+      { provider: "anthropic", method: "cli", setDefault: true },
+      runtime,
+    );
+
+    expect(mocks.resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        workspaceDir: "/tmp/openclaw/workspace",
+        bundledProviderAllowlistCompat: true,
+        bundledProviderVitestCompat: true,
+        providerRefs: ["anthropic"],
+        activate: true,
+      }),
+    );
+    expect(runClaudeCliMigration).toHaveBeenCalledOnce();
+    expect(runtime.log).toHaveBeenCalledWith("Default model set to claude-cli/claude-sonnet-4-6");
+  });
+
   it("clears stale auth lockouts before attempting openai-codex login", async () => {
     const runtime = createRuntime();
     const fakeStore = {

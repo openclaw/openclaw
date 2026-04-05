@@ -575,7 +575,7 @@ export function buildAllowedModelSet(params: {
     // data is stale and does not include the configured model yet.
     allowedKeys.add(key);
 
-    if (!syntheticCatalogEntries.has(key)) {
+    if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
       const configuredSynthetic = resolveConfiguredSyntheticEntry(parsed.provider, parsed.model);
       syntheticCatalogEntries.set(key, {
         ...configuredSynthetic,

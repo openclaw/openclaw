@@ -30,13 +30,14 @@ type RestartPostCheckContext = {
   fail: (message: string, hints?: string[]) => void;
 };
 
-type NotLoadedActionResult = {
-  result: "stopped" | "restarted";
+type ServiceRecoveryResult = {
+  result: "started" | "stopped" | "restarted";
   message?: string;
   warnings?: string[];
+  loaded?: boolean;
 };
 
-type NotLoadedActionContext = {
+type ServiceRecoveryContext = {
   json: boolean;
   stdout: Writable;
   fail: (message: string, hints?: string[]) => void;
@@ -186,17 +187,17 @@ export async function runServiceStart(params: {
   service: GatewayService;
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
+  onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult | null>;
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "start", json });
+  const loaded = await resolveServiceLoadedOrFail({
+    serviceNoun: params.serviceNoun,
+    service: params.service,
+    fail,
+  });
 
-  if (
-    (await resolveServiceLoadedOrFail({
-      serviceNoun: params.serviceNoun,
-      service: params.service,
-      fail,
-    })) === null
-  ) {
+  if (loaded === null) {
     return;
   }
   // Pre-flight config validation (#35862) — run for both loaded and not-loaded
@@ -207,6 +208,28 @@ export async function runServiceStart(params: {
       fail(
         `${params.serviceNoun} aborted: config is invalid.\n${configError}\nFix the config and retry, or run "openclaw doctor" to repair.`,
       );
+      return;
+    }
+  }
+  if (!loaded) {
+    try {
+      const handled = await params.onNotLoaded?.({ json, stdout, fail });
+      if (handled) {
+        emit({
+          ok: true,
+          result: handled.result,
+          message: handled.message,
+          warnings: handled.warnings,
+          service: buildDaemonServiceSnapshot(params.service, handled.loaded ?? false),
+        });
+        if (!json && handled.message) {
+          defaultRuntime.log(handled.message);
+        }
+        return;
+      }
+    } catch (err) {
+      const hints = params.renderStartHints();
+      fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
       return;
     }
   }
@@ -255,7 +278,7 @@ export async function runServiceStop(params: {
   serviceNoun: string;
   service: GatewayService;
   opts?: DaemonLifecycleOptions;
-  onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
+  onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult | null>;
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "stop", json });
@@ -326,12 +349,13 @@ export async function runServiceRestart(params: {
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<GatewayServiceRestartResult | void>;
-  onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
+  onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult | null>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "restart", json });
   const warnings: string[] = [];
-  let handledNotLoaded: NotLoadedActionResult | null = null;
+  let handledRecovery: ServiceRecoveryResult | null = null;
+  let recoveredLoadedState: boolean | null = null;
   const emitScheduledRestart = (
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
     serviceLoaded: boolean,
@@ -373,12 +397,12 @@ export async function runServiceRestart(params: {
 
   if (!loaded) {
     try {
-      handledNotLoaded = (await params.onNotLoaded?.({ json, stdout, fail })) ?? null;
+      handledRecovery = (await params.onNotLoaded?.({ json, stdout, fail })) ?? null;
     } catch (err) {
       fail(`${params.serviceNoun} restart failed: ${String(err)}`);
       return false;
     }
-    if (!handledNotLoaded) {
+    if (!handledRecovery) {
       await handleServiceNotLoaded({
         serviceNoun: params.serviceNoun,
         service: params.service,
@@ -389,9 +413,10 @@ export async function runServiceRestart(params: {
       });
       return false;
     }
-    if (handledNotLoaded.warnings?.length) {
-      warnings.push(...handledNotLoaded.warnings);
+    if (handledRecovery.warnings?.length) {
+      warnings.push(...handledRecovery.warnings);
     }
+    recoveredLoadedState = handledRecovery.loaded ?? null;
   }
 
   if (loaded && params.checkTokenDrift) {
@@ -437,14 +462,14 @@ export async function runServiceRestart(params: {
     }
     let restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
     if (restartStatus.scheduled) {
-      return emitScheduledRestart(restartStatus, loaded);
+      return emitScheduledRestart(restartStatus, loaded || recoveredLoadedState === true);
     }
     if (params.postRestartCheck) {
       const postRestartResult = await params.postRestartCheck({ json, stdout, warnings, fail });
       if (postRestartResult) {
         restartStatus = describeGatewayServiceRestart(params.serviceNoun, postRestartResult);
         if (restartStatus.scheduled) {
-          return emitScheduledRestart(restartStatus, loaded);
+          return emitScheduledRestart(restartStatus, loaded || recoveredLoadedState === true);
         }
       }
     }
@@ -455,16 +480,18 @@ export async function runServiceRestart(params: {
       } catch {
         restarted = true;
       }
+    } else if (recoveredLoadedState !== null) {
+      restarted = recoveredLoadedState;
     }
     emit({
       ok: true,
       result: "restarted",
-      message: handledNotLoaded?.message,
+      message: handledRecovery?.message,
       service: buildDaemonServiceSnapshot(params.service, restarted),
       warnings: warnings.length ? warnings : undefined,
     });
-    if (!json && handledNotLoaded?.message) {
-      defaultRuntime.log(handledNotLoaded.message);
+    if (!json && handledRecovery?.message) {
+      defaultRuntime.log(handledRecovery.message);
     }
     return true;
   } catch (err) {

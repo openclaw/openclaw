@@ -89,7 +89,9 @@ describe("acpx plugin config parsing", () => {
       fs.writeFileSync(path.join(workspacePluginRoot, "package.json"), "{}\n", "utf8");
       fs.writeFileSync(path.join(workspacePluginRoot, "openclaw.plugin.json"), "{}\n", "utf8");
 
-      const moduleUrl = pathToFileURL(path.join(repoRoot, "dist-runtime", "register.runtime.js")).href;
+      const moduleUrl = pathToFileURL(
+        path.join(repoRoot, "dist-runtime", "register.runtime.js"),
+      ).href;
       expect(resolveAcpxPluginRoot(moduleUrl)).toBe(workspacePluginRoot);
     } finally {
       fs.rmSync(repoRoot, { recursive: true, force: true });

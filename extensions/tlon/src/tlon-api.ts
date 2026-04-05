@@ -10,7 +10,7 @@ type ClientConfig = {
   shipName: string;
   verbose: boolean;
   getCode: () => Promise<string>;
-  allowPrivateNetwork?: boolean;
+  dangerouslyAllowPrivateNetwork?: boolean;
 };
 
 type StorageService = "presigned-url" | "credentials";
@@ -112,7 +112,7 @@ function sanitizeFileName(fileName: string): string {
 
 async function getAuthCookie(config: ClientConfig): Promise<string> {
   return await authenticate(config.shipUrl, await config.getCode(), {
-    ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(config.allowPrivateNetwork),
+    ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
   });
 }
 
@@ -121,7 +121,7 @@ async function scryJson<T>(config: ClientConfig, cookie: string, path: string): 
     {
       baseUrl: config.shipUrl,
       cookie,
-      ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(config.allowPrivateNetwork),
+      ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(config.dangerouslyAllowPrivateNetwork),
     },
     { path, auditContext: "tlon-storage-scry" },
   )) as T;

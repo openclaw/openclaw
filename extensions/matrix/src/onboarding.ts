@@ -1,4 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizardAdapter,
@@ -324,17 +325,15 @@ async function runMatrixConfigure(params: {
   ).trim();
   const requiresAllowPrivateNetwork = requiresMatrixPrivateNetworkOptIn(homeserver);
   const shouldPromptAllowPrivateNetwork =
-    requiresAllowPrivateNetwork || existing.allowPrivateNetwork === true;
+    requiresAllowPrivateNetwork || isPrivateNetworkOptInEnabled(existing);
   const allowPrivateNetwork = shouldPromptAllowPrivateNetwork
     ? await params.prompter.confirm({
         message: "Allow private/internal Matrix homeserver traffic for this account?",
-        initialValue: existing.allowPrivateNetwork === true || requiresAllowPrivateNetwork,
+        initialValue: isPrivateNetworkOptInEnabled(existing) || requiresAllowPrivateNetwork,
       })
     : false;
   if (requiresAllowPrivateNetwork && !allowPrivateNetwork) {
-    throw new Error(
-      "Matrix homeserver requires allowPrivateNetwork for trusted private/internal access",
-    );
+    throw new Error("Matrix homeserver requires explicit private-network opt-in");
   }
   await resolveValidatedMatrixHomeserverUrl(homeserver, {
     allowPrivateNetwork,

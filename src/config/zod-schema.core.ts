@@ -346,7 +346,6 @@ export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: z.record(z.string(), ModelProviderSchema).optional(),
-    bedrockDiscovery: BedrockDiscoverySchema,
   })
   .strict()
   .optional();

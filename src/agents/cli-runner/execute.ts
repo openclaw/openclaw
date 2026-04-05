@@ -171,11 +171,20 @@ export async function executePreparedCliRun(
       const env = (() => {
         const next = sanitizeHostExecEnv({
           baseEnv: process.env,
-          overrides: backend.env,
           blockPathOverrides: true,
         });
         for (const key of backend.clearEnv ?? []) {
           delete next[key];
+        }
+        if (backend.env && Object.keys(backend.env).length > 0) {
+          Object.assign(
+            next,
+            sanitizeHostExecEnv({
+              baseEnv: {},
+              overrides: backend.env,
+              blockPathOverrides: true,
+            }),
+          );
         }
         Object.assign(next, context.preparedBackend.env);
         return next;
