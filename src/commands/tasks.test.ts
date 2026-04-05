@@ -278,7 +278,7 @@ describe("tasks commands", () => {
     });
   });
 
-  it("surfaces blocked backing-session state in task detail JSON before registry reconciliation", async () => {
+  it("projects terminal backing-session evidence in task detail JSON before maintenance apply", async () => {
     await withTaskCommandStateDir(async () => {
       const task = createRunningTaskRun({
         runtime: "cli",
@@ -303,27 +303,21 @@ describe("tasks commands", () => {
 
       const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
         taskId: string;
+        status: string;
+        error?: string;
         statusReason?: {
           code: string;
           summary: string;
-          evidence?: Array<{ kind: string; data?: Record<string, string> }>;
         };
       };
 
       expect(payload).toMatchObject({
         taskId: task.taskId,
+        status: "failed",
+        error: "Backing session failed.",
         statusReason: {
-          code: "blocked_on_backing_session_state",
-          summary: "Backing session failed; task has not reconciled yet.",
-          evidence: expect.arrayContaining([
-            expect.objectContaining({
-              kind: "session_state",
-              data: {
-                state: "failed",
-                source: "session_status",
-              },
-            }),
-          ]),
+          code: "failed",
+          summary: "Backing session failed.",
         },
       });
     });

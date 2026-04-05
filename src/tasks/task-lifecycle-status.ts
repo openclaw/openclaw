@@ -213,7 +213,7 @@ function resolveWaitTaskId(waitJson: JsonValue | undefined): string | undefined 
   return typeof waitJson.taskId === "string" ? normalizeId(waitJson.taskId) : undefined;
 }
 
-type BackingSessionState =
+export type BackingSessionState =
   | "running"
   | "done"
   | "failed"
@@ -223,7 +223,7 @@ type BackingSessionState =
   | "error"
   | "missing";
 
-type BackingSessionSnapshot = {
+export type BackingSessionSnapshot = {
   state: BackingSessionState;
   source: "session_status" | "acp_state" | "missing";
   summary: string;
@@ -298,7 +298,7 @@ function loadPersistedBackingSessionSnapshot(
   return mapPersistedSessionStatus(entry.status, entry.updatedAt);
 }
 
-function resolveTaskBackingSessionSnapshot(
+export function resolveTaskBackingSessionSnapshot(
   task: Pick<TaskRecord, "runtime" | "childSessionKey" | "status"> & {
     runtime?: TaskRecord["runtime"];
   },

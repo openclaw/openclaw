@@ -7,14 +7,19 @@ import {
   getTaskById,
   listTaskRecords,
   markTaskLostById,
+  markTaskTerminalById,
   maybeDeliverTaskTerminalUpdate,
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
+import {
+  resolveTaskBackingSessionSnapshot,
+  type BackingSessionSnapshot,
+} from "./task-lifecycle-status.js";
 import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
 import type { TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
-import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
+import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
 
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -96,6 +101,86 @@ function shouldMarkLost(task: TaskRecord, now: number): boolean {
   return !hasBackingSession(task);
 }
 
+function resolveTaskTerminalStatusFromBackingSession(
+  backingSession: BackingSessionSnapshot,
+): Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled"> | undefined {
+  switch (backingSession.state) {
+    case "done":
+      return "succeeded";
+    case "failed":
+      return "failed";
+    case "timeout":
+      return "timed_out";
+    case "killed":
+      return "cancelled";
+    default:
+      return undefined;
+  }
+}
+
+function resolveTaskTerminalEvidenceText(backingSession: BackingSessionSnapshot): {
+  error?: string;
+  terminalSummary?: string;
+} {
+  switch (backingSession.state) {
+    case "done":
+      return { terminalSummary: "Backing session finished." };
+    case "failed":
+      return { error: "Backing session failed." };
+    case "timeout":
+      return { error: "Backing session timed out." };
+    case "killed":
+      return { error: "Backing session was killed." };
+    default:
+      return {};
+  }
+}
+
+function projectTaskTerminalFromBackingSession(task: TaskRecord):
+  | {
+      status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+      task: TaskRecord;
+    }
+  | undefined {
+  const backingSession = resolveTaskBackingSessionSnapshot(task);
+  if (!backingSession) {
+    return undefined;
+  }
+  const status = resolveTaskTerminalStatusFromBackingSession(backingSession);
+  if (!status) {
+    return undefined;
+  }
+  const terminalAt = Math.max(
+    task.createdAt,
+    task.startedAt ?? 0,
+    task.lastEventAt ?? 0,
+    backingSession.recordedAt ?? 0,
+  );
+  const evidenceText = resolveTaskTerminalEvidenceText(backingSession);
+  const projected: TaskRecord = {
+    ...task,
+    status,
+    endedAt: terminalAt,
+    lastEventAt: terminalAt,
+    ...(task.error !== undefined || evidenceText.error === undefined
+      ? {}
+      : { error: evidenceText.error }),
+    ...(task.terminalSummary !== undefined || evidenceText.terminalSummary === undefined
+      ? {}
+      : { terminalSummary: evidenceText.terminalSummary }),
+  };
+  return {
+    status,
+    task:
+      typeof projected.cleanupAfter === "number"
+        ? projected
+        : {
+            ...projected,
+            cleanupAfter: resolveCleanupAfter(projected),
+          },
+  };
+}
+
 function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
   if (!isTerminalTask(task)) {
     return false;
@@ -148,6 +233,10 @@ function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
 
 export function reconcileTaskRecordForOperatorInspection(task: TaskRecord): TaskRecord {
   const now = Date.now();
+  const projectedTerminal = projectTaskTerminalFromBackingSession(task);
+  if (projectedTerminal) {
+    return projectedTerminal.task;
+  }
   if (!shouldMarkLost(task, now)) {
     return task;
   }
@@ -181,6 +270,10 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
   let cleanupStamped = 0;
   let pruned = 0;
   for (const task of listTaskRecords()) {
+    if (projectTaskTerminalFromBackingSession(task)) {
+      reconciled += 1;
+      continue;
+    }
     if (shouldMarkLost(task, now)) {
       reconciled += 1;
       continue;
@@ -226,6 +319,27 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   for (const task of tasks) {
     const current = getTaskById(task.taskId);
     if (!current) {
+      continue;
+    }
+    const terminalProjection = projectTaskTerminalFromBackingSession(current);
+    if (terminalProjection) {
+      const next =
+        markTaskTerminalById({
+          taskId: current.taskId,
+          status: terminalProjection.status,
+          endedAt: terminalProjection.task.endedAt ?? now,
+          lastEventAt: terminalProjection.task.lastEventAt,
+          error: terminalProjection.task.error,
+          terminalSummary: terminalProjection.task.terminalSummary,
+        }) ?? current;
+      void maybeDeliverTaskTerminalUpdate(next.taskId);
+      if (next.status === terminalProjection.status) {
+        reconciled += 1;
+      }
+      processed += 1;
+      if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+        await yieldToEventLoop();
+      }
       continue;
     }
     if (shouldMarkLost(current, now)) {
