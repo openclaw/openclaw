@@ -364,8 +364,7 @@ export function convertMessagesToInputItems(
         }>) {
           if (block.type === "text" && typeof block.text === "string") {
             const parsedSignature = parseAssistantTextSignature(block.textSignature);
-            const blockPhase =
-              parsedSignature?.phase ?? (hasExplicitBlockPhase ? undefined : assistantMessagePhase);
+            const blockPhase = parsedSignature?.phase ?? assistantMessagePhase;
             if (textParts.length > 0 && blockPhase !== currentTextPhase) {
               pushAssistantText(currentTextPhase);
             }
@@ -527,7 +526,7 @@ export function buildAssistantMessageFromResponse(
           try {
             return JSON.parse(item.arguments) as Record<string, unknown>;
           } catch {
-            return {} as Record<string, unknown>;
+            return item.arguments;
           }
         })(),
       });

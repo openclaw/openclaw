@@ -736,12 +736,7 @@ describe("convertMessagesToInputItems", () => {
       {
         type: "message",
         role: "assistant",
-        content: "Legacy. ",
-      },
-      {
-        type: "message",
-        role: "assistant",
-        content: "Done.",
+        content: "Legacy. Done.",
         phase: "final_answer",
       },
     ]);
