@@ -89,12 +89,14 @@ type ServerPluginBootstrapModule = typeof import("./server-plugin-bootstrap.js")
 type PluginRuntimeModule = typeof import("../plugins/runtime/index.js");
 type GatewayRequestScopeModule = typeof import("../plugins/runtime/gateway-request-scope.js");
 type MethodScopesModule = typeof import("./method-scopes.js");
+type RuntimeStateModule = typeof import("../plugins/runtime-state.js");
 
 let serverPluginsModule: ServerPluginsModule;
 let serverPluginBootstrapModule: ServerPluginBootstrapModule;
 let runtimeModule: PluginRuntimeModule;
 let gatewayRequestScopeModule: GatewayRequestScopeModule;
 let methodScopesModule: MethodScopesModule;
+let getActivePluginRegistryWorkspaceDirFromState: typeof import("../plugins/runtime-state.js").getActivePluginRegistryWorkspaceDirFromState;
 
 function createTestLog() {
   return {
@@ -131,6 +133,8 @@ async function loadTestModules() {
   runtimeModule = await import("../plugins/runtime/index.js");
   gatewayRequestScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
   methodScopesModule = await import("./method-scopes.js");
+  const runtimeStateModule: RuntimeStateModule = await import("../plugins/runtime-state.js");
+  ({ getActivePluginRegistryWorkspaceDirFromState } = runtimeStateModule);
 }
 
 async function createSubagentRuntime(
@@ -335,6 +339,20 @@ describe("loadGatewayPlugins", () => {
     expect(loadOpenClawPlugins).not.toHaveBeenCalled();
     expect(result.pluginRegistry.plugins).toEqual([]);
     expect(result.gatewayMethods).toEqual(["sessions.get"]);
+  });
+
+  test("stores workspaceDir on the active registry when startup scope is empty", () => {
+    resolveGatewayStartupPluginIds.mockReturnValue([]);
+
+    serverPluginsModule.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp/gateway-workspace",
+      log: createTestLog(),
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+
+    expect(getActivePluginRegistryWorkspaceDirFromState()).toBe("/tmp/gateway-workspace");
   });
 
   test("loads gateway plugins from the auto-enabled config snapshot", async () => {

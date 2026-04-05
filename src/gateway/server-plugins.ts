@@ -429,7 +429,7 @@ export function loadGatewayPlugins(params: {
     });
   if (pluginIds.length === 0) {
     const pluginRegistry = createEmptyPluginRegistry();
-    setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable");
+    setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
     return {
       pluginRegistry,
       gatewayMethods: [...params.baseMethods],

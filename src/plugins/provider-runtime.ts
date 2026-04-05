@@ -8,6 +8,7 @@ import {
 } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import { resolvePluginCacheInputs } from "./roots.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import type {
   ProviderAuthDoctorHintContext,
   ProviderAugmentModelCatalogContext,
@@ -134,13 +135,14 @@ function resolveProviderPluginsForHooks(params: {
   onlyPluginIds?: string[];
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const cacheBucket = resolveHookProviderCacheBucket({
     config: params.config,
     env,
   });
   const cacheKey = buildHookProviderCacheKey({
     config: params.config,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     onlyPluginIds: params.onlyPluginIds,
     env,
   });
@@ -150,6 +152,7 @@ function resolveProviderPluginsForHooks(params: {
   }
   const resolved = resolvePluginProviders({
     ...params,
+    workspaceDir,
     env,
     activate: false,
     cache: false,
@@ -165,9 +168,10 @@ function resolveProviderPluginsForCatalogHooks(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin[] {
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const onlyPluginIds = resolveCatalogHookProviderPluginIds({
     config: params.config,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     env: params.env,
   });
   if (onlyPluginIds.length === 0) {
@@ -175,6 +179,7 @@ function resolveProviderPluginsForCatalogHooks(params: {
   }
   return resolveProviderPluginsForHooks({
     ...params,
+    workspaceDir,
     onlyPluginIds,
   });
 }
@@ -185,10 +190,11 @@ export function resolveProviderRuntimePlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin | undefined {
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const owningPluginIds = resolveOwningPluginIdsForProvider({
     provider: params.provider,
     config: params.config,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     env: params.env,
   });
   if (!owningPluginIds || owningPluginIds.length === 0) {
@@ -196,6 +202,7 @@ export function resolveProviderRuntimePlugin(params: {
   }
   return resolveProviderPluginsForHooks({
     ...params,
+    workspaceDir,
     onlyPluginIds: owningPluginIds,
   }).find((plugin) => matchesProviderId(plugin, params.provider));
 }

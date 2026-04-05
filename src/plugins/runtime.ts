@@ -25,6 +25,7 @@ const state: RegistryState = (() => {
         version: 0,
       },
       key: null,
+      workspaceDir: null,
       runtimeSubagentMode: "default",
       importedPluginIds: new Set<string>(),
     };
@@ -70,17 +71,23 @@ export function setActivePluginRegistry(
   registry: PluginRegistry,
   cacheKey?: string,
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable" = "default",
+  workspaceDir?: string,
 ) {
   state.activeRegistry = registry;
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);
   syncTrackedSurface(state.channel, registry, true);
   state.key = cacheKey ?? null;
+  state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
   return state.activeRegistry;
+}
+
+export function getActivePluginRegistryWorkspaceDir(): string | undefined {
+  return state.workspaceDir ?? undefined;
 }
 
 export function requireActivePluginRegistry(): PluginRegistry {
@@ -222,6 +229,7 @@ export function resetPluginRuntimeStateForTest(): void {
   installSurfaceRegistry(state.httpRoute, null, false);
   installSurfaceRegistry(state.channel, null, false);
   state.key = null;
+  state.workspaceDir = null;
   state.runtimeSubagentMode = "default";
   state.importedPluginIds.clear();
 }
