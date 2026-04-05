@@ -1,0 +1,5 @@
+{
+  "id": "amazon-bedrock-mantle",
+  "enabledByDefault": true,
+  "providers": ["amazon-bedrock-mantle"]
+}
