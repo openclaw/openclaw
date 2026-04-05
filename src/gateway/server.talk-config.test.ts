@@ -196,6 +196,7 @@ describe("gateway talk.config", () => {
       const res = await fetchTalkConfig(ws);
       expect(res.ok).toBe(true);
       expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+        provider: "elevenlabs",
         voiceId: "voice-123",
         apiKey: "__OPENCLAW_REDACTED__",
         silenceTimeoutMs: 1500,
@@ -238,6 +239,7 @@ describe("gateway talk.config", () => {
       const res = await fetchTalkConfig(ws, { includeSecrets: true });
       expect(res.ok).toBe(true);
       expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+        provider: "elevenlabs",
         apiKey: "secret-key-abc",
       });
     });
@@ -263,7 +265,10 @@ describe("gateway talk.config", () => {
           provider: "default",
           id: "ELEVENLABS_API_KEY",
         } satisfies SecretRef;
-        expectElevenLabsTalkConfig(res.payload?.config?.talk, { apiKey: secretRef });
+        expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+          provider: "elevenlabs",
+          apiKey: secretRef,
+        });
       });
     });
   });
