@@ -72,13 +72,11 @@ export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
   const currentDangerousAllowPrivateNetwork = currentNetwork.dangerouslyAllowPrivateNetwork;
 
   let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
-  if (
-    typeof legacyAllowPrivateNetwork === "boolean" ||
-    typeof currentDangerousAllowPrivateNetwork === "boolean"
-  ) {
-    // Preserve current effective posture while collapsing to the canonical key.
-    resolvedDangerousAllowPrivateNetwork =
-      legacyAllowPrivateNetwork === true || currentDangerousAllowPrivateNetwork === true;
+  if (typeof currentDangerousAllowPrivateNetwork === "boolean") {
+    // The canonical key wins when both shapes are present.
+    resolvedDangerousAllowPrivateNetwork = currentDangerousAllowPrivateNetwork;
+  } else if (typeof legacyAllowPrivateNetwork === "boolean") {
+    resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
   } else if (currentDangerousAllowPrivateNetwork === undefined) {
     resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
   }

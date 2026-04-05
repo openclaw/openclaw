@@ -131,7 +131,7 @@ describe("legacy private-network alias helpers", () => {
     ]);
   });
 
-  it("preserves the effective opt-in when both old and new keys are present", () => {
+  it("prefers the canonical network key when both old and new keys are present", () => {
     const changes: string[] = [];
     const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
       entry: {
@@ -146,13 +146,13 @@ describe("legacy private-network alias helpers", () => {
 
     expect(migrated.entry).toEqual({
       network: {
-        dangerouslyAllowPrivateNetwork: true,
+        dangerouslyAllowPrivateNetwork: false,
       },
     });
-    expect(changes[0]).toContain("(true)");
+    expect(changes[0]).toContain("(false)");
   });
 
-  it("preserves the effective opt-in when the new key is true and the legacy key is false", () => {
+  it("keeps an explicit canonical true when the legacy key is false", () => {
     const changes: string[] = [];
     const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
       entry: {
