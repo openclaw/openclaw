@@ -13,7 +13,7 @@ describe("StepFun provider catalog", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = await resolveImplicitProvidersForTest({
       agentDir,
-      env: { ...process.env, STEPFUN_API_KEY: "test-stepfun-key" },
+      env: { STEPFUN_API_KEY: "test-stepfun-key" },
     });
 
     expect(providers?.stepfun).toMatchObject({
@@ -68,7 +68,7 @@ describe("StepFun provider catalog", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = await resolveImplicitProvidersForTest({
       agentDir,
-      env: { ...process.env, STEPFUN_API_KEY: "test-stepfun-key" },
+      env: { STEPFUN_API_KEY: "test-stepfun-key" },
       config: {
         models: {
           providers: {

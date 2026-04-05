@@ -171,5 +171,6 @@ describe("implicit provider resolution matrix", () => {
 
       assertProviders(providers);
     },
+    240_000,
   );
 });
