@@ -3,13 +3,11 @@ import {
   definePluginEntry,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
-  type ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyOpenrouterConfig,
   buildOpenrouterProvider,
   buildProviderReplayFamilyHooks,
-  buildProviderStreamFamilyHooks,
   createProviderApiKeyAuthMethod,
   DEFAULT_CONTEXT_TOKENS,
   getOpenRouterModelCapabilities,
@@ -17,6 +15,7 @@ import {
   OPENROUTER_DEFAULT_MODEL_REF,
   openrouterMediaUnderstandingProvider,
 } from "./register.runtime.js";
+import { wrapOpenRouterProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -36,8 +35,6 @@ export default definePluginEntry({
     const PASSTHROUGH_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
       family: "passthrough-gemini",
     });
-    const OPENROUTER_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("openrouter-thinking");
-
     function buildDynamicOpenRouterModel(
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {
@@ -54,53 +51,6 @@ export default definePluginEntry({
         contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         maxTokens: capabilities?.maxTokens ?? OPENROUTER_DEFAULT_MAX_TOKENS,
       };
-    }
-
-    function injectOpenRouterRouting(
-      baseStreamFn: StreamFn | undefined,
-      providerRouting?: Record<string, unknown>,
-    ): StreamFn | undefined {
-      if (!providerRouting) {
-        return baseStreamFn;
-      }
-      return (model, context, options) =>
-        (
-          baseStreamFn ??
-          ((nextModel, nextContext, nextOptions) => {
-            throw new Error(
-              `OpenRouter routing wrapper requires an underlying streamFn for ${String(nextModel.id)}.`,
-            );
-          })
-        )(
-          {
-            ...model,
-            compat: { ...model.compat, openRouterRouting: providerRouting },
-          } as typeof model,
-          context,
-          options,
-        );
-    }
-
-    function wrapOpenRouterProviderStream(
-      ctx: ProviderWrapStreamFnContext,
-    ): StreamFn | null | undefined {
-      const providerRouting =
-        ctx.extraParams?.provider != null && typeof ctx.extraParams.provider === "object"
-          ? (ctx.extraParams.provider as Record<string, unknown>)
-          : undefined;
-      const routedStreamFn = providerRouting
-        ? injectOpenRouterRouting(ctx.streamFn, providerRouting)
-        : ctx.streamFn;
-      const wrapStreamFn = OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn ?? undefined;
-      if (!wrapStreamFn) {
-        return routedStreamFn;
-      }
-      return (
-        wrapStreamFn({
-          ...ctx,
-          streamFn: routedStreamFn,
-        }) ?? undefined
-      );
     }
 
     function isOpenRouterCacheTtlModel(modelId: string): boolean {

@@ -255,8 +255,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `anthropic/claude-opus-4-6`
 - CLI: `openclaw onboard --auth-choice apiKey` or `openclaw onboard --auth-choice anthropic-cli`
 - Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
-- Billing note: Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover OpenClaw, and Anthropic OAuth/subscription traffic now requires **Extra Usage** billed separately from the subscription.
-- Existing Anthropic OAuth/token profiles still run if already configured, but new setup is no longer offered through onboarding or auth commands.
+- Billing note: Anthropic's public Claude Code docs still include direct Claude Code terminal usage in Claude plan limits. Separately, Anthropic notified OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription.
+- Anthropic setup-token is available again as a legacy/manual OpenClaw path. Use it with the expectation that Anthropic told OpenClaw users this path requires **Extra Usage**.
 
 ```json5
 {

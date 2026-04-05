@@ -11,17 +11,10 @@ import {
   resolveCopilotForwardCompatModel,
   wrapCopilotProviderStream,
 } from "./register.runtime.js";
+import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
-
-function buildGithubCopilotReplayPolicy(modelId?: string) {
-  return (modelId?.toLowerCase() ?? "").includes("claude")
-    ? {
-        dropThinkingBlocks: true,
-      }
-    : {};
-}
 
 export default definePluginEntry({
   id: "github-copilot",
