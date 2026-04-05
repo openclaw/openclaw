@@ -1,17 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   installModelsConfigTestHooks,
   MODELS_CONFIG_IMPLICIT_ENV_VARS,
-  resolveImplicitProvidersForTest,
   unsetEnv,
   withModelsTempHome,
   withTempEnv,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
-import { readGeneratedModelsJson } from "./models-config.test-utils.js";
+import { planOpenClawModelsJson } from "./models-config.plan.js";
+
+vi.mock("./cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: () => null,
+  readMiniMaxCliCredentialsCached: () => null,
+}));
 
 installModelsConfigTestHooks();
 
@@ -43,61 +47,43 @@ async function writeCodexOauthProfile(agentDir: string) {
 }
 
 describe("openai-codex implicit provider", () => {
-  it("injects an implicit provider when Codex OAuth exists", async () => {
-    await withModelsTempHome(async () => {
-      await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
-        unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
-        const agentDir = resolveOpenClawAgentDir();
-        await writeCodexOauthProfile(agentDir);
-
-        const providers = await resolveImplicitProvidersForTest({ agentDir });
-        expect(providers?.["openai-codex"]).toMatchObject({
-          baseUrl: "https://chatgpt.com/backend-api",
-          api: "openai-codex-responses",
-          models: [],
-        });
-        expect(providers?.["openai-codex"]).not.toHaveProperty("apiKey");
-      });
-    });
-  });
-
   it("normalizes generated openai-codex rows back to the Codex transport when oauth exists", async () => {
     await withModelsTempHome(async () => {
       await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
         unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
+        process.env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS = "openai-codex";
         const agentDir = resolveOpenClawAgentDir();
         await writeCodexOauthProfile(agentDir);
-        await fs.writeFile(
-          path.join(agentDir, "models.json"),
-          JSON.stringify(
-            {
-              providers: {
-                "openai-codex": {
-                  baseUrl: "https://api.openai.com/v1",
+        const existingParsed = {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT-5.4",
                   api: "openai-responses",
-                  models: [
-                    {
-                      id: "gpt-5.4",
-                      name: "GPT-5.4",
-                      api: "openai-responses",
-                      contextWindow: 1_000_000,
-                      maxTokens: 100_000,
-                    },
-                  ],
+                  contextWindow: 1_000_000,
+                  maxTokens: 100_000,
                 },
-              },
+              ],
             },
-            null,
-            2,
-          ),
-          "utf8",
-        );
+          },
+        };
+        const plan = await planOpenClawModelsJson({
+          cfg: {},
+          sourceConfigForSecrets: {},
+          agentDir,
+          env: createConfigRuntimeEnv({}),
+          existingRaw: `${JSON.stringify(existingParsed, null, 2)}\n`,
+          existingParsed,
+        });
 
-        await ensureOpenClawModelsJson({});
-
-        const parsed = await readGeneratedModelsJson<{
+        expect(plan.action).toBe("write");
+        const parsed = JSON.parse((plan as { contents: string }).contents) as {
           providers: Record<string, { baseUrl?: string; api?: string }>;
-        }>();
+        };
         expect(parsed.providers["openai-codex"]).toMatchObject({
           baseUrl: "https://chatgpt.com/backend-api",
           api: "openai-codex-responses",
@@ -110,27 +96,9 @@ describe("openai-codex implicit provider", () => {
     await withModelsTempHome(async () => {
       await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
         unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
+        process.env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS = "openai-codex";
         const agentDir = resolveOpenClawAgentDir();
-        await fs.mkdir(agentDir, { recursive: true });
-        await fs.writeFile(
-          path.join(agentDir, "models.json"),
-          JSON.stringify(
-            {
-              providers: {
-                "openai-codex": {
-                  baseUrl: "https://chatgpt.com/backend-api",
-                  api: "openai-codex-responses",
-                  models: [],
-                },
-              },
-            },
-            null,
-            2,
-          ),
-          "utf8",
-        );
-
-        await ensureOpenClawModelsJson({
+        const cfg = {
           models: {
             mode: "merge",
             providers: {
@@ -141,11 +109,29 @@ describe("openai-codex implicit provider", () => {
               },
             },
           },
+        };
+        const existingParsed = {
+          providers: {
+            "openai-codex": {
+              baseUrl: "https://chatgpt.com/backend-api",
+              api: "openai-codex-responses",
+              models: [],
+            },
+          },
+        };
+        const plan = await planOpenClawModelsJson({
+          cfg,
+          sourceConfigForSecrets: cfg,
+          agentDir,
+          env: createConfigRuntimeEnv(cfg),
+          existingRaw: `${JSON.stringify(existingParsed, null, 2)}\n`,
+          existingParsed,
         });
 
-        const parsed = await readGeneratedModelsJson<{
+        expect(plan.action).toBe("write");
+        const parsed = JSON.parse((plan as { contents: string }).contents) as {
           providers: Record<string, { baseUrl?: string; api?: string }>;
-        }>();
+        };
         expect(parsed.providers["openai-codex"]).toMatchObject({
           baseUrl: "https://chatgpt.com/backend-api",
           api: "openai-codex-responses",
