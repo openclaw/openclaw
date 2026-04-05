@@ -24,6 +24,7 @@ class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
   private var didStartForeground = false
+  private var currentForegroundServiceType: Int? = null
 
   override fun onCreate() {
     super.onCreate()
@@ -136,16 +137,18 @@ class NodeForegroundService : Service() {
   }
 
   private fun startForegroundWithTypes(notification: Notification) {
-    if (didStartForeground) {
+    val serviceType = foregroundServiceType(locationGranted = hasAnyLocationPermission())
+    if (!shouldRestartForeground(serviceType)) {
       updateNotification(notification)
       return
     }
     startForeground(
       NOTIFICATION_ID,
       notification,
-      foregroundServiceType(locationGranted = hasAnyLocationPermission()),
+      serviceType,
     )
     didStartForeground = true
+    currentForegroundServiceType = serviceType
   }
 
   private fun hasAnyLocationPermission(): Boolean {
@@ -158,6 +161,10 @@ class NodeForegroundService : Service() {
   private fun foregroundServiceType(locationGranted: Boolean): Int {
     return ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
       if (locationGranted) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
+  }
+
+  private fun shouldRestartForeground(serviceType: Int): Boolean {
+    return !didStartForeground || currentForegroundServiceType != serviceType
   }
 
   companion object {

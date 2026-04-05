@@ -5,6 +5,8 @@ import android.content.pm.ServiceInfo
 import android.content.Intent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -52,6 +54,52 @@ class NodeForegroundServiceTest {
     )
   }
 
+  @Test
+  fun shouldRestartForeground_whenNeverStarted() {
+    val service = Robolectric.buildService(NodeForegroundService::class.java).get()
+
+    val shouldRestart =
+      shouldRestartForeground(
+        service = service,
+        didStartForeground = false,
+        currentForegroundServiceType = null,
+        requestedServiceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+      )
+
+    assertTrue(shouldRestart)
+  }
+
+  @Test
+  fun shouldRestartForeground_whenServiceTypeChanges() {
+    val service = Robolectric.buildService(NodeForegroundService::class.java).get()
+
+    val shouldRestart =
+      shouldRestartForeground(
+        service = service,
+        didStartForeground = true,
+        currentForegroundServiceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+        requestedServiceType =
+          ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+      )
+
+    assertTrue(shouldRestart)
+  }
+
+  @Test
+  fun shouldRestartForeground_whenServiceTypeMatches() {
+    val service = Robolectric.buildService(NodeForegroundService::class.java).get()
+
+    val shouldRestart =
+      shouldRestartForeground(
+        service = service,
+        didStartForeground = true,
+        currentForegroundServiceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+        requestedServiceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+      )
+
+    assertFalse(shouldRestart)
+  }
+
   private fun buildNotification(service: NodeForegroundService): Notification {
     val method =
       NodeForegroundService::class.java.getDeclaredMethod(
@@ -71,5 +119,28 @@ class NodeForegroundServiceTest {
       )
     method.isAccessible = true
     return method.invoke(service, locationGranted) as Int
+  }
+
+  private fun shouldRestartForeground(
+    service: NodeForegroundService,
+    didStartForeground: Boolean,
+    currentForegroundServiceType: Int?,
+    requestedServiceType: Int,
+  ): Boolean {
+    val didStartField = NodeForegroundService::class.java.getDeclaredField("didStartForeground")
+    didStartField.isAccessible = true
+    didStartField.setBoolean(service, didStartForeground)
+
+    val currentTypeField = NodeForegroundService::class.java.getDeclaredField("currentForegroundServiceType")
+    currentTypeField.isAccessible = true
+    currentTypeField.set(service, currentForegroundServiceType)
+
+    val method =
+      NodeForegroundService::class.java.getDeclaredMethod(
+        "shouldRestartForeground",
+        Int::class.javaPrimitiveType,
+      )
+    method.isAccessible = true
+    return method.invoke(service, requestedServiceType) as Boolean
   }
 }
