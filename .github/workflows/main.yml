@@ -2,7 +2,7 @@ name: 自动同步上游 OpenClaw (main分支)
 
 on:
   schedule:
-    - cron: "*/50 * * * *"  # 每50分钟执行一次
+    - cron: "0 12 */1 * *"
   workflow_dispatch:        # 允许在网页端手动触发
 
 jobs:
