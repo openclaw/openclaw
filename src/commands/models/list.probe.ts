@@ -454,9 +454,6 @@ async function probeTarget(params: {
   await fs.mkdir(sessionDir, { recursive: true });
 
   const start = Date.now();
-  // CLI backends do not yet translate streamParams.maxTokens into backend-native
-  // argv, so keep auth probes explicitly tiny at the prompt layer too.
-  const prompt = buildProbePrompt(maxTokens);
   const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({
     provider: target.provider,
     model: `${model.provider}/${model.model}`,
@@ -476,7 +473,9 @@ async function probeTarget(params: {
         agentId,
         workspaceDir,
         config: cfg,
-        prompt,
+        // CLI backends do not yet translate streamParams.maxTokens into
+        // backend-native argv, so keep auth probes explicitly tiny here too.
+        prompt: buildProbePrompt(maxTokens),
         provider: target.model.provider,
         model: target.model.model,
         authProfileId: target.profileId,
@@ -494,7 +493,7 @@ async function probeTarget(params: {
         workspaceDir,
         agentDir,
         config: cfg,
-        prompt,
+        prompt: PROBE_PROMPT,
         provider: target.model.provider,
         model: target.model.model,
         authProfileId: target.profileId,
