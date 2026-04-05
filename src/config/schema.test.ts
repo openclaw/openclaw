@@ -271,7 +271,7 @@ describe("config schema", () => {
       },
     });
 
-    expect(parsed.experimental?.planTool).toBe(true);
+    expect(parsed?.experimental?.planTool).toBe(true);
   });
 
   it("accepts web fetch maxResponseBytes in the runtime zod schema", () => {
