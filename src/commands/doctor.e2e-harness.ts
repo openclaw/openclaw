@@ -232,9 +232,9 @@ vi.mock("../plugins/loader.js", async () => {
 });
 
 vi.mock("../config/config.js", async () => {
-  const paths = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
-    ...paths,
+    ...actual,
     CONFIG_PATH: "/tmp/openclaw.json",
     loadConfig: () => loadConfig(),
     createConfigIO: (...args: unknown[]) => createConfigIO(...args),

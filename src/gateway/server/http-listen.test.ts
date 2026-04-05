@@ -6,9 +6,13 @@ import { listenGatewayHttpServer } from "./http-listen.js";
 
 const sleepMock = vi.hoisted(() => vi.fn(async (_ms: number) => {}));
 
-vi.mock("../../utils.js", () => ({
-  sleep: (ms: number) => sleepMock(ms),
-}));
+vi.mock("../../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
+  return {
+    ...actual,
+    sleep: (ms: number) => sleepMock(ms),
+  };
+});
 
 type ListenOutcome = { kind: "error"; code: string } | { kind: "listening" };
 

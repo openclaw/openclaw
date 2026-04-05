@@ -50,9 +50,9 @@ vi.mock("../config/paths.js", async () => {
 });
 
 vi.mock("../config/config.js", async () => {
-  const paths = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
-    ...paths,
+    ...actual,
     loadConfig: mocks.loadConfig,
     writeConfigFile: mocks.writeConfigFile,
   };

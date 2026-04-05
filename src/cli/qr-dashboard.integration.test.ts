@@ -16,9 +16,9 @@ const {
 const runtimeExit = runtime.exit;
 
 vi.mock("../config/config.js", async () => {
-  const paths = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
-    ...paths,
+    ...actual,
     loadConfig: loadConfigMock,
     readConfigFileSnapshot: readConfigFileSnapshotMock,
     resolveGatewayPort: resolveGatewayPortMock,

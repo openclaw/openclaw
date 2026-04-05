@@ -493,9 +493,9 @@ vi.mock("../infra/update-check.js", () => ({
   compareSemverStrings: vi.fn(() => 0),
 }));
 vi.mock("../config/config.js", async () => {
-  const paths = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
-    ...paths,
+    ...actual,
     loadConfig: mocks.loadConfig,
     readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
     resolveGatewayPort: vi.fn(() => 18789),
