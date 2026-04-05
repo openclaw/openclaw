@@ -58,24 +58,24 @@ Use `action: "list"` to inspect available providers and models at runtime:
 
 ## Tool parameters
 
-| Parameter         | Type     | Description                                                                           |
-| ----------------- | -------- | ------------------------------------------------------------------------------------- |
-| `prompt`          | string   | Video generation prompt (required for `action: "generate"`)                           |
-| `action`          | string   | `"generate"` (default) or `"list"` to inspect providers                               |
-| `model`           | string   | Provider/model override, e.g. `qwen/wan2.6-t2v`                                       |
-| `image`           | string   | Single reference image path or URL                                                    |
-| `images`          | string[] | Multiple reference images (up to 5)                                                   |
-| `video`           | string   | Single reference video path or URL                                                    |
-| `videos`          | string[] | Multiple reference videos (up to 4)                                                   |
-| `size`            | string   | Size hint when the provider supports it                                               |
-| `aspectRatio`     | string   | Aspect ratio: `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9` |
-| `resolution`      | string   | Resolution hint: `480P`, `720P`, or `1080P`                                           |
-| `durationSeconds` | number   | Target duration in seconds                                                            |
-| `audio`           | boolean  | Enable generated audio when the provider supports it                                  |
-| `watermark`       | boolean  | Toggle provider watermarking when supported                                           |
-| `filename`        | string   | Output filename hint                                                                  |
+| Parameter         | Type     | Description                                                                            |
+| ----------------- | -------- | -------------------------------------------------------------------------------------- |
+| `prompt`          | string   | Video generation prompt (required for `action: "generate"`)                            |
+| `action`          | string   | `"generate"` (default) or `"list"` to inspect providers                                |
+| `model`           | string   | Provider/model override, e.g. `qwen/wan2.6-t2v`                                        |
+| `image`           | string   | Single reference image path or URL                                                     |
+| `images`          | string[] | Multiple reference images (up to 5)                                                    |
+| `video`           | string   | Single reference video path or URL                                                     |
+| `videos`          | string[] | Multiple reference videos (up to 4)                                                    |
+| `size`            | string   | Size hint when the provider supports it                                                |
+| `aspectRatio`     | string   | Aspect ratio: `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9`  |
+| `resolution`      | string   | Resolution hint: `480P`, `720P`, or `1080P`                                            |
+| `durationSeconds` | number   | Target duration in seconds. OpenClaw may round to the nearest provider-supported value |
+| `audio`           | boolean  | Enable generated audio when the provider supports it                                   |
+| `watermark`       | boolean  | Toggle provider watermarking when supported                                            |
+| `filename`        | string   | Output filename hint                                                                   |
 
-Not all providers support all parameters. The tool validates provider capability limits before it submits the request.
+Not all providers support all parameters. The tool validates provider capability limits before it submits the request. When a provider or model only supports a discrete set of video lengths, OpenClaw rounds `durationSeconds` to the nearest supported value and reports the normalized duration in the tool result.
 
 ## Configuration
 

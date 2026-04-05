@@ -150,6 +150,43 @@ describe("video-generation runtime", () => {
     expect(mocks.listVideoGenerationProviders).toHaveBeenCalledWith({} as OpenClawConfig);
   });
 
+  it("normalizes requested durations to supported provider values", async () => {
+    let seenDurationSeconds: number | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
+    mocks.getVideoGenerationProvider.mockReturnValue({
+      id: "video-plugin",
+      capabilities: {
+        supportedDurationSeconds: [4, 6, 8],
+      },
+      generateVideo: async (req) => {
+        seenDurationSeconds = req.durationSeconds;
+        return {
+          videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+          model: "vid-v1",
+        };
+      },
+    });
+
+    const result = await generateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/vid-v1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+      durationSeconds: 5,
+    });
+
+    expect(seenDurationSeconds).toBe(6);
+    expect(result.metadata).toMatchObject({
+      requestedDurationSeconds: 5,
+      normalizedDurationSeconds: 6,
+      supportedDurationSeconds: [4, 6, 8],
+    });
+  });
+
   it("builds a generic config hint without hardcoded provider ids", async () => {
     mocks.listVideoGenerationProviders.mockReturnValue([
       {
