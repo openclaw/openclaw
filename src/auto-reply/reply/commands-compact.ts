@@ -31,7 +31,7 @@ function parseCompactCommand(params: {
     : raw;
   const trimmed = stripped.trim();
   if (!trimmed) {
-    return undefined;
+    return { dryRun: false };
   }
   const lowered = trimmed.toLowerCase();
   const prefix = lowered.startsWith("/compact") ? "/compact" : null;
