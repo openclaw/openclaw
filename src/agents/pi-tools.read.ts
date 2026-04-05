@@ -355,6 +355,62 @@ export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): An
   return wrapToolWorkspaceRootGuardWithOptions(tool, root);
 }
 
+function mapWorkspaceTempAliasToRoot(filePath: string, root: string): string {
+  const candidate = filePath.replace(/\\/g, "/");
+  const withoutAt = candidate.startsWith("@") ? candidate.slice(1) : candidate;
+  if (withoutAt === "tmp" || withoutAt.startsWith("tmp/")) {
+    const relative = withoutAt === "tmp" ? "" : withoutAt.slice(4);
+    return path.resolve(root, "run", "tmp", ...relative.split("/").filter(Boolean));
+  }
+  return filePath;
+}
+
+function remapWorkspaceAliasPath(params: {
+  filePath: string;
+  root: string;
+  containerWorkdir?: string;
+}): string {
+  const aliasMapped = mapWorkspaceTempAliasToRoot(params.filePath, params.root);
+  return mapContainerPathToWorkspaceRoot({
+    filePath: aliasMapped,
+    root: params.root,
+    containerWorkdir: params.containerWorkdir,
+  });
+}
+
+function rewriteWorkspaceAliasParams(params: {
+  args: unknown;
+  root: string;
+  containerWorkdir?: string;
+}) {
+  const record =
+    params.args && typeof params.args === "object"
+      ? (params.args as Record<string, unknown>)
+      : undefined;
+  if (!record) {
+    return params.args;
+  }
+
+  let changed = false;
+  const next: Record<string, unknown> = { ...record };
+  for (const key of ["path", "file_path", "filePath", "file"] as const) {
+    const value = record[key];
+    if (typeof value !== "string" || value.trim().length === 0) {
+      continue;
+    }
+    const remapped = remapWorkspaceAliasPath({
+      filePath: value,
+      root: params.root,
+      containerWorkdir: params.containerWorkdir,
+    });
+    if (remapped !== value) {
+      next[key] = remapped;
+      changed = true;
+    }
+  }
+  return changed ? next : params.args;
+}
+
 function mapContainerPathToWorkspaceRoot(params: {
   filePath: string;
   root: string;
@@ -401,7 +457,7 @@ export function resolveToolPathAgainstWorkspaceRoot(params: {
   root: string;
   containerWorkdir?: string;
 }): string {
-  const mapped = mapContainerPathToWorkspaceRoot(params);
+  const mapped = remapWorkspaceAliasPath(params);
   const candidate = mapped.startsWith("@") ? mapped.slice(1) : mapped;
   return path.isAbsolute(candidate)
     ? path.resolve(candidate)
@@ -562,19 +618,21 @@ export function wrapToolWorkspaceRootGuardWithOptions(
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const normalized = normalizeToolParams(args);
+      const aliased = rewriteWorkspaceAliasParams({
+        args: normalized ?? args,
+        root,
+        containerWorkdir: options?.containerWorkdir,
+      });
       const record =
-        normalized ??
-        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+        aliased && typeof aliased === "object"
+          ? (aliased as Record<string, unknown>)
+          : (normalized ??
+            (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined));
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
-        const sandboxPath = mapContainerPathToWorkspaceRoot({
-          filePath,
-          root,
-          containerWorkdir: options?.containerWorkdir,
-        });
-        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        await assertSandboxPath({ filePath, cwd: root, root });
       }
-      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
+      return tool.execute(toolCallId, aliased, signal, onUpdate);
     },
   };
 }

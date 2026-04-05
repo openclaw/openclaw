@@ -85,7 +85,7 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
 
   it("maps @-prefixed container workspace paths to host workspace root", async () => {
     const { wrapToolWorkspaceRootGuardWithOptions } = await loadModule();
-    const { tool } = createToolHarness();
+    const { execute, tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
       containerWorkdir: "/workspace",
     });
@@ -97,6 +97,12 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       cwd: root,
       root,
     });
+    expect(execute).toHaveBeenCalledWith(
+      "tc-at-container",
+      { path: path.resolve(root, "docs", "readme.md") },
+      undefined,
+      undefined,
+    );
   });
 
   it("normalizes @-prefixed absolute paths before guard checks", async () => {
@@ -129,5 +135,41 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       cwd: root,
       root,
     });
+  });
+
+  it("maps @tmp aliases to the workspace run/tmp directory", async () => {
+    const { wrapToolWorkspaceRootGuardWithOptions } = await loadModule();
+    const { execute, tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-at-tmp", { path: "@tmp/reports/out.txt" });
+
+    const expected = path.resolve(root, "run", "tmp", "reports", "out.txt");
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: expected,
+      cwd: root,
+      root,
+    });
+    expect(execute).toHaveBeenCalledWith("tc-at-tmp", { path: expected }, undefined, undefined);
+  });
+
+  it("maps tolerant tmp/ paths to the workspace run/tmp directory", async () => {
+    const { wrapToolWorkspaceRootGuardWithOptions } = await loadModule();
+    const { execute, tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-tmp", { path: "tmp/reports/out.txt" });
+
+    const expected = path.resolve(root, "run", "tmp", "reports", "out.txt");
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: expected,
+      cwd: root,
+      root,
+    });
+    expect(execute).toHaveBeenCalledWith("tc-tmp", { path: expected }, undefined, undefined);
   });
 });
