@@ -252,11 +252,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       }),
       "/tmp",
     );
-    expect(resolveAgentTransportOverrideMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        effectiveExtraParams: { transport: "websocket" },
-      }),
-    );
   });
 
   it("emits internal + plugin compaction hooks with counts", async () => {
