@@ -74,7 +74,7 @@ describe("anthropic payload policy", () => {
     });
   });
 
-  it("denies proxied Anthropic service tier and omits long-TTL upgrades for custom hosts", () => {
+  it("denies proxied Anthropic service tier but honours explicit long-TTL for custom hosts", () => {
     const policy = resolveAnthropicPayloadPolicy({
       provider: "anthropic",
       api: "anthropic-messages",
@@ -91,16 +91,17 @@ describe("anthropic payload policy", () => {
     applyAnthropicPayloadPolicyToParams(payload, policy);
 
     expect(payload).not.toHaveProperty("service_tier");
+    // Explicit cacheRetention: "long" grants 1h TTL even for proxy endpoints
     expect(payload.system).toEqual([
       {
         type: "text",
         text: "Follow policy.",
-        cache_control: { type: "ephemeral" },
+        cache_control: { type: "ephemeral", ttl: "1h" },
       },
     ]);
     expect(payload.messages[0]).toEqual({
       role: "user",
-      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }],
+      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } }],
     });
   });
 

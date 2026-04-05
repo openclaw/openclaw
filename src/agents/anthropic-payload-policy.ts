@@ -58,7 +58,13 @@ function resolveAnthropicEphemeralCacheControl(
   if (retention === "none") {
     return undefined;
   }
-  const ttl = retention === "long" && isLongTtlEligibleEndpoint(baseUrl) ? "1h" : undefined;
+  // When the user explicitly configures cacheRetention: "long", honour the 1h TTL
+  // regardless of the base URL. The endpoint check is only meaningful for the auto
+  // default — proxy providers that forward to the real Anthropic API benefit from
+  // extended TTL just as much as direct connections.
+  const explicitLong = cacheRetention === "long";
+  const ttl =
+    retention === "long" && (explicitLong || isLongTtlEligibleEndpoint(baseUrl)) ? "1h" : undefined;
   return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
 }
 
