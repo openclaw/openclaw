@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearMatrixApprovalReactionTargetsForTest,
+  resolveMatrixApprovalReactionTarget,
+} from "./approval-reactions.js";
 import { MatrixExecApprovalHandler } from "./exec-approvals-handler.js";
 
 const baseRequest = {
@@ -23,6 +27,7 @@ function createHandler(cfg: OpenClawConfig, accountId = "default") {
     .fn()
     .mockResolvedValueOnce({ messageId: "$m1", roomId: "!ops:example.org" })
     .mockResolvedValue({ messageId: "$m2", roomId: "!dm-owner:example.org" });
+  const reactMessage = vi.fn().mockResolvedValue(undefined);
   const editMessage = vi.fn().mockResolvedValue({ eventId: "$edit1" });
   const deleteMessage = vi.fn().mockResolvedValue(undefined);
   const repairDirectRooms = vi.fn().mockResolvedValue({
@@ -37,16 +42,26 @@ function createHandler(cfg: OpenClawConfig, accountId = "default") {
     {
       nowMs: () => 1000,
       sendMessage,
+      reactMessage,
       editMessage,
       deleteMessage,
       repairDirectRooms,
     },
   );
-  return { client, handler, sendMessage, editMessage, deleteMessage, repairDirectRooms };
+  return {
+    client,
+    handler,
+    sendMessage,
+    reactMessage,
+    editMessage,
+    deleteMessage,
+    repairDirectRooms,
+  };
 }
 
 afterEach(() => {
   vi.useRealTimers();
+  clearMatrixApprovalReactionTargetsForTest();
 });
 
 describe("MatrixExecApprovalHandler", () => {
@@ -76,6 +91,54 @@ describe("MatrixExecApprovalHandler", () => {
         accountId: "default",
         threadId: "$thread",
       }),
+    );
+  });
+
+  it("seeds emoji reactions for each allowed approval decision", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok",
+          execApprovals: {
+            enabled: true,
+            approvers: ["@owner:example.org"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, reactMessage, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested(baseRequest);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "room:!ops:example.org",
+      expect.stringContaining("React here: ✅ Allow once, ♾️ Allow always, ❌ Deny"),
+      expect.anything(),
+    );
+    expect(reactMessage).toHaveBeenCalledTimes(3);
+    expect(reactMessage).toHaveBeenNthCalledWith(
+      1,
+      "!ops:example.org",
+      "$m1",
+      "✅",
+      expect.anything(),
+    );
+    expect(reactMessage).toHaveBeenNthCalledWith(
+      2,
+      "!ops:example.org",
+      "$m1",
+      "♾️",
+      expect.anything(),
+    );
+    expect(reactMessage).toHaveBeenNthCalledWith(
+      3,
+      "!ops:example.org",
+      "$m1",
+      "❌",
+      expect.anything(),
     );
   });
 
@@ -245,6 +308,62 @@ describe("MatrixExecApprovalHandler", () => {
     );
   });
 
+  it("anchors reactions on the first chunk and clears stale chunks on resolve", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok",
+          execApprovals: {
+            enabled: true,
+            approvers: ["@owner:example.org"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage, reactMessage, editMessage, deleteMessage } = createHandler(cfg);
+    sendMessage.mockReset().mockResolvedValue({
+      messageId: "$m3",
+      primaryMessageId: "$m1",
+      messageIds: ["$m1", "$m2", "$m3"],
+      roomId: "!ops:example.org",
+    });
+
+    await handler.handleRequested(baseRequest);
+    await handler.handleResolved({
+      id: baseRequest.id,
+      decision: "allow-once",
+      resolvedBy: "matrix:@owner:example.org",
+      ts: 2000,
+    });
+
+    expect(reactMessage).toHaveBeenNthCalledWith(
+      1,
+      "!ops:example.org",
+      "$m1",
+      "✅",
+      expect.anything(),
+    );
+    expect(editMessage).toHaveBeenCalledWith(
+      "!ops:example.org",
+      "$m1",
+      expect.stringContaining("Exec approval: Allowed once"),
+      expect.anything(),
+    );
+    expect(deleteMessage).toHaveBeenCalledWith(
+      "!ops:example.org",
+      "$m2",
+      expect.objectContaining({ reason: "approval resolved" }),
+    );
+    expect(deleteMessage).toHaveBeenCalledWith(
+      "!ops:example.org",
+      "$m3",
+      expect.objectContaining({ reason: "approval resolved" }),
+    );
+  });
+
   it("deletes tracked approval messages when they expire", async () => {
     vi.useFakeTimers();
     const cfg = {
@@ -276,6 +395,79 @@ describe("MatrixExecApprovalHandler", () => {
     );
   });
 
+  it("deletes every chunk of a tracked approval prompt when it expires", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok",
+          execApprovals: {
+            enabled: true,
+            approvers: ["@owner:example.org"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, sendMessage, deleteMessage } = createHandler(cfg);
+    sendMessage.mockReset().mockResolvedValue({
+      messageId: "$m3",
+      primaryMessageId: "$m1",
+      messageIds: ["$m1", "$m2", "$m3"],
+      roomId: "!ops:example.org",
+    });
+
+    await handler.handleRequested(baseRequest);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deleteMessage).toHaveBeenCalledWith(
+      "!ops:example.org",
+      "$m1",
+      expect.objectContaining({ reason: "approval expired" }),
+    );
+    expect(deleteMessage).toHaveBeenCalledWith(
+      "!ops:example.org",
+      "$m2",
+      expect.objectContaining({ reason: "approval expired" }),
+    );
+    expect(deleteMessage).toHaveBeenCalledWith(
+      "!ops:example.org",
+      "$m3",
+      expect.objectContaining({ reason: "approval expired" }),
+    );
+  });
+
+  it("clears tracked approval anchors when the handler stops", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok",
+          execApprovals: {
+            enabled: true,
+            approvers: ["@owner:example.org"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler } = createHandler(cfg);
+
+    await handler.handleRequested(baseRequest);
+    await handler.stop();
+
+    expect(
+      resolveMatrixApprovalReactionTarget({
+        roomId: "!ops:example.org",
+        eventId: "$m1",
+        reactionKey: "✅",
+      }),
+    ).toBeNull();
+  });
+
   it("honors request decision constraints in pending approval text", async () => {
     const cfg = {
       channels: {
@@ -291,7 +483,7 @@ describe("MatrixExecApprovalHandler", () => {
         },
       },
     } as OpenClawConfig;
-    const { handler, sendMessage } = createHandler(cfg);
+    const { handler, sendMessage, reactMessage } = createHandler(cfg);
 
     await handler.handleRequested({
       ...baseRequest,
@@ -305,6 +497,26 @@ describe("MatrixExecApprovalHandler", () => {
     expect(sendMessage).toHaveBeenCalledWith(
       "room:!ops:example.org",
       expect.not.stringContaining("allow-always"),
+      expect.anything(),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "room:!ops:example.org",
+      expect.stringContaining("React here: ✅ Allow once, ❌ Deny"),
+      expect.anything(),
+    );
+    expect(reactMessage).toHaveBeenCalledTimes(2);
+    expect(reactMessage).toHaveBeenNthCalledWith(
+      1,
+      "!ops:example.org",
+      "$m1",
+      "✅",
+      expect.anything(),
+    );
+    expect(reactMessage).toHaveBeenNthCalledWith(
+      2,
+      "!ops:example.org",
+      "$m1",
+      "❌",
       expect.anything(),
     );
   });

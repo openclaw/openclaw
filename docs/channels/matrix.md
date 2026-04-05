@@ -679,7 +679,13 @@ Delivery rules:
 - `target: "channel"` sends the prompt back to the originating Matrix room or DM
 - `target: "both"` sends to approver DMs and the originating Matrix room or DM
 
-Matrix uses text approval prompts today. Approvers resolve them with `/approve <id> allow-once`, `/approve <id> allow-always`, or `/approve <id> deny`.
+Matrix approval prompts seed reaction shortcuts on the primary approval message:
+
+- `✅` = allow once
+- `❌` = deny
+- `♾️` = allow always when that decision is allowed by the effective exec policy
+
+Approvers can react on that message or use the fallback slash commands: `/approve <id> allow-once`, `/approve <id> allow-always`, or `/approve <id> deny`.
 
 Only resolved approvers can approve or deny. Channel delivery includes the command text, so only enable `channel` or `both` in trusted rooms.
 

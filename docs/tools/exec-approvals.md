@@ -24,6 +24,11 @@ host policy sources, and the effective result.
 If the companion app UI is **not available**, any request that requires a prompt is
 resolved by the **ask fallback** (default: deny).
 
+Native chat approval clients can also expose channel-specific affordances on the
+pending approval message. For example, Matrix can seed reaction shortcuts on the
+approval prompt (`✅` allow once, `❌` deny, and `♾️` allow always when available)
+while still leaving the `/approve ...` commands in the message as a fallback.
+
 ## Where it applies
 
 Exec approvals are enforced locally on the execution host:
