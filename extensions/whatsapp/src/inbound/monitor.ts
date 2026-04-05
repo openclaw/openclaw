@@ -246,6 +246,21 @@ export async function monitorWebInbox(options: {
     if (!from) {
       return null;
     }
+    // Guard against self-message loops (#61033): when self-chat mode is not
+    // explicitly enabled, drop all fromMe DMs addressed to the bot's own
+    // number.  Without this, WhatsApp can echo the bot's replies with a
+    // different message ID, bypassing the outbound-ID echo check above and
+    // creating an infinite auto-reply loop.
+    if (
+      !group &&
+      Boolean(msg.key?.fromMe) &&
+      !options.selfChatMode &&
+      self.e164 &&
+      from === self.e164
+    ) {
+      logVerbose(`Dropping fromMe self-DM ${id ?? "?"} — selfChatMode not enabled`);
+      return null;
+    }
     const senderE164 = group
       ? participantJid
         ? await resolveInboundJid(participantJid)
