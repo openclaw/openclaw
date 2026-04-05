@@ -579,27 +579,28 @@ describe("gateway server chat", () => {
         })}\n`,
         "utf-8",
       );
-      dispatchInboundMessageMock.mockImplementationOnce(
-        async (params: {
-          dispatcher: {
-            sendFinalReply: (payload: { text: string; btw: { question: string } }) => boolean;
-            markComplete: () => void;
-            waitForIdle: () => Promise<void>;
-            getQueuedCounts: () => { final: number; block: number; tool: number };
-          };
-        }) => {
-          params.dispatcher.sendFinalReply({
-            text: "323",
-            btw: { question: "what is 17 * 19?" },
-          });
-          params.dispatcher.markComplete();
-          await params.dispatcher.waitForIdle();
-          return {
-            queuedFinal: true,
-            counts: params.dispatcher.getQueuedCounts(),
-          };
-        },
-      );
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string; btw: { question: string } }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({
+          text: "323",
+          btw: { question: "what is 17 * 19?" },
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
       const sideResultPromise = onceMessage(
         ws,
         (o) =>
@@ -666,31 +667,32 @@ describe("gateway server chat", () => {
         })}\n`,
         "utf-8",
       );
-      dispatchInboundMessageMock.mockImplementationOnce(
-        async (params: {
-          dispatcher: {
-            sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
-            markComplete: () => void;
-            waitForIdle: () => Promise<void>;
-            getQueuedCounts: () => { final: number; block: number; tool: number };
-          };
-        }) => {
-          params.dispatcher.sendBlockReply({
-            text: "first chunk",
-            btw: { question: "what changed?" },
-          });
-          params.dispatcher.sendBlockReply({
-            text: "second chunk",
-            btw: { question: "what changed?" },
-          });
-          params.dispatcher.markComplete();
-          await params.dispatcher.waitForIdle();
-          return {
-            queuedFinal: false,
-            counts: params.dispatcher.getQueuedCounts(),
-          };
-        },
-      );
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendBlockReply({
+          text: "first chunk",
+          btw: { question: "what changed?" },
+        });
+        params.dispatcher.sendBlockReply({
+          text: "second chunk",
+          btw: { question: "what changed?" },
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: false,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
       const sideResultPromise = onceMessage(
         ws,
         (o) =>

@@ -46,8 +46,9 @@ const sendConfigApply = async (
 
 const sendConfigGet = async (_id: string) => {
   return await rpcReq<{
-    ok: boolean;
-    payload?: { hash?: string; raw?: string | null; config?: Record<string, unknown> };
+    hash?: string;
+    raw?: string | null;
+    config?: Record<string, unknown>;
   }>(requireWs(), "config.get", {});
 };
 

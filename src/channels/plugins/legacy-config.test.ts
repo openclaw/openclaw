@@ -16,7 +16,11 @@ describe("bundled channel legacy config migrations", () => {
       },
     });
 
-    expect(result.next.channels?.mattermost).toEqual({
+    const nextChannels = (result.next.channels ?? {}) as {
+      mattermost?: Record<string, unknown>;
+    };
+
+    expect(nextChannels.mattermost).toEqual({
       network: {
         dangerouslyAllowPrivateNetwork: true,
       },
