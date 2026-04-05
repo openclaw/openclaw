@@ -385,6 +385,12 @@ export const de: TranslationMap = {
     subtitle: "Gateway Dashboard",
     passwordPlaceholder: "optional",
   },
+  markdownSidebar: {
+    title: "Tool-Ausgabe",
+    closeTitle: "Seitenleiste schließen",
+    viewRawText: "Rohtext anzeigen",
+    empty: "Kein Inhalt verfügbar",
+  },
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",
     refreshTitle: "Chat-Daten aktualisieren",

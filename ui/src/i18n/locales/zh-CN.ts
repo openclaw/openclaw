@@ -381,6 +381,12 @@ export const zh_CN: TranslationMap = {
     subtitle: "网关仪表盘",
     passwordPlaceholder: "可选",
   },
+  markdownSidebar: {
+    title: "工具输出",
+    closeTitle: "关闭侧边栏",
+    viewRawText: "查看原始文本",
+    empty: "没有可用内容",
+  },
   chat: {
     disconnected: "已断开与网关的连接。",
     refreshTitle: "刷新聊天数据",

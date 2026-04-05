@@ -409,6 +409,12 @@ export const es: TranslationMap = {
     id: "Bahasa Indonesia (Indonesian)",
     pl: "Polski (Polish)",
   },
+  markdownSidebar: {
+    title: "Salida de la herramienta",
+    closeTitle: "Cerrar barra lateral",
+    viewRawText: "Ver texto sin formato",
+    empty: "No hay contenido disponible",
+  },
   cron: {
     summary: {
       enabled: "Habilitado",
