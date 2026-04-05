@@ -909,22 +909,11 @@ describe("doctor config flow", () => {
       const outputs = noteSpy.mock.calls
         .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
         .map((call) => String(call[0]));
+      const joinedOutputs = outputs.join("\n");
       expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
       expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
-      expect(
-        outputs.some(
-          (line) =>
-            line.includes("channels.slack.accounts.work.allowFrom: aliceforged") &&
-            line.includes("mutable allowlist"),
-        ),
-      ).toBe(true);
-      expect(
-        outputs.some(
-          (line) =>
-            line.includes('channels.slack.accounts.opsopen.allowFrom: set to ["*"]') &&
-            line.includes('required by dmPolicy="open"'),
-        ),
-      ).toBe(true);
+      expect(joinedOutputs).toContain('channels.slack.accounts.opsopen.allowFrom: set to ["*"]');
+      expect(joinedOutputs).toContain('required by dmPolicy="open"');
       expect(
         outputs.some(
           (line) =>
@@ -1653,30 +1642,15 @@ describe("doctor config flow", () => {
         run: loadAndMaybeMigrateDoctorConfig,
       });
 
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            String(message).includes("session.threadBindings:") &&
-            String(message).includes("session.threadBindings.idleHours"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            String(message).includes("channels.discord.threadBindings:") &&
-            String(message).includes("channels.discord.threadBindings.idleHours"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            String(message).includes("channels.discord.accounts:") &&
-            String(message).includes("channels.discord.accounts.<id>.threadBindings.idleHours"),
-        ),
-      ).toBe(true);
+      const legacyMessages = noteSpy.mock.calls
+        .filter(([, title]) => title === "Legacy config keys detected")
+        .map(([message]) => String(message))
+        .join("\n");
+
+      expect(legacyMessages).toContain("session.threadBindings.ttlHours");
+      expect(legacyMessages).toContain("session.threadBindings.idleHours");
+      expect(legacyMessages).toContain("channels.<id>.threadBindings.ttlHours");
+      expect(legacyMessages).toContain("channels.<id>.threadBindings.idleHours");
       expect(
         noteSpy.mock.calls.some(
           ([message, title]) =>

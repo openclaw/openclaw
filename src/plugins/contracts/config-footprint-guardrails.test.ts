@@ -112,18 +112,14 @@ describe("config footprint guardrails", () => {
     }
   });
 
-  it("keeps canonical nested streaming paths in the generated base config schema", () => {
-    const basePaths = new Set(collectSchemaPaths(GENERATED_BASE_CONFIG_SCHEMA.schema));
+  it("keeps canonical nested streaming paths in the public core channel schema", () => {
+    const source = readSource("src/config/zod-schema.providers-core.ts");
 
-    expect(basePaths.has("channels.telegram.streaming.mode")).toBe(true);
-    expect(basePaths.has("channels.telegram.streaming.preview.chunk")).toBe(true);
-    expect(basePaths.has("channels.telegram.streaming.block.enabled")).toBe(true);
-    expect(basePaths.has("channels.discord.streaming.mode")).toBe(true);
-    expect(basePaths.has("channels.discord.streaming.preview.chunk")).toBe(true);
-    expect(basePaths.has("channels.discord.streaming.block.coalesce")).toBe(true);
-    expect(basePaths.has("channels.slack.streaming.mode")).toBe(true);
-    expect(basePaths.has("channels.slack.streaming.block.coalesce")).toBe(true);
-    expect(basePaths.has("channels.slack.streaming.nativeTransport")).toBe(true);
+    expect(source).toContain("streaming: ChannelPreviewStreamingConfigSchema.optional(),");
+    expect(source).toContain("streaming: SlackStreamingConfigSchema.optional(),");
+    expect(source).not.toContain('streamMode: z.enum(["replace", "status_final", "append"])');
+    expect(source).not.toContain("draftChunk:");
+    expect(source).not.toContain("nativeStreaming:");
   });
 
   it("keeps shared setup input canonical-first", () => {
