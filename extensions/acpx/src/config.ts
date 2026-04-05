@@ -51,10 +51,12 @@ function resolveNearestAcpxPluginRoot(moduleUrl: string): string {
 }
 
 function resolveWorkspaceAcpxPluginRoot(currentRoot: string): string | null {
+  const parentDir = path.basename(path.dirname(currentRoot));
+  const grandparentDir = path.basename(path.dirname(path.dirname(currentRoot)));
   if (
     path.basename(currentRoot) !== "acpx" ||
-    path.basename(path.dirname(currentRoot)) !== "extensions" ||
-    path.basename(path.dirname(path.dirname(currentRoot))) !== "dist"
+    parentDir !== "extensions" ||
+    (grandparentDir !== "dist" && grandparentDir !== "dist-runtime")
   ) {
     return null;
   }
@@ -62,11 +64,34 @@ function resolveWorkspaceAcpxPluginRoot(currentRoot: string): string | null {
   return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
 }
 
+function resolveFallbackAcpxPluginRoot(startDir: string): string | null {
+  // When running from bundled dist/, try to find extensions/acpx from repo root
+  const possibleRoots = [startDir, path.dirname(startDir), path.dirname(path.dirname(startDir))];
+  for (const root of possibleRoots) {
+    const extensionsAcpx = path.join(root, "extensions", "acpx");
+    if (isAcpxPluginRoot(extensionsAcpx)) {
+      return extensionsAcpx;
+    }
+  }
+  return null;
+}
+
 export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
   const resolvedRoot = resolveNearestAcpxPluginRoot(moduleUrl);
   // In a live repo checkout, dist/ can be rebuilt out from under the running gateway.
   // Prefer the stable source plugin root when a built extension is running beside it.
-  return resolveWorkspaceAcpxPluginRoot(resolvedRoot) ?? resolvedRoot;
+  const workspaceRoot = resolveWorkspaceAcpxPluginRoot(resolvedRoot);
+  if (workspaceRoot) {
+    return workspaceRoot;
+  }
+  // If resolvedRoot doesn't have the acpx package.json, try fallback
+  if (!isAcpxPluginRoot(resolvedRoot)) {
+    const fallbackRoot = resolveFallbackAcpxPluginRoot(resolvedRoot);
+    if (fallbackRoot) {
+      return fallbackRoot;
+    }
+  }
+  return resolvedRoot;
 }
 
 export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
