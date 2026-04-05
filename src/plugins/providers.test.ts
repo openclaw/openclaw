@@ -71,7 +71,6 @@ function setOwningProviderManifestPlugins() {
     createManifestProviderPlugin({
       id: "anthropic",
       providerIds: ["anthropic"],
-      cliBackends: ["claude-cli"],
       modelSupport: {
         modelPrefixes: ["claude-"],
       },
@@ -96,7 +95,6 @@ function setOwningProviderManifestPluginsWithWorkspace() {
     createManifestProviderPlugin({
       id: "anthropic",
       providerIds: ["anthropic"],
-      cliBackends: ["claude-cli"],
       modelSupport: {
         modelPrefixes: ["claude-"],
       },
@@ -283,7 +281,6 @@ describe("resolvePluginProviders", () => {
   it("maps cli backend ids to owning plugin ids via manifests", () => {
     setOwningProviderManifestPlugins();
 
-    expectOwningPluginIds("claude-cli", ["anthropic"]);
     expectOwningPluginIds("codex-cli", ["openai"]);
   });
 

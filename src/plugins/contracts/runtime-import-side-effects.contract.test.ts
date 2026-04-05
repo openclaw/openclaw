@@ -20,10 +20,9 @@ const BOOTSTRAP_FIX =
 
 function mockBootstrapRegistry() {
   vi.doMock("../../channels/plugins/bootstrap-registry.js", async () => {
-    const actual =
-      await vi.importActual<typeof import("../../channels/plugins/bootstrap-registry.js")>(
-        "../../channels/plugins/bootstrap-registry.js",
-      );
+    const actual = await vi.importActual<
+      typeof import("../../channels/plugins/bootstrap-registry.js")
+    >("../../channels/plugins/bootstrap-registry.js");
     return {
       ...actual,
       listBootstrapChannelPlugins,

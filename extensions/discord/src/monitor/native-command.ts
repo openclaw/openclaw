@@ -637,11 +637,17 @@ export function createDiscordNativeCommand(params: {
       value: command.description,
       label: `command:${command.name}`,
     });
-    defer = true;
+    defer = false;
     ephemeral = ephemeralDefault;
     options = options;
 
     async run(interaction: CommandInteraction) {
+      const deferred = await safeDiscordInteractionCall("interaction defer", () =>
+        interaction.defer(),
+      );
+      if (deferred === null) {
+        return;
+      }
       const commandArgs = argDefinitions?.length
         ? readDiscordCommandArgs(interaction, argDefinitions)
         : command.acceptsArgs

@@ -453,18 +453,15 @@ describe("gateway agent handler", () => {
   });
 
   it("preserves cliSessionIds from existing session entry", async () => {
-    const existingCliSessionIds = { "claude-cli": "abc-123-def" };
-    const existingClaudeCliSessionId = "abc-123-def";
+    const existingCliSessionIds = { "codex-cli": "abc-123-def" };
 
     mockMainSessionEntry({
       cliSessionIds: existingCliSessionIds,
-      claudeCliSessionId: existingClaudeCliSessionId,
     });
 
     const capturedEntry = await runMainAgentAndCaptureEntry("test-idem");
     expect(capturedEntry).toBeDefined();
     expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
-    expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
   });
 
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
@@ -903,7 +900,6 @@ describe("gateway agent handler", () => {
     expect(capturedEntry).toBeDefined();
     // Should be undefined, not cause an error
     expect(capturedEntry?.cliSessionIds).toBeUndefined();
-    expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
   });
 
   it("prunes legacy main alias keys when writing a canonical session entry", async () => {

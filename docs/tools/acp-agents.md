@@ -111,9 +111,8 @@ For Claude Code through ACP, the stack is:
 
 Important distinction:
 
-- ACP Claude is not the same thing as the direct `claude-cli/...` fallback runtime.
 - ACP Claude is a harness session with ACP controls, session resume, background-task tracking, and optional conversation/thread binding.
-- `claude-cli/...` is a text-only local CLI backend. See [CLI Backends](/gateway/cli-backends).
+- CLI backends are separate text-only local fallback runtimes. See [CLI Backends](/gateway/cli-backends).
 
 For operators, the practical rule is:
 

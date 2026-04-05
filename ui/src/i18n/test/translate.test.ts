@@ -11,6 +11,7 @@ import { ko } from "../locales/ko.ts";
 import { pl } from "../locales/pl.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
 import { tr } from "../locales/tr.ts";
+import { uk } from "../locales/uk.ts";
 import { zh_CN } from "../locales/zh-CN.ts";
 import { zh_TW } from "../locales/zh-TW.ts";
 
@@ -108,6 +109,7 @@ describe("i18n", () => {
     expect((pl.common as { version?: string }).version).toBeTruthy();
     expect((pt_BR.common as { version?: string }).version).toBeTruthy();
     expect((tr.common as { version?: string }).version).toBeTruthy();
+    expect((uk.common as { version?: string }).version).toBeTruthy();
     expect((zh_CN.common as { version?: string }).version).toBeTruthy();
     expect((zh_TW.common as { version?: string }).version).toBeTruthy();
   });
@@ -124,6 +126,7 @@ describe("i18n", () => {
       pl,
       pt_BR,
       tr,
+      uk,
       zh_CN,
       zh_TW,
     })) {

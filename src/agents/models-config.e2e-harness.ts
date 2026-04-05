@@ -12,7 +12,12 @@ import { resetModelsJsonReadyCacheForTest } from "./models-config.js";
 import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 
 export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-models-" });
+  // Models-config tests do not exercise session persistence; skip draining
+  // unrelated session lock state during temp-home teardown.
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-models-",
+    skipSessionCleanup: true,
+  });
 }
 
 export function installModelsConfigTestHooks(opts?: { restoreFetch?: boolean }) {
@@ -125,6 +130,8 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "TOGETHER_API_KEY",
   "VOLCANO_ENGINE_API_KEY",
   "BYTEPLUS_API_KEY",
+  "CHUTES_API_KEY",
+  "CHUTES_OAUTH_TOKEN",
   "KILOCODE_API_KEY",
   "KIMI_API_KEY",
   "KIMICODE_API_KEY",
@@ -166,6 +173,8 @@ const TEST_PROVIDER_ENV_TO_PROVIDER_IDS: Record<string, string[]> = {
   AWS_SESSION_TOKEN: ["amazon-bedrock"],
   AWS_SHARED_CREDENTIALS_FILE: ["amazon-bedrock"],
   BYTEPLUS_API_KEY: ["byteplus"],
+  CHUTES_API_KEY: ["chutes"],
+  CHUTES_OAUTH_TOKEN: ["chutes"],
   CLOUD_ML_REGION: ["anthropic-vertex"],
   CLOUDFLARE_AI_GATEWAY_API_KEY: ["cloudflare-ai-gateway"],
   COPILOT_GITHUB_TOKEN: ["github-copilot"],

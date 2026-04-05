@@ -367,10 +367,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("sessions_spawn");
-    expect(prompt).toContain(
-      'runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured',
-    );
-    expect(prompt).toContain("not agents_list");
+    expect(prompt).toContain("Set `agentId` explicitly unless `acp.defaultAgent` is configured");
+    expect(prompt).toContain("`subagents`/`agents_list`");
   });
 
   it("guides harness requests to ACP thread-bound spawns", () => {
@@ -778,7 +776,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(boundaryIndex).toBeGreaterThan(-1);
     expect(dynamicIndex).toBeGreaterThan(boundaryIndex);
-    expect(heartbeatIndex).toBeGreaterThan(dynamicIndex);
+    expect(heartbeatIndex).toBe(-1);
   });
 
   it("summarizes the message tool when available", () => {
@@ -787,8 +785,8 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["message"],
     });
 
-    expect(prompt).toContain("message: Send messages and channel actions");
     expect(prompt).toContain("### message tool");
+    expect(prompt).toContain("Use `message` for proactive sends + channel actions");
     expect(prompt).toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
   });
 

@@ -8,6 +8,8 @@ import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node.mj
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
+const WATCH_RESTARTABLE_CHILD_EXIT_CODES = new Set([143]);
+const WATCH_RESTARTABLE_CHILD_SIGNALS = new Set(["SIGTERM"]);
 
 const buildRunnerArgs = (args) => [WATCH_NODE_RUNNER, ...args];
 
@@ -26,6 +28,10 @@ const resolveRepoPath = (filePath, cwd) => {
 
 const isIgnoredWatchPath = (filePath, cwd) =>
   !isRestartRelevantRunNodePath(resolveRepoPath(filePath, cwd));
+
+const shouldRestartAfterChildExit = (exitCode, exitSignal) =>
+  (typeof exitCode === "number" && WATCH_RESTARTABLE_CHILD_EXIT_CODES.has(exitCode)) ||
+  (typeof exitSignal === "string" && WATCH_RESTARTABLE_CHILD_SIGNALS.has(exitSignal));
 
 export async function runWatchMain(params = {}) {
   const deps = {
@@ -90,7 +96,7 @@ export async function runWatchMain(params = {}) {
         if (shuttingDown) {
           return;
         }
-        if (restartRequested) {
+        if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal)) {
           restartRequested = false;
           startRunner();
           return;

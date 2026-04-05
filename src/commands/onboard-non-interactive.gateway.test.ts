@@ -33,7 +33,13 @@ const readLastGatewayErrorLineMock = vi.hoisted(() =>
   vi.fn(async () => "Gateway failed to start: required secrets are unavailable."),
 );
 let waitForGatewayReachableMock:
-  | ((params: { url: string; token?: string; password?: string; deadlineMs?: number }) => Promise<{
+  | ((params: {
+      url: string;
+      token?: string;
+      password?: string;
+      deadlineMs?: number;
+      probeTimeoutMs?: number;
+    }) => Promise<{
       ok: boolean;
       detail?: string;
     }>)
@@ -479,10 +485,20 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   it("uses a longer health deadline when daemon install was requested", async () => {
     await withStateDir("state-local-daemon-health-", async (stateDir) => {
       let capturedDeadlineMs: number | undefined;
-      waitForGatewayReachableMock = vi.fn(async (params: { deadlineMs?: number }) => {
-        capturedDeadlineMs = params.deadlineMs;
-        return { ok: true };
-      });
+      let capturedProbeTimeoutMs: number | undefined;
+      waitForGatewayReachableMock = vi.fn(
+        async (params: {
+          url: string;
+          token?: string;
+          password?: string;
+          deadlineMs?: number;
+          probeTimeoutMs?: number;
+        }) => {
+          capturedDeadlineMs = params.deadlineMs;
+          capturedProbeTimeoutMs = params.probeTimeoutMs;
+          return { ok: true };
+        },
+      );
 
       await runNonInteractiveSetup(
         {
@@ -500,6 +516,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
       expect(capturedDeadlineMs).toBe(45_000);
+      expect(capturedProbeTimeoutMs).toBe(10_000);
     });
   }, 60_000);
 

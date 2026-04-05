@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
-import { buildAnthropicCliBackend } from "../../extensions/anthropic/test-api.js";
 import { buildGoogleGeminiCliBackend } from "../../extensions/google/test-api.js";
 import { buildOpenAICodexCliBackend } from "../../extensions/openai/test-api.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -149,11 +148,6 @@ export async function setupCliRunnerTestModule() {
   const registry = createEmptyPluginRegistry();
   registry.cliBackends = [
     {
-      pluginId: "anthropic",
-      backend: buildAnthropicCliBackend(),
-      source: "test",
-    },
-    {
       pluginId: "openai",
       backend: buildOpenAICodexCliBackend(),
       source: "test",
@@ -173,15 +167,6 @@ export async function setupCliRunnerTestModule() {
     contextFiles: [],
   });
   return (await import("./cli-runner.js")).runCliAgent;
-}
-
-export async function setupClaudeCliRunnerTestModule() {
-  const runCliAgent = await setupCliRunnerTestModule();
-  return (params: Parameters<typeof import("./claude-cli-runner.js").runClaudeCliAgent>[0]) =>
-    runCliAgent({
-      ...params,
-      provider: params.provider ?? "claude-cli",
-    });
 }
 
 export function stubBootstrapContext(params: {

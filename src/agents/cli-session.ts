@@ -2,8 +2,6 @@ import crypto from "node:crypto";
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-const CLAUDE_CLI_BACKEND_ID = "claude-cli";
-
 function trimOptional(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -39,12 +37,6 @@ export function getCliSessionBinding(
   const fromMap = entry.cliSessionIds?.[normalized];
   if (fromMap?.trim()) {
     return { sessionId: fromMap.trim() };
-  }
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    const legacy = entry.claudeCliSessionId?.trim();
-    if (legacy) {
-      return { sessionId: legacy };
-    }
   }
   return undefined;
 }
@@ -87,9 +79,6 @@ export function setCliSessionBinding(
     },
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    entry.claudeCliSessionId = trimmed;
-  }
 }
 
 export function clearCliSession(entry: SessionEntry, provider: string): void {
@@ -104,15 +93,11 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
     delete next[normalized];
     entry.cliSessionIds = Object.keys(next).length > 0 ? next : undefined;
   }
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    delete entry.claudeCliSessionId;
-  }
 }
 
 export function clearAllCliSessions(entry: SessionEntry): void {
   delete entry.cliSessionBindings;
   delete entry.cliSessionIds;
-  delete entry.claudeCliSessionId;
 }
 
 export function resolveCliSessionReuse(params: {

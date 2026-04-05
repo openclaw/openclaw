@@ -25,6 +25,7 @@ import { resolveNonInteractiveWorkspaceDir } from "./local/workspace.js";
 
 const INSTALL_DAEMON_HEALTH_DEADLINE_MS = 45_000;
 const ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS = 15_000;
+const INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS = 10_000;
 
 async function collectGatewayHealthFailureDiagnostics(): Promise<
   GatewayHealthFailureDiagnostics | undefined
@@ -211,6 +212,7 @@ export async function runNonInteractiveLocalSetup(params: {
       deadlineMs: opts.installDaemon
         ? INSTALL_DAEMON_HEALTH_DEADLINE_MS
         : ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS,
+      probeTimeoutMs: opts.installDaemon ? INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS : undefined,
     });
     if (!probe.ok) {
       const diagnostics = opts.installDaemon

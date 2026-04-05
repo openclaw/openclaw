@@ -16,9 +16,9 @@ function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
   const accounts = isRecord(value) ? value : null;
   return Boolean(
     accounts &&
-      Object.values(accounts).some((account) =>
-        hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
-      ),
+    Object.values(accounts).some((account) =>
+      hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
+    ),
   );
 }
 
@@ -26,13 +26,13 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "bluebubbles"],
     message:
-      "channels.bluebubbles.allowPrivateNetwork is legacy; use channels.bluebubbles.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+      'channels.bluebubbles.allowPrivateNetwork is legacy; use channels.bluebubbles.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(isRecord(value) ? value : {}),
   },
   {
     path: ["channels", "bluebubbles", "accounts"],
     message:
-      "channels.bluebubbles.accounts.<id>.allowPrivateNetwork is legacy; use channels.bluebubbles.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+      'channels.bluebubbles.accounts.<id>.allowPrivateNetwork is legacy; use channels.bluebubbles.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
     match: hasLegacyAllowPrivateNetworkInAccounts,
   },
 ];
