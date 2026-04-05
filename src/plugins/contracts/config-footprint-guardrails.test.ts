@@ -68,8 +68,20 @@ describe("config footprint guardrails", () => {
         "hooks.internal.handlers",
         "channels.telegram.groupMentionsOnly",
         "channels.telegram.streamMode",
+        "channels.telegram.chunkMode",
+        "channels.telegram.blockStreaming",
+        "channels.telegram.draftChunk",
+        "channels.telegram.blockStreamingCoalesce",
         "channels.slack.streamMode",
+        "channels.slack.chunkMode",
+        "channels.slack.blockStreaming",
+        "channels.slack.blockStreamingCoalesce",
+        "channels.slack.nativeStreaming",
         "channels.discord.streamMode",
+        "channels.discord.chunkMode",
+        "channels.discord.blockStreaming",
+        "channels.discord.draftChunk",
+        "channels.discord.blockStreamingCoalesce",
         "channels.googlechat.streamMode",
         "channels.slack.channels.*.allow",
         "channels.slack.accounts.*.channels.*.allow",
@@ -98,6 +110,20 @@ describe("config footprint guardrails", () => {
         `${pluginId} missing canonical network.dangerouslyAllowPrivateNetwork`,
       ).toBe(true);
     }
+  });
+
+  it("keeps canonical nested streaming paths in the generated base config schema", () => {
+    const basePaths = new Set(collectSchemaPaths(GENERATED_BASE_CONFIG_SCHEMA.schema));
+
+    expect(basePaths.has("channels.telegram.streaming.mode")).toBe(true);
+    expect(basePaths.has("channels.telegram.streaming.preview.chunk")).toBe(true);
+    expect(basePaths.has("channels.telegram.streaming.block.enabled")).toBe(true);
+    expect(basePaths.has("channels.discord.streaming.mode")).toBe(true);
+    expect(basePaths.has("channels.discord.streaming.preview.chunk")).toBe(true);
+    expect(basePaths.has("channels.discord.streaming.block.coalesce")).toBe(true);
+    expect(basePaths.has("channels.slack.streaming.mode")).toBe(true);
+    expect(basePaths.has("channels.slack.streaming.block.coalesce")).toBe(true);
+    expect(basePaths.has("channels.slack.streaming.nativeTransport")).toBe(true);
   });
 
   it("keeps shared setup input canonical-first", () => {

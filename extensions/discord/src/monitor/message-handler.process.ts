@@ -20,6 +20,7 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
@@ -544,9 +545,8 @@ export async function processDiscordMessage(
   const discordStreamMode = resolveDiscordPreviewStreamMode(discordConfig);
   const draftMaxChars = Math.min(textLimit, 2000);
   const accountBlockStreamingEnabled =
-    typeof discordConfig?.blockStreaming === "boolean"
-      ? discordConfig.blockStreaming
-      : cfg.agents?.defaults?.blockStreamingDefault === "on";
+    resolveChannelStreamingBlockEnabled(discordConfig) ??
+    (cfg.agents?.defaults?.blockStreamingDefault === "on");
   const canStreamDraft = discordStreamMode !== "off" && !accountBlockStreamingEnabled;
   const draftReplyToMessageId = () => replyReference.use();
   const deliverChannelId = deliverTarget.startsWith("channel:")
@@ -853,8 +853,8 @@ export async function processDiscordMessage(
         skillFilter: channelConfig?.skills,
         disableBlockStreaming:
           disableBlockStreamingForDraft ??
-          (typeof discordConfig?.blockStreaming === "boolean"
-            ? !discordConfig.blockStreaming
+          (typeof resolveChannelStreamingBlockEnabled(discordConfig) === "boolean"
+            ? !resolveChannelStreamingBlockEnabled(discordConfig)
             : undefined),
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
         onAssistantMessageStart: draftStream

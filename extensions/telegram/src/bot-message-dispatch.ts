@@ -16,6 +16,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import {
@@ -199,9 +200,8 @@ export const dispatchTelegramMessage = async ({
     parseMode: "HTML" as const,
   });
   const accountBlockStreamingEnabled =
-    typeof telegramCfg.blockStreaming === "boolean"
-      ? telegramCfg.blockStreaming
-      : cfg.agents?.defaults?.blockStreamingDefault === "on";
+    resolveChannelStreamingBlockEnabled(telegramCfg) ??
+    (cfg.agents?.defaults?.blockStreamingDefault === "on");
   const resolvedReasoningLevel = resolveTelegramReasoningLevel({
     cfg,
     sessionKey: ctxPayload.SessionKey,
@@ -393,8 +393,8 @@ export const dispatchTelegramMessage = async ({
     ? true
     : forceBlockStreamingForReasoning
       ? false
-      : typeof telegramCfg.blockStreaming === "boolean"
-        ? !telegramCfg.blockStreaming
+      : typeof resolveChannelStreamingBlockEnabled(telegramCfg) === "boolean"
+        ? !resolveChannelStreamingBlockEnabled(telegramCfg)
         : canStreamAnswerDraft
           ? true
           : undefined;

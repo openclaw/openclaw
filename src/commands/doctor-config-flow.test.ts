@@ -633,12 +633,14 @@ describe("doctor config flow", () => {
       channels: {
         discord: {
           streamMode?: string;
-          streaming?: string;
+          streaming?: {
+            mode?: string;
+          };
           lifecycle?: unknown;
         };
       };
     };
-    expect(cfg.channels.discord.streaming).toBe("partial");
+    expect(cfg.channels.discord.streaming?.mode).toBe("partial");
     expect(cfg.channels.discord.streamMode).toBeUndefined();
     expect(cfg.channels.discord.lifecycle).toEqual({
       enabled: true,
@@ -680,7 +682,7 @@ describe("doctor config flow", () => {
           ([message, title]) =>
             title === "Legacy config keys detected" &&
             String(message).includes("channels.telegram:") &&
-            String(message).includes("channels.telegram.streamMode is legacy"),
+            String(message).includes("channels.telegram.streamMode, channels.telegram.streaming"),
         ),
       ).toBe(true);
       expect(
@@ -688,7 +690,7 @@ describe("doctor config flow", () => {
           ([message, title]) =>
             title === "Legacy config keys detected" &&
             String(message).includes("channels.discord:") &&
-            String(message).includes("boolean channels.discord.streaming are legacy"),
+            String(message).includes("channels.discord.streamMode, channels.discord.streaming"),
         ),
       ).toBe(true);
       expect(
@@ -704,7 +706,7 @@ describe("doctor config flow", () => {
           ([message, title]) =>
             title === "Legacy config keys detected" &&
             String(message).includes("channels.slack:") &&
-            String(message).includes("boolean channels.slack.streaming are legacy"),
+            String(message).includes("channels.slack.streamMode, channels.slack.streaming"),
         ),
       ).toBe(true);
       expect(

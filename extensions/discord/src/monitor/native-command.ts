@@ -21,6 +21,7 @@ import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runt
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -1175,8 +1176,8 @@ async function dispatchDiscordCommandInteraction(params: {
     replyOptions: {
       skillFilter: channelConfig?.skills,
       disableBlockStreaming:
-        typeof discordConfig?.blockStreaming === "boolean"
-          ? !discordConfig.blockStreaming
+        typeof resolveChannelStreamingBlockEnabled(discordConfig) === "boolean"
+          ? !resolveChannelStreamingBlockEnabled(discordConfig)
           : undefined,
       onModelSelected,
     },
