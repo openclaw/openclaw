@@ -4670,6 +4670,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   every: {
                     type: "string",
                   },
+                  schedule: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        start: {
+                          type: "string",
+                        },
+                        end: {
+                          type: "string",
+                        },
+                        every: {
+                          type: "string",
+                        },
+                      },
+                      required: ["start", "end", "every"],
+                      additionalProperties: false,
+                    },
+                  },
                   activeHours: {
                     type: "object",
                     properties: {
@@ -5883,6 +5902,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   properties: {
                     every: {
                       type: "string",
+                    },
+                    schedule: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          start: {
+                            type: "string",
+                          },
+                          end: {
+                            type: "string",
+                          },
+                          every: {
+                            type: "string",
+                          },
+                        },
+                        required: ["start", "end", "every"],
+                        additionalProperties: false,
+                      },
                     },
                     activeHours: {
                       type: "object",
@@ -25205,6 +25243,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Heartbeat Direct Policy",
       help: 'Per-agent override for heartbeat direct/DM delivery policy; use "block" for agents that should only send heartbeat alerts to non-DM destinations.',
       tags: ["access", "storage", "automation"],
+    },
+    "agents.defaults.heartbeat.schedule": {
+      label: "Heartbeat Schedule",
+      help: "Time-of-day schedule blocks that map time windows to heartbeat intervals. First matching window determines the interval; falls back to every when no window matches. Uses the same timezone as activeHours.",
+      tags: ["automation"],
+    },
+    "agents.defaults.heartbeat.schedule[].start": {
+      label: "Schedule Window Start",
+      help: 'Start time of the schedule window (24h, HH:MM, inclusive). Cannot be "24:00".',
+      tags: ["automation"],
+    },
+    "agents.defaults.heartbeat.schedule[].end": {
+      label: "Schedule Window End",
+      help: 'End time of the schedule window (24h, HH:MM, exclusive). Use "24:00" for end-of-day. Supports overnight wrapping (e.g. "23:00" to "08:00").',
+      tags: ["automation"],
+    },
+    "agents.defaults.heartbeat.schedule[].every": {
+      label: "Schedule Window Interval",
+      help: "Heartbeat interval for this time window (duration string, e.g. 15m, 1h, 2h). Default unit: minutes.",
+      tags: ["automation"],
+    },
+    "agents.list[].heartbeat.schedule": {
+      label: "Agent Heartbeat Schedule",
+      help: "Per-agent time-of-day schedule blocks. Overrides the defaults schedule entirely (not merged entry-by-entry).",
+      tags: ["automation"],
     },
     "agents.defaults.heartbeat.suppressToolErrorWarnings": {
       label: "Heartbeat Suppress Tool Error Warnings",

@@ -1497,6 +1497,16 @@ export const FIELD_HELP: Record<string, string> = {
     'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
   "agents.list.*.heartbeat.directPolicy":
     'Per-agent override for heartbeat direct/DM delivery policy; use "block" for agents that should only send heartbeat alerts to non-DM destinations.',
+  "agents.defaults.heartbeat.schedule":
+    "Time-of-day schedule blocks that map time windows to heartbeat intervals. First matching window determines the interval; falls back to every when no window matches. Uses the same timezone as activeHours.",
+  "agents.defaults.heartbeat.schedule[].start":
+    'Start time of the schedule window (24h, HH:MM, inclusive). Cannot be "24:00".',
+  "agents.defaults.heartbeat.schedule[].end":
+    'End time of the schedule window (24h, HH:MM, exclusive). Use "24:00" for end-of-day. Supports overnight wrapping (e.g. "23:00" to "08:00").',
+  "agents.defaults.heartbeat.schedule[].every":
+    "Heartbeat interval for this time window (duration string, e.g. 15m, 1h, 2h). Default unit: minutes.",
+  "agents.list[].heartbeat.schedule":
+    "Per-agent time-of-day schedule blocks. Overrides the defaults schedule entirely (not merged entry-by-entry).",
   "channels.mattermost.configWrites":
     "Allow Mattermost to write config in response to channel events/commands (default: true).",
   "channels.modelByChannel":

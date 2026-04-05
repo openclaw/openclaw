@@ -1,4 +1,5 @@
 import { resolveUserTimezone } from "../agents/date-time.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 
@@ -67,6 +68,16 @@ function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | nul
   }
 }
 
+function isWithinWindow(currentMin: number, startMin: number, endMin: number): boolean {
+  if (startMin === endMin) {
+    return false;
+  }
+  if (endMin > startMin) {
+    return currentMin >= startMin && currentMin < endMin;
+  }
+  return currentMin >= startMin || currentMin < endMin;
+}
+
 export function isWithinActiveHours(
   cfg: OpenClawConfig,
   heartbeat?: HeartbeatConfig,
@@ -92,8 +103,100 @@ export function isWithinActiveHours(
     return true;
   }
 
-  if (endMin > startMin) {
-    return currentMin >= startMin && currentMin < endMin;
+  return isWithinWindow(currentMin, startMin, endMin);
+}
+
+/**
+ * Returns the heartbeat interval in ms from the first matching schedule entry,
+ * or `null` if no schedule is configured or no entry matches the current time.
+ */
+export function resolveScheduleIntervalMs(
+  cfg: OpenClawConfig,
+  heartbeat?: HeartbeatConfig,
+  nowMs?: number,
+): number | null {
+  const schedule = heartbeat?.schedule;
+  if (!schedule || schedule.length === 0) {
+    return null;
   }
-  return currentMin >= startMin || currentMin < endMin;
+
+  const timeZone = resolveActiveHoursTimezone(cfg, heartbeat?.activeHours?.timezone);
+  const currentMin = resolveMinutesInTimeZone(nowMs ?? Date.now(), timeZone);
+  if (currentMin === null) {
+    return null;
+  }
+
+  for (const entry of schedule) {
+    const startMin = parseActiveHoursTime({ allow24: false }, entry.start);
+    const endMin = parseActiveHoursTime({ allow24: true }, entry.end);
+    if (startMin === null || endMin === null) {
+      continue;
+    }
+    if (isWithinWindow(currentMin, startMin, endMin)) {
+      try {
+        const ms = parseDurationMs(entry.every, { defaultUnit: "m" });
+        return ms > 0 ? ms : null;
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Returns milliseconds until the next schedule window boundary (nearest future
+ * `start` or `end` across all schedule entries), or `null` if no schedule is
+ * configured. Used by the scheduler to wake at interval transitions.
+ *
+ * Note: uses fixed 24*60 minute arithmetic, which can be off by up to ~60 min
+ * during DST transitions (23h or 25h days). This is acceptable because the
+ * boundary timer is best-effort — the actual interval is always re-resolved
+ * via resolveScheduleIntervalMs (which uses Intl.DateTimeFormat and handles
+ * DST correctly) when the timer fires.
+ */
+export function resolveNextWindowBoundaryMs(
+  cfg: OpenClawConfig,
+  heartbeat?: HeartbeatConfig,
+  nowMs?: number,
+): number | null {
+  const schedule = heartbeat?.schedule;
+  if (!schedule || schedule.length === 0) {
+    return null;
+  }
+
+  const timeZone = resolveActiveHoursTimezone(cfg, heartbeat?.activeHours?.timezone);
+  const now = nowMs ?? Date.now();
+  const currentMin = resolveMinutesInTimeZone(now, timeZone);
+  if (currentMin === null) {
+    return null;
+  }
+
+  const MINUTES_IN_DAY = 24 * 60;
+  let smallestDelta = Number.POSITIVE_INFINITY;
+
+  for (const entry of schedule) {
+    const startMin = parseActiveHoursTime({ allow24: false }, entry.start);
+    const endMin = parseActiveHoursTime({ allow24: true }, entry.end);
+    if (startMin === null || endMin === null) {
+      continue;
+    }
+    for (const boundary of [startMin, endMin]) {
+      if (boundary === currentMin) {
+        continue;
+      }
+      const delta =
+        boundary > currentMin ? boundary - currentMin : MINUTES_IN_DAY - currentMin + boundary;
+      if (delta < smallestDelta) {
+        smallestDelta = delta;
+      }
+    }
+  }
+
+  if (!Number.isFinite(smallestDelta)) {
+    return null;
+  }
+
+  return smallestDelta * 60_000;
 }

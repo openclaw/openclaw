@@ -8,6 +8,15 @@ import type {
 } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
+export type HeartbeatScheduleEntry = {
+  /** Start time (24h, HH:MM). Inclusive. */
+  start: string;
+  /** End time (24h, HH:MM). Exclusive. Use "24:00" for end-of-day. */
+  end: string;
+  /** Heartbeat interval for this time window (duration string, default unit: minutes). */
+  every: string;
+};
+
 export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
@@ -231,6 +240,8 @@ export type AgentDefaultsConfig = {
   heartbeat?: {
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
+    /** Time-of-day schedule blocks; first matching window determines the interval. Falls back to `every` when no window matches. */
+    schedule?: HeartbeatScheduleEntry[];
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
     activeHours?: {
       /** Start time (24h, HH:MM). Inclusive. */

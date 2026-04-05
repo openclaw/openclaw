@@ -283,4 +283,36 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("uses schedule-based interval when configured", async () => {
+    useFakeHeartbeatTime();
+    // Set time to 10:00 UTC (inside the 15m window)
+    vi.setSystemTime(new Date(Date.UTC(2025, 0, 1, 10, 0, 0)));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "UTC",
+            heartbeat: {
+              every: "30m",
+              schedule: [
+                { start: "08:00", end: "18:00", every: "15m" },
+                { start: "18:00", end: "08:00", every: "2h" },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // Should fire at 15m (schedule), not 30m (base every)
+    await vi.advanceTimersByTimeAsync(15 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    runner.stop();
+  });
 });

@@ -185,6 +185,41 @@ If you want heartbeats to run all day, use one of these patterns:
 Do not set the same `start` and `end` time (for example `08:00` to `08:00`).
 That is treated as a zero-width window, so heartbeats are always skipped.
 
+### Schedule (time-of-day intervals)
+
+Use `schedule` to apply different heartbeat frequencies at different times of day.
+Each entry defines a time window and the interval to use during that window.
+The first matching window wins; if no window matches, `every` is used as the fallback.
+
+```json5
+{
+  agents: {
+    defaults: {
+      heartbeat: {
+        every: "30m", // fallback when no schedule window matches
+        schedule: [
+          { start: "08:00", end: "18:00", every: "15m" }, // work hours: responsive
+          { start: "18:00", end: "23:00", every: "30m" }, // evening: moderate
+          { start: "23:00", end: "08:00", every: "2h" }, // overnight: economical
+        ],
+      },
+    },
+  },
+}
+```
+
+Schedule entries use the same timezone as `activeHours.timezone` (defaults to your `userTimezone`, then host timezone, then UTC).
+
+Overnight windows work naturally: `{ start: "23:00", end: "08:00", every: "2h" }` covers 11pm through 8am.
+
+**Interaction with `activeHours`:** `activeHours` is a binary gate applied on top of the schedule. If the current time is outside `activeHours`, heartbeats are skipped regardless of what `schedule` says.
+
+**First-match-wins:** if schedule entries overlap, the first matching entry determines the interval.
+
+**Boundary behavior:** when a heartbeat run is in flight at a window boundary, the current run finishes normally. The next tick uses the new interval from the matching window. Transitions are accurate to the minute; the runner wakes at window boundaries but may fire up to ~60 seconds after the exact transition.
+
+**Manual wakes** (via `openclaw system heartbeat wake`) always fire regardless of schedule intervals.
+
 ### Multi account example
 
 Use `accountId` to target a specific account on multi-account channels like Telegram:

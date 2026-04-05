@@ -49,7 +49,11 @@ import {
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
-import { isWithinActiveHours } from "./heartbeat-active-hours.js";
+import {
+  isWithinActiveHours,
+  resolveNextWindowBoundaryMs,
+  resolveScheduleIntervalMs,
+} from "./heartbeat-active-hours.js";
 import {
   buildExecEventPrompt,
   buildCronEventPrompt,
@@ -1088,8 +1092,10 @@ export function startHeartbeatRunner(opts: {
   };
 
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
+    const effectiveInterval =
+      resolveScheduleIntervalMs(state.cfg, agent.heartbeat, now) ?? agent.intervalMs;
     agent.lastRunMs = now;
-    agent.nextDueMs = now + agent.intervalMs;
+    agent.nextDueMs = now + effectiveInterval;
   };
 
   const scheduleNext = () => {
@@ -1108,6 +1114,15 @@ export function startHeartbeatRunner(opts: {
     for (const agent of state.agents.values()) {
       if (agent.nextDueMs < nextDue) {
         nextDue = agent.nextDueMs;
+      }
+      // Also wake at the next schedule window boundary so the interval
+      // transitions promptly (e.g. 2h overnight -> 15m work hours).
+      const boundaryMs = resolveNextWindowBoundaryMs(state.cfg, agent.heartbeat, now);
+      if (boundaryMs !== null) {
+        const boundaryDue = now + boundaryMs;
+        if (boundaryDue < nextDue) {
+          nextDue = boundaryDue;
+        }
       }
     }
     if (!Number.isFinite(nextDue)) {
@@ -1135,9 +1150,11 @@ export function startHeartbeatRunner(opts: {
       if (!intervalMs) {
         continue;
       }
-      intervals.push(intervalMs);
+      const scheduleIntervalMs = resolveScheduleIntervalMs(cfg, agent.heartbeat, now);
+      const effectiveInterval = scheduleIntervalMs ?? intervalMs;
+      intervals.push(effectiveInterval);
       const prevState = prevAgents.get(agent.agentId);
-      const nextDueMs = resolveNextDue(now, intervalMs, prevState);
+      const nextDueMs = resolveNextDue(now, effectiveInterval, prevState);
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
@@ -1230,8 +1247,21 @@ export function startHeartbeatRunner(opts: {
       }
 
       for (const agent of state.agents.values()) {
-        if (isInterval && now < agent.nextDueMs) {
-          continue;
+        // Re-resolve the schedule interval at tick time so boundary transitions
+        // take effect in both directions: shorter intervals make the agent due
+        // sooner, longer intervals push the next due time forward (avoiding
+        // spurious runs when transitioning to a slower cadence).
+        if (isInterval) {
+          const scheduleMs = resolveScheduleIntervalMs(state.cfg, agent.heartbeat, now);
+          if (scheduleMs !== null && typeof agent.lastRunMs === "number") {
+            const recalcDue = agent.lastRunMs + scheduleMs;
+            if (recalcDue !== agent.nextDueMs) {
+              agent.nextDueMs = recalcDue;
+            }
+          }
+          if (now < agent.nextDueMs) {
+            continue;
+          }
         }
 
         let res: HeartbeatRunResult;
