@@ -63,21 +63,21 @@ These areas are defined in detail in [UI and Gateway Spec](/claw/05-ui-and-gatew
 
 Every mission moves through the same canonical state machine.
 
-| State | Meaning |
-| --- | --- |
-| `draft` | Goal has been captured but mission files are not finalized. |
-| `preflighting` | Claw is evaluating capability, auth, root selection, and likely blockers before the mission can be started. |
-| `awaiting_setup` | Claw found a missing prerequisite that must be satisfied before start approval makes sense. |
-| `awaiting_approval` | Mission packet is ready and waiting for the single start approval. |
-| `queued` | Mission is approved and waiting for an execution slot. |
-| `running` | Mission team is actively executing. |
-| `recovering` | Gateway restarted or mission state became uncertain and Claw is reconciling state before resuming. |
-| `blocked` | Claw cannot safely continue without operator input or missing external capability. |
-| `verifying` | Verifier is checking completion against explicit done criteria. |
-| `done` | Mission is complete and verifier accepted the result. |
-| `paused` | Operator or global controls paused the mission. |
-| `cancelled` | Operator cancelled the mission. |
-| `failed` | Mission hit a terminal engine-level failure that Claw cannot recover from automatically. |
+| State               | Meaning                                                                                                     |
+| ------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `draft`             | Goal has been captured but mission files are not finalized.                                                 |
+| `preflighting`      | Claw is evaluating capability, auth, root selection, and likely blockers before the mission can be started. |
+| `awaiting_setup`    | Claw found a missing prerequisite that must be satisfied before start approval makes sense.                 |
+| `awaiting_approval` | Mission packet is ready and waiting for the single start approval.                                          |
+| `queued`            | Mission is approved and waiting for an execution slot.                                                      |
+| `running`           | Mission team is actively executing.                                                                         |
+| `recovering`        | Gateway restarted or mission state became uncertain and Claw is reconciling state before resuming.          |
+| `blocked`           | Claw cannot safely continue without operator input or missing external capability.                          |
+| `verifying`         | Verifier is checking completion against explicit done criteria.                                             |
+| `done`              | Mission is complete and verifier accepted the result.                                                       |
+| `paused`            | Operator or global controls paused the mission.                                                             |
+| `cancelled`         | Operator cancelled the mission.                                                                             |
+| `failed`            | Mission hit a terminal engine-level failure that Claw cannot recover from automatically.                    |
 
 ### Terminal states
 

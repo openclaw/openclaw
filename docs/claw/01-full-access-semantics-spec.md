@@ -20,11 +20,11 @@ This document defines what full access means for Claw v1 and how capability avai
 
 Every tool or capability must be classified into one of four distinct states:
 
-| State | Meaning |
-| --- | --- |
-| `exists` | The code for the capability is present in the build or plugin set. |
-| `exposed` | The capability is actually surfaced to the Claw session by tool policy and runtime assembly. |
-| `usable` | The capability can be invoked successfully in the current runtime environment. |
+| State           | Meaning                                                                                                           |
+| --------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `exists`        | The code for the capability is present in the build or plugin set.                                                |
+| `exposed`       | The capability is actually surfaced to the Claw session by tool policy and runtime assembly.                      |
+| `usable`        | The capability can be invoked successfully in the current runtime environment.                                    |
 | `authenticated` | The capability can operate against its target system because required credentials, pairing, or login are present. |
 
 These states are intentionally different.
@@ -49,18 +49,18 @@ In Claw v1, "full access" means:
 
 Full access covers the following capability families.
 
-| Family | Included capabilities | Claw v1 meaning of full access |
-| --- | --- | --- |
-| Filesystem | `read`, `write`, `edit`, `apply_patch` | Host-wide read and mutation, not workspace-limited. |
-| Runtime | `exec`, `process`, `code_execution` | Host execution, background process control, no routine ask gate. |
-| Browser and web | `browser`, `web_fetch`, `web_search`, provider web tools | Host browser control, evaluation enabled, web tools surfaced when configured. |
-| Sessions and agents | `sessions_*`, `subagents`, `agents_list` | Full orchestration, spawning, yielding, resuming, and inspection. |
-| Gateway and automation | `gateway`, `cron` | Full control available to owner-controlled Claw missions. |
-| Nodes and devices | `nodes`, device-backed capabilities | Fully surfaced when devices are paired and host permissions exist. |
-| Media | `image`, `image_generate`, `tts`, media-understanding style tools | Exposed when installed and configured; auth-dependent where relevant. |
-| Memory | `memory_search`, `memory_get`, memory plugins | Exposed when configured; backend availability and auth still matter. |
-| Messaging and channels | `message` and channel-owned tools | Exposed when installed; operational only when channels are configured and authenticated. |
-| Plugin tools | Bundled and enabled plugin tools, including optional tools | Exposed by default to Claw unless a later Claw policy explicitly narrows them. |
+| Family                 | Included capabilities                                             | Claw v1 meaning of full access                                                           |
+| ---------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Filesystem             | `read`, `write`, `edit`, `apply_patch`                            | Host-wide read and mutation, not workspace-limited.                                      |
+| Runtime                | `exec`, `process`, `code_execution`                               | Host execution, background process control, no routine ask gate.                         |
+| Browser and web        | `browser`, `web_fetch`, `web_search`, provider web tools          | Host browser control, evaluation enabled, web tools surfaced when configured.            |
+| Sessions and agents    | `sessions_*`, `subagents`, `agents_list`                          | Full orchestration, spawning, yielding, resuming, and inspection.                        |
+| Gateway and automation | `gateway`, `cron`                                                 | Full control available to owner-controlled Claw missions.                                |
+| Nodes and devices      | `nodes`, device-backed capabilities                               | Fully surfaced when devices are paired and host permissions exist.                       |
+| Media                  | `image`, `image_generate`, `tts`, media-understanding style tools | Exposed when installed and configured; auth-dependent where relevant.                    |
+| Memory                 | `memory_search`, `memory_get`, memory plugins                     | Exposed when configured; backend availability and auth still matter.                     |
+| Messaging and channels | `message` and channel-owned tools                                 | Exposed when installed; operational only when channels are configured and authenticated. |
+| Plugin tools           | Bundled and enabled plugin tools, including optional tools        | Exposed by default to Claw unless a later Claw policy explicitly narrows them.           |
 
 ## Normative semantics by family
 
@@ -199,11 +199,11 @@ The readiness packet must include:
 
 Preflight may end in one of three outcomes:
 
-| Outcome | Meaning |
-| --- | --- |
-| `ready` | Mission packet is ready for start approval. |
-| `awaiting_setup` | Mission requires auth, config, or capability setup before start approval is sensible. |
-| `blocked` | Mission cannot even produce a viable start packet because the runtime or product configuration is fundamentally incomplete. |
+| Outcome          | Meaning                                                                                                                     |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `ready`          | Mission packet is ready for start approval.                                                                                 |
+| `awaiting_setup` | Mission requires auth, config, or capability setup before start approval is sensible.                                       |
+| `blocked`        | Mission cannot even produce a viable start packet because the runtime or product configuration is fundamentally incomplete. |
 
 ## Blocker conditions
 
