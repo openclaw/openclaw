@@ -163,6 +163,42 @@ describe("resolveMatrixInboundRoute", () => {
     expect(route.lastRoutePolicy).toBe("session");
   });
 
+  it("keeps configured ACP room bindings ahead of per-room DM session scope", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          agentId: "room-agent",
+          match: {
+            channel: "matrix",
+            accountId: "ops",
+            peer: { kind: "channel", id: "!dm:example.org" },
+          },
+        },
+        {
+          type: "acp",
+          agentId: "acp-agent",
+          match: {
+            channel: "matrix",
+            accountId: "ops",
+            peer: { kind: "channel", id: "!dm:example.org" },
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const { route, configuredBinding } = resolveDmRoute(cfg, {
+      dmSessionScope: "per-room",
+    });
+
+    expect(configuredBinding?.spec.agentId).toBe("acp-agent");
+    expect(route.agentId).toBe("acp-agent");
+    expect(route.matchedBy).toBe("binding.channel");
+    expect(route.sessionKey).toContain("agent:acp-agent:acp:binding:matrix:ops:");
+    expect(route.sessionKey).not.toBe("agent:acp-agent:matrix:channel:!dm:example.org");
+    expect(route.lastRoutePolicy).toBe("session");
+  });
+
   it("lets runtime conversation bindings override both sender and room route matches", () => {
     const touch = vi.fn();
     registerSessionBindingAdapter({

@@ -31,6 +31,13 @@ function resolveMatrixDmSessionKey(params: {
   }).toLowerCase();
 }
 
+function shouldApplyMatrixPerRoomDmSessionScope(params: {
+  isDirectMessage: boolean;
+  configuredSessionKey?: string;
+}): boolean {
+  return params.isDirectMessage && !params.configuredSessionKey;
+}
+
 export function resolveMatrixInboundRoute(params: {
   cfg: CoreConfig;
   accountId: string;
@@ -120,7 +127,10 @@ export function resolveMatrixInboundRoute(params: {
         }
       : baseRoute;
 
-  const dmSessionKey = params.isDirectMessage
+  const dmSessionKey = shouldApplyMatrixPerRoomDmSessionScope({
+    isDirectMessage: params.isDirectMessage,
+    configuredSessionKey,
+  })
     ? resolveMatrixDmSessionKey({
         accountId: params.accountId,
         agentId: effectiveRoute.agentId,

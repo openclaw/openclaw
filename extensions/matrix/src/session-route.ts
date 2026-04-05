@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/config-runtime";
 import {
   buildChannelOutboundSessionRoute,
+  normalizeAccountId,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/channel-core";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
