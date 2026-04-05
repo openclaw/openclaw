@@ -160,6 +160,34 @@ function resolveStructuralSessionFallbackPath(
   return path.normalize(path.resolve(candidateAbsPath));
 }
 
+function remapSameAgentCrossRootSessionPath(
+  candidateAbsPath: string,
+  expectedAgentId: string,
+): string | undefined {
+  const parsed = resolveAgentSessionsPathParts(candidateAbsPath);
+  if (!parsed) {
+    return undefined;
+  }
+  const { parts, sessionsIndex } = parsed;
+  const agentIdPart = parts[sessionsIndex - 1];
+  if (!agentIdPart) {
+    return undefined;
+  }
+  const normalizedAgentId = normalizeAgentId(agentIdPart);
+  if (normalizedAgentId !== normalizeAgentId(expectedAgentId)) {
+    return undefined;
+  }
+  const relativeSegments = parts.slice(sessionsIndex + 1);
+  if (relativeSegments.length !== 1) {
+    return undefined;
+  }
+  const fileName = relativeSegments[0];
+  if (!fileName || fileName === "." || fileName === "..") {
+    return undefined;
+  }
+  return path.join(resolveAgentSessionsDir(normalizedAgentId), fileName);
+}
+
 function safeRealpathSync(filePath: string): string | undefined {
   try {
     return fs.realpathSync(filePath);
@@ -207,6 +235,10 @@ function resolvePathWithinSessionsDir(
       const resolvedFromAgent = tryAgentFallback(explicitAgentId);
       if (resolvedFromAgent) {
         return resolvedFromAgent;
+      }
+      const remappedSameAgent = remapSameAgentCrossRootSessionPath(realTrimmed, explicitAgentId);
+      if (remappedSameAgent) {
+        return remappedSameAgent;
       }
     }
     const extractedAgentId = extractAgentIdFromAbsoluteSessionPath(realTrimmed);

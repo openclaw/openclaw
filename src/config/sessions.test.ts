@@ -598,6 +598,33 @@ describe("sessions", () => {
     });
   });
 
+  it("remaps same-agent cross-root absolute sessionFile paths into the current state dir", () => {
+    withStateDir(path.resolve("/different/state"), () => {
+      const originalBase = path.resolve("/home/rai/.openclaw");
+      const staleMainSession = path.join(
+        originalBase,
+        "agents",
+        "shikamaru",
+        "sessions",
+        "sess-1.jsonl",
+      );
+      const sessionFile = resolveSessionFilePath(
+        "sess-1",
+        { sessionFile: staleMainSession },
+        { agentId: "shikamaru" },
+      );
+      expect(sessionFile).toBe(
+        path.join(
+          path.resolve("/different/state"),
+          "agents",
+          "shikamaru",
+          "sessions",
+          "sess-1.jsonl",
+        ),
+      );
+    });
+  });
+
   it("falls back when structural cross-root path traverses after sessions", () => {
     withStateDir(path.resolve("/different/state"), () => {
       const originalBase = path.resolve("/original/state");
