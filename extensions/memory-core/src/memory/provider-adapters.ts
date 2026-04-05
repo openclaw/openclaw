@@ -282,7 +282,9 @@ const jinaAdapter: MemoryEmbeddingProviderAdapter = {
         id: "jina",
         cacheKeyData: {
           provider: "jina",
+          baseUrl: client.baseUrl,
           model: client.model,
+          headers: sanitizeHeaders(client.headers, ["authorization"]),
         },
       },
     };
