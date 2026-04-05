@@ -62,6 +62,7 @@ import {
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
+import { sanitizeOutboundText } from "./sanitize-outbound.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -575,10 +576,19 @@ export async function processDiscordMessage(
   let finalizedViaPreviewMessage = false;
 
   const resolvePreviewFinalText = (text?: string) => {
+    const currentPreviewText = discordStreamMode === "block" ? draftText : lastPartialText;
     if (typeof text !== "string") {
-      return undefined;
+      return { text: undefined, sanitizedEmpty: false };
     }
-    const formatted = convertMarkdownTables(text, tableMode);
+    const sanitized = sanitizeOutboundText(text);
+    if (!sanitized) {
+      const trimmedPreview = currentPreviewText.trim();
+      return {
+        text: trimmedPreview || undefined,
+        sanitizedEmpty: true,
+      };
+    }
+    const formatted = convertMarkdownTables(sanitized, tableMode);
     const chunks = chunkDiscordTextWithMode(formatted, {
       maxChars: draftMaxChars,
       maxLines: maxLinesPerMessage,
@@ -588,21 +598,20 @@ export async function processDiscordMessage(
       chunks.push(formatted);
     }
     if (chunks.length !== 1) {
-      return undefined;
+      return { text: undefined, sanitizedEmpty: false };
     }
     const trimmed = chunks[0].trim();
     if (!trimmed) {
-      return undefined;
+      return { text: undefined, sanitizedEmpty: false };
     }
-    const currentPreviewText = discordStreamMode === "block" ? draftText : lastPartialText;
     if (
       currentPreviewText &&
       currentPreviewText.startsWith(trimmed) &&
       trimmed.length < currentPreviewText.length
     ) {
-      return undefined;
+      return { text: undefined, sanitizedEmpty: false };
     }
-    return trimmed;
+    return { text: trimmed, sanitizedEmpty: false };
   };
 
   const updateDraftFromPartial = (text?: string) => {
@@ -708,7 +717,8 @@ export async function processDiscordMessage(
           const reply = resolveSendableOutboundReplyParts(payload);
           const hasMedia = reply.hasMedia;
           const finalText = payload.text;
-          const previewFinalText = resolvePreviewFinalText(finalText);
+          const previewFinal = resolvePreviewFinalText(finalText);
+          const previewFinalText = previewFinal.text;
           const previewMessageId = draftStream.messageId();
 
           // Try to finalize via preview edit (text-only, fits in 2000 chars, not an error)
@@ -774,6 +784,14 @@ export async function processDiscordMessage(
                 );
               }
             }
+          }
+
+          if (!finalizedViaPreviewMessage && previewFinal.sanitizedEmpty && hasStreamedMessage) {
+            notifyFinalReplyStart();
+            finalizedViaPreviewMessage = true;
+            replyReference.markSent();
+            observer?.onFinalReplyDelivered?.();
+            return;
           }
 
           // Clear the preview and fall through to standard delivery
