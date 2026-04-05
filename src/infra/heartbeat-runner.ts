@@ -315,16 +315,37 @@ function resolveHeartbeatSession(
 function resolveIsolatedHeartbeatSessionKey(params: {
   sessionKey: string;
   configuredSessionKey: string;
+  sessionEntry?: { heartbeatIsolatedBaseSessionKey?: string };
 }) {
-  const suffix = params.sessionKey.slice(params.configuredSessionKey.length);
+  const storedBaseSessionKey = params.sessionEntry?.heartbeatIsolatedBaseSessionKey?.trim();
+  if (storedBaseSessionKey) {
+    const suffix = params.sessionKey.slice(storedBaseSessionKey.length);
+    if (
+      params.sessionKey.startsWith(storedBaseSessionKey) &&
+      suffix.length > 0 &&
+      /^(:heartbeat)+$/.test(suffix)
+    ) {
+      return {
+        isolatedSessionKey: `${storedBaseSessionKey}:heartbeat`,
+        isolatedBaseSessionKey: storedBaseSessionKey,
+      };
+    }
+  }
+
+  const configuredSuffix = params.sessionKey.slice(params.configuredSessionKey.length);
   if (
     params.sessionKey.startsWith(params.configuredSessionKey) &&
-    suffix.length > 0 &&
-    /^(:heartbeat)+$/.test(suffix)
+    /^(:heartbeat){2,}$/.test(configuredSuffix)
   ) {
-    return `${params.configuredSessionKey}:heartbeat`;
+    return {
+      isolatedSessionKey: `${params.configuredSessionKey}:heartbeat`,
+      isolatedBaseSessionKey: params.configuredSessionKey,
+    };
   }
-  return `${params.sessionKey}:heartbeat`;
+  return {
+    isolatedSessionKey: `${params.sessionKey}:heartbeat`,
+    isolatedBaseSessionKey: params.sessionKey,
+  };
 }
 
 function resolveHeartbeatReasoningPayloads(
@@ -731,27 +752,27 @@ export async function runHeartbeatOnce(opts: {
   }
 
   let runSessionKey = sessionKey;
-  let runStorePath = storePath;
   if (useIsolatedSession) {
     const configuredSession = resolveHeartbeatSession(cfg, agentId, heartbeat);
     // Collapse only the repeated `:heartbeat` suffixes introduced by wake-triggered
-    // re-entry, while preserving legitimate base session keys that already end with
-    // `:heartbeat` (see https://github.com/openclaw/openclaw/issues/59493).
-    const isolatedKey = resolveIsolatedHeartbeatSessionKey({
+    // re-entry for heartbeat-created isolated sessions. Real session keys that
+    // happen to end with `:heartbeat` still get a distinct isolated sibling.
+    const { isolatedSessionKey, isolatedBaseSessionKey } = resolveIsolatedHeartbeatSessionKey({
       sessionKey,
       configuredSessionKey: configuredSession.sessionKey,
+      sessionEntry: entry,
     });
     const cronSession = resolveCronSession({
       cfg,
-      sessionKey: isolatedKey,
+      sessionKey: isolatedSessionKey,
       agentId,
       nowMs: startedAt,
       forceNew: true,
     });
-    cronSession.store[isolatedKey] = cronSession.sessionEntry;
+    cronSession.sessionEntry.heartbeatIsolatedBaseSessionKey = isolatedBaseSessionKey;
+    cronSession.store[isolatedSessionKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
-    runSessionKey = isolatedKey;
-    runStorePath = cronSession.storePath;
+    runSessionKey = isolatedSessionKey;
   }
 
   // Update task last run times AFTER successful heartbeat completion

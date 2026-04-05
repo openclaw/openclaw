@@ -100,16 +100,34 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
 
       // Simulate wake-request path: key already has :heartbeat from a previous tick.
       const alreadySuffixedKey = `${baseSessionKey}:heartbeat`;
-
-      const ctx = await runIsolatedHeartbeat({
-        tmpDir,
+      await fs.writeFile(
         storePath,
+        JSON.stringify({
+          [alreadySuffixedKey]: {
+            sessionId: "sid",
+            updatedAt: 1,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+            heartbeatIsolatedBaseSessionKey: baseSessionKey,
+          },
+        }),
+        "utf-8",
+      );
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
         cfg,
         sessionKey: alreadySuffixedKey,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
       });
 
       // Key must remain stable — no double :heartbeat suffix.
-      expect(ctx?.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
     });
   });
 
@@ -173,15 +191,87 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       const cfg = makeNamedIsolatedHeartbeatConfig(tmpDir, storePath, "alerts:heartbeat");
       const baseSessionKey = "agent:main:alerts:heartbeat";
       const alreadyIsolatedKey = `${baseSessionKey}:heartbeat`;
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [alreadyIsolatedKey]: {
+            sessionId: "sid",
+            updatedAt: 1,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+            heartbeatIsolatedBaseSessionKey: baseSessionKey,
+          },
+        }),
+        "utf-8",
+      );
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: alreadyIsolatedKey,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(alreadyIsolatedKey);
+    });
+  });
+
+  it("keeps a forced real :heartbeat session distinct from the heartbeat-isolated sibling", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const realSessionKey = "agent:main:alerts:heartbeat";
 
       const ctx = await runIsolatedHeartbeat({
         tmpDir,
         storePath,
         cfg,
-        sessionKey: alreadyIsolatedKey,
+        sessionKey: realSessionKey,
       });
 
-      expect(ctx?.SessionKey).toBe(alreadyIsolatedKey);
+      expect(ctx?.SessionKey).toBe(`${realSessionKey}:heartbeat`);
+    });
+  });
+
+  it("stays stable when a forced real :heartbeat session re-enters through its isolated sibling", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const realSessionKey = "agent:main:alerts:heartbeat";
+      const isolatedSessionKey = `${realSessionKey}:heartbeat`;
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [isolatedSessionKey]: {
+            sessionId: "sid",
+            updatedAt: 1,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+            heartbeatIsolatedBaseSessionKey: realSessionKey,
+          },
+        }),
+        "utf-8",
+      );
+
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: isolatedSessionKey,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(isolatedSessionKey);
     });
   });
 
