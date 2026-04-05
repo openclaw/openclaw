@@ -602,20 +602,33 @@ export function handleMessageEnd(
       ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
       ctx.blockChunker.reset();
     } else if (text !== ctx.state.lastBlockReplyText) {
-      // Check for duplicates before emitting (same logic as emitBlockChunk).
-      const normalizedText = normalizeTextForComparison(text);
-      if (
-        isMessagingToolDuplicateNormalized(
-          normalizedText,
-          ctx.state.messagingToolSentTextsNormalized,
-        )
-      ) {
+      // Guard: for text_end channels, if text_end already delivered content
+      // (lastBlockReplyText is set), skip this safety send. The text comparison
+      // here uses a different stripping pipeline (stripBlockTags with reset state)
+      // than emitBlockChunk (stripBlockTags with running blockState +
+      // stripDowngradedToolCallText), which can false-positive. When text_end
+      // didn't deliver (e.g. commentary suppressed, provider skipped text_end),
+      // lastBlockReplyText is still null and message_end must deliver.
+      if (ctx.state.blockReplyBreak === "text_end" && ctx.state.lastBlockReplyText != null) {
         ctx.log.debug(
-          `Skipping message_end block reply - already sent via messaging tool: ${text.slice(0, 50)}...`,
+          `Skipping message_end safety send for text_end channel - content already delivered via text_end`,
         );
       } else {
-        ctx.state.lastBlockReplyText = text;
-        emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
+        // Check for duplicates before emitting (same logic as emitBlockChunk).
+        const normalizedText = normalizeTextForComparison(text);
+        if (
+          isMessagingToolDuplicateNormalized(
+            normalizedText,
+            ctx.state.messagingToolSentTextsNormalized,
+          )
+        ) {
+          ctx.log.debug(
+            `Skipping message_end block reply - already sent via messaging tool: ${text.slice(0, 50)}...`,
+          );
+        } else {
+          ctx.state.lastBlockReplyText = text;
+          emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
+        }
       }
     }
   }
