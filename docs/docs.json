@@ -972,6 +972,7 @@
                   "install/fly",
                   "install/gcp",
                   "install/hetzner",
+                  "install/islo-dev",
                   "install/kubernetes",
                   "vps",
                   "install/macos-vm",
