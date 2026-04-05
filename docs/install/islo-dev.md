@@ -17,6 +17,7 @@ islo use my-sandbox --agent openclaw --task "Build a REST API with Express"
 ```
 
 That's it. islo automatically:
+
 1. Creates a sandbox VM (Kata Container on bare-metal)
 2. Installs Node.js and OpenClaw via [mise](https://mise.jdx.dev)
 3. Launches `openclaw agent --message "..." --local --thinking high`
@@ -74,12 +75,14 @@ OpenClaw requires Node 22.14+. islo installs it automatically as a dependency.
 ## How it works
 
 islo.dev sandboxes are hardware-isolated VMs (Kata Containers) with:
+
 - Full root access and toolchain (git, gh CLI, docker, etc.)
 - Network isolation via nftables + Envoy transparent proxy
 - GitHub integration for cloning repos and opening PRs
 - Agent-aware lifecycle — sandbox stays alive while the agent runs
 
 When you pass `--agent openclaw`, islo:
+
 1. Installs `node` (dependency) and `openclaw` (via npm)
 2. Injects configured API keys as environment variables
 3. Runs `openclaw agent --message "<task>" --local --thinking high`
