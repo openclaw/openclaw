@@ -638,6 +638,33 @@ describe("gateway send mirroring", () => {
     });
   });
 
+  it("falls back to the provided sessionKey when outbound route lookup returns null", async () => {
+    mockDeliverySuccess("m-session-fallback");
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      sessionKey: "agent:work:slack:channel:c1",
+      idempotencyKey: "idem-session-fallback",
+    });
+
+    expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:slack:channel:c1",
+        }),
+        mirror: expect.objectContaining({
+          sessionKey: "agent:work:slack:channel:c1",
+          agentId: "work",
+        }),
+      }),
+    );
+  });
+
   it("prefers explicit agentId over sessionKey agent for delivery and mirror", async () => {
     mockDeliverySuccess("m-agent-precedence");
 

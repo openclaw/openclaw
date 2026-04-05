@@ -259,10 +259,11 @@ export const sendHandlers: GatewayRequestHandlers = {
             route: outboundRoute,
           });
         }
+        const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
         const outboundSession = buildOutboundSessionContext({
           cfg,
           agentId: effectiveAgentId,
-          sessionKey: outboundRoute?.sessionKey,
+          sessionKey: outboundSessionKey,
         });
         const results = await deliverOutboundPayloads({
           cfg,
@@ -275,9 +276,9 @@ export const sendHandlers: GatewayRequestHandlers = {
           threadId: threadId ?? null,
           deps: outboundDeps,
           gatewayClientScopes: client?.connect?.scopes ?? [],
-          mirror: outboundRoute
+          mirror: outboundSessionKey
             ? {
-                sessionKey: outboundRoute.sessionKey,
+                sessionKey: outboundSessionKey,
                 agentId: effectiveAgentId,
                 text: mirrorText || message,
                 mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
