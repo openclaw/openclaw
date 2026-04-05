@@ -41,10 +41,19 @@ function loadDispatchAcpRuntime() {
   return dispatchAcpRuntimePromise;
 }
 
+function hasExplicitCommandCandidate(ctx: PluginHookReplyDispatchEvent["ctx"]): boolean {
+  return [ctx.CommandBody, ctx.BodyForCommands].some(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
+}
+
 export async function tryDispatchAcpReplyHook(
   event: PluginHookReplyDispatchEvent,
   ctx: PluginHookReplyDispatchContext,
 ): Promise<PluginHookReplyDispatchResult | void> {
+  if (event.sendPolicy === "deny" && !hasExplicitCommandCandidate(event.ctx)) {
+    return;
+  }
   const runtime = await loadDispatchAcpRuntime();
   const bypassForCommand = await runtime.shouldBypassAcpDispatchForCommand(event.ctx, ctx.cfg);
 

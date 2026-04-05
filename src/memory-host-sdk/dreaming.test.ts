@@ -6,7 +6,9 @@ const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg: OpenClawConfig, agentId: string) => `/workspace/${agentId}`),
 );
 const resolveMemorySearchConfig = vi.hoisted(() =>
-  vi.fn((_cfg: OpenClawConfig, _agentId: string) => ({ enabled: true })),
+  vi.fn<(_cfg: OpenClawConfig, _agentId: string) => { enabled: boolean } | undefined>(() => ({
+    enabled: true,
+  })),
 );
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -90,7 +92,7 @@ describe("memory dreaming host helpers", () => {
 
   it("dedupes shared workspaces and skips agents without memory search", () => {
     resolveMemorySearchConfig.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
-      agentId === "beta" ? null : { enabled: true },
+      agentId === "beta" ? undefined : { enabled: true },
     );
     resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
       if (agentId === "alpha") {

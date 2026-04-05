@@ -10,7 +10,9 @@ const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg: OpenClawConfig, _agentId: string) => "/tmp/openclaw"),
 );
 const resolveMemorySearchConfig = vi.hoisted(() =>
-  vi.fn((_cfg: OpenClawConfig, _agentId: string) => ({ enabled: true })),
+  vi.fn<(_cfg: OpenClawConfig, _agentId: string) => { enabled: boolean } | undefined>(() => ({
+    enabled: true,
+  })),
 );
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 
@@ -330,7 +332,7 @@ describe("doctor.memory.status", () => {
       )}\n`,
       "utf-8",
     );
-    resolveMemorySearchConfig.mockReturnValue(null);
+    resolveMemorySearchConfig.mockReturnValue(undefined);
     loadConfig.mockReturnValue({
       plugins: {
         entries: {

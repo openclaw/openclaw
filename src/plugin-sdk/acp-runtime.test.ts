@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
 
 const { bypassMock, dispatchMock } = vi.hoisted(() => ({
   bypassMock: vi.fn(),
@@ -13,10 +14,12 @@ vi.mock("../auto-reply/reply/dispatch-acp.runtime.js", () => ({
 import { tryDispatchAcpReplyHook } from "./acp-runtime.js";
 
 const event = {
-  ctx: {
+  ctx: buildTestCtx({
     SessionKey: "agent:test:session",
-    BodyForAgent: "hello",
-  },
+    CommandBody: "/acp cancel",
+    BodyForCommands: "/acp cancel",
+    BodyForAgent: "/acp cancel",
+  }),
   runId: "run-1",
   sessionKey: "agent:test:session",
   inboundAudio: false,
