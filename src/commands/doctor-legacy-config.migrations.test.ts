@@ -761,7 +761,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
-    expect(res.changes).toEqual(["Moved legacy talk flat fields → talk.providers.elevenlabs."]);
+    expect(res.changes).toEqual([
+      "Moved talk legacy fields (voiceId, voiceAliases, modelId, outputFormat, apiKey) → talk.providers.elevenlabs (filled missing provider fields only).",
+    ]);
   });
 
   it("normalizes talk provider ids without overriding explicit provider config", () => {

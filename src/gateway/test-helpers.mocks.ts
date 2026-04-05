@@ -313,6 +313,7 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   videoGenerationProviders: [],
   webFetchProviders: [],
   webSearchProviders: [],
+  memoryEmbeddingProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],

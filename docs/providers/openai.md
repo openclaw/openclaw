@@ -14,14 +14,16 @@ OpenAI explicitly supports subscription OAuth usage in external tools/workflows 
 
 ## Default interaction style
 
-OpenClaw adds a small OpenAI-specific prompt overlay by default for both
-`openai/*` and `openai-codex/*` runs. The overlay keeps the assistant warm,
-collaborative, concise, and direct without replacing the base OpenClaw system
-prompt.
+OpenClaw can add a small OpenAI-specific prompt overlay for both `openai/*` and
+`openai-codex/*` runs. By default, the overlay keeps the assistant warm,
+collaborative, concise, direct, and a little more emotionally expressive
+without replacing the base OpenClaw system prompt. The friendly overlay also
+permits the occasional emoji when it fits naturally, while keeping overall
+output concise.
 
 Config key:
 
-`plugins.entries.openai.config.personalityOverlay`
+`plugins.entries.openai.config.personality`
 
 Allowed values:
 
@@ -34,7 +36,8 @@ Scope:
 - Applies to `openai-codex/*` models.
 - Does not affect other providers.
 
-This behavior is enabled by default:
+This behavior is on by default. Keep `"friendly"` explicitly if you want that
+to survive future local config churn:
 
 ```json5
 {
@@ -42,7 +45,7 @@ This behavior is enabled by default:
     entries: {
       openai: {
         config: {
-          personalityOverlay: "friendly",
+          personality: "friendly",
         },
       },
     },
@@ -52,7 +55,7 @@ This behavior is enabled by default:
 
 ### Disable the OpenAI prompt overlay
 
-If you prefer the unmodified base OpenClaw prompt, turn the overlay off:
+If you want the unmodified base OpenClaw prompt, set the overlay to `"off"`:
 
 ```json5
 {
@@ -60,7 +63,7 @@ If you prefer the unmodified base OpenClaw prompt, turn the overlay off:
     entries: {
       openai: {
         config: {
-          personalityOverlay: "off",
+          personality: "off",
         },
       },
     },
@@ -71,7 +74,7 @@ If you prefer the unmodified base OpenClaw prompt, turn the overlay off:
 You can also set it directly with the config CLI:
 
 ```bash
-openclaw config set plugins.entries.openai.config.personalityOverlay off
+openclaw config set plugins.entries.openai.config.personality off
 ```
 
 ## Option A: OpenAI API key (OpenAI Platform)

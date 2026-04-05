@@ -3,7 +3,8 @@
 export {
   getMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
-} from "../plugins/memory-embedding-providers.js";
+  listRegisteredMemoryEmbeddingProviderAdapters,
+} from "../plugins/memory-embedding-provider-runtime.js";
 export type {
   MemoryEmbeddingBatchChunk,
   MemoryEmbeddingBatchOptions,

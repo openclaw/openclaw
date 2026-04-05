@@ -13,6 +13,7 @@ type RecordShortTermRecallsFn = (params: {
   query: string;
   results: MemorySearchResult[];
   nowMs?: number;
+  timezone?: string;
 }) => Promise<void>;
 
 const recallTrackingMock = vi.hoisted(() => ({
@@ -134,5 +135,47 @@ describe("memory_search recall tracking", () => {
       }
       resolveRecall?.();
     }
+  });
+
+  it("passes the resolved dreaming timezone into recall tracking", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/2026-04-03.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.95,
+        snippet: "Move backups to S3 Glacier.",
+        source: "memory" as const,
+      },
+    ]);
+
+    const tool = createSearchTool(
+      asOpenClawConfig({
+        agents: {
+          defaults: {
+            userTimezone: "America/Los_Angeles",
+          },
+          list: [{ id: "main", default: true }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  mode: "core",
+                  timezone: "Europe/London",
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    await tool.execute("call_recall_timezone", { query: "glacier" });
+
+    expect(recallTrackingMock.recordShortTermRecalls).toHaveBeenCalledTimes(1);
+    const [firstCall] = recallTrackingMock.recordShortTermRecalls.mock.calls;
+    expect(firstCall?.[0]?.timezone).toBe("Europe/London");
   });
 });

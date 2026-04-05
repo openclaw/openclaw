@@ -1,3 +1,4 @@
+import { capturePluginRegistration } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 
@@ -18,6 +19,22 @@ vi.mock("./cli-auth-seam.js", () => {
 import anthropicPlugin from "./index.js";
 
 describe("anthropic provider replay hooks", () => {
+  it("registers the claude-cli backend", async () => {
+    const captured = capturePluginRegistration({ register: anthropicPlugin.register });
+
+    expect(captured.cliBackends).toContainEqual(
+      expect.objectContaining({
+        id: "claude-cli",
+        bundleMcp: true,
+        config: expect.objectContaining({
+          command: "claude",
+          modelArg: "--model",
+          sessionArg: "--session-id",
+        }),
+      }),
+    );
+  });
+
   it("owns native reasoning output mode for Claude transports", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
@@ -99,6 +116,41 @@ describe("anthropic provider replay hooks", () => {
     ).toBe("short");
   });
 
+  it("backfills Claude CLI allowlist defaults through plugin hooks for older configs", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const next = provider.applyConfigDefaults?.({
+      provider: "anthropic",
+      env: {},
+      config: {
+        auth: {
+          profiles: {
+            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "claude-cli/claude-sonnet-4-6" },
+            models: {
+              "claude-cli/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(next?.agents?.defaults?.heartbeat).toMatchObject({
+      every: "1h",
+    });
+    expect(next?.agents?.defaults?.models).toMatchObject({
+      "claude-cli/claude-sonnet-4-6": {},
+      "claude-cli/claude-opus-4-6": {},
+      "claude-cli/claude-opus-4-5": {},
+      "claude-cli/claude-sonnet-4-5": {},
+      "claude-cli/claude-haiku-4-5": {},
+    });
+  });
+
   it("resolves claude-cli synthetic oauth auth", async () => {
     readClaudeCliCredentialsForRuntimeMock.mockReset();
     readClaudeCliCredentialsForRuntimeMock.mockReturnValue({
@@ -164,6 +216,17 @@ describe("anthropic provider replay hooks", () => {
       config: {},
     } as never);
 
-    expect(result?.profiles).toEqual([]);
+    expect(result?.profiles).toEqual([
+      {
+        profileId: "anthropic:claude-cli",
+        credential: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "setup-access-token",
+          refresh: "refresh-token",
+          expires: 123,
+        },
+      },
+    ]);
   });
 });

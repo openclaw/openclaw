@@ -105,6 +105,12 @@ describe("bundled plugin metadata", () => {
     );
   });
 
+  it("keeps config schemas on all bundled plugin manifests", () => {
+    for (const entry of listBundledPluginMetadata()) {
+      expect(entry.manifest.configSchema).toEqual(expect.any(Object));
+    }
+  });
+
   it("prefers built generated paths when present and falls back to source paths", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-metadata-");
 

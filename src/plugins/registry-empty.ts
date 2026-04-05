@@ -18,6 +18,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     videoGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    memoryEmbeddingProviders: [],
     gatewayHandlers: {},
     gatewayMethodScopes: {},
     httpRoutes: [],

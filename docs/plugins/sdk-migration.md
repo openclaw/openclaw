@@ -308,7 +308,7 @@ new plugin code.
 
 The same rule applies to other bundled-helper families such as:
 
-- browser support helpers: `plugin-sdk/browser-config-support`, `plugin-sdk/browser-support`
+- browser support helpers: `plugin-sdk/browser-cdp`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-control-auth`, `plugin-sdk/browser-profiles`, `plugin-sdk/browser-support`
 - Matrix: `plugin-sdk/matrix*`
 - LINE: `plugin-sdk/line*`
 - IRC: `plugin-sdk/irc*`

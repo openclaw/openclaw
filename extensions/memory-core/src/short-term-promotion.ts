@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -145,6 +146,7 @@ export type RankShortTermPromotionOptions = {
   minScore?: number;
   minRecallCount?: number;
   minUniqueQueries?: number;
+  maxAgeDays?: number;
   includePromoted?: boolean;
   recencyHalfLifeDays?: number;
   weights?: Partial<PromotionWeights>;
@@ -158,7 +160,9 @@ export type ApplyShortTermPromotionsOptions = {
   minScore?: number;
   minRecallCount?: number;
   minUniqueQueries?: number;
+  maxAgeDays?: number;
   nowMs?: number;
+  timezone?: string;
 };
 
 export type ApplyShortTermPromotionsResult = {
@@ -566,6 +570,7 @@ export async function recordShortTermRecalls(params: {
   query: string;
   results: MemorySearchResult[];
   nowMs?: number;
+  timezone?: string;
 }): Promise<void> {
   const workspaceDir = params.workspaceDir?.trim();
   if (!workspaceDir) {
@@ -600,7 +605,7 @@ export async function recordShortTermRecalls(params: {
       const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
       const recallDays = mergeRecentDistinct(
         existing?.recallDays ?? [],
-        nowIso.slice(0, 10),
+        formatMemoryDreamingDay(nowMs, params.timezone),
         MAX_RECALL_DAYS,
       );
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
@@ -648,6 +653,7 @@ export async function rankShortTermPromotionCandidates(
     options.minUniqueQueries,
     DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
   );
+  const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
   const includePromoted = Boolean(options.includePromoted);
   const halfLifeDays = toFinitePositive(
     options.recencyHalfLifeDays,
@@ -683,6 +689,9 @@ export async function rankShortTermPromotionCandidates(
     const ageDays = Number.isFinite(lastRecalledAtMs)
       ? Math.max(0, (nowMs - lastRecalledAtMs) / DAY_MS)
       : 0;
+    if (maxAgeDays >= 0 && ageDays > maxAgeDays) {
+      continue;
+    }
     const recency = clampScore(calculateRecencyComponent(ageDays, halfLifeDays));
     const recallDays = entry.recallDays ?? [];
     const conceptTags = entry.conceptTags ?? [];
@@ -746,8 +755,164 @@ export async function rankShortTermPromotionCandidates(
   return sorted.slice(0, limit);
 }
 
-function buildPromotionSection(candidates: PromotionCandidate[], nowMs: number): string {
-  const sectionDate = new Date(nowMs).toISOString().slice(0, 10);
+function resolveShortTermSourcePathCandidates(
+  workspaceDir: string,
+  candidatePath: string,
+): string[] {
+  const normalizedPath = normalizeMemoryPath(candidatePath);
+  const basenames = [normalizedPath];
+  if (!normalizedPath.startsWith("memory/")) {
+    basenames.push(path.posix.join("memory", path.posix.basename(normalizedPath)));
+  }
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  for (const relativePath of basenames) {
+    const absolutePath = path.resolve(workspaceDir, relativePath);
+    if (seen.has(absolutePath)) {
+      continue;
+    }
+    seen.add(absolutePath);
+    resolved.push(absolutePath);
+  }
+  return resolved;
+}
+
+function normalizeRangeSnippet(lines: string[], startLine: number, endLine: number): string {
+  const startIndex = Math.max(0, startLine - 1);
+  const endIndex = Math.min(lines.length, endLine);
+  if (startIndex >= endIndex) {
+    return "";
+  }
+  return normalizeSnippet(lines.slice(startIndex, endIndex).join(" "));
+}
+
+function compareCandidateWindow(
+  targetSnippet: string,
+  windowSnippet: string,
+): { matched: boolean; quality: number } {
+  if (!targetSnippet || !windowSnippet) {
+    return { matched: false, quality: 0 };
+  }
+  if (windowSnippet === targetSnippet) {
+    return { matched: true, quality: 3 };
+  }
+  if (windowSnippet.includes(targetSnippet)) {
+    return { matched: true, quality: 2 };
+  }
+  if (targetSnippet.includes(windowSnippet)) {
+    return { matched: true, quality: 1 };
+  }
+  return { matched: false, quality: 0 };
+}
+
+function relocateCandidateRange(
+  lines: string[],
+  candidate: PromotionCandidate,
+): { startLine: number; endLine: number; snippet: string } | null {
+  const targetSnippet = normalizeSnippet(candidate.snippet);
+  const preferredSpan = Math.max(1, candidate.endLine - candidate.startLine + 1);
+  if (targetSnippet.length === 0) {
+    const fallbackSnippet = normalizeRangeSnippet(lines, candidate.startLine, candidate.endLine);
+    if (!fallbackSnippet) {
+      return null;
+    }
+    return {
+      startLine: candidate.startLine,
+      endLine: candidate.endLine,
+      snippet: fallbackSnippet,
+    };
+  }
+
+  const exactSnippet = normalizeRangeSnippet(lines, candidate.startLine, candidate.endLine);
+  if (exactSnippet === targetSnippet) {
+    return {
+      startLine: candidate.startLine,
+      endLine: candidate.endLine,
+      snippet: exactSnippet,
+    };
+  }
+
+  const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 3, 8));
+  let bestMatch:
+    | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
+    | undefined;
+  for (let startIndex = 0; startIndex < lines.length; startIndex += 1) {
+    for (let span = 1; span <= maxSpan && startIndex + span <= lines.length; span += 1) {
+      const startLine = startIndex + 1;
+      const endLine = startIndex + span;
+      const snippet = normalizeRangeSnippet(lines, startLine, endLine);
+      const comparison = compareCandidateWindow(targetSnippet, snippet);
+      if (!comparison.matched) {
+        continue;
+      }
+      const distance = Math.abs(startLine - candidate.startLine);
+      if (
+        !bestMatch ||
+        comparison.quality > bestMatch.quality ||
+        (comparison.quality === bestMatch.quality && distance < bestMatch.distance) ||
+        (comparison.quality === bestMatch.quality &&
+          distance === bestMatch.distance &&
+          Math.abs(span - preferredSpan) <
+            Math.abs(bestMatch.endLine - bestMatch.startLine + 1 - preferredSpan))
+      ) {
+        bestMatch = {
+          startLine,
+          endLine,
+          snippet,
+          quality: comparison.quality,
+          distance,
+        };
+      }
+    }
+  }
+
+  if (!bestMatch) {
+    return null;
+  }
+  return {
+    startLine: bestMatch.startLine,
+    endLine: bestMatch.endLine,
+    snippet: bestMatch.snippet,
+  };
+}
+
+async function rehydratePromotionCandidate(
+  workspaceDir: string,
+  candidate: PromotionCandidate,
+): Promise<PromotionCandidate | null> {
+  const sourcePaths = resolveShortTermSourcePathCandidates(workspaceDir, candidate.path);
+  for (const sourcePath of sourcePaths) {
+    let rawSource: string;
+    try {
+      rawSource = await fs.readFile(sourcePath, "utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+
+    const lines = rawSource.split(/\r?\n/);
+    const relocated = relocateCandidateRange(lines, candidate);
+    if (!relocated) {
+      continue;
+    }
+    return {
+      ...candidate,
+      startLine: relocated.startLine,
+      endLine: relocated.endLine,
+      snippet: relocated.snippet,
+    };
+  }
+  return null;
+}
+
+function buildPromotionSection(
+  candidates: PromotionCandidate[],
+  nowMs: number,
+  timezone?: string,
+): string {
+  const sectionDate = formatMemoryDreamingDay(nowMs, timezone);
   const lines = ["", `## Promoted From Short-Term Memory (${sectionDate})`, ""];
 
   for (const candidate of candidates) {
@@ -787,6 +952,7 @@ export async function applyShortTermPromotions(
     options.minUniqueQueries,
     DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
   );
+  const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
 
   return await withShortTermLock(workspaceDir, async () => {
@@ -805,6 +971,9 @@ export async function applyShortTermPromotions(
         if (candidate.uniqueQueries < minUniqueQueries) {
           return false;
         }
+        if (maxAgeDays >= 0 && candidate.ageDays > maxAgeDays) {
+          return false;
+        }
         const latest = store.entries[candidate.key];
         if (latest?.promotedAt) {
           return false;
@@ -813,7 +982,15 @@ export async function applyShortTermPromotions(
       })
       .slice(0, limit);
 
-    if (selected.length === 0) {
+    const rehydratedSelected: PromotionCandidate[] = [];
+    for (const candidate of selected) {
+      const rehydrated = await rehydratePromotionCandidate(workspaceDir, candidate);
+      if (rehydrated) {
+        rehydratedSelected.push(rehydrated);
+      }
+    }
+
+    if (rehydratedSelected.length === 0) {
       return {
         memoryPath,
         applied: 0,
@@ -829,18 +1006,21 @@ export async function applyShortTermPromotions(
     });
 
     const header = existingMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
-    const section = buildPromotionSection(selected, nowMs);
+    const section = buildPromotionSection(rehydratedSelected, nowMs, options.timezone);
     await fs.writeFile(
       memoryPath,
       `${header}${withTrailingNewline(existingMemory)}${section}`,
       "utf-8",
     );
 
-    for (const candidate of selected) {
+    for (const candidate of rehydratedSelected) {
       const entry = store.entries[candidate.key];
       if (!entry) {
         continue;
       }
+      entry.startLine = candidate.startLine;
+      entry.endLine = candidate.endLine;
+      entry.snippet = candidate.snippet;
       entry.promotedAt = nowIso;
     }
     store.updatedAt = nowIso;
@@ -848,8 +1028,8 @@ export async function applyShortTermPromotions(
 
     return {
       memoryPath,
-      applied: selected.length,
-      appliedCandidates: selected,
+      applied: rehydratedSelected.length,
+      appliedCandidates: rehydratedSelected,
     };
   });
 }

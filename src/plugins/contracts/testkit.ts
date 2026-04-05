@@ -89,6 +89,7 @@ export function registerVirtualTestPlugin(params: {
   name: string;
   source?: string;
   kind?: PluginRecord["kind"];
+  contracts?: PluginRecord["contracts"];
   register(this: void, api: OpenClawPluginApi): void;
 }) {
   registerTestPlugin({
@@ -99,6 +100,7 @@ export function registerVirtualTestPlugin(params: {
       name: params.name,
       source: params.source ?? `/virtual/${params.id}/index.ts`,
       ...(params.kind ? { kind: params.kind } : {}),
+      ...(params.contracts ? { contracts: params.contracts } : {}),
     }),
     register: params.register,
   });

@@ -29,6 +29,7 @@ const resolveTextChunkLimitMock = vi.fn<
 >(() => 4000);
 const resolveMarkdownTableModeMock = vi.fn(() => "code");
 const convertMarkdownTablesMock = vi.fn((text: string) => text);
+const chunkMarkdownTextWithModeMock = vi.fn((text: string) => (text ? [text] : []));
 
 vi.mock("./outbound-media-runtime.js", () => ({
   loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
@@ -52,7 +53,7 @@ const runtimeStub = {
         resolveTextChunkLimitMock(cfg, channel, accountId),
       resolveChunkMode: () => "length",
       chunkMarkdownText: (text: string) => (text ? [text] : []),
-      chunkMarkdownTextWithMode: (text: string) => (text ? [text] : []),
+      chunkMarkdownTextWithMode: (text: string) => chunkMarkdownTextWithModeMock(text),
       resolveMarkdownTableMode: () => resolveMarkdownTableModeMock(),
       convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
     },
@@ -143,6 +144,9 @@ function resetMatrixSendRuntimeMocks() {
   resolveTextChunkLimitMock.mockReset().mockReturnValue(4000);
   resolveMarkdownTableModeMock.mockReset().mockReturnValue("code");
   convertMarkdownTablesMock.mockReset().mockImplementation((text: string) => text);
+  chunkMarkdownTextWithModeMock
+    .mockReset()
+    .mockImplementation((text: string) => (text ? [text] : []));
   applyMatrixSendRuntimeStub();
 }
 
@@ -554,6 +558,28 @@ describe("sendMessageMatrix threads", () => {
     });
 
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(expect.anything(), "matrix", "ops");
+  });
+
+  it("returns ordered event ids for chunked text sends", async () => {
+    const { client, sendMessage } = makeClient();
+    sendMessage
+      .mockReset()
+      .mockResolvedValueOnce("$m1")
+      .mockResolvedValueOnce("$m2")
+      .mockResolvedValueOnce("$m3");
+    convertMarkdownTablesMock.mockImplementation(() => "part1|part2|part3");
+    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+
+    const result = await sendMessageMatrix("room:!room:example", "ignored", {
+      client,
+    });
+
+    expect(result).toMatchObject({
+      roomId: "!room:example",
+      primaryMessageId: "$m1",
+      messageId: "$m3",
+      messageIds: ["$m1", "$m2", "$m3"],
+    });
   });
 });
 

@@ -3,7 +3,7 @@ import {
   stripChannelTargetPrefix,
   stripTargetKindPrefix,
   type ChannelOutboundSessionRouteParams,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/channel-core";
 
 export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   const stripped = stripChannelTargetPrefix(params.target, "matrix");

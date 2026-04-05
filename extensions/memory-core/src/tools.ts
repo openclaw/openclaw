@@ -6,6 +6,10 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import {
+  resolveMemoryCorePluginConfig,
+  resolveMemoryDreamingConfig,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   clampResultsByInjectedChars,
@@ -51,12 +55,14 @@ function queueShortTermRecallTracking(params: {
   query: string;
   rawResults: MemorySearchResult[];
   surfacedResults: MemorySearchResult[];
+  timezone?: string;
 }): void {
   const trackingResults = resolveRecallTrackingResults(params.rawResults, params.surfacedResults);
   void recordShortTermRecalls({
     workspaceDir: params.workspaceDir,
     query: params.query,
     results: trackingResults,
+    timezone: params.timezone,
   }).catch(() => {
     // Recall tracking is best-effort and must never block memory recall.
   });
@@ -102,11 +108,16 @@ export function createMemorySearchTool(options: {
             status.backend === "qmd"
               ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
               : decorated;
+          const dreamingTimezone = resolveMemoryDreamingConfig({
+            pluginConfig: resolveMemoryCorePluginConfig(cfg),
+            cfg,
+          }).timezone;
           queueShortTermRecallTracking({
             workspaceDir: status.workspaceDir,
             query,
             rawResults,
             surfacedResults: results,
+            timezone: dreamingTimezone,
           });
           const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
           return jsonResult({

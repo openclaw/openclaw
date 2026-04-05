@@ -176,6 +176,16 @@ describe("memory cli", () => {
     }
   }
 
+  async function writeDailyMemoryNote(
+    workspaceDir: string,
+    date: string,
+    lines: string[],
+  ): Promise<void> {
+    const notePath = path.join(workspaceDir, "memory", `${date}.md`);
+    await fs.mkdir(path.dirname(notePath), { recursive: true });
+    await fs.writeFile(notePath, `${lines.join("\n")}\n`, "utf-8");
+  }
+
   async function expectCloseFailureAfterCommand(params: {
     args: string[];
     manager: Record<string, unknown>;
@@ -873,6 +883,22 @@ describe("memory cli", () => {
 
   it("applies top promote candidates into MEMORY.md", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "line 1",
+        "line 2",
+        "line 3",
+        "line 4",
+        "line 5",
+        "line 6",
+        "line 7",
+        "line 8",
+        "line 9",
+        "Gateway host uses local mode and binds loopback port 18789",
+        "Keep agent gateway local",
+        "Expose healthcheck only on loopback",
+        "Monitor restart policy",
+        "Review proxy config",
+      ]);
       await recordShortTermRecalls({
         workspaceDir,
         query: "network setup",
@@ -909,7 +935,7 @@ describe("memory cli", () => {
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       const memoryText = await fs.readFile(memoryPath, "utf-8");
       expect(memoryText).toContain("Promoted From Short-Term Memory");
-      expect(memoryText).toContain("memory/2026-04-01.md:10-14");
+      expect(memoryText).toContain("memory/2026-04-01.md:10-10");
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Promoted 1 candidate(s) to"));
       expect(close).toHaveBeenCalled();
     });

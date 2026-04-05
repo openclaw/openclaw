@@ -83,7 +83,8 @@ function formatModeGuideLine(mode: DreamingMode): string {
   return (
     `- ${mode}: cadence=${resolved.cron}; ` +
     `minScore=${resolved.minScore}, minRecallCount=${resolved.minRecallCount}, ` +
-    `minUniqueQueries=${resolved.minUniqueQueries}.`
+    `minUniqueQueries=${resolved.minUniqueQueries}, recencyHalfLifeDays=${resolved.recencyHalfLifeDays}, ` +
+    `maxAgeDays=${resolved.maxAgeDays ?? "none"}.`
   );
 }
 
@@ -107,6 +108,8 @@ function formatStatus(cfg: OpenClawConfig): string {
     `- cadence: ${cadence}${timezone}`,
     `- limit: ${resolved.limit}`,
     `- thresholds: minScore=${resolved.minScore}, minRecallCount=${resolved.minRecallCount}, minUniqueQueries=${resolved.minUniqueQueries}`,
+    `- aging: recencyHalfLifeDays=${resolved.recencyHalfLifeDays}, maxAgeDays=${resolved.maxAgeDays ?? "none"}`,
+    `- verboseLogging: ${resolved.verboseLogging ? "on" : "off"}`,
   ].join("\n");
 }
 

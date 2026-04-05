@@ -46,6 +46,10 @@ export {
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
 } from "../security/dm-policy-shared.js";
+export {
+  evaluateGroupRouteAccessForPolicy,
+  resolveSenderScopedGroupPolicy,
+} from "./group-access.js";
 export { createAllowlistProviderRestrictSendersWarningCollector };
 
 export type ChannelMutableAllowlistCandidate = {

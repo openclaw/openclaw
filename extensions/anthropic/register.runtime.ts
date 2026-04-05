@@ -23,10 +23,14 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
-import { readClaudeCliCredentialsForRuntime } from "./cli-auth-seam.js";
+import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
-import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
-import { CLAUDE_CLI_BACKEND_ID } from "./cli-shared.js";
+import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
+  CLAUDE_CLI_DEFAULT_MODEL_REF,
+} from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfig,
@@ -285,7 +289,7 @@ function buildAnthropicAuthDoctorHint(params: {
 }
 
 function resolveClaudeCliSyntheticAuth() {
-  const credential = readClaudeCliCredentialsForRuntime();
+  const credential = claudeCliAuth.readClaudeCliCredentialsForRuntime();
   if (!credential) {
     return undefined;
   }
@@ -303,7 +307,8 @@ function resolveClaudeCliSyntheticAuth() {
 }
 
 async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
-  if (!hasClaudeCliAuth()) {
+  const credential = claudeCliAuth.readClaudeCliCredentialsForSetup();
+  if (!credential) {
     throw new Error(
       [
         "Claude CLI is not authenticated on this host.",
@@ -311,7 +316,7 @@ async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<Provi
       ].join("\n"),
     );
   }
-  return buildAnthropicCliMigrationResult(ctx.config);
+  return buildAnthropicCliMigrationResult(ctx.config, credential);
 }
 
 async function runAnthropicCliMigrationNonInteractive(ctx: {
@@ -319,7 +324,8 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   runtime: ProviderAuthContext["runtime"];
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
-  if (!hasClaudeCliAuth({ allowKeychainPrompt: false })) {
+  const credential = claudeCliAuth.readClaudeCliCredentialsForSetupNonInteractive();
+  if (!credential) {
     ctx.runtime.error(
       [
         'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
@@ -330,7 +336,7 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
     return null;
   }
 
-  const result = buildAnthropicCliMigrationResult(ctx.config);
+  const result = buildAnthropicCliMigrationResult(ctx.config, credential);
   const currentDefaults = ctx.config.agents?.defaults;
   const currentModel = currentDefaults?.model;
   const currentFallbacks =
@@ -402,10 +408,8 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
           groupLabel: "Anthropic",
           groupHint: "Claude CLI + API key",
           modelAllowlist: {
-            allowedKeys: [...anthropicOauthAllowlist].map((model) =>
-              model.replace(/^anthropic\//, "claude-cli/"),
-            ),
-            initialSelections: ["claude-cli/claude-sonnet-4-6"],
+            allowedKeys: [...CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS],
+            initialSelections: [CLAUDE_CLI_DEFAULT_MODEL_REF],
             message: "Claude CLI models",
           },
         },

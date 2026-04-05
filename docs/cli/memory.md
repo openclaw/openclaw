@@ -99,14 +99,17 @@ Dreaming is the overnight reflection pass for memory. It is called "dreaming" be
 - You can toggle modes from chat with `/dreaming off|core|rem|deep`. Run `/dreaming` (or `/dreaming options`) to see what each mode does.
 - When enabled, `memory-core` automatically creates and maintains a managed cron job.
 - Set `dreaming.limit` to `0` if you want dreaming enabled but automatic promotion effectively paused.
-- Ranking uses weighted signals: recall frequency, retrieval relevance, query diversity, and temporal recency (recent recalls decay over time).
+- Ranking uses weighted signals: recall frequency, retrieval relevance, query diversity, temporal recency, cross-day consolidation, and derived concept richness.
 - Promotion into `MEMORY.md` only happens when quality thresholds are met, so long-term memory stays high signal instead of collecting one-off details.
+- Automatic runs fan out across configured memory workspaces, so one agent's sessions consolidate into that agent's memory workspace instead of only the default session.
+- Promotion re-reads the live daily note before writing to `MEMORY.md`, so edited or deleted short-term snippets do not get promoted from stale recall-store snapshots.
+- Scheduled and manual `memory promote` runs share the same dreaming defaults unless you pass CLI threshold overrides.
 
 Default mode presets:
 
-- `core`: daily at `0 3 * * *`, `minScore=0.75`, `minRecallCount=3`, `minUniqueQueries=2`
-- `deep`: every 12 hours (`0 */12 * * *`), `minScore=0.8`, `minRecallCount=3`, `minUniqueQueries=3`
-- `rem`: every 6 hours (`0 */6 * * *`), `minScore=0.85`, `minRecallCount=4`, `minUniqueQueries=3`
+- `core`: daily at `0 3 * * *`, `minScore=0.75`, `minRecallCount=3`, `minUniqueQueries=2`, `recencyHalfLifeDays=14`
+- `deep`: every 12 hours (`0 */12 * * *`), `minScore=0.8`, `minRecallCount=3`, `minUniqueQueries=3`, `recencyHalfLifeDays=14`
+- `rem`: every 6 hours (`0 */6 * * *`), `minScore=0.85`, `minRecallCount=4`, `minUniqueQueries=3`, `recencyHalfLifeDays=14`
 
 Example:
 
@@ -132,4 +135,5 @@ Notes:
 - `memory status` includes any extra paths configured via `memorySearch.extraPaths`.
 - If effectively active memory remote API key fields are configured as SecretRefs, the command resolves those values from the active gateway snapshot. If gateway is unavailable, the command fails fast.
 - Gateway version skew note: this command path requires a gateway that supports `secrets.resolve`; older gateways return an unknown-method error.
-- Dreaming cadence defaults to each mode's preset schedule. Override cadence with `plugins.entries.memory-core.config.dreaming.frequency` as a cron expression (for example `0 3 * * *`) and fine-tune with `timezone`, `limit`, `minScore`, `minRecallCount`, and `minUniqueQueries`.
+- Dreaming cadence defaults to each mode's preset schedule. Override cadence with `plugins.entries.memory-core.config.dreaming.cron` as a cron expression (for example `0 3 * * *`) and fine-tune with `timezone`, `limit`, `minScore`, `minRecallCount`, `minUniqueQueries`, `recencyHalfLifeDays`, and `maxAgeDays`.
+- Set `plugins.entries.memory-core.config.dreaming.verboseLogging` to `true` to emit per-run candidate and apply details into the normal gateway logs while tuning the feature.

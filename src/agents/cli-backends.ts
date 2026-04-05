@@ -1,11 +1,7 @@
-import {
-  CLAUDE_CLI_BACKEND_ID,
-  buildAnthropicCliBackend,
-  normalizeClaudeBackendConfig,
-} from "../../extensions/anthropic/cli-backend-api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
+import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ResolvedCliBackend = {
@@ -15,7 +11,10 @@ export type ResolvedCliBackend = {
   pluginId?: string;
 };
 
-export { normalizeClaudeBackendConfig };
+export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
+  const normalizeConfig = resolveFallbackCliBackendPolicy("claude-cli")?.normalizeConfig;
+  return normalizeConfig ? normalizeConfig(config) : config;
+}
 
 type FallbackCliBackendPolicy = {
   bundleMcp: boolean;
@@ -23,19 +22,26 @@ type FallbackCliBackendPolicy = {
   normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
 };
 
-const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {
-  [CLAUDE_CLI_BACKEND_ID]: {
-    // Claude CLI consumes explicit MCP config overlays even when the runtime
-    // plugin registry is not initialized yet (for example direct runner tests
-    // or narrow non-gateway entrypoints).
-    bundleMcp: true,
-    baseConfig: buildAnthropicCliBackend().config,
-    normalizeConfig: normalizeClaudeBackendConfig,
-  },
-};
+const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
+
+function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
+  const entry = resolvePluginSetupCliBackend({
+    backend: provider,
+  });
+  if (!entry) {
+    return undefined;
+  }
+  return {
+    // Setup-registered backends keep narrow CLI paths generic even when the
+    // runtime plugin registry has not booted yet.
+    bundleMcp: entry.backend.bundleMcp === true,
+    baseConfig: entry.backend.config,
+    normalizeConfig: entry.backend.normalizeConfig,
+  };
+}
 
 function resolveFallbackCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
-  return FALLBACK_CLI_BACKEND_POLICIES[provider];
+  return FALLBACK_CLI_BACKEND_POLICIES[provider] ?? resolveSetupCliBackendPolicy(provider);
 }
 
 function normalizeBackendKey(key: string): string {

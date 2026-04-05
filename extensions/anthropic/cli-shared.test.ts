@@ -149,5 +149,8 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_SEED_DIR");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_REMOTE");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_USE_COWORK_PLUGINS");
+    expect(backend.config.clearEnv).toContain("OTEL_METRICS_EXPORTER");
+    expect(backend.config.clearEnv).toContain("OTEL_EXPORTER_OTLP_PROTOCOL");
+    expect(backend.config.clearEnv).toContain("OTEL_SDK_DISABLED");
   });
 });

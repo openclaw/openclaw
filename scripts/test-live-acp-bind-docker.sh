@@ -10,12 +10,6 @@ WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
 CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/openclaw/docker-cli-tools}"
 ACP_AGENT="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
-ACPX_VERSION="${OPENCLAW_DOCKER_ACPX_VERSION:-$(node -p "const pkg=require(process.argv[1]); process.stdout.write(String(pkg.dependencies?.acpx ?? ''))" "$ROOT_DIR/extensions/acpx/package.json")}"
-
-if [[ -z "$ACPX_VERSION" ]]; then
-  echo "Unable to resolve bundled ACPX version from extensions/acpx/package.json" >&2
-  exit 1
-fi
 
 case "$ACP_AGENT" in
   claude)
@@ -76,7 +70,7 @@ if ((${#AUTH_DIRS[@]} > 0)); then
   for auth_dir in "${AUTH_DIRS[@]}"; do
     host_path="$HOME/$auth_dir"
     if [[ -d "$host_path" ]]; then
-      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/home/node/"$auth_dir":ro)
+      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth/"$auth_dir":ro)
     fi
   done
 fi
@@ -93,7 +87,18 @@ read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail
 [ -f "$HOME/.profile" ] && source "$HOME/.profile" || true
 export PATH="$HOME/.npm-global/bin:$PATH"
+IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
 IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
+if ((${#auth_dirs[@]} > 0)); then
+  for auth_dir in "${auth_dirs[@]}"; do
+    [ -n "$auth_dir" ] || continue
+    if [ -d "/host-auth/$auth_dir" ]; then
+      mkdir -p "$HOME/$auth_dir"
+      cp -R "/host-auth/$auth_dir/." "$HOME/$auth_dir"
+      chmod -R u+rwX "$HOME/$auth_dir" || true
+    fi
+  done
+fi
 if ((${#auth_files[@]} > 0)); then
   for auth_file in "${auth_files[@]}"; do
     [ -n "$auth_file" ] || continue
@@ -102,9 +107,6 @@ if ((${#auth_files[@]} > 0)); then
       chmod u+rw "$HOME/$auth_file" || true
     fi
   done
-fi
-if [ ! -x "$HOME/.npm-global/bin/acpx" ]; then
-  npm_config_prefix="$HOME/.npm-global" npm install -g "acpx@${OPENCLAW_DOCKER_ACPX_VERSION}"
 fi
 agent="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
 case "$agent" in
@@ -162,7 +164,7 @@ elif [ -d /app/dist/extensions ]; then
   export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
 fi
 cd "$tmp_dir"
-export OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND="$HOME/.npm-global/bin/acpx"
+export OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}"
 pnpm test:live src/gateway/gateway-acp-bind.live.test.ts
 EOF
 
@@ -174,6 +176,7 @@ echo "==> Agent: $ACP_AGENT"
 echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
 docker run --rm -t \
+  -u node \
   --entrypoint bash \
   -e ANTHROPIC_API_KEY \
   -e ANTHROPIC_API_KEY_OLD \
@@ -185,12 +188,12 @@ docker run --rm -t \
   -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_VITEST_FS_MODULE_CACHE=0 \
-  -e OPENCLAW_DOCKER_ACPX_VERSION="$ACPX_VERSION" \
+  -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
   -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
   -e OPENCLAW_LIVE_TEST=1 \
   -e OPENCLAW_LIVE_ACP_BIND=1 \
   -e OPENCLAW_LIVE_ACP_BIND_AGENT="$ACP_AGENT" \
-  -e OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND="${OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND:-}" \
+  -e OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}" \
   -v "$ROOT_DIR":/src:ro \
   -v "$CONFIG_DIR":/home/node/.openclaw \
   -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \

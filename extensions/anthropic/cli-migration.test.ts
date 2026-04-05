@@ -125,6 +125,9 @@ describe("anthropic cli migration", () => {
           models: {
             "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
             "claude-cli/claude-opus-4-6": { alias: "Opus" },
+            "claude-cli/claude-opus-4-5": {},
+            "claude-cli/claude-sonnet-4-5": {},
+            "claude-cli/claude-haiku-4-5": {},
             "openai/gpt-5.2": {},
           },
         },
@@ -151,6 +154,37 @@ describe("anthropic cli migration", () => {
           models: {
             "openai/gpt-5.2": {},
             "claude-cli/claude-sonnet-4-6": {},
+            "claude-cli/claude-opus-4-6": {},
+            "claude-cli/claude-opus-4-5": {},
+            "claude-cli/claude-sonnet-4-5": {},
+            "claude-cli/claude-haiku-4-5": {},
+          },
+        },
+      },
+    });
+  });
+
+  it("backfills the Claude CLI allowlist when older configs only stored sonnet", () => {
+    const result = buildAnthropicCliMigrationResult({
+      agents: {
+        defaults: {
+          model: { primary: "claude-cli/claude-sonnet-4-6" },
+          models: {
+            "claude-cli/claude-sonnet-4-6": {},
+          },
+        },
+      },
+    });
+
+    expect(result.configPatch).toEqual({
+      agents: {
+        defaults: {
+          models: {
+            "claude-cli/claude-sonnet-4-6": {},
+            "claude-cli/claude-opus-4-6": {},
+            "claude-cli/claude-opus-4-5": {},
+            "claude-cli/claude-sonnet-4-5": {},
+            "claude-cli/claude-haiku-4-5": {},
           },
         },
       },
@@ -170,13 +204,14 @@ describe("anthropic cli migration", () => {
   });
 
   it("registered cli auth returns the same migration result as the builder", async () => {
-    readClaudeCliCredentialsForSetup.mockReturnValue({
+    const credential = {
       type: "oauth",
       provider: "anthropic",
       access: "access-token",
       refresh: "refresh-token",
       expires: Date.now() + 60_000,
-    });
+    } as const;
+    readClaudeCliCredentialsForSetup.mockReturnValue(credential);
     const method = await resolveAnthropicCliAuthMethod();
     const config = {
       agents: {
@@ -195,8 +230,58 @@ describe("anthropic cli migration", () => {
     };
 
     await expect(method.run(createProviderAuthContext(config))).resolves.toEqual(
-      buildAnthropicCliMigrationResult(config),
+      buildAnthropicCliMigrationResult(config, credential),
     );
+  });
+
+  it("stores a claude-cli oauth profile when Claude CLI credentials are available", () => {
+    const result = buildAnthropicCliMigrationResult(
+      {},
+      {
+        type: "oauth",
+        provider: "anthropic",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: 123,
+      },
+    );
+
+    expect(result.profiles).toEqual([
+      {
+        profileId: "anthropic:claude-cli",
+        credential: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: 123,
+        },
+      },
+    ]);
+  });
+
+  it("stores a claude-cli token profile when Claude CLI only exposes a bearer token", () => {
+    const result = buildAnthropicCliMigrationResult(
+      {},
+      {
+        type: "token",
+        provider: "anthropic",
+        token: "bearer-token",
+        expires: 123,
+      },
+    );
+
+    expect(result.profiles).toEqual([
+      {
+        profileId: "anthropic:claude-cli",
+        credential: {
+          type: "token",
+          provider: "claude-cli",
+          token: "bearer-token",
+          expires: 123,
+        },
+      },
+    ]);
   });
 
   it("registered non-interactive cli auth rewrites anthropic fallbacks before setting the claude-cli default", async () => {
