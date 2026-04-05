@@ -313,13 +313,15 @@ export function handleMessageUpdate(
   }
   const next =
     phaseAwareVisibleText ||
-    ctx
-      .stripBlockTags(ctx.state.deltaBuffer, {
-        thinking: false,
-        final: false,
-        inlineCode: createInlineCodeState(),
-      })
-      .trim();
+    (deliveryPhase === "final_answer"
+      ? ""
+      : ctx
+          .stripBlockTags(ctx.state.deltaBuffer, {
+            thinking: false,
+            final: false,
+            inlineCode: createInlineCodeState(),
+          })
+          .trim());
   if (next) {
     const wasThinking = ctx.state.partialBlockState.thinking;
     const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";

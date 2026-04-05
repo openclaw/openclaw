@@ -363,7 +363,8 @@ describe("session history HTTP endpoints", () => {
 
       const visible = await appendAssistantMessageToSessionTranscript({
         sessionKey: "agent:main:main",
-        text: JSON.stringify({
+        text: "Done.",
+        message: {
           role: "assistant",
           content: [
             {
@@ -377,7 +378,7 @@ describe("session history HTTP endpoints", () => {
               textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
             },
           ],
-        }),
+        },
         storePath,
       });
       expect(visible.ok).toBe(true);
