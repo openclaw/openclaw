@@ -3,4 +3,4 @@ export {
   listRuntimeImageGenerationProviders,
   type GenerateImageParams,
   type GenerateImageRuntimeResult,
-} from "../plugin-sdk/image-generation-runtime.js";
+} from "../../extensions/image-generation-core/runtime-api.js";

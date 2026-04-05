@@ -61,7 +61,7 @@ describe("openai-codex implicit provider", () => {
     });
   });
 
-  it("replaces stale openai-codex baseUrl in generated models.json", async () => {
+  it("keeps generated openai-codex rows on the generic OpenAI responses transport", async () => {
     await withModelsTempHome(async () => {
       await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
         unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
@@ -99,8 +99,8 @@ describe("openai-codex implicit provider", () => {
           providers: Record<string, { baseUrl?: string; api?: string }>;
         }>();
         expect(parsed.providers["openai-codex"]).toMatchObject({
-          baseUrl: "https://chatgpt.com/backend-api",
-          api: "openai-codex-responses",
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-responses",
         });
       });
     });

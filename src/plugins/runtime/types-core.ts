@@ -67,24 +67,24 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
-    textToSpeech: typeof import("../../plugin-sdk/speech-runtime.js").textToSpeech;
-    textToSpeechTelephony: typeof import("../../plugin-sdk/speech-runtime.js").textToSpeechTelephony;
-    listVoices: typeof import("../../plugin-sdk/speech-runtime.js").listSpeechVoices;
+    textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
+    textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
+    listVoices: typeof import("../../tts/tts.js").listSpeechVoices;
   };
   mediaUnderstanding: {
-    runFile: typeof import("../../plugin-sdk/media-understanding-runtime.js").runMediaUnderstandingFile;
-    describeImageFile: typeof import("../../plugin-sdk/media-understanding-runtime.js").describeImageFile;
-    describeImageFileWithModel: typeof import("../../plugin-sdk/media-understanding-runtime.js").describeImageFileWithModel;
-    describeVideoFile: typeof import("../../plugin-sdk/media-understanding-runtime.js").describeVideoFile;
-    transcribeAudioFile: typeof import("../../plugin-sdk/media-understanding-runtime.js").transcribeAudioFile;
+    runFile: typeof import("../../media-understanding/runtime.js").runMediaUnderstandingFile;
+    describeImageFile: typeof import("../../media-understanding/runtime.js").describeImageFile;
+    describeImageFileWithModel: typeof import("../../media-understanding/runtime.js").describeImageFileWithModel;
+    describeVideoFile: typeof import("../../media-understanding/runtime.js").describeVideoFile;
+    transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
   };
   imageGeneration: {
-    generate: typeof import("../../plugin-sdk/image-generation-runtime.js").generateImage;
-    listProviders: typeof import("../../plugin-sdk/image-generation-runtime.js").listRuntimeImageGenerationProviders;
+    generate: typeof import("../../image-generation/runtime.js").generateImage;
+    listProviders: typeof import("../../image-generation/runtime.js").listRuntimeImageGenerationProviders;
   };
   videoGeneration: {
-    generate: typeof import("../../plugin-sdk/video-generation-runtime.js").generateVideo;
-    listProviders: typeof import("../../plugin-sdk/video-generation-runtime.js").listRuntimeVideoGenerationProviders;
+    generate: typeof import("../../video-generation/runtime.js").generateVideo;
+    listProviders: typeof import("../../video-generation/runtime.js").listRuntimeVideoGenerationProviders;
   };
   webSearch: {
     listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;

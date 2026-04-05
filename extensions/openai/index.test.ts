@@ -268,6 +268,15 @@ describe("openai plugin", () => {
     expect(nonOpenAIResult).toBeUndefined();
   });
 
+  it("includes stronger execution guidance in the OpenAI prompt overlay", () => {
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "If the user asks you to do the work, start in the same turn instead of restating the plan.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Commentary-only turns are incomplete when the next action is clear.",
+    );
+  });
+
   it("supports opting out of the prompt overlay via plugin config", async () => {
     const { on } = await registerOpenAIPluginWithHook({
       pluginConfig: { personalityOverlay: "off" },

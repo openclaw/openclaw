@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { textToSpeech as globalTextToSpeech } from "openclaw/plugin-sdk/speech-runtime";
 import {
   getAccessToken,
   sendC2CMessage,
@@ -19,6 +18,7 @@ import {
   sendC2CFileMessage,
   sendGroupFileMessage,
 } from "./api.js";
+import { getQQBotRuntime } from "./runtime.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 import {
   isGlobalTTSAvailable,
@@ -387,7 +387,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
         return;
       }
       log?.info(`[qqbot:${account.accountId}] TTS (global fallback): "${ttsText.slice(0, 50)}..."`);
-      const globalResult = await globalTextToSpeech({
+      const globalResult = await getQQBotRuntime().tts.textToSpeech({
         text: ttsText,
         cfg: cfg as OpenClawConfig,
         channel: "qqbot",

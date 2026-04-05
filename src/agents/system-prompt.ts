@@ -25,6 +25,81 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js"
 export type PromptMode = "full" | "minimal" | "none";
 type OwnerIdDisplay = "raw" | "hash";
 
+const CONTEXT_FILE_ORDER = new Map<string, number>([
+  ["agents.md", 10],
+  ["soul.md", 20],
+  ["identity.md", 30],
+  ["user.md", 40],
+  ["tools.md", 50],
+  ["bootstrap.md", 60],
+  ["memory.md", 70],
+]);
+
+const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);
+
+function normalizeContextFilePath(pathValue: string): string {
+  return pathValue.trim().replace(/\\/g, "/");
+}
+
+function getContextFileBasename(pathValue: string): string {
+  const normalizedPath = normalizeContextFilePath(pathValue);
+  return (normalizedPath.split("/").pop() ?? normalizedPath).toLowerCase();
+}
+
+function isDynamicContextFile(pathValue: string): boolean {
+  return DYNAMIC_CONTEXT_FILE_BASENAMES.has(getContextFileBasename(pathValue));
+}
+
+function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {
+  return contextFiles.toSorted((a, b) => {
+    const aPath = normalizeContextFilePath(a.path);
+    const bPath = normalizeContextFilePath(b.path);
+    const aBase = getContextFileBasename(a.path);
+    const bBase = getContextFileBasename(b.path);
+    const aOrder = CONTEXT_FILE_ORDER.get(aBase) ?? Number.MAX_SAFE_INTEGER;
+    const bOrder = CONTEXT_FILE_ORDER.get(bBase) ?? Number.MAX_SAFE_INTEGER;
+    if (aOrder !== bOrder) {
+      return aOrder - bOrder;
+    }
+    if (aBase !== bBase) {
+      return aBase.localeCompare(bBase);
+    }
+    return aPath.localeCompare(bPath);
+  });
+}
+
+function buildProjectContextSection(params: {
+  files: EmbeddedContextFile[];
+  heading: string;
+  dynamic: boolean;
+}) {
+  if (params.files.length === 0) {
+    return [];
+  }
+  const lines = [params.heading, ""];
+  if (params.dynamic) {
+    lines.push(
+      "The following frequently-changing project context files are kept below the cache boundary when possible:",
+      "",
+    );
+  } else {
+    const hasSoulFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "soul.md",
+    );
+    lines.push("The following project context files have been loaded:");
+    if (hasSoulFile) {
+      lines.push(
+        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+      );
+    }
+    lines.push("");
+  }
+  for (const file of params.files) {
+    lines.push(`## ${file.path}`, "", file.content, "");
+  }
+  return lines;
+}
+
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
@@ -180,10 +255,28 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
   ];
 }
 
-function buildExecApprovalPromptGuidance(params: { runtimeChannel?: string }) {
+function buildExecutionBiasSection(params: { isMinimal: boolean }) {
+  if (params.isMinimal) {
+    return [];
+  }
+  return [
+    "## Execution Bias",
+    "If the user asks you to do the work, start doing it in the same turn.",
+    "Use a real tool call or concrete action first when the task is actionable; do not stop at a plan or promise-to-act reply.",
+    "Commentary-only turns are incomplete when tools are available and the next action is clear.",
+    "If the work will take multiple steps or a while to finish, send one short progress update before or while acting.",
+    "",
+  ];
+}
+
+function buildExecApprovalPromptGuidance(params: {
+  runtimeChannel?: string;
+  inlineButtonsEnabled?: boolean;
+}) {
   const runtimeChannel = params.runtimeChannel?.trim().toLowerCase();
   const usesNativeApprovalUi =
     runtimeChannel === "webchat" ||
+    params.inlineButtonsEnabled === true ||
     (runtimeChannel
       ? Boolean(resolveChannelApprovalCapability(getChannelPlugin(runtimeChannel))?.native)
       : false);
@@ -224,6 +317,7 @@ export function buildAgentSystemPrompt(params: {
     os?: string;
     arch?: string;
     node?: string;
+    provider?: string;
     model?: string;
     defaultModel?: string;
     shell?: string;
@@ -504,11 +598,15 @@ export function buildAgentSystemPrompt(params: {
     "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
     buildExecApprovalPromptGuidance({
       runtimeChannel: params.runtimeInfo?.channel,
+      inlineButtonsEnabled,
     }),
     "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
     "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
     "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
     "",
+    ...buildExecutionBiasSection({
+      isMinimal,
+    }),
     ...safetySection,
     "## OpenClaw CLI Quick Reference",
     "OpenClaw is controlled via subcommands. Do not invent commands.",
@@ -648,35 +746,27 @@ export function buildAgentSystemPrompt(params: {
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
-  if (validContextFiles.length > 0) {
-    lines.push("# Project Context", "");
-    if (validContextFiles.length > 0) {
-      const hasSoulFile = validContextFiles.some((file) => {
-        const normalizedPath = file.path.trim().replace(/\\/g, "/");
-        const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
-        return baseName.toLowerCase() === "soul.md";
-      });
-      lines.push("The following project context files have been loaded:");
-      if (hasSoulFile) {
-        lines.push(
-          "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
-        );
-      }
-      lines.push("");
-    }
-    for (const file of validContextFiles) {
-      lines.push(`## ${file.path}`, "", file.content, "");
-    }
-  }
+  const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
+  const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
+  const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
+  lines.push(
+    ...buildProjectContextSection({
+      files: stableContextFiles,
+      heading: "# Project Context",
+      dynamic: false,
+    }),
+  );
 
   // Skip silent replies for subagent/none modes
   if (!isMinimal) {
     lines.push(
       "## Silent Replies",
-      `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
+      `Use ${SILENT_REPLY_TOKEN} ONLY when no user-visible reply is required.`,
       "",
       "⚠️ Rules:",
-      "- It must be your ENTIRE message — nothing else",
+      "- Valid cases: silent housekeeping, deliberate no-op ambient wakeups, or after a messaging tool already delivered the user-visible reply.",
+      "- Never use it to avoid doing requested work or to end an actionable turn early.",
+      "- It must be your ENTIRE message - nothing else",
       `- Never append it to an actual response (never include "${SILENT_REPLY_TOKEN}" in real replies)`,
       "- Never wrap it in markdown or code blocks",
       "",
@@ -689,8 +779,16 @@ export function buildAgentSystemPrompt(params: {
 
   // Keep large stable prompt context above this seam so Anthropic-family
   // transports can reuse it across labs and turns. Dynamic group/session
-  // additions below it are the primary cache invalidators.
+  // additions and volatile project context below it are the primary cache invalidators.
   lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
+
+  lines.push(
+    ...buildProjectContextSection({
+      files: dynamicContextFiles,
+      heading: stableContextFiles.length > 0 ? "# Dynamic Project Context" : "# Project Context",
+      dynamic: true,
+    }),
+  );
 
   if (extraSystemPrompt) {
     // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"

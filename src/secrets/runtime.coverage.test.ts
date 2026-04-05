@@ -11,30 +11,18 @@ import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 type SecretRegistryEntry = ReturnType<typeof listSecretTargetRegistryEntries>[number];
 
-const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvidersMock } =
-  vi.hoisted(() => ({
-    resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-    resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-  }));
-const { resolveBundledPluginWebFetchProvidersMock, resolvePluginWebFetchProvidersMock } =
-  vi.hoisted(() => ({
-    resolveBundledPluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
-    resolvePluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
-  }));
+const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
+  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+}));
+const { resolvePluginWebFetchProvidersMock } = vi.hoisted(() => ({
+  resolvePluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
+}));
 
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 
-vi.mock("../plugins/web-search-providers.js", () => ({
-  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
-}));
-
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-}));
-
-vi.mock("../plugins/web-fetch-providers.js", () => ({
-  resolveBundledPluginWebFetchProviders: resolveBundledPluginWebFetchProvidersMock,
 }));
 
 vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
@@ -343,9 +331,7 @@ describe("secrets runtime target coverage", () => {
 
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
-    resolveBundledPluginWebSearchProvidersMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
-    resolveBundledPluginWebFetchProvidersMock.mockReset();
     resolvePluginWebFetchProvidersMock.mockReset();
   });
 

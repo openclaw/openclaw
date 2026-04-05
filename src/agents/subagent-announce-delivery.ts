@@ -119,6 +119,22 @@ function parseTelegramAnnounceTarget(to: string): {
   return { chatId, chatType };
 }
 
+function normalizeTelegramAnnounceTarget(target: string | undefined): string | undefined {
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (/^group:/i.test(trimmed)) {
+    return `telegram:${trimmed.slice("group:".length)}`;
+  }
+  if (!/^telegram:/i.test(trimmed)) {
+    return undefined;
+  }
+  const raw = trimmed.slice("telegram:".length);
+  const topicMatch = /^(.*):topic:[^:]+$/u.exec(raw);
+  return `telegram:${topicMatch?.[1] ?? raw}`;
+}
+
 function shouldStripThreadFromAnnounceEntry(
   normalizedRequester?: DeliveryContext,
   normalizedEntry?: DeliveryContext,
@@ -131,6 +147,13 @@ function shouldStripThreadFromAnnounceEntry(
     return false;
   }
   const requesterChannel = normalizedRequester.channel?.trim().toLowerCase();
+  if (requesterChannel === "telegram") {
+    const requesterTarget = normalizeTelegramAnnounceTarget(normalizedRequester.to);
+    const entryTarget = normalizeTelegramAnnounceTarget(normalizedEntry?.to);
+    if (requesterTarget && entryTarget) {
+      return requesterTarget !== entryTarget;
+    }
+  }
   const plugin = requesterChannel ? getChannelPlugin(requesterChannel) : undefined;
   const pluginDecision = plugin?.conversationBindings?.shouldStripThreadFromAnnounceOrigin?.({
     requester: normalizedRequester,

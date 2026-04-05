@@ -55,6 +55,13 @@ const matrixRoomSchema = z
   })
   .optional();
 
+const matrixNetworkSchema = z
+  .object({
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const MatrixConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
@@ -62,7 +69,7 @@ export const MatrixConfigSchema = z.object({
   accounts: z.record(z.string(), z.unknown()).optional(),
   markdown: MarkdownConfigSchema,
   homeserver: z.string().optional(),
-  allowPrivateNetwork: z.boolean().optional(),
+  network: matrixNetworkSchema,
   proxy: z.string().optional(),
   userId: z.string().optional(),
   accessToken: buildSecretInputSchema().optional(),

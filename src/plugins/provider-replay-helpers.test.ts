@@ -3,6 +3,7 @@ import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
   buildHybridAnthropicOrOpenAIReplayPolicy,
+  buildNativeAnthropicReplayPolicyForModel,
   buildOpenAICompatibleReplayPolicy,
   buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
@@ -33,12 +34,28 @@ describe("provider replay helpers", () => {
 
   it("derives claude-only anthropic replay policy from the model id", () => {
     expect(buildAnthropicReplayPolicyForModel("claude-sonnet-4-6")).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
       dropThinkingBlocks: true,
       validateAnthropicTurns: true,
     });
     expect(buildAnthropicReplayPolicyForModel("amazon.nova-pro-v1")).not.toHaveProperty(
       "dropThinkingBlocks",
     );
+  });
+
+  it("builds native Anthropic replay policy with selective tool-call id preservation", () => {
+    expect(buildNativeAnthropicReplayPolicyForModel("claude-sonnet-4-6")).toMatchObject({
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
+      preserveSignatures: true,
+      repairToolUseResultPairing: true,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+      dropThinkingBlocks: true,
+    });
   });
 
   it("builds hybrid anthropic or openai replay policy", () => {

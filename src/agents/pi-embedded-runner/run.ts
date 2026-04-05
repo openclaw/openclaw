@@ -80,7 +80,10 @@ import {
   type RuntimeAuthState,
   scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
-import { resolveIncompleteTurnPayloadText } from "./run/incomplete-turn.js";
+import {
+  resolveIncompleteTurnPayloadText,
+  resolvePlanningOnlyRetryInstruction,
+} from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
@@ -303,7 +306,9 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadProfileRotations = 0;
+      let planningOnlyRetryAttempts = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
+      let planningOnlyRetryInstruction: string | null = null;
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
@@ -474,8 +479,11 @@ export async function runEmbeddedPiAgent(
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
-          const prompt =
+          const basePrompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+          const prompt = planningOnlyRetryInstruction
+            ? `${basePrompt}\n\n${planningOnlyRetryInstruction}`
+            : basePrompt;
           let resolvedStreamApiKey: string | undefined;
           if (!runtimeAuthState && apiKeyInfo) {
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
@@ -1337,6 +1345,26 @@ export async function runEmbeddedPiAgent(
             timedOut,
             attempt,
           });
+          const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
+            provider,
+            modelId,
+            aborted,
+            timedOut,
+            attempt,
+          });
+          if (
+            !incompleteTurnText &&
+            nextPlanningOnlyRetryInstruction &&
+            planningOnlyRetryAttempts < 1
+          ) {
+            planningOnlyRetryAttempts += 1;
+            planningOnlyRetryInstruction = nextPlanningOnlyRetryInstruction;
+            log.warn(
+              `planning-only turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${provider}/${modelId} — retrying once with act-now steer`,
+            );
+            continue;
+          }
           if (incompleteTurnText) {
             const incompleteStopReason = attempt.lastAssistant?.stopReason;
             log.warn(
