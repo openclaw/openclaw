@@ -40,7 +40,7 @@ function resolveWithStoredEntry(params?: {
   forceNew?: boolean;
   fresh?: boolean;
   payloadModel?: string;
-  isCronSession?: boolean;
+  isCronOwnedSession?: boolean;
 }) {
   const sessionKey = params?.sessionKey ?? "webhook:stable-key";
   const store: SessionStore = params?.entry
@@ -56,7 +56,7 @@ function resolveWithStoredEntry(params?: {
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
     payloadModel: params?.payloadModel,
-    isCronSession: params?.isCronSession,
+    isCronOwnedSession: params?.isCronOwnedSession,
   });
 }
 
@@ -293,7 +293,7 @@ describe("resolveCronSession", () => {
         },
         forceNew: true,
         payloadModel: "bailian/qwen3.5-plus",
-        isCronSession: true,
+        isCronOwnedSession: true,
       });
 
       expect(result.isNewSession).toBe(true);
@@ -415,7 +415,7 @@ describe("resolveCronSession", () => {
         fresh: true,
         forceNew: true,
         payloadModel: "bailian/glm-5",
-        isCronSession: true,
+        isCronOwnedSession: true,
       });
 
       expect(result.isNewSession).toBe(true);
@@ -427,10 +427,11 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.lastTo).toBeUndefined();
     });
 
-    it("preserves model-selection overrides on hook-dispatched isolated sessions (non-cron key)", () => {
-      // Hook-dispatched jobs set forceNew (sessionTarget "isolated") but can
-      // target a shared interactive session via a non-cron session key.
-      // Clearing overrides here would silently wipe user-set /model state.
+    it("preserves model-selection overrides on hook-dispatched isolated sessions (deliveryContract shared)", () => {
+      // Hook-dispatched jobs set forceNew (sessionTarget "isolated") and
+      // deliveryContract "shared".  Even when payload.model is set, the
+      // isCronOwnedSession guard (derived from deliveryContract) prevents
+      // clearing overrides on what is effectively a shared session.
       const result = resolveWithStoredEntry({
         entry: {
           sessionId: "interactive-session-id",
@@ -443,11 +444,11 @@ describe("resolveCronSession", () => {
         },
         forceNew: true,
         payloadModel: "bailian/qwen3.5-plus",
-        isCronSession: false,
+        isCronOwnedSession: false,
       });
 
       expect(result.isNewSession).toBe(true);
-      // Overrides must be preserved — hook-dispatched, not a cron session
+      // Overrides must be preserved — deliveryContract is "shared", not cron-owned
       expect(result.sessionEntry.modelOverride).toBe("claude-opus-4.6");
       expect(result.sessionEntry.providerOverride).toBe("github-copilot");
       expect(result.sessionEntry.fallbackNoticeActiveModel).toBe("bailian/glm-5");

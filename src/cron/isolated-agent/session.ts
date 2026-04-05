@@ -16,7 +16,7 @@ export function resolveCronSession(params: {
   agentId: string;
   forceNew?: boolean;
   payloadModel?: string;
-  isCronSession?: boolean;
+  isCronOwnedSession?: boolean;
 }) {
   const sessionCfg = params.cfg.session;
   const storePath = resolveStorePath(sessionCfg?.store, {
@@ -98,11 +98,14 @@ export function resolveCronSession(params: {
     //     never lose user-set overrides.
     //   - payloadModel: only clear when the cron job specifies its own
     //     model (backward compatibility).
-    //   - isCronSession: hook-dispatched jobs also set forceNew (via
-    //     sessionTarget "isolated") but can target shared interactive
-    //     sessions through non-cron session keys.  Without this guard,
-    //     a hook call with a payload model would silently wipe user-set
-    //     /model state from the interactive session entry.
+    //   - isCronOwnedSession: derived from the deliveryContract — true
+    //     only for cron-scheduler-dispatched jobs (deliveryContract
+    //     "cron-owned" / undefined), false for hook-dispatched jobs
+    //     (deliveryContract "shared").  This explicit ownership signal
+    //     avoids the fragility of session-key prefix matching: hook
+    //     dispatchers can use configurable session keys that happen to
+    //     start with "cron:", which would misclassify a shared hook run
+    //     as cron-owned and silently clear user-set /model state.
     //
     // Note: authProfileOverride and its companion fields are intentionally
     // NOT cleared here — resolveSessionAuthProfileOverride() uses the
@@ -111,7 +114,7 @@ export function resolveCronSession(params: {
     // cron jobs (which always create new sessions).
     ...(params.forceNew &&
       params.payloadModel &&
-      params.isCronSession && {
+      params.isCronOwnedSession && {
         providerOverride: undefined,
         modelOverride: undefined,
         fallbackNoticeActiveModel: undefined,
