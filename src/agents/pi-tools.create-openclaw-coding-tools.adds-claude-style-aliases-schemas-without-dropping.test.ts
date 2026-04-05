@@ -4,13 +4,13 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
-import { createBrowserTool } from "../plugin-sdk/browser.js";
+import { createBrowserTool } from "../../extensions/browser/runtime-api.js";
+import { applyXaiModelCompat } from "../../extensions/xai/api.js";
 import {
   findUnsupportedSchemaKeywords,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
   XAI_UNSUPPORTED_SCHEMA_KEYWORDS,
 } from "../plugin-sdk/provider-tools.js";
-import { applyXaiModelCompat } from "../plugin-sdk/xai.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { __testing, createOpenClawCodingTools } from "./pi-tools.js";
@@ -99,12 +99,14 @@ describe("createOpenClawCodingTools", () => {
 
       const patched = __testing.patchToolSchemaForClaudeCompatibility(base);
       const params = patched.parameters as {
+        additionalProperties?: unknown;
         properties?: Record<string, unknown>;
         required?: string[];
       };
       const props = params.properties ?? {};
 
       expect(props.file_path).toEqual(props.path);
+      expect(params.additionalProperties).toBe(false);
       expect(params.required ?? []).not.toContain("path");
       expect(params.required ?? []).not.toContain("file_path");
     });

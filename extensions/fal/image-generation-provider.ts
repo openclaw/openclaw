@@ -11,7 +11,7 @@ import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
   type SsrFPolicy,
-  ssrfPolicyFromAllowPrivateNetwork,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
@@ -102,7 +102,7 @@ function resolveFalNetworkPolicy(params: {
   }
 
   const hostPolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostSuffix]);
-  const privateNetworkPolicy = ssrfPolicyFromAllowPrivateNetwork(true);
+  const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(true);
   const trustedHostPolicy = mergeSsrFPolicies(hostPolicy, privateNetworkPolicy);
   return {
     apiPolicy: trustedHostPolicy,

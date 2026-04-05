@@ -581,12 +581,15 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     **local-only models** so your data stays on your device. Subscriptions (Claude
     Pro/Max or OpenAI Codex) are optional ways to authenticate those providers.
 
-    Anthropic's public Claude Code docs still include direct Claude Code terminal
-    use in Claude plan limits. Separately, Anthropic notified OpenClaw users on
-    **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw**
-    Claude-login path counts as third-party harness usage and now requires
-    **Extra Usage** billed separately from the subscription. OpenAI Codex OAuth
-    is explicitly supported for external tools like OpenClaw.
+    We believe Claude Code CLI fallback is likely allowed for local,
+    user-managed automation based on Anthropic's public CLI docs. That said,
+    Anthropic's third-party harness policy creates enough ambiguity around
+    subscription-backed use in external products that we do not recommend it
+    for production. Anthropic also notified OpenClaw users on **April 4, 2026
+    at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path
+    counts as third-party harness usage and now requires **Extra Usage**
+    billed separately from the subscription. OpenAI Codex OAuth is explicitly
+    supported for external tools like OpenClaw.
 
     OpenClaw also supports other hosted subscription-style options including
     **Qwen Cloud Coding Plan**, **MiniMax Coding Plan**, and
@@ -603,13 +606,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     Yes, via a local **Claude CLI** login on the gateway host.
 
     Claude Pro/Max subscriptions **do not include an API key**, so Claude CLI
-    reuse is the supported subscription-style path in OpenClaw. Anthropic's
-    public Claude Code docs still cover direct Claude Code terminal use under
-    your plan. Separately, Anthropic told OpenClaw users on **April 4, 2026 at
-    12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path
-    requires **Extra Usage** billed separately from the subscription. If you
-    want the clearest and safest supported path for production, use an
-    Anthropic API key.
+    reuse is the local fallback path in OpenClaw. We believe Claude Code CLI
+    fallback is likely allowed for local, user-managed automation based on
+    Anthropic's public CLI docs. That said, Anthropic's third-party harness
+    policy creates enough ambiguity around subscription-backed use in external
+    products that we do not recommend it for production. We recommend
+    Anthropic API keys instead.
 
   </Accordion>
 
@@ -618,11 +620,13 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
     Anthropic setup-token is also available again as a legacy/manual OpenClaw path. Anthropic's OpenClaw-specific billing notice still applies there, so use it with the expectation that Anthropic requires **Extra Usage**. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
-    Important: Anthropic's public Claude Code docs still cover direct Claude
-    Code terminal use under Claude plans. Separately, Anthropic told OpenClaw
-    users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the
-    **OpenClaw** Claude-login path requires **Extra Usage** billed separately
-    from the subscription.
+    Important: We believe Claude Code CLI fallback is likely allowed for local,
+    user-managed automation based on Anthropic's public CLI docs. That said,
+    Anthropic's third-party harness policy creates enough ambiguity around
+    subscription-backed use in external products that we do not recommend it
+    for production. Anthropic also told OpenClaw users on **April 4, 2026 at
+    12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path
+    requires **Extra Usage** billed separately from the subscription.
 
     For production or multi-user workloads, Anthropic API key auth is the
     safer, recommended choice. If you want other subscription-style hosted
@@ -652,7 +656,7 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Is AWS Bedrock supported?">
-    Yes. OpenClaw has a bundled **Amazon Bedrock (Converse)** provider. With AWS env markers present, OpenClaw can auto-discover the streaming/text Bedrock catalog and merge it as an implicit `amazon-bedrock` provider; otherwise you can explicitly enable `models.bedrockDiscovery.enabled` or add a manual provider entry. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
+    Yes. OpenClaw has a bundled **Amazon Bedrock (Converse)** provider. With AWS env markers present, OpenClaw can auto-discover the streaming/text Bedrock catalog and merge it as an implicit `amazon-bedrock` provider; otherwise you can explicitly enable `plugins.entries.amazon-bedrock.config.discovery.enabled` or add a manual provider entry. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
   </Accordion>
 
   <Accordion title="How does Codex auth work?">

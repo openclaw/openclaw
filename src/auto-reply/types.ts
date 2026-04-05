@@ -64,6 +64,15 @@ export type GetReplyOptions = {
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
+  /** Called when a concrete work item starts, updates, or completes. */
+  onItemEvent?: (payload: {
+    itemId?: string;
+    kind?: string;
+    title?: string;
+    name?: string;
+    phase?: string;
+    status?: string;
+  }) => Promise<void> | void;
   /** Called when context auto-compaction starts (allows UX feedback during the pause). */
   onCompactionStart?: () => Promise<void> | void;
   /** Called when context auto-compaction completes. */

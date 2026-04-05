@@ -674,6 +674,34 @@ describe("resolveModel", () => {
     });
   });
 
+  it("matches prefixed Hugging Face ids against discovered registry models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "huggingface",
+      modelId: "deepseek-ai/DeepSeek-R1",
+      templateModel: {
+        ...makeModel("deepseek-ai/DeepSeek-R1"),
+        provider: "huggingface",
+        baseUrl: "https://router.huggingface.co/v1",
+        reasoning: true,
+        input: ["text"],
+      },
+    });
+
+    const result = resolveModelForTest(
+      "huggingface",
+      "huggingface/deepseek-ai/DeepSeek-R1",
+      "/tmp/agent",
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "huggingface",
+      id: "deepseek-ai/DeepSeek-R1",
+      reasoning: true,
+      input: ["text"],
+    });
+  });
+
   it("preloads OpenRouter capabilities before first async resolve of an unknown model", async () => {
     mockLoadOpenRouterModelCapabilities.mockImplementation(async (modelId) => {
       if (modelId === "google/gemini-3.1-flash-image-preview") {
