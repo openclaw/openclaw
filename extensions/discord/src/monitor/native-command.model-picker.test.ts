@@ -20,6 +20,7 @@ import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
 import { replyWithDiscordModelPickerProviders } from "./native-command-ui.js";
+import { handleDiscordModelPickerInteraction } from "./native-command-ui.js";
 import {
   __testing as nativeCommandTesting,
   createDiscordModelPickerFallbackButton,
@@ -720,6 +721,47 @@ describe("Discord model picker interactions", () => {
 
     expect(JSON.stringify(submitInteraction.followUp.mock.calls[0]?.[0])).toContain(
       "✅ Model set to openai/gpt-4o.",
+    );
+  });
+
+  it("does not write a fallback override when hidden /model dispatch is rejected", async () => {
+    const context = createModelPickerContext();
+    context.threadBindings = createBoundThreadBindingManager({
+      accountId: "default",
+      threadId: "thread-bound",
+      targetSessionKey: "agent:worker:subagent:bound",
+      agentId: "worker",
+    });
+    const pickerData = createDefaultModelPickerData();
+    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
+    await saveSessionStore(storePath, {
+      "agent:worker:subagent:bound": {
+        updatedAt: Date.now(),
+        sessionId: "bound-session",
+      },
+    });
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+
+    const interaction = createInteraction({ userId: "owner" });
+    interaction.channel = {
+      type: ChannelType.PublicThread,
+      id: "thread-bound",
+    };
+
+    await handleDiscordModelPickerInteraction({
+      interaction: interaction as unknown as PickerButtonInteraction,
+      data: createModelsViewSubmitData(),
+      ctx: context,
+      safeInteractionCall: async (_label, fn) => await fn(),
+      dispatchCommandInteraction: async () => false,
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store["agent:worker:subagent:bound"]?.providerOverride).toBeUndefined();
+    expect(store["agent:worker:subagent:bound"]?.modelOverride).toBeUndefined();
+    expect(JSON.stringify(interaction.followUp.mock.calls[0]?.[0])).toContain(
+      "❌ Failed to apply openai/gpt-4o.",
     );
   });
 

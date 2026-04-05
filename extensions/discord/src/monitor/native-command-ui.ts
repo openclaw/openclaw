@@ -86,7 +86,7 @@ export type DispatchDiscordCommandInteractionParams = {
 
 export type DispatchDiscordCommandInteraction = (
   params: DispatchDiscordCommandInteractionParams,
-) => Promise<void>;
+) => Promise<boolean>;
 
 export type SafeDiscordInteractionCall = <T>(
   label: string,
@@ -800,7 +800,7 @@ export async function handleDiscordModelPickerInteraction(params: {
     }
 
     try {
-      await withTimeout(
+      const dispatchAccepted = await withTimeout(
         params.dispatchCommandInteraction({
           interaction,
           prompt: selectionCommand.prompt,
@@ -816,6 +816,17 @@ export async function handleDiscordModelPickerInteraction(params: {
         }),
         12000,
       );
+      if (!dispatchAccepted) {
+        await params.safeInteractionCall("model picker follow-up", () =>
+          interaction.followUp({
+            ...buildDiscordModelPickerNoticePayload(
+              `❌ Failed to apply ${resolvedModelRef}. Try /model ${resolvedModelRef} directly.`,
+            ),
+            ephemeral: true,
+          }),
+        );
+        return;
+      }
     } catch (error) {
       if (error instanceof Error && error.message === "timeout") {
         await params.safeInteractionCall("model picker follow-up", () =>
