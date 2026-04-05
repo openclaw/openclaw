@@ -52,6 +52,8 @@ export type VideoGenerationProviderCapabilities = {
   maxInputImages?: number;
   maxInputVideos?: number;
   maxDurationSeconds?: number;
+  supportedDurationSeconds?: readonly number[];
+  supportedDurationSecondsByModel?: Readonly<Record<string, readonly number[]>>;
   supportsSize?: boolean;
   supportsAspectRatio?: boolean;
   supportsResolution?: boolean;

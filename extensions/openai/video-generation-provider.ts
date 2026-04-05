@@ -194,6 +194,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
       maxInputImages: 1,
       maxInputVideos: 1,
       maxDurationSeconds: 12,
+      supportedDurationSeconds: OPENAI_VIDEO_SECONDS,
       supportsSize: true,
     },
     async generateVideo(req) {

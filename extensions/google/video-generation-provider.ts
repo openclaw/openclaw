@@ -162,6 +162,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       maxInputImages: 1,
       maxInputVideos: 1,
       maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
+      supportedDurationSeconds: GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
       supportsAspectRatio: true,
       supportsResolution: true,
       supportsSize: true,

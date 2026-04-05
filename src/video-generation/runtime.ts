@@ -8,6 +8,10 @@ import {
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import {
+  normalizeVideoGenerationDuration,
+  resolveVideoGenerationSupportedDurations,
+} from "./duration-support.js";
 import { parseVideoGenerationModelRef } from "./model-ref.js";
 import { getVideoGenerationProvider, listVideoGenerationProviders } from "./provider-registry.js";
 import type {
@@ -147,6 +151,19 @@ export async function generateVideo(
     }
 
     try {
+      const requestedDurationSeconds =
+        typeof params.durationSeconds === "number" && Number.isFinite(params.durationSeconds)
+          ? Math.max(1, Math.round(params.durationSeconds))
+          : undefined;
+      const normalizedDurationSeconds = normalizeVideoGenerationDuration({
+        provider,
+        model: candidate.model,
+        durationSeconds: requestedDurationSeconds,
+      });
+      const supportedDurationSeconds = resolveVideoGenerationSupportedDurations({
+        provider,
+        model: candidate.model,
+      });
       const result: VideoGenerationResult = await provider.generateVideo({
         provider: candidate.provider,
         model: candidate.model,
@@ -157,7 +174,7 @@ export async function generateVideo(
         size: params.size,
         aspectRatio: params.aspectRatio,
         resolution: params.resolution,
-        durationSeconds: params.durationSeconds,
+        durationSeconds: normalizedDurationSeconds,
         audio: params.audio,
         watermark: params.watermark,
         inputImages: params.inputImages,
@@ -171,7 +188,17 @@ export async function generateVideo(
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
-        metadata: result.metadata,
+        metadata:
+          typeof requestedDurationSeconds === "number" &&
+          typeof normalizedDurationSeconds === "number" &&
+          requestedDurationSeconds !== normalizedDurationSeconds
+            ? {
+                ...result.metadata,
+                requestedDurationSeconds,
+                normalizedDurationSeconds,
+                ...(supportedDurationSeconds ? { supportedDurationSeconds } : {}),
+              }
+            : result.metadata,
       };
     } catch (err) {
       lastError = err;
