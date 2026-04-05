@@ -11,6 +11,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
+import { stripOpenClawExecGatewayIdentityEnv } from "../infra/openclaw-exec-env.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -1459,11 +1460,13 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
+      const effectiveExecEnv = host === "gateway" ? stripOpenClawExecGatewayIdentityEnv(env) : env;
+
       if (host === "node") {
         return executeNodeHostCommand({
           command: params.command,
           workdir,
-          env,
+          env: effectiveExecEnv,
           requestedEnv: params.env,
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
@@ -1494,7 +1497,7 @@ export function createExecTool(
         const gatewayResult = await processGatewayAllowlist({
           command: params.command,
           workdir,
-          env,
+          env: effectiveExecEnv,
           requestedEnv: params.env,
           pty: params.pty === true && !sandbox,
           timeoutSec: params.timeout,
@@ -1545,7 +1548,7 @@ export function createExecTool(
         command: params.command,
         execCommand: execCommandOverride,
         workdir,
-        env,
+        env: effectiveExecEnv,
         sandbox,
         containerWorkdir,
         usePty,

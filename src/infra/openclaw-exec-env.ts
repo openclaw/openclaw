@@ -1,13 +1,6 @@
 export const OPENCLAW_CLI_ENV_VAR = "OPENCLAW_CLI";
 export const OPENCLAW_CLI_ENV_VALUE = "1";
-export const OPENCLAW_SERVICE_RUNTIME_ENV_VARS = [
-  "OPENCLAW_LAUNCHD_LABEL",
-  "OPENCLAW_SYSTEMD_UNIT",
-  "OPENCLAW_WINDOWS_TASK_NAME",
-  "OPENCLAW_SERVICE_MARKER",
-  "OPENCLAW_SERVICE_KIND",
-  "OPENCLAW_SERVICE_VERSION",
-] as const;
+export const OPENCLAW_EXEC_GATEWAY_IDENTITY_ENV_VARS = ["OPENCLAW_SERVICE_KIND"] as const;
 
 export function markOpenClawExecEnv<T extends Record<string, string | undefined>>(env: T): T {
   return {
@@ -16,11 +9,13 @@ export function markOpenClawExecEnv<T extends Record<string, string | undefined>
   };
 }
 
-export function stripOpenClawServiceRuntimeEnv<T extends Record<string, string | undefined>>(
+// Exec children should not inherit the gateway-only credential precedence signal,
+// but restart/update flows still need supervisor-name overrides.
+export function stripOpenClawExecGatewayIdentityEnv<T extends Record<string, string | undefined>>(
   env: T,
 ): T {
   const stripped = { ...env };
-  for (const key of OPENCLAW_SERVICE_RUNTIME_ENV_VARS) {
+  for (const key of OPENCLAW_EXEC_GATEWAY_IDENTITY_ENV_VARS) {
     delete stripped[key as keyof T];
   }
   return stripped;

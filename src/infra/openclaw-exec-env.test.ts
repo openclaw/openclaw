@@ -4,8 +4,8 @@ import {
   markOpenClawExecEnv,
   OPENCLAW_CLI_ENV_VALUE,
   OPENCLAW_CLI_ENV_VAR,
-  OPENCLAW_SERVICE_RUNTIME_ENV_VARS,
-  stripOpenClawServiceRuntimeEnv,
+  OPENCLAW_EXEC_GATEWAY_IDENTITY_ENV_VARS,
+  stripOpenClawExecGatewayIdentityEnv,
 } from "./openclaw-exec-env.js";
 
 describe("markOpenClawExecEnv", () => {
@@ -54,9 +54,9 @@ describe("ensureOpenClawExecMarkerOnProcess", () => {
   });
 });
 
-describe("stripOpenClawServiceRuntimeEnv", () => {
-  it("removes OpenClaw service runtime markers while preserving other env vars", () => {
-    const stripped = stripOpenClawServiceRuntimeEnv({
+describe("stripOpenClawExecGatewayIdentityEnv", () => {
+  it("removes the gateway identity marker while preserving supervisor overrides", () => {
+    const stripped = stripOpenClawExecGatewayIdentityEnv({
       PATH: "/usr/bin",
       OPENCLAW_SERVICE_MARKER: "openclaw",
       OPENCLAW_SERVICE_KIND: "gateway",
@@ -69,18 +69,16 @@ describe("stripOpenClawServiceRuntimeEnv", () => {
 
     expect(stripped).toEqual({
       PATH: "/usr/bin",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
+      OPENCLAW_SERVICE_VERSION: "2026.3.13",
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway",
       KEEP: "1",
     });
   });
 
-  it("tracks the full OpenClaw service runtime marker set", () => {
-    expect(OPENCLAW_SERVICE_RUNTIME_ENV_VARS).toEqual([
-      "OPENCLAW_LAUNCHD_LABEL",
-      "OPENCLAW_SYSTEMD_UNIT",
-      "OPENCLAW_WINDOWS_TASK_NAME",
-      "OPENCLAW_SERVICE_MARKER",
-      "OPENCLAW_SERVICE_KIND",
-      "OPENCLAW_SERVICE_VERSION",
-    ]);
+  it("tracks the gateway identity marker set", () => {
+    expect(OPENCLAW_EXEC_GATEWAY_IDENTITY_ENV_VARS).toEqual(["OPENCLAW_SERVICE_KIND"]);
   });
 });

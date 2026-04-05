@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
-import { OPENCLAW_SERVICE_RUNTIME_ENV_VARS } from "../infra/openclaw-exec-env.js";
+import { OPENCLAW_EXEC_GATEWAY_IDENTITY_ENV_VARS } from "../infra/openclaw-exec-env.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
@@ -90,7 +90,16 @@ describe("exec PATH login shell merge", () => {
   });
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["PATH", "SHELL", ...OPENCLAW_SERVICE_RUNTIME_ENV_VARS]);
+    envSnapshot = captureEnv([
+      "PATH",
+      "SHELL",
+      ...OPENCLAW_EXEC_GATEWAY_IDENTITY_ENV_VARS,
+      "OPENCLAW_SERVICE_MARKER",
+      "OPENCLAW_SERVICE_VERSION",
+      "OPENCLAW_SYSTEMD_UNIT",
+      "OPENCLAW_LAUNCHD_LABEL",
+      "OPENCLAW_WINDOWS_TASK_NAME",
+    ]);
     shellEnvMocks.getShellPathFromLoginShell.mockReset();
     shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
@@ -133,7 +142,7 @@ describe("exec PATH login shell merge", () => {
     expect(value).toBe("exec");
   });
 
-  it("does not leak OpenClaw service runtime env vars to host=gateway commands", async () => {
+  it("strips the gateway identity marker but preserves supervisor overrides for host=gateway commands", async () => {
     if (isWin) {
       return;
     }
@@ -152,7 +161,9 @@ describe("exec PATH login shell merge", () => {
     });
     const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
-    expect(value).toBe("||||||exec");
+    expect(value).toBe(
+      "openclaw||2026.3.13|openclaw-gateway.service|ai.openclaw.gateway|OpenClaw Gateway|exec",
+    );
   });
 
   it("throws security violation when env.PATH is provided", async () => {
