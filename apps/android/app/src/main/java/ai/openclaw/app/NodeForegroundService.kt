@@ -20,11 +20,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
-class NodeForegroundService : Service() {
+open class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
   private var didStartForeground = false
   private var currentForegroundServiceType: Int? = null
+  private var latestNotification: Notification? = null
 
   override fun onCreate() {
     super.onCreate()
@@ -71,6 +72,7 @@ class NodeForegroundService : Service() {
         stopSelf()
         return START_NOT_STICKY
       }
+      ACTION_REFRESH_FOREGROUND -> refreshForegroundServiceType()
     }
     // Keep running; connection is managed by NodeRuntime (auto-reconnect + manual).
     return START_STICKY
@@ -137,6 +139,7 @@ class NodeForegroundService : Service() {
   }
 
   private fun startForegroundWithTypes(notification: Notification) {
+    latestNotification = notification
     val serviceType = foregroundServiceType(locationGranted = hasAnyLocationPermission())
     if (!shouldRestartForeground(serviceType)) {
       updateNotification(notification)
@@ -151,7 +154,13 @@ class NodeForegroundService : Service() {
     currentForegroundServiceType = serviceType
   }
 
-  private fun hasAnyLocationPermission(): Boolean {
+  private fun refreshForegroundServiceType() {
+    startForegroundWithTypes(
+      notification = latestNotification ?: buildNotification(title = "OpenClaw Node", text = "Starting…"),
+    )
+  }
+
+  internal open fun hasAnyLocationPermission(): Boolean {
     return ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
       PackageManager.PERMISSION_GRANTED ||
       ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
@@ -172,6 +181,7 @@ class NodeForegroundService : Service() {
     private const val NOTIFICATION_ID = 1
 
     private const val ACTION_STOP = "ai.openclaw.app.action.STOP"
+    private const val ACTION_REFRESH_FOREGROUND = "ai.openclaw.app.action.REFRESH_FOREGROUND"
 
     fun start(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java)
@@ -181,6 +191,11 @@ class NodeForegroundService : Service() {
     fun stop(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java).setAction(ACTION_STOP)
       context.startService(intent)
+    }
+
+    fun refresh(context: Context) {
+      val intent = Intent(context, NodeForegroundService::class.java).setAction(ACTION_REFRESH_FOREGROUND)
+      context.startForegroundService(intent)
     }
   }
 }

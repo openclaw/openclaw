@@ -69,6 +69,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.NodeForegroundService
 import ai.openclaw.app.normalizeLocalHourMinute
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.node.DeviceNotificationListenerService
@@ -169,6 +170,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
 
   var pendingLocationSelection by remember { mutableStateOf<LocationMode?>(null) }
+  var previousLocationModeBeforeAlwaysPrompt by remember { mutableStateOf<LocationMode?>(null) }
   var pendingPreciseToggle by remember { mutableStateOf(false) }
   val backgroundLocationOptionLabel =
     remember(context) {
@@ -198,19 +200,33 @@ fun SettingsSheet(viewModel: MainViewModel) {
         LocationMode.WhileUsing -> {
           pendingLocationSelection = null
           if (granted) {
-            viewModel.setLocationMode(LocationMode.WhileUsing)
+            setLocationModeAndRefreshService(
+              context = context,
+              viewModel = viewModel,
+              mode = LocationMode.WhileUsing,
+            )
           }
         }
         LocationMode.Always -> {
           if (!granted) {
             pendingLocationSelection = null
+            previousLocationModeBeforeAlwaysPrompt = null
             return@rememberLauncherForActivityResult
           }
           if (hasBackgroundLocationPermission(context)) {
             pendingLocationSelection = null
-            viewModel.setLocationMode(LocationMode.Always)
+            previousLocationModeBeforeAlwaysPrompt = null
+            setLocationModeAndRefreshService(
+              context = context,
+              viewModel = viewModel,
+              mode = LocationMode.Always,
+            )
           } else {
-            viewModel.setLocationMode(LocationMode.WhileUsing)
+            setLocationModeAndRefreshService(
+              context = context,
+              viewModel = viewModel,
+              mode = LocationMode.WhileUsing,
+            )
             openAppSettings(context)
           }
         }
@@ -373,17 +389,40 @@ fun SettingsSheet(viewModel: MainViewModel) {
           val backgroundGranted = hasBackgroundLocationPermission(context)
           when {
             pendingLocationSelection == LocationMode.Always -> {
+              val restoredMode = restoreLocationModeAfterCanceledAlwaysGrant(
+                previousMode = previousLocationModeBeforeAlwaysPrompt,
+                locationGranted = locationGranted,
+              )
               pendingLocationSelection = null
+              previousLocationModeBeforeAlwaysPrompt = null
               if (backgroundLocationAvailable && locationGranted && backgroundGranted) {
-                viewModel.setLocationMode(LocationMode.Always)
+                setLocationModeAndRefreshService(
+                  context = context,
+                  viewModel = viewModel,
+                  mode = LocationMode.Always,
+                )
+              } else if (restoredMode != null) {
+                setLocationModeAndRefreshService(
+                  context = context,
+                  viewModel = viewModel,
+                  mode = restoredMode,
+                )
               }
             }
             locationMode == LocationMode.Always &&
               (!backgroundLocationAvailable || !locationGranted || !backgroundGranted) -> {
-              viewModel.setLocationMode(if (locationGranted) LocationMode.WhileUsing else LocationMode.Off)
+              setLocationModeAndRefreshService(
+                context = context,
+                viewModel = viewModel,
+                mode = if (locationGranted) LocationMode.WhileUsing else LocationMode.Off,
+              )
             }
             locationMode == LocationMode.WhileUsing && !locationGranted -> {
-              viewModel.setLocationMode(LocationMode.Off)
+              setLocationModeAndRefreshService(
+                context = context,
+                viewModel = viewModel,
+                mode = LocationMode.Off,
+              )
             }
           }
           micPermissionGranted =
@@ -444,7 +483,11 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
   fun requestLocationPermissions() {
     if (hasAnyLocationPermission(context)) {
-      viewModel.setLocationMode(LocationMode.WhileUsing)
+      setLocationModeAndRefreshService(
+        context = context,
+        viewModel = viewModel,
+        mode = LocationMode.WhileUsing,
+      )
     } else {
       pendingLocationSelection = LocationMode.WhileUsing
       locationPermissionLauncher.launch(
@@ -459,6 +502,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       return
     }
     if (!hasAnyLocationPermission(context)) {
+      previousLocationModeBeforeAlwaysPrompt = locationMode
       pendingLocationSelection = LocationMode.Always
       locationPermissionLauncher.launch(
         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
@@ -467,11 +511,21 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
     if (hasBackgroundLocationPermission(context)) {
       pendingLocationSelection = null
-      viewModel.setLocationMode(LocationMode.Always)
+      previousLocationModeBeforeAlwaysPrompt = null
+      setLocationModeAndRefreshService(
+        context = context,
+        viewModel = viewModel,
+        mode = LocationMode.Always,
+      )
       return
     }
+    previousLocationModeBeforeAlwaysPrompt = locationMode
     pendingLocationSelection = LocationMode.Always
-    viewModel.setLocationMode(LocationMode.WhileUsing)
+    setLocationModeAndRefreshService(
+      context = context,
+      viewModel = viewModel,
+      mode = LocationMode.WhileUsing,
+    )
     openAppSettings(context)
   }
 
@@ -1190,7 +1244,13 @@ fun SettingsSheet(viewModel: MainViewModel) {
             trailingContent = {
               RadioButton(
                 selected = locationMode == LocationMode.Off,
-                onClick = { viewModel.setLocationMode(LocationMode.Off) },
+                onClick = {
+                  setLocationModeAndRefreshService(
+                    context = context,
+                    viewModel = viewModel,
+                    mode = LocationMode.Off,
+                  )
+                },
               )
             },
           )
@@ -1353,6 +1413,27 @@ internal fun resolveNotificationCandidatePackages(
     .toSet()
 }
 
+internal fun restoreLocationModeAfterCanceledAlwaysGrant(
+  previousMode: LocationMode?,
+  locationGranted: Boolean,
+): LocationMode? {
+  return when (previousMode) {
+    null -> null
+    LocationMode.Off -> LocationMode.Off
+    LocationMode.WhileUsing,
+    LocationMode.Always,
+    -> if (locationGranted) LocationMode.WhileUsing else LocationMode.Off
+  }
+}
+
+private fun setLocationModeAndRefreshService(
+  context: Context,
+  viewModel: MainViewModel,
+  mode: LocationMode,
+) {
+  viewModel.setLocationMode(mode)
+  NodeForegroundService.refresh(context)
+}
 
 @Composable
 private fun settingsTextFieldColors() =

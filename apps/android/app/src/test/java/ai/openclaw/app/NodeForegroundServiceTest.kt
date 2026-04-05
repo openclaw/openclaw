@@ -100,6 +100,28 @@ class NodeForegroundServiceTest {
     assertFalse(shouldRestart)
   }
 
+  @Test
+  fun onStartCommand_refreshActionReevaluatesForegroundServiceType() {
+    TestNodeForegroundService.locationGranted = true
+    val service = Robolectric.buildService(TestNodeForegroundService::class.java).get()
+    setForegroundState(
+      service = service,
+      didStartForeground = true,
+      currentForegroundServiceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+    )
+
+    service.onStartCommand(
+      Intent(service, NodeForegroundService::class.java).setAction(refreshForegroundAction()),
+      0,
+      1,
+    )
+
+    assertEquals(
+      ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+      currentForegroundServiceType(service),
+    )
+  }
+
   private fun buildNotification(service: NodeForegroundService): Notification {
     val method =
       NodeForegroundService::class.java.getDeclaredMethod(
@@ -142,5 +164,39 @@ class NodeForegroundServiceTest {
       )
     method.isAccessible = true
     return method.invoke(service, requestedServiceType) as Boolean
+  }
+
+  private fun setForegroundState(
+    service: NodeForegroundService,
+    didStartForeground: Boolean,
+    currentForegroundServiceType: Int?,
+  ) {
+    val didStartField = NodeForegroundService::class.java.getDeclaredField("didStartForeground")
+    didStartField.isAccessible = true
+    didStartField.setBoolean(service, didStartForeground)
+
+    val currentTypeField = NodeForegroundService::class.java.getDeclaredField("currentForegroundServiceType")
+    currentTypeField.isAccessible = true
+    currentTypeField.set(service, currentForegroundServiceType)
+  }
+
+  private fun currentForegroundServiceType(service: NodeForegroundService): Int? {
+    val currentTypeField = NodeForegroundService::class.java.getDeclaredField("currentForegroundServiceType")
+    currentTypeField.isAccessible = true
+    return currentTypeField.get(service) as Int?
+  }
+
+  private fun refreshForegroundAction(): String {
+    val field = NodeForegroundService::class.java.getDeclaredField("ACTION_REFRESH_FOREGROUND")
+    field.isAccessible = true
+    return field.get(null) as String
+  }
+
+  private class TestNodeForegroundService : NodeForegroundService() {
+    override fun hasAnyLocationPermission(): Boolean = locationGranted
+
+    companion object {
+      var locationGranted: Boolean = false
+    }
   }
 }
