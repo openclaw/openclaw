@@ -149,6 +149,114 @@ describe("sessions.usage", () => {
     expect(sessions[1].agentId).toBe("main");
   });
 
+  it("keeps aggregates across all sessions even when limit trims the returned list", async () => {
+    vi.mocked(discoverAllSessions).mockImplementation(async (params?: { agentId?: string }) => {
+      if (params?.agentId === "main") {
+        return [
+          {
+            sessionId: "s-feishu",
+            sessionFile: "/tmp/agents/main/sessions/s-feishu.jsonl",
+            mtime: 300,
+            firstUserMessage: "feishu",
+          },
+          {
+            sessionId: "s-webchat",
+            sessionFile: "/tmp/agents/main/sessions/s-webchat.jsonl",
+            mtime: 200,
+            firstUserMessage: "webchat",
+          },
+        ];
+      }
+      return [];
+    });
+    vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      storePath: "(multiple)",
+      store: {
+        "agent:main:feishu:direct:ou_demo": {
+          sessionId: "s-feishu",
+          sessionFile: "s-feishu.jsonl",
+          updatedAt: 300,
+          channel: "feishu",
+          origin: { provider: "feishu" },
+        },
+        "agent:main:webchat:thread:t_demo": {
+          sessionId: "s-webchat",
+          sessionFile: "s-webchat.jsonl",
+          updatedAt: 200,
+          channel: "webchat",
+          origin: { provider: "webchat" },
+        },
+      },
+    });
+    vi.mocked(loadSessionCostSummary).mockImplementation(async ({ sessionId }) => {
+      if (sessionId === "s-feishu") {
+        return {
+          input: 10,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 72_800,
+          totalCost: 0,
+          inputCost: 0,
+          outputCost: 0,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        };
+      }
+      if (sessionId === "s-webchat") {
+        return {
+          input: 5,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 12,
+          totalCost: 0,
+          inputCost: 0,
+          outputCost: 0,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          missingCostEntries: 0,
+        };
+      }
+      return {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      };
+    });
+
+    const respond = await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      limit: 1,
+    });
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    const result = respond.mock.calls[0]?.[1] as {
+      sessions: Array<{ channel?: string }>;
+      aggregates: { byChannel: Array<{ channel: string; totals: { totalTokens: number } }> };
+    };
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]?.channel).toBe("feishu");
+    expect(result.aggregates.byChannel).toEqual([
+      expect.objectContaining({
+        channel: "feishu",
+        totals: expect.objectContaining({ totalTokens: 72_800 }),
+      }),
+      expect.objectContaining({
+        channel: "webchat",
+        totals: expect.objectContaining({ totalTokens: 12 }),
+      }),
+    ]);
+  });
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));

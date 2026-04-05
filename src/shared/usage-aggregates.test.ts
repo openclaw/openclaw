@@ -40,7 +40,7 @@ describe("shared/usage-aggregates", () => {
     });
   });
 
-  it("merges daily latency by date and computes aggregate tail sorting", () => {
+  it("merges daily latency by date and sorts channels by tokens before cost", () => {
     const dailyLatencyMap = new Map<
       string,
       {
@@ -62,8 +62,8 @@ describe("shared/usage-aggregates", () => {
 
     const tail = buildUsageAggregateTail({
       byChannelMap: new Map([
-        ["discord", { totalCost: 4 }],
-        ["telegram", { totalCost: 8 }],
+        ["discord", { totalCost: 0, totalTokens: 20 }],
+        ["telegram", { totalCost: 0, totalTokens: 80 }],
       ]),
       latencyTotals: {
         count: 3,
