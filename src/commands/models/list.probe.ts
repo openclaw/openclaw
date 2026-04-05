@@ -480,6 +480,7 @@ async function probeTarget(params: {
         provider: target.model.provider,
         model: target.model.model,
         authProfileId: target.profileId,
+        thinkLevel: "off",
         timeoutMs,
         runId: `probe-${crypto.randomUUID()}`,
         streamParams: { maxTokens },
