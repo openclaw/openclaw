@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import android.app.Notification
+import android.content.pm.ServiceInfo
 import android.content.Intent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -30,6 +31,27 @@ class NodeForegroundServiceTest {
     assertEquals(expectedFlags, savedIntent.flags and expectedFlags)
   }
 
+  @Test
+  fun foregroundServiceType_omitsLocationWhenPermissionMissing() {
+    val service = Robolectric.buildService(NodeForegroundService::class.java).get()
+
+    val serviceType = foregroundServiceType(service, locationGranted = false)
+
+    assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, serviceType)
+  }
+
+  @Test
+  fun foregroundServiceType_includesLocationWhenPermissionGranted() {
+    val service = Robolectric.buildService(NodeForegroundService::class.java).get()
+
+    val serviceType = foregroundServiceType(service, locationGranted = true)
+
+    assertEquals(
+      ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+      serviceType,
+    )
+  }
+
   private fun buildNotification(service: NodeForegroundService): Notification {
     val method =
       NodeForegroundService::class.java.getDeclaredMethod(
@@ -39,5 +61,15 @@ class NodeForegroundServiceTest {
       )
     method.isAccessible = true
     return method.invoke(service, "Title", "Text") as Notification
+  }
+
+  private fun foregroundServiceType(service: NodeForegroundService, locationGranted: Boolean): Int {
+    val method =
+      NodeForegroundService::class.java.getDeclaredMethod(
+        "foregroundServiceType",
+        Boolean::class.javaPrimitiveType,
+      )
+    method.isAccessible = true
+    return method.invoke(service, locationGranted) as Int
   }
 }

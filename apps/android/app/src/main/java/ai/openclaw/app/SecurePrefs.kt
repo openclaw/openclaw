@@ -524,11 +524,7 @@ class SecurePrefs(
 
   private fun loadLocationMode(): LocationMode {
     val raw = plainPrefs.getString(locationModeKey, "off")
-    val resolved = LocationMode.fromRawValue(raw)
-    if (raw?.trim()?.lowercase() == "always") {
-      plainPrefs.edit { putString(locationModeKey, resolved.rawValue) }
-    }
-    return resolved
+    return LocationMode.fromRawValue(raw)
   }
 
   private fun loadWakeWords(): List<String> {

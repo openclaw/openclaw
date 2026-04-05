@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,7 +8,9 @@ import android.app.Service
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -140,9 +143,21 @@ class NodeForegroundService : Service() {
     startForeground(
       NOTIFICATION_ID,
       notification,
-      ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+      foregroundServiceType(locationGranted = hasAnyLocationPermission()),
     )
     didStartForeground = true
+  }
+
+  private fun hasAnyLocationPermission(): Boolean {
+    return ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+      PackageManager.PERMISSION_GRANTED ||
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+      PackageManager.PERMISSION_GRANTED
+  }
+
+  private fun foregroundServiceType(locationGranted: Boolean): Int {
+    return ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
+      if (locationGranted) ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0
   }
 
   companion object {
