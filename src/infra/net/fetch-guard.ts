@@ -158,6 +158,13 @@ function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
+function isMockedFetch(fetchImpl: FetchLike | undefined): boolean {
+  if (typeof fetchImpl !== "function") {
+    return false;
+  }
+  return typeof (fetchImpl as FetchLike & { mock?: unknown }).mock === "object";
+}
+
 export function retainSafeHeadersForCrossOriginRedirectHeaders(
   headers?: HeadersInit,
 ): Record<string, string> | undefined {
@@ -296,14 +303,17 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
       const supportsDispatcherInit =
         params.fetchImpl !== undefined ||
+        isMockedFetch(defaultFetch) ||
         (defaultFetch as DispatcherCompatibleFetch).__openclawAcceptsDispatcher === true;
-      // Use caller-provided fetch stubs when present; otherwise fall back to
-      // undici's fetch whenever we attach a dispatcher because the global fetch
-      // path will not honor per-request dispatchers.
-      const response =
-        dispatcher && !supportsDispatcherInit
-          ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-          : await defaultFetch(parsedUrl.toString(), init);
+      // Explicit caller stubs, test-installed global fetch mocks, and
+      // dispatcher-aware wrappers should win.
+      // Otherwise, fall back to undici's fetch whenever we attach a dispatcher,
+      // because the default global fetch path will not honor per-request
+      // dispatchers.
+      const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
+      const response = shouldUseRuntimeFetch
+        ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+        : await defaultFetch(parsedUrl.toString(), init);
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");

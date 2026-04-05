@@ -233,9 +233,11 @@ describe("fetchWithSsrFGuard hardening", () => {
   it("uses runtime undici fetch when attaching a dispatcher", async () => {
     const runtimeFetch = vi.fn(async () => okResponse());
     const originalGlobalFetch = globalThis.fetch;
-    const globalFetch = vi.fn(async () => {
+    let globalFetchCalls = 0;
+    const globalFetch = async () => {
+      globalFetchCalls += 1;
       throw new Error("global fetch should not be used when a dispatcher is attached");
-    });
+    };
 
     class MockAgent {
       constructor(readonly options: unknown) {}
@@ -262,7 +264,46 @@ describe("fetchWithSsrFGuard hardening", () => {
       });
 
       expect(runtimeFetch).toHaveBeenCalledTimes(1);
-      expect(globalFetch).not.toHaveBeenCalled();
+      expect(globalFetchCalls).toBe(0);
+      await result.release();
+    } finally {
+      (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
+    }
+  });
+
+  it("uses mocked global fetch when tests stub it", async () => {
+    const runtimeFetch = vi.fn(async () => {
+      throw new Error("runtime fetch should not be used when global fetch is mocked");
+    });
+    const originalGlobalFetch = globalThis.fetch;
+    const globalFetch = vi.fn(async () => okResponse());
+
+    class MockAgent {
+      constructor(readonly options: unknown) {}
+    }
+    class MockEnvHttpProxyAgent {
+      constructor(readonly options: unknown) {}
+    }
+    class MockProxyAgent {
+      constructor(readonly options: unknown) {}
+    }
+
+    (globalThis as Record<string, unknown>).fetch = globalFetch as typeof fetch;
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: MockAgent,
+      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+      ProxyAgent: MockProxyAgent,
+      fetch: runtimeFetch,
+    };
+
+    try {
+      const result = await fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        lookupFn: createPublicLookup(),
+      });
+
+      expect(globalFetch).toHaveBeenCalledTimes(1);
+      expect(runtimeFetch).not.toHaveBeenCalled();
       await result.release();
     } finally {
       (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
