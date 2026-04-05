@@ -9,15 +9,23 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
+import { resolveDefaultMatrixAccountId } from "./matrix/accounts.js";
 import {
   resolveMatrixSessionAccountId,
   resolveMatrixStoredRoomId,
 } from "./matrix/session-store-metadata.js";
 import { resolveMatrixDirectUserId, resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 
-function resolveMatrixDmSessionScope(
+function resolveEffectiveMatrixAccountId(
   params: Pick<ChannelOutboundSessionRouteParams, "cfg" | "accountId">,
-): "per-user" | "per-room" {
+): string {
+  return normalizeAccountId(params.accountId ?? resolveDefaultMatrixAccountId(params.cfg));
+}
+
+function resolveMatrixDmSessionScope(params: {
+  cfg: ChannelOutboundSessionRouteParams["cfg"];
+  accountId: string;
+}): "per-user" | "per-room" {
   return (
     resolveMatrixAccountConfig({
       cfg: params.cfg,
@@ -29,7 +37,7 @@ function resolveMatrixDmSessionScope(
 function resolveMatrixCurrentDmRoomId(params: {
   cfg: ChannelOutboundSessionRouteParams["cfg"];
   agentId: string;
-  accountId?: string | null;
+  accountId: string;
   currentSessionKey?: string;
   targetUserId: string;
 }): string | undefined {
@@ -53,7 +61,7 @@ function resolveMatrixCurrentDmRoomId(params: {
       resolveMatrixSessionAccountId(
         existing.deliveryContext?.accountId ?? existing.lastAccountId ?? existing.origin?.accountId,
       ) ?? undefined;
-    if (!currentAccountId || currentAccountId !== normalizeAccountId(params.accountId)) {
+    if (!currentAccountId || currentAccountId !== params.accountId) {
       return undefined;
     }
     const currentRoomId = resolveMatrixStoredRoomId({
@@ -87,12 +95,17 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
   if (!target) {
     return null;
   }
+  const effectiveAccountId = resolveEffectiveMatrixAccountId(params);
   const roomScopedDmId =
-    target.kind === "user" && resolveMatrixDmSessionScope(params) === "per-room"
+    target.kind === "user" &&
+    resolveMatrixDmSessionScope({
+      cfg: params.cfg,
+      accountId: effectiveAccountId,
+    }) === "per-room"
       ? resolveMatrixCurrentDmRoomId({
           cfg: params.cfg,
           agentId: params.agentId,
-          accountId: params.accountId,
+          accountId: effectiveAccountId,
           currentSessionKey: params.currentSessionKey,
           targetUserId: target.id,
         })
@@ -112,7 +125,7 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "matrix",
-    accountId: params.accountId,
+    accountId: effectiveAccountId,
     peer,
     chatType,
     from,

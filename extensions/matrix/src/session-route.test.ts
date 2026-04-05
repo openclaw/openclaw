@@ -245,4 +245,63 @@ describe("resolveMatrixOutboundSessionRoute", () => {
       to: "room:!dm:example.org",
     });
   });
+
+  it("uses the effective default Matrix account when accountId is omitted", () => {
+    const storePath = createTempStore({
+      "agent:main:matrix:channel:!dm:example.org": {
+        sessionId: "sess-1",
+        updatedAt: Date.now(),
+        chatType: "direct",
+        origin: {
+          chatType: "direct",
+          from: "matrix:@alice:example.org",
+          to: "room:!dm:example.org",
+          accountId: "ops",
+        },
+        deliveryContext: {
+          channel: "matrix",
+          to: "room:!dm:example.org",
+          accountId: "ops",
+        },
+      },
+    });
+    const cfg = {
+      session: {
+        store: storePath,
+      },
+      channels: {
+        matrix: {
+          defaultAccount: "ops",
+          accounts: {
+            ops: {
+              dm: {
+                sessionScope: "per-room",
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const route = resolveMatrixOutboundSessionRoute({
+      cfg,
+      agentId: "main",
+      currentSessionKey: "agent:main:matrix:channel:!dm:example.org",
+      target: "@alice:example.org",
+      resolvedTarget: {
+        to: "@alice:example.org",
+        kind: "user",
+        source: "normalized",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:matrix:channel:!dm:example.org",
+      baseSessionKey: "agent:main:matrix:channel:!dm:example.org",
+      peer: { kind: "channel", id: "!dm:example.org" },
+      chatType: "direct",
+      from: "matrix:@alice:example.org",
+      to: "room:!dm:example.org",
+    });
+  });
 });
