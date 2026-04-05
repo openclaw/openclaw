@@ -454,9 +454,9 @@ export async function runPreparedReply(
     queueMode: resolvedQueue.mode,
   });
   if (isActive && activeRunQueueAction === "run-now") {
-    const ended = await replyRunRegistry.waitForIdle(sessionKey);
+    await replyRunRegistry.waitForIdle(sessionKey);
     preparedSessionState = resolvePreparedSessionState();
-    if (!ended && replyRunRegistry.isActive(sessionKey)) {
+    if (replyRunRegistry.isActive(sessionKey)) {
       typing.cleanup();
       return {
         text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
