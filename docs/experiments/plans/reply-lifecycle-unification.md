@@ -51,7 +51,7 @@ The refactor must satisfy all of the following:
 
 - each reply-producing inbound turn creates exactly one `ReplyOperation`
 - the operation is created before any eager reset-success notice or preflight work
-- the operation is registered in the active-run registry immediately and stays registered until the turn reaches a terminal outcome
+- the operation is registered in the active-run registry as soon as the turn owns the session, and stays registered until the turn reaches a terminal outcome
 - `/stop` targets that same operation in every phase
 - preflight compaction, memory flush, and main reply execution all run under the same operation-owned `AbortController`
 - there is never a window where reply work exists for a session but `abortEmbeddedPiRun(sessionId)` cannot see it
@@ -175,7 +175,7 @@ The embedded runner and command queue keep their generic responsibilities. They 
 
 `ReplyOperation` owns one stable registry handle for the entire lifetime of the turn.
 
-That handle is created in `reply-operation.ts`, registered immediately through `setActiveEmbeddedRun(sessionId, handle, sessionKey)`, may be moved to a replacement `sessionId` through `moveActiveEmbeddedRun(...)` when memory flush rotates the backing session, and is cleared exactly once when the operation reaches a terminal state.
+That handle is created in `reply-operation.ts`, registered through `setActiveEmbeddedRun(sessionId, handle, sessionKey)` once the turn owns the session, may be moved to a replacement `sessionId` through `moveActiveEmbeddedRun(...)` when memory flush rotates the backing session, and is cleared exactly once when the operation reaches a terminal state.
 
 `run/attempt.ts` does not become the registry owner for reply-driven turns. When a `ReplyOperation` is present, the embedded runner attaches its transient streaming handle to the already-registered operation handle instead of registering a second lifecycle in `runs.ts`.
 
@@ -206,6 +206,7 @@ Queue behavior is fixed as follows:
 - `ReplyOperation` is created before queue admission and enters phase `queued`
 - if queue admission rejects immediately with `GatewayDrainingError`, the operation fails with `gateway_draining`
 - if the lane later rejects the task with `CommandLaneClearedError`, the operation fails with `command_lane_cleared`
+- if a same-session run is already active and queue policy still resolves to `run-now`, the new turn waits for `waitForEmbeddedPiRunEnd(sessionId)` to settle before registering its stable handle
 - if `/stop` aborts the operation while it is still queued, the operation transitions to `aborted`, clears its registry handle immediately, and the queued closure becomes a no-op when it is eventually dequeued
 
 The queue continues to be generic infrastructure. No reply-specific state or UX logic moves into `command-queue.ts`.
@@ -219,7 +220,7 @@ Preflight compaction and memory flush do not run outside the active-run registry
 The exact flow is:
 
 - `get-reply-run.ts` creates `ReplyOperation`
-- `ReplyOperation` registers its stable handle immediately
+- `ReplyOperation` registers its stable handle before preflight begins and only after any previous same-session `run-now` overlap has drained
 - `agent-runner.ts` moves the phase from `queued` to `preflight_compacting`
 - `agent-runner-memory.ts` passes `operation.abortSignal` into preflight compaction
 - if memory flush is needed, `agent-runner-memory.ts` moves the phase to `memory_flushing` before starting it
@@ -315,7 +316,7 @@ The refactor is not done until all of the following are true:
 - reply-producing `/new` does not emit a standalone success notice before execution
 - drain and lane-clear failures do not use the generic external failure message
 - only one stable registry handle exists per reply turn
-- the registry handle is registered immediately, may move to a replacement session id during memory flush, and is cleared exactly once
+- the registry handle is registered before preflight, never overwrites a still-active prior same-session handle, may move to a replacement session id during memory flush, and is cleared exactly once
 
 ## Tradeoffs
 

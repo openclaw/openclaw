@@ -10,6 +10,7 @@ vi.mock("../../agents/pi-embedded.runtime.js", () => ({
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: vi.fn().mockReturnValue("session:session-key"),
+  waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("../../config/sessions/group.js", () => ({
@@ -102,6 +103,10 @@ let drainFormattedSystemEvents: typeof import("./session-system-events.js").drai
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let getActiveEmbeddedRunCount: typeof import("../../agents/pi-embedded-runner/runs.js").getActiveEmbeddedRunCount;
 let abortEmbeddedPiRun: typeof import("../../agents/pi-embedded-runner/runs.js").abortEmbeddedPiRun;
+let clearActiveEmbeddedRun: typeof import("../../agents/pi-embedded-runner/runs.js").clearActiveEmbeddedRun;
+let setActiveEmbeddedRun: typeof import("../../agents/pi-embedded-runner/runs.js").setActiveEmbeddedRun;
+let runsTesting: typeof import("../../agents/pi-embedded-runner/runs.js").__testing;
+let resetActiveEmbeddedRuns: typeof import("../../agents/pi-embedded-runner/runs.js").__testing.resetActiveEmbeddedRuns;
 let loadScopeCounter = 0;
 
 async function loadFreshGetReplyRunModuleForTest() {
@@ -193,14 +198,23 @@ describe("runPreparedReply media-only handling", () => {
     ({ routeReply } = await import("./route-reply.runtime.js"));
     ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
-    ({ getActiveEmbeddedRunCount, abortEmbeddedPiRun } =
-      await import("../../agents/pi-embedded-runner/runs.js"));
+    ({
+      __testing: runsTesting,
+      getActiveEmbeddedRunCount,
+      abortEmbeddedPiRun,
+      clearActiveEmbeddedRun,
+      setActiveEmbeddedRun,
+    } = await import("../../agents/pi-embedded-runner/runs.js"));
+    resetActiveEmbeddedRuns = () => {
+      runsTesting.resetActiveEmbeddedRuns();
+    };
   });
 
   beforeEach(async () => {
     storeRuntimeLoads.mockClear();
     updateSessionStore.mockReset();
     vi.clearAllMocks();
+    resetActiveEmbeddedRuns();
     await loadFreshGetReplyRunModuleForTest();
   });
 
@@ -300,6 +314,49 @@ describe("runPreparedReply media-only handling", () => {
 
     expect(getActiveEmbeddedRunCount()).toBe(activeBefore);
     abortEmbeddedPiRun(sessionId);
+  });
+  it("waits for the previous active run to clear before registering a new reply operation", async () => {
+    const oldAbort = vi.fn();
+    const oldHandle = {
+      queueMessage: vi.fn(async () => {}),
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: oldAbort,
+    };
+    setActiveEmbeddedRun("session-overlap", oldHandle, "session-key");
+
+    let resolveWait!: (value: boolean) => void;
+    const waitPromise = new Promise<boolean>((resolve) => {
+      resolveWait = resolve;
+    });
+
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    vi.mocked(piRuntime.abortEmbeddedPiRun).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValue(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValue(false);
+    vi.mocked(piRuntime.waitForEmbeddedPiRunEnd).mockImplementationOnce(
+      async () => await waitPromise,
+    );
+    const queueSettings = await import("./queue/settings.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-overlap",
+      }),
+    );
+
+    await Promise.resolve();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+    expect(abortEmbeddedPiRun("session-overlap")).toBe(true);
+    expect(oldAbort).toHaveBeenCalledTimes(1);
+
+    clearActiveEmbeddedRun("session-overlap", oldHandle, "session-key");
+    resolveWait(true);
+
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
   it("uses inbound origin channel for run messageProvider", async () => {
     await runPreparedReply(

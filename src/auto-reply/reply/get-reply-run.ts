@@ -400,6 +400,7 @@ export async function runPreparedReply(
     isEmbeddedPiRunActive,
     isEmbeddedPiRunStreaming,
     resolveEmbeddedSessionLane,
+    waitForEmbeddedPiRunEnd,
   } = await loadPiEmbeddedRuntime();
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
   const laneSize = getQueueSize(sessionLaneKey);
@@ -422,6 +423,15 @@ export async function runPreparedReply(
     shouldFollowup,
     queueMode: resolvedQueue.mode,
   });
+  if (isActive && activeRunQueueAction === "run-now") {
+    const ended = await waitForEmbeddedPiRunEnd(sessionIdFinal);
+    if (!ended && isEmbeddedPiRunActive(sessionIdFinal)) {
+      typing.cleanup();
+      return {
+        text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+      };
+    }
+  }
   const shouldCreateReplyOperation =
     !(shouldSteer && isStreaming && !shouldFollowup) &&
     activeRunQueueAction !== "drop" &&
