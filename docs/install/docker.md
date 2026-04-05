@@ -200,6 +200,20 @@ Then use `clawdock-start`, `clawdock-stop`, `clawdock-dashboard`, etc. Run
 `clawdock-help` for all commands.
 See [ClawDock](/install/clawdock) for the full helper guide.
 
+### Keep macOS awake (optional)
+
+Docker itself does not reliably keep macOS awake. If the gateway must stay
+online for Slack, webhooks, or scheduled jobs:
+
+```bash
+scripts/openclaw-keepawake.sh on
+scripts/openclaw-keepawake.sh status
+scripts/openclaw-keepawake.sh off
+```
+
+By default this uses `caffeinate -imsu`, which allows the displays to sleep.
+Set `OPENCLAW_KEEPAWAKE_FLAGS=-dimsu` if you also want to keep the displays on.
+
 <AccordionGroup>
   <Accordion title="Enable agent sandbox for Docker gateway">
     ```bash
@@ -302,6 +316,89 @@ See [ClawDock](/install/clawdock) for the full helper guide.
     [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md).
   </Accordion>
 </AccordionGroup>
+
+## Backup and migration (Intel Mac to Apple Silicon)
+
+For low-disruption host migration, move OpenClaw data and config, then rebuild
+the Docker image natively on the new machine.
+
+Use:
+
+- `scripts/migrate/backup-openclaw.sh` on the source host
+- `scripts/migrate/restore-openclaw.sh` on the target host
+
+### 1) Create a backup on the source host
+
+From the repo root:
+
+```bash
+scripts/migrate/backup-openclaw.sh
+```
+
+The archive includes:
+
+- OpenClaw config dir (`OPENCLAW_CONFIG_DIR` or `~/.openclaw`)
+- OpenClaw workspace dir (`OPENCLAW_WORKSPACE_DIR` or `~/.openclaw/workspace`)
+- `.env` and Docker setup files from the repo root
+- metadata and an internal checksum manifest
+
+Output files:
+
+- `backups/openclaw-backup-<timestamp>.tar.gz`
+- `backups/openclaw-backup-<timestamp>.tar.gz.sha256`
+
+Optional path overrides:
+
+```bash
+scripts/migrate/backup-openclaw.sh \
+  --config-dir "$HOME/.openclaw" \
+  --workspace-dir "$HOME/.openclaw/workspace" \
+  --output-dir "$HOME/openclaw-backups"
+```
+
+### 2) Transfer the archive to the target host
+
+Copy the archive and checksum file to the new machine using your normal secure
+transfer method.
+
+### 3) Restore on the target host
+
+From the repo root on the target host:
+
+```bash
+scripts/migrate/restore-openclaw.sh --archive /path/to/openclaw-backup-<timestamp>.tar.gz
+```
+
+Default restore behavior:
+
+- verifies archive checksums
+- stops `openclaw-gateway` before restore
+- snapshots current config and workspace as `.pre-restore-<timestamp>`
+- restores config and workspace from backup
+- writes the backup env file as `.env.from-backup` for review
+
+To overwrite `.env` directly:
+
+```bash
+scripts/migrate/restore-openclaw.sh \
+  --archive /path/to/openclaw-backup-<timestamp>.tar.gz \
+  --apply-env
+```
+
+### 4) Rebuild and validate on the target architecture
+
+Always rebuild on Apple Silicon:
+
+```bash
+docker compose up -d --build --force-recreate openclaw-gateway
+docker compose run --rm openclaw-cli health
+docker compose run --rm openclaw-cli channels status --probe
+```
+
+### Architecture migration note
+
+Do not carry over architecture-specific binary caches from x86 to arm hosts.
+Rebuild containers and reinstall native toolchains on the target host.
 
 ### Running on a VPS?
 
