@@ -1,0 +1,92 @@
+{
+  "name": "ai-code-reviewer",
+  "version": "1.0.0",
+  "description": "AI-powered code review assistant for quality, security, and performance analysis",
+  "author": "Abdullah Tariq <abdullah.tariq.7654@gmail.com>",
+  "license": "MIT",
+  "keywords": [
+    "code-review",
+    "static-analysis",
+    "security",
+    "performance",
+    "best-practices",
+    "linting",
+    "ai-assistant"
+  ],
+  "engines": {
+    "openclaw": ">=2026.3.0"
+  },
+  "skill": {
+    "id": "ai-code-reviewer",
+    "name": "AI Code Reviewer",
+    "description": "Intelligent code review with security, performance, and quality analysis",
+    "category": "development",
+    "triggers": [
+      "review code",
+      "code review",
+      "analyze code",
+      "check code",
+      "find bugs",
+      "security review",
+      "performance review",
+      "code quality"
+    ],
+    "capabilities": [
+      "code_analysis",
+      "security_scanning",
+      "performance_analysis",
+      "style_checking",
+      "bug_detection"
+    ],
+    "supportedLanguages": [
+      "typescript",
+      "javascript",
+      "python",
+      "java",
+      "go",
+      "rust",
+      "ruby",
+      "php",
+      "swift",
+      "kotlin",
+      "c",
+      "cpp",
+      "csharp"
+    ]
+  },
+  "config": {
+    "severityThreshold": {
+      "type": "string",
+      "enum": ["critical", "warning", "suggestion"],
+      "default": "warning",
+      "description": "Minimum severity level to report"
+    },
+    "maxIssues": {
+      "type": "number",
+      "default": 50,
+      "description": "Maximum number of issues to report"
+    },
+    "enableSecurityScan": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable security vulnerability detection"
+    },
+    "enablePerformanceScan": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable performance issue detection"
+    },
+    "customRules": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Additional custom rules to enforce"
+    },
+    "ignorePatterns": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["**/*.test.*", "**/*.spec.*", "**/node_modules/**"],
+      "description": "File patterns to ignore"
+    }
+  }
+}
