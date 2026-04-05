@@ -1,1 +1,1 @@
-export * from "../../packages/memory-host-sdk/src/engine-embeddings.js";
+export * from "../memory-host-sdk/engine-embeddings.js";
