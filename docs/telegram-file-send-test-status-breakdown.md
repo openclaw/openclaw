@@ -26,7 +26,7 @@
 ## 5. Source CLI end-to-end dry-run
 - 狀態：❌ 尚未通過
 - 指令範例：
-  - `node openclaw.mjs message send --channel telegram --target 239426573 --media ./README.md --force-document --reply-to 5206 --dry-run --json`
+  - `node openclaw.mjs message send --channel telegram --target <telegramChatId> --media ./README.md --force-document --reply-to <messageId> --dry-run --json`
 - 阻塞原因：
   - source CLI / shared bundle / matrix entrypoint 問題
   - 錯誤：`Multiple matrix-js-sdk entrypoints detected!`

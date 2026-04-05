@@ -48,7 +48,7 @@
 ## 尚未完成
 ### End-to-end source CLI dry-run
 嘗試執行：
-- `node openclaw.mjs message send --channel telegram --target 239426573 --media ./README.md --force-document --reply-to 5206 --dry-run --json`
+- `node openclaw.mjs message send --channel telegram --target <telegramChatId> --media ./README.md --force-document --reply-to <messageId> --dry-run --json`
 
 但 source CLI 在 plugin registry 載入階段失敗，錯誤為：
 - `Multiple matrix-js-sdk entrypoints detected!`
