@@ -198,6 +198,7 @@
   "target-resolver-runtime",
   "telegram-command-config",
   "thread-ownership",
+  "telegram-command-config",
   "tlon",
   "tool-send",
   "twitch",
