@@ -1,3 +1,5 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { logIoError } from "./io-errors.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -99,6 +101,8 @@ const OPEN_DM_POLICY_ALLOW_FROM_RE =
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const CONFIG_HEALTH_STATE_FILENAME = "config-health.json";
 const loggedInvalidConfigs = new Set<string>();
+
+const configLogger = createSubsystemLogger("config/io");
 
 type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
 
@@ -290,8 +294,10 @@ async function tightenStateDirPermissionsIfNeeded(params: {
       return;
     }
     await params.fsModule.promises.chmod(configDir, 0o700);
-  } catch {
-    // Best-effort hardening only; callers still need the config write to proceed.
+  } catch (err) {
+    configLogger.debug(
+      `Failed to harden config directory permissions: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
@@ -726,8 +732,8 @@ async function appendConfigAuditRecord(
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "write", path: "config-audit.jsonl", error: err });
   }
 }
 
@@ -742,8 +748,8 @@ function appendConfigAuditRecordSync(
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "write", path: "config-audit.jsonl", error: err });
   }
 }
 
@@ -753,7 +759,8 @@ async function readConfigHealthState(deps: Required<ConfigIoDeps>): Promise<Conf
     const raw = await deps.fs.promises.readFile(healthPath, "utf-8");
     const parsed = JSON.parse(raw);
     return isPlainObject(parsed) ? (parsed as ConfigHealthState) : {};
-  } catch {
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "read", path: "config-health.json", error: err });
     return {};
   }
 }
@@ -764,7 +771,8 @@ function readConfigHealthStateSync(deps: Required<ConfigIoDeps>): ConfigHealthSt
     const raw = deps.fs.readFileSync(healthPath, "utf-8");
     const parsed = JSON.parse(raw);
     return isPlainObject(parsed) ? (parsed as ConfigHealthState) : {};
-  } catch {
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "read", path: "config-health.json", error: err });
     return {};
   }
 }
@@ -780,8 +788,8 @@ async function writeConfigHealthState(
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "write", path: "config-health.json", error: err });
   }
 }
 
@@ -793,8 +801,8 @@ function writeConfigHealthStateSync(deps: Required<ConfigIoDeps>, state: ConfigH
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "write", path: "config-health.json", error: err });
   }
 }
 
@@ -883,7 +891,8 @@ async function readConfigFingerprintForPath(
       gatewayMode: resolveGatewayMode(parsed),
       observedAt: new Date().toISOString(),
     };
-  } catch {
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "read", path: targetPath, error: err });
     return null;
   }
 }
@@ -907,7 +916,8 @@ function readConfigFingerprintForPathSync(
       gatewayMode: resolveGatewayMode(parsed),
       observedAt: new Date().toISOString(),
     };
-  } catch {
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "read", path: targetPath, error: err });
     return null;
   }
 }
@@ -930,7 +940,8 @@ async function persistClobberedConfigSnapshot(params: {
       flag: "wx",
     });
     return targetPath;
-  } catch {
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "write", path: targetPath, error: err });
     return null;
   }
 }
@@ -949,7 +960,8 @@ function persistClobberedConfigSnapshotSync(params: {
       flag: "wx",
     });
     return targetPath;
-  } catch {
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "write", path: targetPath, error: err });
     return null;
   }
 }
@@ -1021,8 +1033,8 @@ async function maybeRecoverSuspiciousConfigRead(params: {
   try {
     await params.deps.fs.promises.copyFile(backupPath, params.configPath);
     restoredFromBackup = true;
-  } catch {
-    // Keep serving the backup payload for this read even if write-back fails.
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "write", path: params.configPath, error: err });
   }
 
   params.deps.logger.warn(
@@ -1128,7 +1140,8 @@ function maybeRecoverSuspiciousConfigReadSync(params: {
   let backupRaw: string;
   try {
     backupRaw = params.deps.fs.readFileSync(backupPath, "utf-8");
-  } catch {
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "read", path: backupPath, error: err });
     return { raw: params.raw, parsed: params.parsed };
   }
   const backupParsedRes = parseConfigJson5(backupRaw, params.deps.json5);
@@ -1151,8 +1164,8 @@ function maybeRecoverSuspiciousConfigReadSync(params: {
   try {
     params.deps.fs.copyFileSync(backupPath, params.configPath);
     restoredFromBackup = true;
-  } catch {
-    // Keep serving the backup payload for this read even if write-back fails.
+  } catch (err) {
+    logIoError({ logger: configLogger, operation: "write", path: params.configPath, error: err });
   }
 
   params.deps.logger.warn(
@@ -2119,7 +2132,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           changedPaths = new Set<string>();
           collectChangedPaths(snapshot.config, cfg, "", changedPaths);
         }
-      } catch {
+      } catch (err) {
+        logIoError({ logger: configLogger, operation: "read", path: configPath, error: err });
         envRefMap = null;
       }
     }
@@ -2157,9 +2171,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");
         const parsedRes = parseConfigJson5(currentRaw, deps.json5);
         if (parsedRes.ok) {
-          // Use env snapshot from when config was loaded (if available) to avoid
-          // TOCTOU issues where env changes between load and write. Falls back to
-          // live env if no snapshot exists (e.g., first write before any load).
           const envForRestore = options.envSnapshotForRestore ?? deps.env;
           cfgToWrite = restoreEnvVarRefs(
             cfgToWrite,
@@ -2168,8 +2179,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           ) as OpenClawConfig;
         }
       }
-    } catch {
-      // If reading the current file fails, write cfg as-is (no env restoration)
+    } catch (err) {
+      logIoError({ logger: configLogger, operation: "read", path: configPath, error: err });
     }
 
     const dir = path.dirname(configPath);
@@ -2400,8 +2411,10 @@ function notifyConfigWriteListeners(event: ConfigWriteNotification): void {
   for (const listener of configWriteListeners) {
     try {
       listener(event);
-    } catch {
-      // Best-effort observer path only; successful writes must still complete.
+    } catch (err) {
+      configLogger.debug(
+        `Config write listener error: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 }
@@ -2560,8 +2573,10 @@ export async function writeConfigFile(
     } catch (error) {
       try {
         refreshHandler.clearOnRefreshFailure?.();
-      } catch {
-        // Keep the original refresh failure as the surfaced error.
+      } catch (err) {
+        configLogger.debug(
+          `Refresh handler clearOnRefreshFailure error: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
       const detail = error instanceof Error ? error.message : String(error);
       throw new ConfigRuntimeRefreshError(

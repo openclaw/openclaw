@@ -1,5 +1,9 @@
 import path from "node:path";
 
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const backupLogger = createSubsystemLogger("config/backup-rotation");
+
 export const CONFIG_BACKUP_COUNT = 5;
 
 export interface BackupRotationFs {
@@ -22,16 +26,16 @@ export async function rotateConfigBackups(
   }
   const backupBase = `${configPath}.bak`;
   const maxIndex = CONFIG_BACKUP_COUNT - 1;
-  await ioFs.unlink(`${backupBase}.${maxIndex}`).catch(() => {
-    // best-effort
+  await ioFs.unlink(`${backupBase}.${maxIndex}`).catch((err) => {
+    backupLogger.debug(`Failed to remove old backup: ${err}`);
   });
   for (let index = maxIndex - 1; index >= 1; index -= 1) {
-    await ioFs.rename(`${backupBase}.${index}`, `${backupBase}.${index + 1}`).catch(() => {
-      // best-effort
+    await ioFs.rename(`${backupBase}.${index}`, `${backupBase}.${index + 1}`).catch((err) => {
+      backupLogger.debug(`Failed to rotate backup ${index} to ${index + 1}: ${err}`);
     });
   }
-  await ioFs.rename(backupBase, `${backupBase}.1`).catch(() => {
-    // best-effort
+  await ioFs.rename(backupBase, `${backupBase}.1`).catch((err) => {
+    backupLogger.debug(`Failed to create backup.1: ${err}`);
   });
 }
 
@@ -89,8 +93,9 @@ export async function cleanOrphanBackups(
   let entries: string[];
   try {
     entries = await ioFs.readdir(dir);
-  } catch {
-    return; // best-effort
+  } catch (err) {
+    backupLogger.debug(`Failed to read backup directory: ${err}`);
+    return;
   }
 
   for (const entry of entries) {
@@ -101,9 +106,8 @@ export async function cleanOrphanBackups(
     if (validSuffixes.has(suffix)) {
       continue;
     }
-    // This is an orphan — remove it
-    await ioFs.unlink(path.join(dir, entry)).catch(() => {
-      // best-effort
+    await ioFs.unlink(path.join(dir, entry)).catch((err) => {
+      backupLogger.debug(`Failed to remove orphan backup: ${err}`);
     });
   }
 }
