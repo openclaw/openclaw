@@ -789,114 +789,86 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  it.each([
-    {
-      name: "heartbeat.session",
-      caseDir: "hb-explicit-session",
-      peerKind: "group" as const,
-      peerId: "120363401234567890@g.us",
-      message: "Group alert",
-      applyOverride: ({ cfg, sessionKey }: { cfg: OpenClawConfig; sessionKey: string }) => {
-        if (cfg.agents?.defaults?.heartbeat) {
-          cfg.agents.defaults.heartbeat.session = sessionKey;
-        }
-      },
-      runOptions: ({ sessionKey: _sessionKey }: { sessionKey: string }) => ({
-        sessionKey: undefined as string | undefined,
-      }),
-    },
-    {
-      name: "runHeartbeatOnce sessionKey arg",
-      caseDir: "hb-forced-session-override",
-      peerKind: "group" as const,
-      peerId: "120363401234567891@g.us",
-      message: "Forced alert",
-      applyOverride: () => {},
-      runOptions: ({ sessionKey }: { sessionKey: string }) => ({ sessionKey }),
-    },
-  ])(
-    "resolves configured and forced session key overrides: $name",
-    async ({ name, caseDir, peerKind, peerId, message, applyOverride, runOptions }) => {
-      const replySpy = vi.fn();
-      try {
-        const tmpDir = await createCaseDir(caseDir);
-        const storePath = path.join(tmpDir, "sessions.json");
-        const cfg: OpenClawConfig = {
-          agents: {
-            defaults: {
-              workspace: tmpDir,
-              heartbeat: {
-                every: "5m",
-                target: "last",
-              },
+  it("keeps heartbeat runs on the main session even when heartbeat.session targets a peer session", async () => {
+    const replySpy = vi.fn();
+    try {
+      const tmpDir = await createCaseDir("hb-explicit-session-routes-main");
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
             },
           },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: { store: storePath },
-        };
-        const mainSessionKey = resolveMainSessionKey(cfg);
-        const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
-        const overrideSessionKey = buildAgentPeerSessionKey({
-          agentId,
-          channel: "whatsapp",
-          peerKind,
-          peerId,
-        });
-        applyOverride({ cfg, sessionKey: overrideSessionKey });
-
-        await fs.writeFile(
-          storePath,
-          JSON.stringify({
-            [mainSessionKey]: {
-              sessionId: "sid-main",
-              updatedAt: Date.now(),
-              lastChannel: "whatsapp",
-              lastTo: "120363401234567890@g.us",
-            },
-            [overrideSessionKey]: {
-              sessionId: `sid-${peerKind}`,
-              updatedAt: Date.now() + 10_000,
-              lastChannel: "whatsapp",
-              lastTo: peerId,
-            },
-          }),
-        );
-
-        replySpy.mockClear();
-        replySpy.mockResolvedValue([{ text: message }]);
-        const sendWhatsApp = vi
-          .fn<
-            (
-              to: string,
-              text: string,
-              opts?: unknown,
-            ) => Promise<{ messageId: string; toJid: string }>
-          >()
-          .mockResolvedValue({ messageId: "m1", toJid: "jid" });
-
-        await runHeartbeatOnce({
-          cfg,
-          ...runOptions({ sessionKey: overrideSessionKey }),
-          deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
-        });
-
-        expect(sendWhatsApp, name).toHaveBeenCalledTimes(1);
-        expect(sendWhatsApp, name).toHaveBeenCalledWith(peerId, message, expect.any(Object));
-        expect(replySpy, name).toHaveBeenCalledWith(
-          expect.objectContaining({
-            SessionKey: overrideSessionKey,
-            From: peerId,
-            To: peerId,
-            Provider: "heartbeat",
-          }),
-          expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
-          cfg,
-        );
-      } finally {
-        replySpy.mockReset();
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
+      const subagentSessionKey = `agent:${agentId}:subagent:test-heartbeat-routing`;
+      if (cfg.agents?.defaults?.heartbeat) {
+        cfg.agents.defaults.heartbeat.session = subagentSessionKey;
       }
-    },
-  );
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [mainSessionKey]: {
+            sessionId: "sid-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+          [subagentSessionKey]: {
+            sessionId: "sid-subagent",
+            updatedAt: Date.now() + 10_000,
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567891@g.us",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Main alert" }]);
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: subagentSessionKey,
+        deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "120363401234567890@g.us",
+        "Main alert",
+        expect.any(Object),
+      );
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: mainSessionKey,
+          From: "120363401234567890@g.us",
+          To: "120363401234567890@g.us",
+          Provider: "heartbeat",
+        }),
+        expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
+        cfg,
+      );
+    } finally {
+      replySpy.mockReset();
+    }
+  });
 
   it("suppresses duplicate heartbeat payloads within 24h", async () => {
     const tmpDir = await createCaseDir("hb-dup-suppress");
