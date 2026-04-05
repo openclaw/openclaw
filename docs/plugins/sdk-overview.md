@@ -198,7 +198,7 @@ explicitly promotes one as public.
     | `plugin-sdk/json-store` | Small JSON state read/write helpers |
     | `plugin-sdk/file-lock` | Re-entrant file-lock helpers |
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
-    | `plugin-sdk/acp-runtime` | ACP runtime/session helpers |
+    | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
     | `plugin-sdk/agent-config-primitives` | Narrow agent runtime config-schema primitives |
     | `plugin-sdk/boolean-param` | Loose boolean param reader |
     | `plugin-sdk/dangerous-name-runtime` | Dangerous-name matching resolution helpers |
@@ -400,6 +400,7 @@ AI CLI backend such as `claude-cli` or `codex-cli`.
 - `before_tool_call`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
 - `before_install`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `before_install`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
+- `reply_dispatch`: returning `{ handled: true, ... }` is terminal. Once any handler claims dispatch, lower-priority handlers and the default model dispatch path are skipped.
 - `message_sending`: returning `{ cancel: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `message_sending`: returning `{ cancel: false }` is treated as no decision (same as omitting `cancel`), not as an override.
 

@@ -16,6 +16,8 @@ import type { ProviderRequestTransportOverrides } from "../agents/provider-reque
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
@@ -26,6 +28,7 @@ import type {
   ModelProviderConfig,
 } from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import type { TtsAutoMode } from "../config/types.tts.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
@@ -2169,6 +2172,7 @@ export type PluginHookName =
   | "gateway_start"
   | "gateway_stop"
   | "before_dispatch"
+  | "reply_dispatch"
   | "before_install";
 
 export const PLUGIN_HOOK_NAMES = [
@@ -2199,6 +2203,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "before_dispatch",
+  "reply_dispatch",
   "before_install",
 ] as const satisfies readonly PluginHookName[];
 
@@ -2476,6 +2481,44 @@ export type PluginHookBeforeDispatchResult = {
   handled: boolean;
   /** Plugin-defined reply text (used when handled=true). */
   text?: string;
+};
+
+// reply_dispatch hook
+export type PluginHookReplyDispatchEvent = {
+  ctx: FinalizedMsgContext;
+  runId?: string;
+  sessionKey?: string;
+  inboundAudio: boolean;
+  sessionTtsAuto?: TtsAutoMode;
+  ttsChannel?: string;
+  suppressUserDelivery?: boolean;
+  shouldRouteToOriginating: boolean;
+  originatingChannel?: string;
+  originatingTo?: string;
+  shouldSendToolSummaries: boolean;
+  sendPolicy: "allow" | "deny";
+  isTailDispatch?: boolean;
+};
+
+export type PluginHookReplyDispatchContext = {
+  cfg: OpenClawConfig;
+  dispatcher: ReplyDispatcher;
+  abortSignal?: AbortSignal;
+  onReplyStart?: () => Promise<void> | void;
+  recordProcessed: (
+    outcome: "completed" | "skipped" | "error",
+    opts?: {
+      reason?: string;
+      error?: string;
+    },
+  ) => void;
+  markIdle: (reason: string) => void;
+};
+
+export type PluginHookReplyDispatchResult = {
+  handled: boolean;
+  queuedFinal: boolean;
+  counts: Record<ReplyDispatchKind, number>;
 };
 
 // message_received hook
@@ -2896,6 +2939,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeDispatchEvent,
     ctx: PluginHookBeforeDispatchContext,
   ) => Promise<PluginHookBeforeDispatchResult | void> | PluginHookBeforeDispatchResult | void;
+  reply_dispatch: (
+    event: PluginHookReplyDispatchEvent,
+    ctx: PluginHookReplyDispatchContext,
+  ) => Promise<PluginHookReplyDispatchResult | void> | PluginHookReplyDispatchResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

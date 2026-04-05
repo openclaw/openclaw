@@ -19,6 +19,9 @@ import type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
+  PluginHookReplyDispatchContext,
+  PluginHookReplyDispatchEvent,
+  PluginHookReplyDispatchResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -73,6 +76,9 @@ export type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
+  PluginHookReplyDispatchContext,
+  PluginHookReplyDispatchEvent,
+  PluginHookReplyDispatchResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -679,6 +685,22 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run reply_dispatch hook.
+   * Allows plugins to own reply dispatch before the default model path runs.
+   * First handler returning { handled: true } wins.
+   */
+  async function runReplyDispatch(
+    event: PluginHookReplyDispatchEvent,
+    ctx: PluginHookReplyDispatchContext,
+  ): Promise<PluginHookReplyDispatchResult | undefined> {
+    return runClaimingHook<"reply_dispatch", PluginHookReplyDispatchResult>(
+      "reply_dispatch",
+      event,
+      ctx,
+    );
+  }
+
+  /**
    * Run message_sending hook.
    * Allows plugins to modify or cancel outgoing messages.
    * Runs sequentially.
@@ -1086,6 +1108,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runInboundClaimForPluginOutcome,
     runMessageReceived,
     runBeforeDispatch,
+    runReplyDispatch,
     runMessageSending,
     runMessageSent,
     // Tool hooks

@@ -1,5 +1,5 @@
 import { createAcpxRuntimeService } from "./register.runtime.js";
-import type { OpenClawPluginApi } from "./runtime-api.js";
+import { tryDispatchAcpReplyHook, type OpenClawPluginApi } from "./runtime-api.js";
 import { createAcpxPluginConfigSchema } from "./src/config-schema.js";
 
 const plugin = {
@@ -13,6 +13,7 @@ const plugin = {
         pluginConfig: api.pluginConfig,
       }),
     );
+    api.on("reply_dispatch", tryDispatchAcpReplyHook);
   },
 };
 

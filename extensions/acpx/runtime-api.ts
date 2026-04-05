@@ -2,6 +2,7 @@ export type { AcpRuntimeErrorCode } from "openclaw/plugin-sdk/acp-runtime";
 export {
   AcpRuntimeError,
   getAcpRuntimeBackend,
+  tryDispatchAcpReplyHook,
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "openclaw/plugin-sdk/acp-runtime";
@@ -23,6 +24,11 @@ export type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginLogger,
+} from "openclaw/plugin-sdk/core";
+export type {
+  PluginHookReplyDispatchContext,
+  PluginHookReplyDispatchEvent,
+  PluginHookReplyDispatchResult,
 } from "openclaw/plugin-sdk/core";
 export type {
   WindowsSpawnProgram,
