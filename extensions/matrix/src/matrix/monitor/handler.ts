@@ -218,6 +218,9 @@ function resolveMatrixSharedDmContextNotice(params: {
     if (currentSession.accountId && currentSession.accountId !== params.accountId) {
       return null;
     }
+    if (!currentSession.directUserId) {
+      return null;
+    }
     if (!currentSession.roomId || currentSession.roomId === params.roomId) {
       return null;
     }

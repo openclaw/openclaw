@@ -689,24 +689,26 @@ describe("matrix monitor handler pairing account scope", () => {
   it("posts a one-time notice when another Matrix DM room already owns the shared DM session", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-shared-notice-"));
     const storePath = path.join(tempDir, "sessions.json");
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        "agent:ops:main": {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-          deliveryContext: {
-            channel: "matrix",
-            to: "room:!other:example.org",
-            accountId: "ops",
-          },
-        },
-      }),
-      "utf8",
-    );
     const sendNotice = vi.fn(async () => "$notice");
 
     try {
+      await recordSessionMetaFromInbound({
+        storePath,
+        sessionKey: "agent:ops:main",
+        ctx: {
+          SessionKey: "agent:ops:main",
+          AccountId: "ops",
+          ChatType: "direct",
+          Provider: "matrix",
+          Surface: "matrix",
+          From: "matrix:@user:example.org",
+          To: "room:!other:example.org",
+          NativeChannelId: "!other:example.org",
+          OriginatingChannel: "matrix",
+          OriginatingTo: "room:!other:example.org",
+        },
+      });
+
       const { handler } = createMatrixHandlerTestHarness({
         isDirectMessage: true,
         resolveStorePath: () => storePath,
@@ -806,6 +808,51 @@ describe("matrix monitor handler pairing account scope", () => {
           body: expect.stringContaining("channels.matrix.dm.sessionScope"),
         }),
       );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips the shared-session notice when the prior Matrix session metadata is not a DM", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-shared-notice-room-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const sendNotice = vi.fn(async () => "$notice");
+
+    try {
+      await recordSessionMetaFromInbound({
+        storePath,
+        sessionKey: "agent:ops:main",
+        ctx: {
+          SessionKey: "agent:ops:main",
+          AccountId: "ops",
+          ChatType: "group",
+          Provider: "matrix",
+          Surface: "matrix",
+          From: "matrix:channel:!group:example.org",
+          To: "room:!group:example.org",
+          NativeChannelId: "!group:example.org",
+          OriginatingChannel: "matrix",
+          OriginatingTo: "room:!group:example.org",
+        },
+      });
+
+      const { handler } = createMatrixHandlerTestHarness({
+        isDirectMessage: true,
+        resolveStorePath: () => storePath,
+        client: {
+          sendMessage: sendNotice,
+        },
+      });
+
+      await handler(
+        "!dm:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$dm1",
+          body: "follow up",
+        }),
+      );
+
+      expect(sendNotice).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
