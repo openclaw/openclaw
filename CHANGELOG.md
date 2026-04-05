@@ -217,6 +217,7 @@ Docs: https://docs.openclaw.ai
 - Agents/logging: keep orphaned-user transcript repair warnings focused on interactive runs, and downgrade background-trigger repairs (`heartbeat`, `cron`, `memory`, `overflow`) to debug logs to reduce false-alarm gateway noise.
 - Gateway/node pairing: require `operator.pairing` for node approvals end-to-end, while still requiring `operator.write` or `operator.admin` when the pending node commands need those higher scopes. (#60461) Thanks @eleqtrizit.
 - Providers/OpenRouter: gate Anthropic prompt-cache `cache_control` markers to native/default OpenRouter routes and preserve them for native OpenRouter hosts behind custom provider ids. Thanks @vincentkoc.
+- Providers/OpenRouter: add the trailing user-turn Anthropic prompt-cache marker on native OpenRouter routes and cap OpenRouter Anthropic requests to the last system/developer breakpoint plus the current user turn so conversation-history cache reuse matches the direct Anthropic path. (#57987) Thanks @shug2k.
 - Browser/CDP: validate both initial and discovered CDP websocket endpoints before connect so strict SSRF policy blocks cross-host pivots and direct websocket targets. (#60469) Thanks @eleqtrizit.
 - Browser/profiles: reject remote browser profile `cdpUrl` values that violate strict SSRF policy before saving config, with clearer validation errors for blocked endpoints. (#60477) Thanks @eleqtrizit.
 - Browser/screenshots: stop sending `fromSurface: false` on CDP screenshots so managed Chrome 146+ browsers can capture images again. (#60682) Thanks @mvanhorn.
