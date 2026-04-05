@@ -408,6 +408,7 @@ describe("callGateway url resolution", () => {
         "operator.write",
         "operator.approvals",
         "operator.pairing",
+        "operator.talk.secrets",
       ],
     },
   ])("scope selection: $label", async ({ call, expectedScopes }) => {

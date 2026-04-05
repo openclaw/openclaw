@@ -84,7 +84,7 @@ describe("talk-voice plugin", () => {
       text:
         "Talk voice status:\n" +
         "- provider: microsoft\n" +
-        "- talk.voiceId: en-US-AvaNeural\n" +
+        "- talk.providers.microsoft.voiceId: en-US-AvaNeural\n" +
         "- microsoft.apiKey: secret…",
     });
   });
