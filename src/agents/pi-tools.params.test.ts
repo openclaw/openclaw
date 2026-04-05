@@ -1,10 +1,11 @@
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
-import { __testing } from "./pi-tools.js";
-import { CLAUDE_PARAM_GROUPS } from "./pi-tools.params.js";
-
-const { assertRequiredParams, patchToolSchemaForClaudeCompatibility, wrapToolParamNormalization } =
-  __testing;
+import {
+  assertRequiredParams,
+  CLAUDE_PARAM_GROUPS,
+  patchToolSchemaForClaudeCompatibility,
+  wrapToolParamNormalization,
+} from "./pi-tools.params.js";
 
 describe("assertRequiredParams", () => {
   it("patches Claude-compatible file tool schemas to disallow unknown parameters", () => {
