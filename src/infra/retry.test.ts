@@ -344,4 +344,30 @@ describe("retry-after inference", () => {
       vi.useRealTimers();
     }
   });
+
+  it("handles HTTP-date Retry-After header", async () => {
+    vi.useFakeTimers();
+    try {
+      const fakeNow = new Date("2025-04-05T12:00:00Z").getTime();
+      vi.setSystemTime(fakeNow);
+      const delays: number[] = [];
+      const error = {
+        status: 429,
+        response: { headers: { "retry-after": "Sat, 05 Apr 2025 12:00:05 GMT" } },
+      };
+      const fn = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("ok");
+      const promise = retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 0,
+        maxDelayMs: 60_000,
+        onRetry: (info) => delays.push(info.delayMs),
+      });
+      await vi.runAllTimersAsync();
+      await promise;
+      expect(delays).toHaveLength(1);
+      expect(delays[0]).toBe(5000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

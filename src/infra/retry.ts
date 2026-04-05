@@ -194,6 +194,14 @@ function extractRetryAfterMsFromError(err: unknown): number | undefined {
     if (Number.isFinite(headerNum) && headerNum >= 0) {
       return Math.round(headerNum * 1000);
     }
+    // Handle HTTP-date format (e.g. "Sat, 05 Apr 2025 12:00:00 GMT")
+    const parsedDate = Date.parse(headerValue);
+    if (Number.isFinite(parsedDate)) {
+      const deltaMs = parsedDate - Date.now();
+      if (deltaMs >= 0) {
+        return Math.round(deltaMs);
+      }
+    }
   }
 
   // 4. Message text
