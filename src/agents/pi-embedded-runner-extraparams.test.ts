@@ -1368,6 +1368,7 @@ it("ignores legacy compat override for kimi-coding tool payloads", () => {
     expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
   });
 
+
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
