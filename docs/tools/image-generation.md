@@ -66,7 +66,7 @@ Use `action: "list"` to inspect available providers and models at runtime:
 | `count`       | number   | Number of images to generate (1–4)                                                    |
 | `filename`    | string   | Output filename hint                                                                  |
 
-Not all providers support all parameters. The tool passes what each provider supports and ignores the rest.
+Not all providers support all parameters. The tool passes what each provider supports, ignores the rest, and reports dropped overrides in the tool result.
 
 ## Configuration
 

@@ -105,6 +105,7 @@ function stubEditedImageFlow(params?: { width?: number; height?: number }) {
     provider: "google",
     model: "gemini-3-pro-image-preview",
     attempts: [],
+    ignoredOverrides: [],
     images: [
       {
         buffer: Buffer.from("png-out"),
@@ -289,6 +290,7 @@ describe("createImageGenerateTool", () => {
       provider: "openai",
       model: "gpt-image-1",
       attempts: [],
+      ignoredOverrides: [],
       images: [
         {
           buffer: Buffer.from("png-1"),
@@ -434,6 +436,7 @@ describe("createImageGenerateTool", () => {
       provider: "google",
       model: "gemini-3.1-flash-image-preview",
       attempts: [],
+      ignoredOverrides: [],
       images: [
         {
           buffer: Buffer.from("jpg-data"),
@@ -586,6 +589,7 @@ describe("createImageGenerateTool", () => {
       provider: "openai",
       model: "gpt-image-1",
       attempts: [],
+      ignoredOverrides: [],
       images: [
         {
           buffer: Buffer.from("png-out"),
@@ -657,6 +661,75 @@ describe("createImageGenerateTool", () => {
       }),
     );
     expect(generateImage.mock.calls[0]?.[0].inputImages).toHaveLength(5);
+  });
+
+  it("reports ignored unsupported overrides instead of failing", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "gpt-image-1",
+        models: ["gpt-image-1"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsSize: true,
+            supportsAspectRatio: false,
+            supportsResolution: false,
+          },
+          edit: {
+            enabled: true,
+            maxCount: 4,
+            maxInputImages: 5,
+            supportsSize: true,
+            supportsAspectRatio: false,
+            supportsResolution: false,
+          },
+          geometry: {
+            sizes: ["1024x1024", "1024x1536", "1536x1024"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [{ key: "aspectRatio", value: "1:1" }],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "generated.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.png",
+      id: "generated.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1");
+    const result = await tool.execute("call-openai-generate", {
+      prompt: "A lobster at the movies",
+      aspectRatio: "1:1",
+    });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("Generated 1 image with openai/gpt-image-1.");
+    expect(text).toContain(
+      "Warning: Ignored unsupported overrides for openai/gpt-image-1: aspectRatio=1:1.",
+    );
+    expect(result).toMatchObject({
+      details: {
+        warning: "Ignored unsupported overrides for openai/gpt-image-1: aspectRatio=1:1.",
+        ignoredOverrides: [{ key: "aspectRatio", value: "1:1" }],
+      },
+    });
   });
 
   it("rejects unsupported aspect ratios", async () => {
@@ -815,14 +888,32 @@ describe("createImageGenerateTool", () => {
     expect(generateImage).not.toHaveBeenCalled();
   });
 
-  it("rejects unsupported provider-specific edit aspect ratio overrides before runtime", async () => {
+  it("passes edit aspect ratio overrides through to runtime for provider-level handling", async () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       createFalEditProvider({ aspectRatios: ["1:1", "16:9"] }),
     ]);
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "fal",
+      model: "fal-ai/flux/dev",
+      attempts: [],
+      ignoredOverrides: [{ key: "aspectRatio", value: "16:9" }],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "edited.png",
+        },
+      ],
+    });
     vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       kind: "image",
       buffer: Buffer.from("input-image"),
+      contentType: "image/png",
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 7,
       contentType: "image/png",
     });
 
@@ -830,13 +921,20 @@ describe("createImageGenerateTool", () => {
       workspaceDir: process.cwd(),
     });
 
-    await expect(
-      tool.execute("call-fal-aspect", {
-        prompt: "edit",
-        image: "./fixtures/a.png",
+    const result = await tool.execute("call-fal-aspect", {
+      prompt: "edit",
+      image: "./fixtures/a.png",
+      aspectRatio: "16:9",
+    });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
         aspectRatio: "16:9",
       }),
-    ).rejects.toThrow("fal edit does not support aspectRatio overrides");
-    expect(generateImage).not.toHaveBeenCalled();
+    );
+    expect(text).toContain(
+      "Warning: Ignored unsupported overrides for fal/fal-ai/flux/dev: aspectRatio=16:9.",
+    );
   });
 });
