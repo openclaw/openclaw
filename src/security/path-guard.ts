@@ -41,7 +41,7 @@ function escapeMinimatchLiteralPrefix(prefix: string): string {
   // Escape minimatch/glob metacharacters in a literal filesystem prefix.
   // We only escape the realpath-derived prefix, never the user-authored glob remainder.
   // Place ] first in class to avoid needing escape; [ does not need escaping inside class.
-  return prefix.replace(/[[\]\\*?{}()!+@]/g, (ch) => `\\${ch}`)
+  return prefix.replace(/[[\]\\*?{}()!+@]/g, (ch) => `\\${ch}`);
 }
 
 function isPathInside(parent: string, child: string): boolean {
@@ -162,8 +162,26 @@ export async function checkPathGuardStrict(
           firstMagic >= 0
             ? normalizedEntryPattern.lastIndexOf("/", firstMagic)
             : -1;
-        const dirPrefix =
-          splitIndex > 0 ? normalizedEntryPattern.slice(0, splitIndex) : "/";
+
+        // On Windows drive-root patterns (e.g. C:/**/**/*.pem), the last slash before
+        // magic can be the drive-root separator. Slicing at that point yields "C:"
+        // which is *not* the drive root on Windows (it is current-directory-on-drive).
+        // Preserve the trailing slash so realpath resolution anchors at the drive root.
+        const dirPrefix = (() => {
+          if (splitIndex > 0) {
+            // Keep "C:/" instead of "C:" when splitIndex lands on the drive separator.
+            if (
+              splitIndex === 2 &&
+              /^[A-Za-z]:/u.test(normalizedEntryPattern) &&
+              normalizedEntryPattern[2] === "/"
+            ) {
+              return normalizedEntryPattern.slice(0, 3);
+            }
+            return normalizedEntryPattern.slice(0, splitIndex);
+          }
+          return "/";
+        })();
+
         const remainder =
           splitIndex >= 0
             ? normalizedEntryPattern.slice(splitIndex)
