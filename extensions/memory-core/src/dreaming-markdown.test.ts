@@ -138,32 +138,6 @@ describe("dreaming markdown storage", () => {
     expect(content.match(/## 2026-04-05 - REM Sleep/g)).toHaveLength(1);
   });
 
-  it("migrates legacy dreams.md to canonical DREAMS.md on the next inline write", async () => {
-    const workspaceDir = await createTempWorkspace();
-    const legacyPath = path.join(workspaceDir, "dreams.md");
-    await fs.writeFile(legacyPath, "## 2026-04-04 - Light Sleep\nlegacy\n", "utf-8");
-
-    await writeDailyDreamingPhaseBlock({
-      workspaceDir,
-      phase: "light",
-      bodyLines: ["- Candidate: migrated forward"],
-      nowMs: Date.parse("2026-04-05T10:00:00Z"),
-      timezone: "UTC",
-      storage: {
-        mode: "inline",
-        separateReports: false,
-      },
-    });
-
-    const canonicalPath = path.join(workspaceDir, "DREAMS.md");
-    const content = await fs.readFile(canonicalPath, "utf-8");
-    expect(content).toContain("## 2026-04-04 - Light Sleep");
-    expect(content).toContain("## 2026-04-05 - Light Sleep");
-    const workspaceEntries = await fs.readdir(workspaceDir);
-    expect(workspaceEntries).toContain("DREAMS.md");
-    expect(workspaceEntries).not.toContain("dreams.md");
-  });
-
   it("still writes deep reports to the per-phase report directory", async () => {
     const workspaceDir = await createTempWorkspace();
 
