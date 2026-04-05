@@ -40,7 +40,7 @@ vi.mock("../daemon/launchd.js", async () => {
     isLaunchAgentListed: vi.fn(async () => false),
     isLaunchAgentLoaded: vi.fn(async () => false),
     launchAgentPlistExists: vi.fn(async () => false),
-    repairLaunchAgentBootstrap: vi.fn(async () => ({ ok: true })),
+    repairLaunchAgentBootstrap: vi.fn(async () => ({ ok: true, status: "repaired" })),
   };
 });
 

@@ -30,14 +30,14 @@ type RestartPostCheckContext = {
   fail: (message: string, hints?: string[]) => void;
 };
 
-type NotLoadedActionResult = {
+type ServiceRecoveryResult = {
   result: "started" | "stopped" | "restarted";
   message?: string;
   warnings?: string[];
   loaded?: boolean;
 };
 
-type NotLoadedActionContext = {
+type ServiceRecoveryContext = {
   json: boolean;
   stdout: Writable;
   fail: (message: string, hints?: string[]) => void;
@@ -187,7 +187,7 @@ export async function runServiceStart(params: {
   service: GatewayService;
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
-  onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
+  onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult | null>;
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "start", json });
@@ -278,7 +278,7 @@ export async function runServiceStop(params: {
   serviceNoun: string;
   service: GatewayService;
   opts?: DaemonLifecycleOptions;
-  onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
+  onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult | null>;
 }) {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "stop", json });
@@ -349,12 +349,12 @@ export async function runServiceRestart(params: {
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<GatewayServiceRestartResult | void>;
-  onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
+  onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult | null>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "restart", json });
   const warnings: string[] = [];
-  let handledNotLoaded: NotLoadedActionResult | null = null;
+  let handledRecovery: ServiceRecoveryResult | null = null;
   let recoveredLoadedState: boolean | null = null;
   const emitScheduledRestart = (
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
@@ -397,12 +397,12 @@ export async function runServiceRestart(params: {
 
   if (!loaded) {
     try {
-      handledNotLoaded = (await params.onNotLoaded?.({ json, stdout, fail })) ?? null;
+      handledRecovery = (await params.onNotLoaded?.({ json, stdout, fail })) ?? null;
     } catch (err) {
       fail(`${params.serviceNoun} restart failed: ${String(err)}`);
       return false;
     }
-    if (!handledNotLoaded) {
+    if (!handledRecovery) {
       await handleServiceNotLoaded({
         serviceNoun: params.serviceNoun,
         service: params.service,
@@ -413,10 +413,10 @@ export async function runServiceRestart(params: {
       });
       return false;
     }
-    if (handledNotLoaded.warnings?.length) {
-      warnings.push(...handledNotLoaded.warnings);
+    if (handledRecovery.warnings?.length) {
+      warnings.push(...handledRecovery.warnings);
     }
-    recoveredLoadedState = handledNotLoaded.loaded ?? null;
+    recoveredLoadedState = handledRecovery.loaded ?? null;
   }
 
   if (loaded && params.checkTokenDrift) {
@@ -486,12 +486,12 @@ export async function runServiceRestart(params: {
     emit({
       ok: true,
       result: "restarted",
-      message: handledNotLoaded?.message,
+      message: handledRecovery?.message,
       service: buildDaemonServiceSnapshot(params.service, restarted),
       warnings: warnings.length ? warnings : undefined,
     });
-    if (!json && handledNotLoaded?.message) {
-      defaultRuntime.log(handledNotLoaded.message);
+    if (!json && handledRecovery?.message) {
+      defaultRuntime.log(handledRecovery.message);
     }
     return true;
   } catch (err) {

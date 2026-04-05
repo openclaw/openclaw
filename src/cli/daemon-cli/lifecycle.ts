@@ -1,6 +1,5 @@
 import { isRestartEnabled } from "../../config/commands.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
-import { launchAgentPlistExists, repairLaunchAgentBootstrap } from "../../daemon/launchd.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
@@ -11,6 +10,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
+import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
 import {
   runServiceRestart,
   runServiceStart,
@@ -131,28 +131,6 @@ async function restartGatewayWithoutServiceManager(port: number) {
   };
 }
 
-async function repairLaunchAgentIfInstalled(params: { result: "started" | "restarted" }) {
-  if (process.platform !== "darwin") {
-    return null;
-  }
-  const serviceEnv = process.env as Record<string, string | undefined>;
-  const plistExists = await launchAgentPlistExists(serviceEnv).catch(() => false);
-  if (!plistExists) {
-    return null;
-  }
-  const repaired = await repairLaunchAgentBootstrap({ env: serviceEnv }).catch(() => ({
-    ok: false,
-  }));
-  if (!repaired.ok) {
-    return null;
-  }
-  return {
-    result: params.result,
-    loaded: true,
-    message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
-  } as const;
-}
-
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   return await runServiceUninstall({
     serviceNoun: "Gateway",
@@ -170,7 +148,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
     renderStartHints: renderGatewayServiceStartHints,
     onNotLoaded:
       process.platform === "darwin"
-        ? async () => await repairLaunchAgentIfInstalled({ result: "started" })
+        ? async () => await recoverInstalledLaunchAgent({ result: "started" })
         : undefined,
     opts,
   });
@@ -216,7 +194,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         restartedWithoutServiceManager = true;
         return handled;
       }
-      return await repairLaunchAgentIfInstalled({ result: "restarted" });
+      return await recoverInstalledLaunchAgent({ result: "restarted" });
     },
     postRestartCheck: async ({ warnings, fail, stdout }) => {
       if (restartedWithoutServiceManager) {

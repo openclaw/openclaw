@@ -313,9 +313,13 @@ export async function readLaunchAgentRuntime(
   };
 }
 
+export type LaunchAgentBootstrapRepairResult =
+  | { ok: true; status: "repaired" | "already-loaded" }
+  | { ok: false; status: "bootstrap-failed" | "kickstart-failed"; detail?: string };
+
 export async function repairLaunchAgentBootstrap(args: {
   env?: Record<string, string | undefined>;
-}): Promise<{ ok: boolean; detail?: string }> {
+}): Promise<LaunchAgentBootstrapRepairResult> {
   const env = args.env ?? (process.env as Record<string, string | undefined>);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
@@ -324,19 +328,25 @@ export async function repairLaunchAgentBootstrap(args: {
   // (matches the same guard in installLaunchAgent and restartLaunchAgent).
   await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+  let repairStatus: LaunchAgentBootstrapRepairResult["status"] = "repaired";
   if (boot.code !== 0) {
     const detail = (boot.stderr || boot.stdout).trim();
     const normalized = detail.toLowerCase();
     const alreadyLoaded = boot.code === 130 || normalized.includes("already exists in domain");
     if (!alreadyLoaded) {
-      return { ok: false, detail: detail || undefined };
+      return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
     }
+    repairStatus = "already-loaded";
   }
   const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (kick.code !== 0) {
-    return { ok: false, detail: (kick.stderr || kick.stdout).trim() || undefined };
+    return {
+      ok: false,
+      status: "kickstart-failed",
+      detail: (kick.stderr || kick.stdout).trim() || undefined,
+    };
   }
-  return { ok: true };
+  return { ok: true, status: repairStatus };
 }
 
 export type LegacyLaunchAgent = {

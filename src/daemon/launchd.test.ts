@@ -247,7 +247,7 @@ describe("launchd bootstrap repair", () => {
       OPENCLAW_PROFILE: "default",
     };
     const repair = await repairLaunchAgentBootstrap({ env });
-    expect(repair.ok).toBe(true);
+    expect(repair).toEqual({ ok: true, status: "repaired" });
 
     const { serviceId, bootstrapIndex } = expectLaunchctlEnableBootstrapOrder(env);
     const kickstartIndex = state.launchctlCalls.findIndex(
@@ -268,7 +268,7 @@ describe("launchd bootstrap repair", () => {
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
-    expect(repair.ok).toBe(true);
+    expect(repair).toEqual({ ok: true, status: "already-loaded" });
     expect(state.launchctlCalls.filter((call) => call[0] === "kickstart")).toHaveLength(1);
   });
 
@@ -282,7 +282,7 @@ describe("launchd bootstrap repair", () => {
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
-    expect(repair.ok).toBe(true);
+    expect(repair).toEqual({ ok: true, status: "already-loaded" });
     expect(state.launchctlCalls.filter((call) => call[0] === "kickstart")).toHaveLength(1);
   });
 
@@ -295,9 +295,29 @@ describe("launchd bootstrap repair", () => {
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
-    expect(repair.ok).toBe(false);
-    expect(repair.detail).toContain("Could not find specified service");
+    expect(repair).toMatchObject({
+      ok: false,
+      status: "bootstrap-failed",
+      detail: expect.stringContaining("Could not find specified service"),
+    });
     expect(state.launchctlCalls.some((call) => call[0] === "kickstart")).toBe(false);
+  });
+
+  it("returns a typed kickstart failure", async () => {
+    state.kickstartError = "launchctl kickstart failed: permission denied";
+    state.kickstartFailuresRemaining = 1;
+    const env: Record<string, string | undefined> = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+
+    const repair = await repairLaunchAgentBootstrap({ env });
+
+    expect(repair).toEqual({
+      ok: false,
+      status: "kickstart-failed",
+      detail: "launchctl kickstart failed: permission denied",
+    });
   });
 });
 
