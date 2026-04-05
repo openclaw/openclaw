@@ -1059,7 +1059,7 @@ export function createOpenAIWebSocketStreamFn(
                 const key = getOutputTextKey(event.item_id, event.content_index);
                 const nextText = `${outputTextByPart.get(key) ?? ""}${event.delta}`;
                 outputTextByPart.set(key, nextText);
-                if (outputItemPhaseById.has(event.item_id)) {
+                if (outputItemPhaseById.get(event.item_id) !== undefined) {
                   emitBufferedTextDelta({
                     itemId: event.item_id,
                     contentIndex: event.content_index,
@@ -1073,7 +1073,7 @@ export function createOpenAIWebSocketStreamFn(
                 if (event.text && event.text !== outputTextByPart.get(key)) {
                   outputTextByPart.set(key, event.text);
                 }
-                if (outputItemPhaseById.has(event.item_id)) {
+                if (outputItemPhaseById.get(event.item_id) !== undefined) {
                   emitBufferedTextDelta({
                     itemId: event.item_id,
                     contentIndex: event.content_index,
