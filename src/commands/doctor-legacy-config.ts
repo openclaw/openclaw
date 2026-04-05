@@ -1,5 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import { migrateAmazonBedrockLegacyConfig } from "../../extensions/amazon-bedrock/config-api.js";
+import {
+  ELEVENLABS_TALK_PROVIDER_ID,
+  normalizeCompatibilityConfig as normalizeElevenLabsCompatibilityConfig,
+} from "../../extensions/elevenlabs/contract-api.js";
 import { migrateVoiceCallLegacyConfigInput } from "../../extensions/voice-call/config-api.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
@@ -8,7 +12,7 @@ import { resolveNormalizedProviderModelMaxTokens } from "../config/defaults.js";
 import { migrateLegacyWebFetchConfig } from "../config/legacy-web-fetch.js";
 import { migrateLegacyWebSearchConfig } from "../config/legacy-web-search.js";
 import { migrateLegacyXSearchConfig } from "../config/legacy-x-search.js";
-import { LEGACY_TALK_PROVIDER_ID, normalizeTalkSection } from "../config/talk.js";
+import { normalizeTalkSection } from "../config/talk.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
@@ -388,6 +392,13 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       return;
     }
 
+    const legacyMigration = normalizeElevenLabsCompatibilityConfig({ cfg: next });
+    if (legacyMigration.changes.length > 0) {
+      next = legacyMigration.config;
+      changes.push(...legacyMigration.changes);
+      return;
+    }
+
     const normalizedTalk = normalizeTalkSection(rawTalk as OpenClawConfig["talk"]);
     if (!normalizedTalk) {
       return;
@@ -411,7 +422,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       return;
     }
 
-    changes.push(`Moved legacy talk flat fields → talk.providers.${LEGACY_TALK_PROVIDER_ID}.`);
+    changes.push(`Moved legacy talk flat fields → talk.providers.${ELEVENLABS_TALK_PROVIDER_ID}.`);
   };
 
   const normalizeLegacyCrossContextMessageConfig = () => {

@@ -1,3 +1,4 @@
+import { migrateElevenLabsLegacyTalkConfig } from "../../extensions/elevenlabs/contract-api.js";
 import {
   buildDefaultControlUiAllowedOrigins,
   hasConfiguredControlUiAllowedOrigins,
@@ -15,7 +16,6 @@ import {
 } from "./legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
-import { LEGACY_TALK_PROVIDER_ID } from "./talk.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
   "every",
@@ -37,13 +37,6 @@ const AGENT_HEARTBEAT_KEYS = new Set([
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 const LEGACY_TTS_PLUGIN_IDS = new Set(["voice-call"]);
-const LEGACY_TALK_FIELD_KEYS = [
-  "voiceId",
-  "voiceAliases",
-  "modelId",
-  "outputFormat",
-  "apiKey",
-] as const;
 
 function sandboxScopeFromPerSession(perSession: boolean): "session" | "shared" {
   return perSession ? "session" : "shared";
@@ -152,7 +145,9 @@ function hasLegacyTalkFields(value: unknown): boolean {
   if (!talk) {
     return false;
   }
-  return LEGACY_TALK_FIELD_KEYS.some((key) => Object.prototype.hasOwnProperty.call(talk, key));
+  return ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"].some((key) =>
+    Object.prototype.hasOwnProperty.call(talk, key),
+  );
 }
 
 function hasLegacySandboxPerSession(value: unknown): boolean {
@@ -167,68 +162,19 @@ function hasLegacyAgentListSandboxPerSession(value: unknown): boolean {
   return value.some((agent) => hasLegacySandboxPerSession(getRecord(agent)?.sandbox));
 }
 
-function resolveTalkMigrationTargetProviderId(talk: Record<string, unknown>): string | null {
-  const explicitProvider =
-    typeof talk.provider === "string" && talk.provider.trim() ? talk.provider.trim() : null;
-  const providers = getRecord(talk.providers);
-  if (explicitProvider) {
-    if (isBlockedObjectKey(explicitProvider)) {
-      return null;
-    }
-    return explicitProvider;
-  }
-  if (!providers) {
-    return LEGACY_TALK_PROVIDER_ID;
-  }
-  const providerIds = Object.keys(providers).filter((key) => !isBlockedObjectKey(key));
-  if (providerIds.length === 0) {
-    return LEGACY_TALK_PROVIDER_ID;
-  }
-  if (providerIds.length === 1) {
-    return providerIds[0] ?? null;
-  }
-  return null;
-}
-
 function migrateLegacyTalkFields(raw: Record<string, unknown>, changes: string[]): void {
-  const talk = getRecord(raw.talk);
-  if (!talk || !hasLegacyTalkFields(talk)) {
+  if (!hasLegacyTalkFields(raw.talk)) {
     return;
   }
-
-  const providerId = resolveTalkMigrationTargetProviderId(talk);
-  if (!providerId) {
-    changes.push(
-      "Skipped talk legacy field migration because talk.providers defines multiple providers and talk.provider is unset; move talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey under the intended provider manually.",
-    );
+  const migrated = migrateElevenLabsLegacyTalkConfig(raw);
+  if (migrated.changes.length === 0) {
     return;
   }
-
-  const providers = ensureRecord(talk, "providers");
-  const existingProvider = getRecord(providers[providerId]) ?? {};
-  const migratedProvider = structuredClone(existingProvider);
-  const legacyFields: Record<string, unknown> = {};
-  const movedKeys: string[] = [];
-  for (const key of LEGACY_TALK_FIELD_KEYS) {
-    if (!Object.prototype.hasOwnProperty.call(talk, key)) {
-      continue;
-    }
-    legacyFields[key] = talk[key];
-    delete talk[key];
-    movedKeys.push(key);
+  for (const key of Object.keys(raw)) {
+    delete raw[key];
   }
-  if (movedKeys.length === 0) {
-    return;
-  }
-
-  mergeMissing(migratedProvider, legacyFields);
-  providers[providerId] = migratedProvider;
-  talk.providers = providers;
-  raw.talk = talk;
-
-  changes.push(
-    `Moved talk legacy fields (${movedKeys.join(", ")}) → talk.providers.${providerId} (filled missing provider fields only).`,
-  );
+  Object.assign(raw, migrated.config);
+  changes.push(...migrated.changes);
 }
 
 function hasLegacyPluginEntryTtsProviderKeys(value: unknown): boolean {

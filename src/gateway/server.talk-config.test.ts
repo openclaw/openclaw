@@ -30,7 +30,7 @@ type TalkConfigPayload = {
     talk?: {
       provider?: string;
       providers?: {
-        elevenlabs?: { voiceId?: string; apiKey?: string | SecretRef };
+        [providerId: string]: { voiceId?: string; apiKey?: string | SecretRef } | undefined;
       };
       resolved?: {
         provider?: string;
@@ -147,22 +147,22 @@ async function invokeTalkSpeakDirect(params: Record<string, unknown>) {
   return response;
 }
 
-function expectElevenLabsTalkConfig(
+function expectTalkConfig(
   talk: TalkConfig | undefined,
   expected: {
-    provider?: string;
+    provider: string;
     voiceId?: string;
     apiKey?: string | SecretRef;
     silenceTimeoutMs?: number;
   },
 ) {
-  expect(talk?.provider).toBe(expected.provider ?? "elevenlabs");
-  expect(talk?.providers?.elevenlabs?.voiceId).toBe(expected.voiceId);
-  expect(talk?.resolved?.provider).toBe("elevenlabs");
+  expect(talk?.provider).toBe(expected.provider);
+  expect(talk?.providers?.[expected.provider]?.voiceId).toBe(expected.voiceId);
+  expect(talk?.resolved?.provider).toBe(expected.provider);
   expect(talk?.resolved?.config?.voiceId).toBe(expected.voiceId);
 
   if ("apiKey" in expected) {
-    expect(talk?.providers?.elevenlabs?.apiKey).toEqual(expected.apiKey);
+    expect(talk?.providers?.[expected.provider]?.apiKey).toEqual(expected.apiKey);
     expect(talk?.resolved?.config?.apiKey).toEqual(expected.apiKey);
   }
   if ("silenceTimeoutMs" in expected) {
@@ -195,7 +195,7 @@ describe("gateway talk.config", () => {
       await connectOperator(ws, ["operator.read"]);
       const res = await fetchTalkConfig(ws);
       expect(res.ok).toBe(true);
-      expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+      expectTalkConfig(res.payload?.config?.talk, {
         provider: "elevenlabs",
         voiceId: "voice-123",
         apiKey: "__OPENCLAW_REDACTED__",
@@ -238,7 +238,7 @@ describe("gateway talk.config", () => {
       await connectOperator(ws, [...scopes]);
       const res = await fetchTalkConfig(ws, { includeSecrets: true });
       expect(res.ok).toBe(true);
-      expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+      expectTalkConfig(res.payload?.config?.talk, {
         provider: "elevenlabs",
         apiKey: "secret-key-abc",
       });
@@ -265,9 +265,36 @@ describe("gateway talk.config", () => {
           provider: "default",
           id: "ELEVENLABS_API_KEY",
         } satisfies SecretRef;
-        expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+        expectTalkConfig(res.payload?.config?.talk, {
           provider: "elevenlabs",
           apiKey: secretRef,
+        });
+      });
+    });
+  });
+
+  it("resolves plugin-owned Talk defaults before redaction", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            voiceId: "voice-from-config",
+          },
+        },
+      },
+    });
+
+    await withEnvAsync({ ELEVENLABS_API_KEY: "env-elevenlabs-key" }, async () => {
+      await withServer(async (ws) => {
+        await connectOperator(ws, ["operator.read"]);
+        const res = await fetchTalkConfig(ws);
+        expect(res.ok, JSON.stringify(res.error)).toBe(true);
+        expectTalkConfig(res.payload?.config?.talk, {
+          provider: "elevenlabs",
+          voiceId: "voice-from-config",
+          apiKey: "__OPENCLAW_REDACTED__",
         });
       });
     });
@@ -290,7 +317,7 @@ describe("gateway talk.config", () => {
       await connectOperator(ws, ["operator.read"]);
       const res = await fetchTalkConfig(ws);
       expect(res.ok).toBe(true);
-      expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+      expectTalkConfig(res.payload?.config?.talk, {
         provider: "elevenlabs",
         voiceId: "voice-normalized",
       });

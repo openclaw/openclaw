@@ -1,0 +1,34 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { ELEVENLABS_TALK_PROVIDER_ID, migrateElevenLabsLegacyTalkConfig } from "./config-compat.js";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasLegacyTalkFields(value: unknown): boolean {
+  const talk = isRecord(value) ? value : null;
+  if (!talk) {
+    return false;
+  }
+  return ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"].some((key) =>
+    Object.prototype.hasOwnProperty.call(talk, key),
+  );
+}
+
+export const legacyConfigRules = [
+  {
+    path: ["talk"],
+    message:
+      "talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey are legacy; use talk.providers.<provider> (auto-migrated on load).",
+    match: hasLegacyTalkFields,
+  },
+] as const;
+
+export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  return migrateElevenLabsLegacyTalkConfig(cfg);
+}
+
+export { ELEVENLABS_TALK_PROVIDER_ID };

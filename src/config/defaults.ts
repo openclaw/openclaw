@@ -3,15 +3,9 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { normalizeProviderSpecificConfig } from "../agents/models-config.providers.policy.js";
 import { applyProviderConfigDefaultsWithPlugin } from "../plugins/provider-runtime.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
-import {
-  LEGACY_TALK_PROVIDER_ID,
-  normalizeTalkConfig,
-  resolveActiveTalkProviderConfig,
-  resolveTalkApiKey,
-} from "./talk.js";
+import { normalizeTalkConfig } from "./talk.js";
 import type { OpenClawConfig } from "./types.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
-import { hasConfiguredSecretInput } from "./types.secrets.js";
 
 type WarnState = { warned: boolean };
 
@@ -131,40 +125,6 @@ export function applySessionDefaults(
   }
 
   return next;
-}
-
-export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
-  const normalized = normalizeTalkConfig(config);
-  const resolved = resolveTalkApiKey();
-  if (!resolved) {
-    return normalized;
-  }
-
-  const talk = normalized.talk;
-  const active = resolveActiveTalkProviderConfig(talk);
-  if (!active || active.provider !== LEGACY_TALK_PROVIDER_ID) {
-    return normalized;
-  }
-
-  const existingProviderApiKeyConfigured = hasConfiguredSecretInput(active?.config?.apiKey);
-  if (existingProviderApiKeyConfigured) {
-    return normalized;
-  }
-
-  const providerId = active.provider;
-  const providers = { ...talk?.providers };
-  const providerConfig = { ...providers[providerId], apiKey: resolved };
-  providers[providerId] = providerConfig;
-
-  const nextTalk = {
-    ...talk,
-    providers,
-  };
-
-  return {
-    ...normalized,
-    talk: nextTalk,
-  };
 }
 
 export function applyTalkConfigNormalization(config: OpenClawConfig): OpenClawConfig {
