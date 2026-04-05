@@ -28,6 +28,15 @@ const FEISHU_CARD_TEMPLATES = new Set([
   "lime",
 ]);
 
+export function hasFeishuCardPayload(card: unknown): card is Record<string, unknown> {
+  return (
+    typeof card === "object" &&
+    card !== null &&
+    !Array.isArray(card) &&
+    Object.keys(card).length > 0
+  );
+}
+
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
     return true;
@@ -485,6 +494,9 @@ export type SendFeishuCardParams = {
 
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
   const { cfg, to, card, replyToMessageId, replyInThread, accountId } = params;
+  if (!hasFeishuCardPayload(card)) {
+    throw new Error("Feishu card payload cannot be empty.");
+  }
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const content = JSON.stringify(card);
 
@@ -514,7 +526,11 @@ export async function editMessageFeishu(params: {
   }
 
   const hasText = typeof text === "string" && text.trim().length > 0;
-  const hasCard = Boolean(card);
+  const cardProvided = card !== undefined;
+  const hasCard = hasFeishuCardPayload(card);
+  if (cardProvided && !hasCard) {
+    throw new Error("Feishu edit card payload cannot be empty.");
+  }
   if (hasText === hasCard) {
     throw new Error("Feishu edit requires exactly one of text or card.");
   }

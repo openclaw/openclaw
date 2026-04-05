@@ -63,6 +63,7 @@ import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
+import { hasFeishuCardPayload } from "./send.js";
 import {
   resolveFeishuParentConversationCandidates,
   resolveFeishuSessionConversation,
@@ -671,16 +672,18 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (ctx.action === "thread-reply" && !replyToMessageId) {
               throw new Error("Feishu thread-reply requires messageId.");
             }
-            const card =
-              ctx.params.card && typeof ctx.params.card === "object"
-                ? (ctx.params.card as Record<string, unknown>)
-                : undefined;
+            const rawCard = ctx.params.card;
+            const cardProvided = rawCard != null && typeof rawCard === "object";
+            const card = hasFeishuCardPayload(rawCard) ? rawCard : undefined;
             const text = readFirstString(ctx.params, ["text", "message"]);
             const mediaUrl = readFeishuMediaParam(ctx.params);
             if (card && mediaUrl) {
               throw new Error(`Feishu ${ctx.action} does not support card with media.`);
             }
             if (!card && !text && !mediaUrl) {
+              if (cardProvided) {
+                throw new Error(`Feishu ${ctx.action} card payload cannot be empty.`);
+              }
               throw new Error(`Feishu ${ctx.action} requires text/message, media, or card.`);
             }
             const runtime = await loadFeishuChannelRuntime();

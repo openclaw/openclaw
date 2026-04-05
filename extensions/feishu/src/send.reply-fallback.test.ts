@@ -266,4 +266,17 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
 
     expect(createMock).not.toHaveBeenCalled();
   });
+
+  it("rejects empty card payloads before calling Feishu APIs", async () => {
+    await expect(
+      sendCardFeishu({
+        cfg: {} as never,
+        to: "user:ou_target",
+        card: {},
+      }),
+    ).rejects.toThrow("Feishu card payload cannot be empty.");
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
+  });
 });
