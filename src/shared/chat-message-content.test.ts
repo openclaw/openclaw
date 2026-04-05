@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractAssistantVisibleText, extractFirstTextBlock } from "./chat-message-content.js";
+import {
+  extractAssistantVisibleText,
+  extractFirstTextBlock,
+  resolveAssistantMessagePhase,
+} from "./chat-message-content.js";
 
 describe("shared/chat-message-content", () => {
   it("extracts the first text block from array content", () => {
@@ -108,5 +112,48 @@ describe("extractAssistantVisibleText", () => {
         ],
       }),
     ).toBe("Actual final answer");
+  });
+});
+
+describe("resolveAssistantMessagePhase", () => {
+  it("prefers the top-level assistant phase when present", () => {
+    expect(resolveAssistantMessagePhase({ role: "assistant", phase: "commentary" })).toBe(
+      "commentary",
+    );
+  });
+
+  it("resolves a single explicit phase from textSignature metadata", () => {
+    expect(
+      resolveAssistantMessagePhase({
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Actual final answer",
+            textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
+          },
+        ],
+      }),
+    ).toBe("final_answer");
+  });
+
+  it("returns undefined when text blocks contain mixed explicit phases", () => {
+    expect(
+      resolveAssistantMessagePhase({
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Working...",
+            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
+          },
+        ],
+      }),
+    ).toBeUndefined();
   });
 });

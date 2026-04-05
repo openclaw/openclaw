@@ -35,6 +35,10 @@ import {
   resolveProviderWebSocketSessionPolicyWithPlugin,
 } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel, ProviderTransportTurnState } from "../plugins/types.js";
+import {
+  encodeAssistantTextSignature,
+  normalizeAssistantPhase,
+} from "../shared/chat-message-content.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-tool-schema.js";
 import {
   getOpenAIWebSocketErrorDetails,
@@ -101,21 +105,6 @@ type OpenAIWsStreamDeps = {
 };
 
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
-
-function normalizeAssistantPhase(value: unknown): OpenAIResponsesAssistantPhase | undefined {
-  return value === "commentary" || value === "final_answer" ? value : undefined;
-}
-
-function encodeAssistantTextSignature(params: {
-  id: string;
-  phase?: OpenAIResponsesAssistantPhase;
-}): string {
-  return JSON.stringify({
-    v: 1,
-    id: params.id,
-    ...(params.phase ? { phase: params.phase } : {}),
-  });
-}
 
 const defaultOpenAIWsStreamDeps: OpenAIWsStreamDeps = {
   createManager: (options) => new OpenAIWebSocketManager(options),

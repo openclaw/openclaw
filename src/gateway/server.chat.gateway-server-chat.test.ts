@@ -542,6 +542,29 @@ describe("gateway server chat", () => {
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
   });
 
+  test("chat.history hides commentary-only assistant entries", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        phase: "commentary",
+        content: [{ type: "text", text: "thinking like caveman" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["hello", "real reply"]);
+  });
+
   test("routes chat.send slash commands without agent runs", async () => {
     await withMainSessionStore(async () => {
       const spy = vi.mocked(agentCommand);

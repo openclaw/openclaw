@@ -17,13 +17,13 @@ export function extractFirstTextBlock(message: unknown): string | undefined {
   return typeof text === "string" ? text : undefined;
 }
 
-type AssistantPhase = "commentary" | "final_answer";
+export type AssistantPhase = "commentary" | "final_answer";
 
-function normalizeAssistantPhase(value: unknown): AssistantPhase | undefined {
+export function normalizeAssistantPhase(value: unknown): AssistantPhase | undefined {
   return value === "commentary" || value === "final_answer" ? value : undefined;
 }
 
-function parseAssistantTextSignature(
+export function parseAssistantTextSignature(
   value: unknown,
 ): { id?: string; phase?: AssistantPhase } | null {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -46,6 +46,46 @@ function parseAssistantTextSignature(
   } catch {
     return null;
   }
+}
+
+export function encodeAssistantTextSignature(params: {
+  id: string;
+  phase?: AssistantPhase;
+}): string {
+  return JSON.stringify({
+    v: 1,
+    id: params.id,
+    ...(params.phase ? { phase: params.phase } : {}),
+  });
+}
+
+export function resolveAssistantMessagePhase(message: unknown): AssistantPhase | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as { phase?: unknown; content?: unknown };
+  const directPhase = normalizeAssistantPhase(entry.phase);
+  if (directPhase) {
+    return directPhase;
+  }
+  if (!Array.isArray(entry.content)) {
+    return undefined;
+  }
+  const explicitPhases = new Set<AssistantPhase>();
+  for (const block of entry.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as { type?: unknown; textSignature?: unknown };
+    if (record.type !== "text") {
+      continue;
+    }
+    const phase = parseAssistantTextSignature(record.textSignature)?.phase;
+    if (phase) {
+      explicitPhases.add(phase);
+    }
+  }
+  return explicitPhases.size === 1 ? [...explicitPhases][0] : undefined;
 }
 
 function extractAssistantTextForPhase(

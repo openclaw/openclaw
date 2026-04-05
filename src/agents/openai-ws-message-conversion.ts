@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { Context, Message, StopReason } from "@mariozechner/pi-ai";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import {
+  encodeAssistantTextSignature,
+  normalizeAssistantPhase,
+  parseAssistantTextSignature,
+} from "../shared/chat-message-content.js";
+import {
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIStrictToolFlagForInventory,
 } from "./openai-tool-schema.js";
@@ -36,46 +41,6 @@ function toNonEmptyString(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function normalizeAssistantPhase(value: unknown): OpenAIResponsesAssistantPhase | undefined {
-  return value === "commentary" || value === "final_answer" ? value : undefined;
-}
-
-function encodeAssistantTextSignature(params: {
-  id: string;
-  phase?: OpenAIResponsesAssistantPhase;
-}): string {
-  return JSON.stringify({
-    v: 1,
-    id: params.id,
-    ...(params.phase ? { phase: params.phase } : {}),
-  });
-}
-
-function parseAssistantTextSignature(
-  value: unknown,
-): { id: string; phase?: OpenAIResponsesAssistantPhase } | null {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return null;
-  }
-  if (!value.startsWith("{")) {
-    return { id: value };
-  }
-  try {
-    const parsed = JSON.parse(value) as { v?: unknown; id?: unknown; phase?: unknown };
-    if (parsed.v !== 1 || typeof parsed.id !== "string") {
-      return null;
-    }
-    return {
-      id: parsed.id,
-      ...(normalizeAssistantPhase(parsed.phase)
-        ? { phase: normalizeAssistantPhase(parsed.phase) }
-        : {}),
-    };
-  } catch {
-    return null;
-  }
 }
 
 function supportsImageInput(modelOverride?: ReplayModelInfo): boolean {
