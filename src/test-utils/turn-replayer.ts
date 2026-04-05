@@ -39,9 +39,11 @@ export function replayTurnFixture(fixture: TurnFixture): ReplayResult {
 function replayEntry(entry: TurnFixtureEntry): void {
   if (entry.kind === "agent") {
     const { seq: _, ts: __, ...rest } = entry.event;
-    emitAgentEvent(rest);
+    const replayEvent: Omit<typeof entry.event, "seq" | "ts"> = rest;
+    emitAgentEvent(replayEvent);
   } else {
     const { seq: _, ts: __, ...rest } = entry.event;
-    emitDiagnosticEvent(rest as unknown as DiagnosticEventInput);
+    const replayEvent: DiagnosticEventInput = rest;
+    emitDiagnosticEvent(replayEvent);
   }
 }
