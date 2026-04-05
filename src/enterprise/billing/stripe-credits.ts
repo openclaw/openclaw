@@ -5,28 +5,28 @@
  * via saved payment methods. Pure usage model — no subscriptions.
  */
 
-import type { OrgId } from "../tenants/types.js";
 import { getOrg } from "../tenants/tenant-store.js";
+import type { OrgId } from "../tenants/types.js";
 import { addCredits, autoTopUpQueue, getAutoTopUp } from "./credits.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface StripeCheckoutResult {
-	checkoutUrl: string;
-	sessionId: string;
+  checkoutUrl: string;
+  sessionId: string;
 }
 
 export interface StripePortalResult {
-	portalUrl: string;
+  portalUrl: string;
 }
 
 export interface PaymentRecord {
-	id: string;
-	orgId: OrgId;
-	amountCents: number;
-	status: "pending" | "succeeded" | "failed";
-	stripePaymentIntentId: string | null;
-	createdAt: Date;
+  id: string;
+  orgId: OrgId;
+  amountCents: number;
+  status: "pending" | "succeeded" | "failed";
+  stripePaymentIntentId: string | null;
+  createdAt: Date;
 }
 
 // ── Checkout Session ─────────────────────────────────────────────────────────
@@ -53,18 +53,20 @@ export interface PaymentRecord {
  * ```
  */
 export function createCreditsPurchaseSession(
-	orgId: OrgId,
-	amountCents: number,
+  orgId: OrgId,
+  _amountCents: number,
 ): StripeCheckoutResult {
-	const org = getOrg(orgId);
-	if (!org) throw new Error(`Org ${orgId} not found`);
+  const org = getOrg(orgId);
+  if (!org) {
+    throw new Error(`Org ${orgId} not found`);
+  }
 
-	// Placeholder — replace with real Stripe call
-	const sessionId = `cs_${Date.now().toString(36)}`;
-	return {
-		checkoutUrl: `https://checkout.stripe.com/pay/${sessionId}`,
-		sessionId,
-	};
+  // Placeholder — replace with real Stripe call
+  const sessionId = `cs_${Date.now().toString(36)}`;
+  return {
+    checkoutUrl: `https://checkout.stripe.com/pay/${sessionId}`,
+    sessionId,
+  };
 }
 
 // ── Auto Top-Up Processing ───────────────────────────────────────────────────
@@ -89,22 +91,26 @@ export function createCreditsPurchaseSession(
  * ```
  */
 export function processAutoTopUpQueue(): number {
-	let processed = 0;
+  let processed = 0;
 
-	while (autoTopUpQueue.length > 0) {
-		const request = autoTopUpQueue.shift();
-		if (!request) break;
+  while (autoTopUpQueue.length > 0) {
+    const request = autoTopUpQueue.shift();
+    if (!request) {
+      break;
+    }
 
-		const config = getAutoTopUp(request.orgId);
-		if (!config?.enabled) continue;
+    const config = getAutoTopUp(request.orgId);
+    if (!config?.enabled) {
+      continue;
+    }
 
-		// In production: charge Stripe, then add credits on success
-		// For now: simulate immediate success
-		addCredits(request.orgId, request.amountCents, "auto_topup", "Auto top-up");
-		processed++;
-	}
+    // In production: charge Stripe, then add credits on success
+    // For now: simulate immediate success
+    addCredits(request.orgId, request.amountCents, "auto_topup", "Auto top-up");
+    processed++;
+  }
 
-	return processed;
+  return processed;
 }
 
 // ── Webhook Handlers ─────────────────────────────────────────────────────────
@@ -118,50 +124,50 @@ export function processAutoTopUpQueue(): number {
  * ```
  */
 export function handleStripeEvent(
-	eventType: string,
-	data: Record<string, unknown>,
+  eventType: string,
+  data: Record<string, unknown>,
 ): { handled: boolean; action?: string } {
-	switch (eventType) {
-		case "checkout.session.completed": {
-			const metadata = data.metadata as Record<string, string> | undefined;
-			if (metadata?.orgId && metadata?.amountCents) {
-				addCredits(
-					metadata.orgId as OrgId,
-					Number(metadata.amountCents),
-					"stripe",
-					"Credit purchase via Stripe Checkout",
-				);
-				return { handled: true, action: "credits_added" };
-			}
-			return { handled: false };
-		}
+  switch (eventType) {
+    case "checkout.session.completed": {
+      const metadata = data.metadata as Record<string, string> | undefined;
+      if (metadata?.orgId && metadata?.amountCents) {
+        addCredits(
+          metadata.orgId as OrgId,
+          Number(metadata.amountCents),
+          "stripe",
+          "Credit purchase via Stripe Checkout",
+        );
+        return { handled: true, action: "credits_added" };
+      }
+      return { handled: false };
+    }
 
-		case "payment_intent.succeeded": {
-			const metadata = data.metadata as Record<string, string> | undefined;
-			if (metadata?.type === "auto_topup" && metadata?.orgId) {
-				addCredits(
-					metadata.orgId as OrgId,
-					Number(metadata.amountCents ?? 0),
-					"auto_topup",
-					"Auto top-up payment succeeded",
-				);
-				return { handled: true, action: "auto_topup_credited" };
-			}
-			return { handled: false };
-		}
+    case "payment_intent.succeeded": {
+      const metadata = data.metadata as Record<string, string> | undefined;
+      if (metadata?.type === "auto_topup" && metadata?.orgId) {
+        addCredits(
+          metadata.orgId as OrgId,
+          Number(metadata.amountCents ?? 0),
+          "auto_topup",
+          "Auto top-up payment succeeded",
+        );
+        return { handled: true, action: "auto_topup_credited" };
+      }
+      return { handled: false };
+    }
 
-		case "payment_intent.payment_failed": {
-			const metadata = data.metadata as Record<string, string> | undefined;
-			if (metadata?.type === "auto_topup" && metadata?.orgId) {
-				// In production: notify the org, disable auto-top-up, alert agents
-				return { handled: true, action: "auto_topup_failed" };
-			}
-			return { handled: false };
-		}
+    case "payment_intent.payment_failed": {
+      const metadata = data.metadata as Record<string, string> | undefined;
+      if (metadata?.type === "auto_topup" && metadata?.orgId) {
+        // In production: notify the org, disable auto-top-up, alert agents
+        return { handled: true, action: "auto_topup_failed" };
+      }
+      return { handled: false };
+    }
 
-		default:
-			return { handled: false };
-	}
+    default:
+      return { handled: false };
+  }
 }
 
 // ── Payment History ──────────────────────────────────────────────────────────
@@ -169,16 +175,16 @@ export function handleStripeEvent(
 const paymentLog: PaymentRecord[] = [];
 
 export function recordPayment(orgId: OrgId, amountCents: number, stripeId: string | null): void {
-	paymentLog.push({
-		id: `pay_${Date.now().toString(36)}`,
-		orgId,
-		amountCents,
-		status: "succeeded",
-		stripePaymentIntentId: stripeId,
-		createdAt: new Date(),
-	});
+  paymentLog.push({
+    id: `pay_${Date.now().toString(36)}`,
+    orgId,
+    amountCents,
+    status: "succeeded",
+    stripePaymentIntentId: stripeId,
+    createdAt: new Date(),
+  });
 }
 
 export function getPaymentHistory(orgId: OrgId): PaymentRecord[] {
-	return paymentLog.filter((p) => p.orgId === orgId);
+  return paymentLog.filter((p) => p.orgId === orgId);
 }
