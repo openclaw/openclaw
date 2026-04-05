@@ -294,6 +294,7 @@ export function handleMessageUpdate(
   if (deliveryPhase === "commentary") {
     return;
   }
+  const phaseAwareVisibleText = coerceText(extractAssistantVisibleText(partialAssistant)).trim();
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
   if (chunk) {
