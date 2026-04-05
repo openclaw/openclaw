@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw Anthropic provider plugin",
   "type": "module",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.77"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
