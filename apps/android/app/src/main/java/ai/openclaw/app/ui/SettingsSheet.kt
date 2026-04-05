@@ -1106,7 +1106,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
                 }
               },
             )
-
+          }
           HorizontalDivider(color = mobileBorder)
           ListItem(
             modifier = Modifier.fillMaxWidth(),
@@ -1120,7 +1120,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
               )
             },
           )
-          }
         }
       }
 
