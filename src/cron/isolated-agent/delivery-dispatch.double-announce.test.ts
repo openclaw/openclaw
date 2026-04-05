@@ -472,6 +472,42 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers independently when two jobs share a session and the same delivery target", async () => {
+    // Regression guard for: https://github.com/openclaw/openclaw/issues/XXXXX
+    // Two cron jobs with the same runSessionId (shared non-isolated session) and
+    // identical delivery targets must NOT collide on the idempotency cache.
+    // Before the fix (v1 key without jobId) the second job's delivery was silently
+    // skipped because it hit the cache entry left by the first job.
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const sharedRunSessionId = "shared-session-abc";
+
+    const paramsA = makeBaseParams({
+      synthesizedText: "Reminder: drink water.",
+      runSessionId: sharedRunSessionId,
+    });
+    (paramsA.job as { id: string }).id = "job-drink-water";
+
+    const paramsB = makeBaseParams({
+      synthesizedText: "Reminder: do homework.",
+      runSessionId: sharedRunSessionId,
+    });
+    (paramsB.job as { id: string }).id = "job-do-homework";
+
+    const stateA = await dispatchCronDelivery(paramsA);
+    const stateB = await dispatchCronDelivery(paramsB);
+
+    // Both jobs must be delivered — not just the first one.
+    expect(stateA.delivered).toBe(true);
+    expect(stateB.delivered).toBe(true);
+    expect(stateA.deliveryAttempted).toBe(true);
+    expect(stateB.deliveryAttempted).toBe(true);
+    // deliverOutboundPayloads must be called once per job, not once total.
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+  });
+
   it("does not cache partial bestEffort delivery replays as delivered", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
