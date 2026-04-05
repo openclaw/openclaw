@@ -2516,7 +2516,7 @@ td.data-table-key-col {
 
 .chat-queue__title {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--chat-font-sm);
   font-weight: 500;
   color: var(--muted);
 }
@@ -2539,7 +2539,7 @@ td.data-table-key-col {
 
 .chat-queue__text {
   color: var(--chat-text);
-  font-size: 13px;
+  font-size: var(--chat-font-md);
   line-height: 1.45;
   white-space: pre-wrap;
   overflow: hidden;
@@ -2552,7 +2552,7 @@ td.data-table-key-col {
 .chat-queue__remove {
   align-self: start;
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: var(--chat-font-sm);
   line-height: 1;
 }
 
@@ -2562,7 +2562,7 @@ td.data-table-key-col {
   margin: 8px auto 0;
   border-radius: var(--radius-full);
   padding: 6px 12px;
-  font-size: 12px;
+  font-size: var(--chat-font-sm);
   line-height: 1;
 }
 
@@ -2597,6 +2597,7 @@ td.data-table-key-col {
   border-radius: var(--radius-lg);
   padding: 10px 14px;
   min-width: 0;
+  font-size: var(--chat-font-body);
 }
 
 :root[data-theme-mode="light"] .chat-bubble {
@@ -2705,6 +2706,7 @@ td.data-table-key-col {
   overflow-wrap: anywhere;
   word-break: break-word;
   color: var(--chat-text);
+  font-size: inherit;
   line-height: 1.5;
 }
 
@@ -2774,7 +2776,7 @@ td.data-table-key-col {
 }
 
 .chat-text :where(pre code) {
-  font-size: 12px;
+  font-size: var(--chat-font-sm);
   white-space: pre;
 }
 
@@ -2783,7 +2785,7 @@ td.data-table-key-col {
   border-collapse: collapse;
   width: 100%;
   max-width: 100%;
-  font-size: 13px;
+  font-size: var(--chat-font-md);
   display: block;
   overflow-x: auto;
 }
@@ -2818,14 +2820,14 @@ td.data-table-key-col {
 
 .chat-tool-card__title {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--chat-font-sm);
   font-weight: 500;
   color: var(--text);
 }
 
 .chat-tool-card__detail {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--chat-font-xs);
   color: var(--muted);
 }
 
@@ -2835,7 +2837,7 @@ td.data-table-key-col {
 
 .chat-tool-card__summary {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--chat-font-xs);
   color: var(--muted);
   cursor: pointer;
   list-style: none;
@@ -2860,7 +2862,7 @@ td.data-table-key-col {
 .chat-tool-card__output {
   margin-top: 8px;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--chat-font-xs);
   line-height: 1.5;
   white-space: pre-wrap;
   color: var(--chat-text);
@@ -2875,7 +2877,7 @@ td.data-table-key-col {
 }
 
 .chat-stamp {
-  font-size: 11px;
+  font-size: var(--chat-font-xs);
   color: var(--muted);
 }
 
@@ -2918,6 +2920,7 @@ td.data-table-key-col {
   resize: vertical;
   white-space: pre-wrap;
   font-family: var(--font-body);
+  font-size: var(--chat-font-body);
   line-height: 1.5;
   border: 1px solid var(--input);
   background: var(--card);
@@ -3005,18 +3008,18 @@ td.data-table-key-col {
 }
 
 .exec-approval-title {
-  font-size: 14px;
+  font-size: var(--chat-font-body);
   font-weight: 600;
 }
 
 .exec-approval-sub {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--chat-font-md);
   margin-top: 4px;
 }
 
 .exec-approval-queue {
-  font-size: 11px;
+  font-size: var(--chat-font-xs);
   font-weight: 500;
   color: var(--muted);
   border: 1px solid var(--border);
@@ -3033,14 +3036,14 @@ td.data-table-key-col {
   word-break: break-word;
   white-space: pre-wrap;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--chat-font-md);
 }
 
 .exec-approval-meta {
   margin-top: 12px;
   display: grid;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--chat-font-md);
   color: var(--muted);
 }
 
@@ -3057,7 +3060,7 @@ td.data-table-key-col {
 
 .exec-approval-error {
   margin-top: 10px;
-  font-size: 13px;
+  font-size: var(--chat-font-md);
   color: var(--danger);
 }
 

@@ -464,7 +464,7 @@
 
 .chat-compose .chat-compose__actions .btn {
   padding: 0 16px;
-  font-size: 13px;
+  font-size: var(--chat-font-md);
   height: 40px;
   min-height: 40px;
   max-height: 40px;
@@ -509,9 +509,9 @@
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 0.92rem;
+  font-size: var(--chat-font-body);
   font-family: inherit;
-  line-height: 1.4;
+  line-height: 1.5;
   outline: none;
   box-sizing: border-box;
 }
@@ -592,7 +592,7 @@
 }
 
 .agent-chat__token-count {
-  font-size: 0.7rem;
+  font-size: var(--chat-font-xs);
   color: var(--muted);
   white-space: nowrap;
   flex-shrink: 0;
@@ -671,7 +671,7 @@
 
 .slash-menu-group__label {
   padding: 4px 10px 2px;
-  font-size: 0.68rem;
+  font-size: var(--chat-font-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -723,7 +723,7 @@
 }
 
 .slash-menu-name {
-  font-size: 0.82rem;
+  font-size: var(--chat-font-md);
   font-weight: 600;
   font-family: var(--mono);
   color: var(--accent);
@@ -731,7 +731,7 @@
 }
 
 .slash-menu-args {
-  font-size: 0.75rem;
+  font-size: var(--chat-font-sm);
   color: var(--muted);
   font-family: var(--mono);
   opacity: 0.65;
@@ -743,7 +743,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
-  font-size: 0.75rem;
+  font-size: var(--chat-font-sm);
   color: var(--muted);
 }
 
@@ -756,7 +756,7 @@
 }
 
 .slash-menu-badge {
-  font-size: 0.65rem;
+  font-size: var(--chat-font-xs);
   font-weight: 600;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
@@ -770,7 +770,7 @@
   display: flex;
   gap: 10px;
   padding: 6px 10px 4px;
-  font-size: 0.68rem;
+  font-size: var(--chat-font-xs);
   color: var(--muted);
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
   margin-top: 4px;
@@ -779,7 +779,7 @@
 .slash-menu-footer kbd {
   display: inline-block;
   padding: 1px 4px;
-  font-size: 0.65rem;
+  font-size: var(--chat-font-xs);
   font-family: var(--mono);
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -819,7 +819,7 @@
   border: none;
   background: rgba(0, 0, 0, 0.6);
   color: #fff;
-  font-size: 12px;
+  font-size: var(--chat-font-sm);
   line-height: 1;
   cursor: pointer;
   display: flex;
@@ -835,7 +835,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.72rem;
+  font-size: var(--chat-font-xs);
   color: var(--muted);
 }
 
@@ -873,13 +873,13 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--chat-font-md);
 }
 
 /* Controls separator */
 .chat-controls__separator {
   color: rgba(255, 255, 255, 0.4);
-  font-size: 18px;
+  font-size: calc(18px * var(--ui-text-scale));
   margin: 0 8px;
   font-weight: 300;
 }
@@ -890,7 +890,7 @@
 
 .chat-controls__session select {
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: var(--chat-font-md);
   max-width: 300px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -904,7 +904,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--chat-font-sm);
   padding: 4px 10px;
   background: rgba(255, 255, 255, 0.04);
   border-radius: var(--radius-sm);
@@ -1003,7 +1003,7 @@
 }
 
 .agent-chat__welcome h2 {
-  font-size: 20px;
+  font-size: calc(20px * var(--ui-text-scale));
   font-weight: 600;
   margin: 0;
   color: var(--foreground);
@@ -1037,7 +1037,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--chat-font-sm);
   font-weight: 500;
   color: var(--muted);
   background: var(--panel);
@@ -1053,7 +1053,7 @@
 }
 
 .agent-chat__hint {
-  font-size: 13px;
+  font-size: var(--chat-font-md);
   color: var(--muted);
   margin: 0;
 }
@@ -1061,7 +1061,7 @@
 .agent-chat__hint kbd {
   display: inline-block;
   padding: 1px 6px;
-  font-size: 11px;
+  font-size: var(--chat-font-xs);
   font-family: var(--font-mono);
   background: var(--panel-strong);
   border: 1px solid var(--border);
@@ -1078,7 +1078,7 @@
 }
 
 .agent-chat__suggestion {
-  font-size: 13px;
+  font-size: var(--chat-font-md);
   padding: 8px 16px;
   border-radius: var(--radius-full);
   border: 1px solid var(--border);
