@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { EmbeddedRunTrigger } from "./params.js";
 
 /**
  * Default idle timeout for LLM streaming responses in milliseconds.
@@ -17,17 +18,34 @@ const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 /**
  * Resolves the LLM idle timeout from configuration.
+ * Cron-triggered runs use proportional idle timeout (50% of overall timeout, capped at 60s)
+ * when no explicit config is set. This allows long-running cron jobs while still detecting
+ * genuinely stuck models.
  * @param cfg - OpenClaw configuration
+ * @param trigger - What initiated this run (cron, heartbeat, user, etc.)
+ * @param timeoutMs - Overall job timeout in milliseconds
  * @returns Idle timeout in milliseconds, or 0 to disable
  */
-export function resolveLlmIdleTimeoutMs(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
+export function resolveLlmIdleTimeoutMs(params: {
+  cfg?: OpenClawConfig;
+  trigger?: EmbeddedRunTrigger;
+  timeoutMs?: number;
+}): number {
+  const raw = params.cfg?.agents?.defaults?.llm?.idleTimeoutSeconds;
   // 0 means disabled (no timeout)
   if (raw === 0) {
     return 0;
   }
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.min(Math.floor(raw) * 1000, MAX_SAFE_TIMEOUT_MS);
+  }
+  // Cron: idle timeout = 50% of overall timeout, capped at default (60s)
+  if (params.trigger === "cron" && params.timeoutMs) {
+    return Math.min(Math.floor(params.timeoutMs * 0.5), DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  }
+  // Cron without timeout configured: disable idle check entirely
+  if (params.trigger === "cron") {
+    return 0;
   }
   return DEFAULT_LLM_IDLE_TIMEOUT_MS;
 }

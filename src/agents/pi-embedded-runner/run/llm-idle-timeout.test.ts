@@ -8,46 +8,109 @@ import {
 
 describe("resolveLlmIdleTimeoutMs", () => {
   it("returns default when config is undefined", () => {
-    expect(resolveLlmIdleTimeoutMs(undefined)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(resolveLlmIdleTimeoutMs({ cfg: undefined })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("returns default when llm config is missing", () => {
     const cfg = { agents: {} } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("returns default when idleTimeoutSeconds is not set", () => {
     const cfg = { agents: { defaults: { llm: {} } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("returns 0 when idleTimeoutSeconds is 0 (disabled)", () => {
     const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 0 } } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(0);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(0);
   });
 
   it("returns configured value in milliseconds", () => {
     const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 30 } } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(30_000);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(30_000);
   });
 
   it("caps at max safe timeout", () => {
     const cfg = {
       agents: { defaults: { llm: { idleTimeoutSeconds: 10_000_000 } } },
     } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(2_147_000_000);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(2_147_000_000);
   });
 
   it("ignores negative values", () => {
     const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: -10 } } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("ignores non-finite values", () => {
     const cfg = {
       agents: { defaults: { llm: { idleTimeoutSeconds: Infinity } } },
     } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs(cfg)).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  describe("cron trigger", () => {
+    it("disables idle timeout for cron when no timeout configured", () => {
+      expect(resolveLlmIdleTimeoutMs({ cfg: undefined, trigger: "cron" })).toBe(0);
+
+      const cfgNoTimeout = { agents: { defaults: { llm: {} } } } as OpenClawConfig;
+      expect(resolveLlmIdleTimeoutMs({ cfg: cfgNoTimeout, trigger: "cron" })).toBe(0);
+    });
+
+    it("uses proportional idle timeout for cron with timeoutMs", () => {
+      // 300s timeout -> 150s idle (50% of 300s), capped at 60s
+      expect(
+        resolveLlmIdleTimeoutMs({ cfg: undefined, trigger: "cron", timeoutMs: 300_000 }),
+      ).toBe(60_000);
+
+      // 100s timeout -> 50s idle (50% of 100s), under 60s cap
+      expect(
+        resolveLlmIdleTimeoutMs({ cfg: undefined, trigger: "cron", timeoutMs: 100_000 }),
+      ).toBe(50_000);
+
+      // 60s timeout -> 30s idle (50% of 60s)
+      expect(
+        resolveLlmIdleTimeoutMs({ cfg: undefined, trigger: "cron", timeoutMs: 60_000 }),
+      ).toBe(30_000);
+
+      // 20s timeout -> 10s idle (50% of 20s)
+      expect(
+        resolveLlmIdleTimeoutMs({ cfg: undefined, trigger: "cron", timeoutMs: 20_000 }),
+      ).toBe(10_000);
+    });
+
+    it("respects explicit idleTimeoutSeconds config for cron", () => {
+      const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 45 } } } } as OpenClawConfig;
+      // Explicit config wins even for cron
+      expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron", timeoutMs: 300_000 })).toBe(45_000);
+    });
+
+    it("respects idleTimeoutSeconds: 0 for cron", () => {
+      const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 0 } } } } as OpenClawConfig;
+      expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(0);
+    });
+  });
+
+  describe("non-cron triggers", () => {
+    it("returns default for non-cron triggers", () => {
+      expect(resolveLlmIdleTimeoutMs({ cfg: undefined, trigger: "user" })).toBe(
+        DEFAULT_LLM_IDLE_TIMEOUT_MS,
+      );
+      expect(resolveLlmIdleTimeoutMs({ cfg: undefined, trigger: "heartbeat" })).toBe(
+        DEFAULT_LLM_IDLE_TIMEOUT_MS,
+      );
+      expect(resolveLlmIdleTimeoutMs({ cfg: undefined, trigger: "manual" })).toBe(
+        DEFAULT_LLM_IDLE_TIMEOUT_MS,
+      );
+    });
+
+    it("ignores timeoutMs for non-cron triggers", () => {
+      // timeoutMs should not affect non-cron triggers
+      expect(
+        resolveLlmIdleTimeoutMs({ cfg: undefined, trigger: "user", timeoutMs: 300_000 }),
+      ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    });
   });
 });
 
