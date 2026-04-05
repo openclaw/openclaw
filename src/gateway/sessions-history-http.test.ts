@@ -465,6 +465,56 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("suppresses NO_REPLY-only SSE fast-path updates while preserving raw sequence numbering", async () => {
+    const { storePath } = await seedSession({ text: "first message" });
+
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        headers: { Accept: "text/event-stream" },
+      });
+
+      expect(res.status).toBe(200);
+      const reader = res.body?.getReader();
+      expect(reader).toBeTruthy();
+      const streamState = { buffer: "" };
+      await readSseEvent(reader!, streamState);
+
+      const silent = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: "NO_REPLY",
+        storePath,
+      });
+      expect(silent.ok).toBe(true);
+
+      const visible = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: "third visible message",
+        storePath,
+      });
+      expect(visible.ok).toBe(true);
+
+      const messageEvent = await readSseEvent(reader!, streamState);
+      expect(messageEvent.event).toBe("message");
+      expect(
+        (messageEvent.data as { message?: { content?: Array<{ text?: string }> } }).message
+          ?.content?.[0]?.text,
+      ).toBe("third visible message");
+      expect((messageEvent.data as { messageSeq?: number }).messageSeq).toBe(3);
+      expect(
+        (
+          messageEvent.data as {
+            message?: { __openclaw?: { id?: string; seq?: number } };
+          }
+        ).message?.__openclaw,
+      ).toMatchObject({
+        id: visible.ok ? visible.messageId : undefined,
+        seq: 3,
+      });
+
+      await reader?.cancel();
+    });
+  });
+
   test("rejects session history when operator.read is not requested", async () => {
     await seedSession({ text: "scope-guarded history" });
 

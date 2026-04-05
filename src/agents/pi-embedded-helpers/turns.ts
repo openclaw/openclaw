@@ -1,17 +1,36 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
+// Extend this union when pi-agent-core adds new tool-call block types
 type AnthropicContentBlock = {
-  type: "text" | "toolUse" | "toolResult";
+  type: "text" | "toolUse" | "toolResult" | "toolCall" | "functionCall";
   text?: string;
   id?: string;
   name?: string;
   toolUseId?: string;
+  toolCallId?: string;
+  tool_use_id?: string;
+  tool_call_id?: string;
 };
 
+/** Recognizes toolUse, toolCall, and functionCall block types from different providers/core versions */
+function isToolCallBlock(type: string | undefined): boolean {
+  return type === "toolUse" || type === "toolCall" || type === "functionCall";
+}
+
+function isAbortedAssistantTurn(msg: AgentMessage): boolean {
+  if (!msg || typeof msg !== "object") {
+    return false;
+  }
+  const stopReason = (msg as { stopReason?: unknown }).stopReason;
+  return stopReason === "error" || stopReason === "aborted";
+}
+
 /**
- * Strips dangling tool_use blocks from assistant messages when the immediately
- * following user message does not contain a matching tool_result block.
- * This fixes the "tool_use ids found without tool_result blocks" error from Anthropic.
+ * Strips dangling assistant tool-call blocks (toolUse/toolCall/functionCall)
+ * when no later message in the same assistant span contains a matching
+ * tool_result block. This fixes the "tool_use ids found without tool_result
+ * blocks" error from Anthropic. Aborted/error turns are still filtered for
+ * dangling tool calls, but they do not receive synthesized fallback text.
  */
 function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[] {
   const result: AgentMessage[] = [];
@@ -33,47 +52,76 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       content?: AnthropicContentBlock[];
     };
 
-    // Get the next message to check for tool_result blocks
-    const nextMsg = messages[i + 1];
-    const nextMsgRole =
-      nextMsg && typeof nextMsg === "object"
-        ? ((nextMsg as { role?: unknown }).role as string | undefined)
-        : undefined;
+    const isAbortedTurn = isAbortedAssistantTurn(msg);
 
-    // If next message is not user, keep the assistant message as-is
-    if (nextMsgRole !== "user") {
+    if (!Array.isArray(assistantMsg.content)) {
       result.push(msg);
       continue;
     }
 
-    // Collect tool_use_ids from the next user message's tool_result blocks
-    const nextUserMsg = nextMsg as {
-      content?: AnthropicContentBlock[];
-    };
+    // Scan ALL subsequent messages in this assistant span for matching tool_result blocks.
+    // OpenAI-compatible transcripts can have assistant(toolCall) → user(text) → toolResult
+    // ordering, so we must look beyond the immediate next message.
+    // TODO: optimize to single-pass suffix set if this helper becomes hot.
     const validToolUseIds = new Set<string>();
-    if (Array.isArray(nextUserMsg.content)) {
-      for (const block of nextUserMsg.content) {
-        if (block && block.type === "toolResult" && block.toolUseId) {
-          validToolUseIds.add(block.toolUseId);
+    for (let j = i + 1; j < messages.length; j++) {
+      const futureMsg = messages[j];
+      if (!futureMsg || typeof futureMsg !== "object") {
+        continue;
+      }
+      const futureRole = (futureMsg as { role?: unknown }).role as string | undefined;
+      if (futureRole === "assistant") {
+        break;
+      }
+      if (futureRole !== "user" && futureRole !== "toolResult" && futureRole !== "tool") {
+        continue;
+      }
+      const futureUserMsg = futureMsg as {
+        content?: AnthropicContentBlock[];
+        toolUseId?: string;
+        toolCallId?: string;
+        tool_use_id?: string;
+        tool_call_id?: string;
+      };
+      if (futureRole === "toolResult" || futureRole === "tool") {
+        const directToolResultId =
+          futureUserMsg.toolUseId ??
+          futureUserMsg.toolCallId ??
+          futureUserMsg.tool_use_id ??
+          futureUserMsg.tool_call_id;
+        if (directToolResultId) {
+          validToolUseIds.add(directToolResultId);
+        }
+      }
+      if (!Array.isArray(futureUserMsg.content)) {
+        continue;
+      }
+      for (const block of futureUserMsg.content) {
+        if (block && block.type === "toolResult") {
+          const toolResultId =
+            block.toolUseId ?? block.toolCallId ?? block.tool_use_id ?? block.tool_call_id;
+          if (toolResultId) {
+            validToolUseIds.add(toolResultId);
+          }
         }
       }
     }
 
-    // Filter out tool_use blocks that don't have matching tool_result
-    const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
+    // Filter out tool-call blocks that don't have matching tool_result
+    const originalContent = assistantMsg.content;
     const filteredContent = originalContent.filter((block) => {
       if (!block) {
         return false;
       }
-      if (block.type !== "toolUse") {
+      if (!isToolCallBlock(block.type)) {
         return true;
       }
-      // Keep tool_use if its id is in the valid set
+      // Keep tool call if its id is in the valid set
       return validToolUseIds.has(block.id || "");
     });
 
-    // If all content would be removed, insert a minimal fallback text block
-    if (originalContent.length > 0 && filteredContent.length === 0) {
+    // If all content would be removed, insert a minimal fallback text block for non-aborted turns.
+    if (originalContent.length > 0 && filteredContent.length === 0 && !isAbortedTurn) {
       result.push({
         ...assistantMsg,
         content: [{ type: "text", text: "[tool calls omitted]" }],
@@ -83,6 +131,33 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
         ...assistantMsg,
         content: filteredContent,
       } as AgentMessage);
+    }
+  }
+
+  // See also: main loop tool_use stripping above
+  // Handle end-of-conversation orphans: if the last message is assistant with
+  // tool-call blocks and no following user message, strip those blocks.
+  if (result.length > 0) {
+    const lastMsg = result[result.length - 1];
+    const lastRole =
+      lastMsg && typeof lastMsg === "object"
+        ? ((lastMsg as { role?: unknown }).role as string | undefined)
+        : undefined;
+    if (lastRole === "assistant") {
+      const lastAssistant = lastMsg as { content?: AnthropicContentBlock[] };
+      if (Array.isArray(lastAssistant.content)) {
+        const hasToolUse = lastAssistant.content.some((b) => b && isToolCallBlock(b.type));
+        if (hasToolUse) {
+          const filtered = lastAssistant.content.filter((b) => b && !isToolCallBlock(b.type));
+          result[result.length - 1] =
+            filtered.length > 0 || isAbortedAssistantTurn(lastMsg)
+              ? ({ ...lastAssistant, content: filtered } as AgentMessage)
+              : ({
+                  ...lastAssistant,
+                  content: [{ type: "text" as const, text: "[tool calls omitted]" }],
+                } as AgentMessage);
+        }
+      }
     }
   }
 
@@ -193,6 +268,7 @@ export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[]
   // First, strip dangling tool_use blocks from assistant messages
   const stripped = stripDanglingAnthropicToolUses(messages);
 
+  // Then merge consecutive user messages
   return validateTurnsWithConsecutiveMerge({
     messages: stripped,
     role: "user",
