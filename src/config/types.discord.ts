@@ -1,6 +1,7 @@
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -37,7 +38,6 @@ export type DiscordDmConfig = {
 };
 
 export type DiscordGuildChannelConfig = {
-  allow?: boolean;
   requireMention?: boolean;
   /**
    * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
@@ -140,8 +140,8 @@ export type DiscordVoiceConfig = {
 };
 
 export type DiscordExecApprovalConfig = {
-  /** Enable exec approval forwarding to Discord DMs. Default: false. */
-  enabled?: boolean;
+  /** Enable mode for Discord exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
+  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
   /** Discord user IDs to receive approval prompts. Optional: falls back to commands.ownerAllowFrom when possible. */
   approvers?: string[];
   /** Only forward approvals for these agent IDs. Omit = all agents. */
@@ -249,6 +249,8 @@ export type DiscordAccountConfig = {
    * - "allowlist": only allow channels present in discord.guilds.*.channels
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
@@ -261,14 +263,8 @@ export type DiscordAccountConfig = {
    * - "partial": edit a single preview message
    * - "block": stream in chunked preview updates
    * - "progress": alias that maps to "partial" on Discord
-   *
-   * Legacy boolean values are still accepted and auto-migrated.
    */
-  streaming?: DiscordStreamMode | boolean;
-  /**
-   * @deprecated Legacy key; migrated automatically to `streaming`.
-   */
-  streamMode?: "partial" | "block" | "off";
+  streaming?: DiscordStreamMode;
   /** Chunking config for Discord stream previews in `streaming: "block"`. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
@@ -289,7 +285,7 @@ export type DiscordAccountConfig = {
   retry?: OutboundRetryConfig;
   /** Per-action tool gating (default: true for all). */
   actions?: DiscordActionConfig;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
   /**
    * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).

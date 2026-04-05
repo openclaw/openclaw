@@ -130,6 +130,37 @@ describe("SlackExecApprovalHandler", () => {
     );
   });
 
+  it("omits allow-always when exec approvals disallow it", async () => {
+    const app = buildApp();
+    const handler = new SlackExecApprovalHandler({
+      app,
+      accountId: "default",
+      config: buildConfig("dm").channels!.slack!.execApprovals!,
+      cfg: buildConfig("dm"),
+    });
+
+    await handler.handleApprovalRequested(
+      buildRequest({
+        ask: "always",
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+
+    const dmCall = sendMessageSlackMock.mock.calls.find(([to]) => to === "user:U123APPROVER");
+    const blocks = dmCall?.[2]?.blocks as Array<Record<string, unknown>> | undefined;
+    const actionsBlock = blocks?.find((block) => block.type === "actions");
+    const buttons = Array.isArray(actionsBlock?.elements) ? actionsBlock.elements : [];
+    const buttonTexts = buttons.map((button) =>
+      typeof button === "object" && button && typeof button.text === "object" && button.text
+        ? String((button.text as { text?: unknown }).text ?? "")
+        : "",
+    );
+
+    expect(buttonTexts).toContain("Allow Once");
+    expect(buttonTexts).toContain("Deny");
+    expect(buttonTexts).not.toContain("Allow Always");
+  });
+
   it("updates the pending approval card in place after resolution", async () => {
     const app = buildApp();
     const update = app.client.chat.update as ReturnType<typeof vi.fn>;

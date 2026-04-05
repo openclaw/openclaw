@@ -12,6 +12,8 @@ import {
   pluginTestRepoRoot as repoRoot,
   writeJson,
 } from "./generated-plugin-test-helpers.js";
+import { collectBundledRuntimeSidecarPaths } from "./runtime-sidecar-paths-baseline.js";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "./runtime-sidecar-paths.js";
 
 const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
 
@@ -59,6 +61,16 @@ describe("bundled plugin metadata", () => {
     },
   );
 
+  it(
+    "matches the checked-in runtime sidecar path baseline",
+    { timeout: BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS },
+    () => {
+      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).toEqual(
+        collectBundledRuntimeSidecarPaths({ rootDir: repoRoot }),
+      );
+    },
+  );
+
   it("captures setup-entry metadata for bundled channel plugins", () => {
     const discord = listBundledPluginMetadata().find((entry) => entry.dirName === "discord");
     expect(discord?.source).toEqual({ source: "./index.ts", built: "index.js" });
@@ -91,6 +103,12 @@ describe("bundled plugin metadata", () => {
     listBundledPluginMetadata().forEach((entry) =>
       expectTestOnlyArtifactsExcluded(entry.publicSurfaceArtifacts ?? []),
     );
+  });
+
+  it("keeps config schemas on all bundled plugin manifests", () => {
+    for (const entry of listBundledPluginMetadata()) {
+      expect(entry.manifest.configSchema).toEqual(expect.any(Object));
+    }
   });
 
   it("prefers built generated paths when present and falls back to source paths", () => {

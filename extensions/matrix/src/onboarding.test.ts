@@ -102,6 +102,7 @@ describe("matrix onboarding", () => {
             homeserver: "https://matrix.main.example.org",
             userId: "@main:example.org",
             accessToken: "main-token",
+            avatarUrl: "mxc://matrix.main.example.org/main-avatar",
           },
         },
       } as CoreConfig,
@@ -117,10 +118,12 @@ describe("matrix onboarding", () => {
 
     expect(result.cfg.channels?.matrix?.homeserver).toBeUndefined();
     expect(result.cfg.channels?.matrix?.accessToken).toBeUndefined();
+    expect(result.cfg.channels?.matrix?.avatarUrl).toBeUndefined();
     expect(result.cfg.channels?.matrix?.accounts?.default).toMatchObject({
       homeserver: "https://matrix.main.example.org",
       userId: "@main:example.org",
       accessToken: "main-token",
+      avatarUrl: "mxc://matrix.main.example.org/main-avatar",
     });
     expect(result.cfg.channels?.matrix?.accounts?.ops).toMatchObject({
       name: "ops",
@@ -187,7 +190,9 @@ describe("matrix onboarding", () => {
 
     expect(result.cfg.channels?.matrix).toMatchObject({
       homeserver: "http://localhost.localdomain:8008",
-      allowPrivateNetwork: true,
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
       accessToken: "ops-token",
     });
   });
@@ -308,7 +313,7 @@ describe("matrix onboarding", () => {
       },
       groupPolicy: "allowlist",
       groups: {
-        "!ops-room:example.org": { allow: true },
+        "!ops-room:example.org": { enabled: true },
       },
     });
     expect(result.cfg.channels?.["matrix"]?.dm).toBeUndefined();

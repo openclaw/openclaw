@@ -11,6 +11,7 @@
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResponseObject } from "./openai-ws-connection.js";
+import { buildOpenAIWebSocketResponseCreatePayload } from "./openai-ws-request.js";
 import {
   __testing as openAIWsStreamTesting,
   buildAssistantMessageFromResponse,
@@ -22,6 +23,7 @@ import {
   releaseWsSession,
 } from "./openai-ws-stream.js";
 import { log } from "./pi-embedded-runner/logger.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock OpenAIWebSocketManager
@@ -35,23 +37,35 @@ const { MockManager } = vi.hoisted(() => {
 
   // Shared mutable flag so inner class can see it
   let _globalConnectShouldFail = false;
+  let _globalSendFailuresRemaining = 0;
 
   class MockManager extends EventEmitter {
     private _listeners: AnyFn[] = [];
     private _previousResponseId: string | null = null;
     private _connected = false;
     private _broken = false;
+    private _lastCloseInfo: { code: number; reason: string; retryable: boolean } | null = null;
 
     sentEvents: unknown[] = [];
     connectCallCount = 0;
     closeCallCount = 0;
+    options: unknown;
 
     // Allow tests to override connect/send behaviour
     connectShouldFail = false;
     sendShouldFail = false;
 
+    constructor(options?: unknown) {
+      super();
+      this.options = options;
+    }
+
     get previousResponseId(): string | null {
       return this._previousResponseId;
+    }
+
+    get lastCloseInfo(): { code: number; reason: string; retryable: boolean } | null {
+      return this._lastCloseInfo;
     }
 
     async connect(_apiKey: string): Promise<void> {
@@ -70,7 +84,10 @@ const { MockManager } = vi.hoisted(() => {
       if (!this._connected) {
         throw new Error("cannot send — not connected");
       }
-      if (this.sendShouldFail) {
+      if (this.sendShouldFail || _globalSendFailuresRemaining > 0) {
+        if (_globalSendFailuresRemaining > 0) {
+          _globalSendFailuresRemaining--;
+        }
         throw new Error("Mock send failure");
       }
       this.sentEvents.push(event);
@@ -107,11 +124,28 @@ const { MockManager } = vi.hoisted(() => {
     close(): void {
       this.closeCallCount++;
       this._connected = false;
+      this._lastCloseInfo = {
+        code: 1000,
+        reason: "closed",
+        retryable: false,
+      };
+      this.emit("close", 1000, "closed");
     }
 
     // Test helper: simulate WebSocket connection drop mid-request
     simulateClose(code = 1006, reason = "connection lost"): void {
       this._connected = false;
+      this._lastCloseInfo = {
+        code,
+        reason,
+        retryable:
+          code === 1001 ||
+          code === 1005 ||
+          code === 1006 ||
+          code === 1011 ||
+          code === 1012 ||
+          code === 1013,
+      };
       this.emit("close", code, reason);
     }
 
@@ -162,10 +196,18 @@ const { MockManager } = vi.hoisted(() => {
       _globalConnectShouldFail = v;
     }
 
+    static get globalSendFailuresRemaining(): number {
+      return _globalSendFailuresRemaining;
+    }
+    static set globalSendFailuresRemaining(v: number) {
+      _globalSendFailuresRemaining = v;
+    }
+
     static reset(): void {
       TrackedMockManager.lastInstance = null;
       TrackedMockManager.instances = [];
       _globalConnectShouldFail = false;
+      _globalSendFailuresRemaining = 0;
     }
   }
 
@@ -173,9 +215,9 @@ const { MockManager } = vi.hoisted(() => {
 });
 
 // Track if streamSimple (HTTP fallback) was called
-const streamSimpleCalls: Array<{ model: unknown; context: unknown }> = [];
-const mockStreamSimple = vi.fn((model: unknown, context: unknown) => {
-  streamSimpleCalls.push({ model, context });
+const streamSimpleCalls: Array<{ model: unknown; context: unknown; options?: unknown }> = [];
+const mockStreamSimple = vi.fn((model: unknown, context: unknown, options?: unknown) => {
+  streamSimpleCalls.push({ model, context, options });
   const stream = createAssistantMessageEventStream();
   queueMicrotask(() => {
     const msg = makeFakeAssistantMessage("http fallback response");
@@ -184,6 +226,7 @@ const mockStreamSimple = vi.fn((model: unknown, context: unknown) => {
   });
   return stream;
 });
+const mockCreateHttpFallbackStreamFn = vi.fn(() => mockStreamSimple as never);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -245,7 +288,7 @@ function assistantMsg(
     stopReason: toolCalls.length > 0 ? "toolUse" : "stop",
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: {},
     timestamp: 0,
   };
@@ -269,7 +312,7 @@ function makeFakeAssistantMessage(text: string) {
     stopReason: "stop" as const,
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: {
       input: 10,
       output: 5,
@@ -312,7 +355,7 @@ function makeResponseObject(
     object: "response",
     created_at: Date.now(),
     status: "completed",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     output,
     usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
   };
@@ -353,6 +396,15 @@ describe("convertTools", () => {
     const tools = [{ name: "ping", description: "", parameters: {} }];
     const result = convertTools(tools as Parameters<typeof convertTools>[0]);
     expect(result[0]?.name).toBe("ping");
+  });
+
+  it("normalizes truly empty parameter schemas for parameter-free tools", () => {
+    const tools = [{ name: "ping", description: "No params", parameters: {} }];
+    const result = convertTools(tools as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+    });
   });
 
   it("injects properties:{} for type:object schemas missing properties (MCP no-param tools)", () => {
@@ -421,6 +473,22 @@ describe("convertTools", () => {
     });
   });
 
+  it("leaves top-level allOf schemas unchanged", () => {
+    const tools = [
+      {
+        name: "conditional",
+        description: "Conditional schema",
+        parameters: {
+          allOf: [{ type: "object", properties: { id: { type: "string" } } }],
+        },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      allOf: [{ type: "object", properties: { id: { type: "string" } } }],
+    });
+  });
+
   it("preserves existing properties on type:object schemas", () => {
     const tools = [
       {
@@ -433,6 +501,61 @@ describe("convertTools", () => {
     expect(result[0]?.parameters).toEqual({
       type: "object",
       properties: { cmd: { type: "string" } },
+    });
+  });
+
+  it("adds strict:true and required:[] for native strict-compatible no-param tools", () => {
+    const tools = [
+      {
+        name: "ping",
+        description: "No params",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0], {
+      strict: true,
+    });
+
+    expect(result[0]).toEqual({
+      type: "function",
+      name: "ping",
+      description: "No params",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+        required: [],
+      },
+      strict: true,
+    });
+  });
+
+  it("falls back to strict:false for native tools with non-strict-compatible schemas", () => {
+    const tools = [
+      {
+        name: "read",
+        description: "Read file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          additionalProperties: false,
+        },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0], {
+      strict: true,
+    });
+
+    expect(result[0]).toEqual({
+      type: "function",
+      name: "read",
+      description: "Read file",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        additionalProperties: false,
+      },
+      strict: false,
     });
   });
 });
@@ -522,7 +645,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -536,6 +659,146 @@ describe("convertMessagesToInputItems", () => {
       content: "Working on it.",
       phase: "commentary",
     });
+  });
+
+  it("splits replayed assistant text on phase changes from block signatures", () => {
+    const msg = {
+      role: "assistant" as const,
+      phase: "final_answer" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: "Working... ",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text" as const,
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+
+    expect(
+      convertMessagesToInputItems([msg] as unknown as Parameters<
+        typeof convertMessagesToInputItems
+      >[0]),
+    ).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: "Working... ",
+        phase: "commentary",
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: "Done.",
+        phase: "final_answer",
+      },
+    ]);
+  });
+
+  it("splits legacy unphased text from later phased text during replay", () => {
+    const msg = {
+      role: "assistant" as const,
+      phase: "final_answer" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: "Legacy. ",
+        },
+        {
+          type: "text" as const,
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+
+    expect(
+      convertMessagesToInputItems([msg] as unknown as Parameters<
+        typeof convertMessagesToInputItems
+      >[0]),
+    ).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: "Legacy. ",
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: "Done.",
+        phase: "final_answer",
+      },
+    ]);
+  });
+
+  it("preserves ordering when commentary text, tool calls, and final answer share one stored assistant message", () => {
+    const msg = {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: "Working... ",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "toolCall" as const,
+          id: "call_1|fc_1",
+          name: "exec",
+          arguments: { cmd: "ls" },
+        },
+        {
+          type: "text" as const,
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      stopReason: "toolUse",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+
+    expect(
+      convertMessagesToInputItems([msg] as Parameters<typeof convertMessagesToInputItems>[0]),
+    ).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: "Working... ",
+        phase: "commentary",
+      },
+      {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_1",
+        name: "exec",
+        arguments: JSON.stringify({ cmd: "ls" }),
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: "Done.",
+        phase: "final_answer",
+      },
+    ]);
   });
 
   it("converts a tool result message", () => {
@@ -633,7 +896,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -662,7 +925,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -690,7 +953,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -718,7 +981,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -745,7 +1008,7 @@ describe("convertMessagesToInputItems", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("buildAssistantMessageFromResponse", () => {
-  const modelInfo = { api: "openai-responses", provider: "openai", id: "gpt-5.2" };
+  const modelInfo = { api: "openai-responses", provider: "openai", id: "gpt-5.4" };
 
   it("extracts text content from a message output item", () => {
     const response = makeResponseObject("resp_1", "Hello from assistant");
@@ -799,12 +1062,53 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.usage.totalTokens).toBe(150);
   });
 
+  it("maps prompt_tokens and completion_tokens usage aliases", () => {
+    const response = makeResponseObject("resp_5b", "Hello");
+    response.usage = {
+      prompt_tokens: 44,
+      completion_tokens: 11,
+      total_tokens: 55,
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(44);
+    expect(msg.usage.output).toBe(11);
+    expect(msg.usage.totalTokens).toBe(55);
+  });
+
+  it("falls back to normalized input and output when total_tokens is missing", () => {
+    const response = makeResponseObject("resp_5c", "Hello");
+    response.usage = {
+      prompt_tokens: 10,
+      completion_tokens: 5,
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(10);
+    expect(msg.usage.output).toBe(5);
+    expect(msg.usage.totalTokens).toBe(15);
+  });
+
+  it("falls back to normalized input and output when total_tokens is zero", () => {
+    const response = makeResponseObject("resp_5d", "Hello");
+    response.usage = {
+      input_tokens: 10,
+      output_tokens: 5,
+      total_tokens: 0,
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(10);
+    expect(msg.usage.output).toBe(5);
+    expect(msg.usage.totalTokens).toBe(15);
+  });
+
   it("sets model/provider/api from modelInfo", () => {
     const response = makeResponseObject("resp_6", "Hi");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
     expect(msg.api).toBe("openai-responses");
     expect(msg.provider).toBe("openai");
-    expect(msg.model).toBe("gpt-5.2");
+    expect(msg.model).toBe("gpt-5.4");
   });
 
   it("handles empty output gracefully", () => {
@@ -824,13 +1128,132 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.content[0]?.text).toBe("Final answer");
   });
 
+  it("keeps only final-answer text when a response contains mixed assistant phases", () => {
+    const response = {
+      id: "resp_mixed_phase",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.2",
+      output: [
+        {
+          type: "message",
+          id: "item_commentary",
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "Working... " }],
+        },
+        {
+          type: "message",
+          id: "item_final",
+          role: "assistant",
+          phase: "final_answer",
+          content: [{ type: "output_text", text: "Done." }],
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo) as {
+      phase?: string;
+      content: Array<{ type: string; text?: string; textSignature?: string }>;
+    };
+
+    expect(msg.phase).toBe("final_answer");
+    expect(msg.content).toMatchObject([
+      {
+        type: "text",
+        text: "Done.",
+        textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+      },
+    ]);
+  });
+
+  it("keeps only phased final text when unphased legacy text and phased final text coexist", () => {
+    const response = {
+      id: "resp_unphased_plus_final",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.2",
+      output: [
+        {
+          type: "message",
+          id: "item_legacy",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Legacy. " }],
+        },
+        {
+          type: "message",
+          id: "item_final",
+          role: "assistant",
+          phase: "final_answer",
+          content: [{ type: "output_text", text: "Done." }],
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo) as {
+      phase?: string;
+      content: Array<{ type: string; text?: string; textSignature?: string }>;
+    };
+
+    expect(msg.phase).toBe("final_answer");
+    expect(msg.content).toMatchObject([
+      {
+        type: "text",
+        text: "Done.",
+        textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+      },
+    ]);
+  });
+
+  it("drops commentary-only text from completed assistant messages but keeps tool calls", () => {
+    const response = {
+      id: "resp_commentary_only_tool",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.2",
+      output: [
+        {
+          type: "message",
+          id: "item_commentary",
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "Working... " }],
+        },
+        {
+          type: "function_call",
+          id: "item_tool",
+          call_id: "call_abc",
+          name: "exec",
+          arguments: '{"arg":"value"}',
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    } as unknown as ResponseObject;
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo) as {
+      phase?: string;
+      content: Array<{ type: string; text?: string; name?: string }>;
+      stopReason: string;
+    };
+
+    expect(msg.phase).toBeUndefined();
+    expect(msg.content.some((part) => part.type === "text")).toBe(false);
+    expect(msg.content).toMatchObject([{ type: "toolCall", name: "exec" }]);
+    expect(msg.stopReason).toBe("toolUse");
+  });
+
   it("maps reasoning output items to thinking blocks with signature", () => {
     const response = {
       id: "resp_reasoning",
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -862,7 +1285,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning.summary",
@@ -889,7 +1312,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning.summary",
@@ -925,7 +1348,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -946,7 +1369,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -1022,7 +1445,7 @@ describe("planTurnInput", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -1047,7 +1470,7 @@ describe("planTurnInput", () => {
         buildAssistantMessageFromResponse(turn1Response, {
           api: "openai-responses",
           provider: "openai",
-          id: "gpt-5.2",
+          id: "gpt-5.4",
         }),
       ] as Parameters<typeof convertMessagesToInputItems>[0],
       tools: [],
@@ -1102,7 +1525,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
   const modelStub = {
     api: "openai-responses",
     provider: "openai",
-    id: "gpt-5.2",
+    id: "gpt-5.4",
     contextWindow: 128000,
     maxTokens: 4096,
     reasoning: false,
@@ -1120,8 +1543,11 @@ describe("createOpenAIWebSocketStreamFn", () => {
   beforeEach(() => {
     MockManager.reset();
     streamSimpleCalls.length = 0;
+    mockCreateHttpFallbackStreamFn.mockReset();
+    mockCreateHttpFallbackStreamFn.mockReturnValue(mockStreamSimple as never);
     openAIWsStreamTesting.setDepsForTest({
-      createManager: (() => new MockManager()) as never,
+      createManager: ((options?: unknown) => new MockManager(options)) as never,
+      createHttpFallbackStreamFn: mockCreateHttpFallbackStreamFn as never,
       streamSimple: mockStreamSimple,
     });
   });
@@ -1134,14 +1560,38 @@ describe("createOpenAIWebSocketStreamFn", () => {
     });
     releaseWsSession("sess-1");
     releaseWsSession("sess-2");
+    releaseWsSession("sess-boundary");
     releaseWsSession("sess-fallback");
+    releaseWsSession("sess-boundary-http-fallback");
+    releaseWsSession("sess-full-context-replay");
     releaseWsSession("sess-incremental");
     releaseWsSession("sess-full");
+    releaseWsSession("sess-onpayload");
+    releaseWsSession("sess-onpayload-async");
     releaseWsSession("sess-phase");
+    releaseWsSession("sess-phase-stream");
+    releaseWsSession("sess-phase-late-map");
+    releaseWsSession("sess-reason");
+    releaseWsSession("sess-reason-none");
     releaseWsSession("sess-tools");
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
+    releaseWsSession("sess-store-proxy");
     releaseWsSession("sess-max-tokens-zero");
+    releaseWsSession("sess-runtime-fallback-nested");
+    releaseWsSession("sess-runtime-fallback");
+    releaseWsSession("sess-runtime-retry");
+    releaseWsSession("sess-send-fail-reset");
+    releaseWsSession("sess-temp");
+    releaseWsSession("sess-text-verbosity");
+    releaseWsSession("sess-text-verbosity-invalid");
+    releaseWsSession("sess-topp");
+    releaseWsSession("sess-turn-metadata-retry");
+    releaseWsSession("sess-warmup-disabled");
+    releaseWsSession("sess-warmup-enabled");
+    releaseWsSession("sess-degraded-cooldown");
+    releaseWsSession("sess-drop");
+    openAIWsStreamTesting.setWsDegradeCooldownMsForTest();
     openAIWsStreamTesting.setDepsForTest();
   });
 
@@ -1157,8 +1607,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     const manager = MockManager.lastInstance;
     expect(manager?.connectCallCount).toBe(1);
-    // Consume stream to avoid dangling promise
-    void resolveStream(stream);
+    releaseWsSession("sess-1");
+    for await (const _ of await resolveStream(stream)) {
+      // consume
+    }
   });
 
   it("sends a response.create event on first turn (full context)", async () => {
@@ -1196,7 +1648,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(manager.sentEvents).toHaveLength(1);
     const sent = manager.sentEvents[0] as { type: string; model: string; input: unknown[] };
     expect(sent.type).toBe("response.create");
-    expect(sent.model).toBe("gpt-5.2");
+    expect(sent.model).toBe("gpt-5.4");
     expect(Array.isArray(sent.input)).toBe(true);
   });
 
@@ -1267,6 +1719,30 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent).not.toHaveProperty("store");
   });
 
+  it("keeps store=false for proxied openai-responses routes when store is still supported", () => {
+    const proxiedModel = {
+      ...modelStub,
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    const turnInput = planTurnInput({
+      context: contextStub as Parameters<typeof planTurnInput>[0]["context"],
+      model: proxiedModel as Parameters<typeof planTurnInput>[0]["model"],
+      previousResponseId: null,
+      lastContextLength: 0,
+    });
+    const sent = buildOpenAIWebSocketResponseCreatePayload({
+      model: proxiedModel as Parameters<
+        typeof buildOpenAIWebSocketResponseCreatePayload
+      >[0]["model"],
+      context: contextStub as Parameters<
+        typeof buildOpenAIWebSocketResponseCreatePayload
+      >[0]["context"],
+      turnInput,
+      tools: [],
+    }) as Record<string, unknown>;
+    expect(sent.store).toBe(false);
+  });
+
   it("emits an AssistantMessage on response.completed", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-2");
     const stream = streamFn(
@@ -1301,7 +1777,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(doneEvent?.message.content[0]?.text).toBe("Hello back!");
   });
 
-  it("keeps assistant phase on completed WebSocket responses", async () => {
+  it("suppresses commentary-only text on completed WebSocket responses", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase");
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
@@ -1328,11 +1804,226 @@ describe("createOpenAIWebSocketStreamFn", () => {
       | {
           type: string;
           reason: string;
-          message: { phase?: string; stopReason: string };
+          message: { phase?: string; stopReason: string; content?: Array<{ type?: string }> };
         }
       | undefined;
-    expect(doneEvent?.message.phase).toBe("commentary");
+    expect(doneEvent?.message.phase).toBeUndefined();
+    expect(doneEvent?.message.content?.some((part) => part.type === "text")).toBe(false);
     expect(doneEvent?.message.stopReason).toBe("toolUse");
+  });
+
+  it("emits accumulated phase-aware partials when output item mapping is available", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-stream");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: Array<{
+      type?: string;
+      delta?: string;
+      partial?: { phase?: string; content?: unknown[] };
+    }> = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev as (typeof events)[number]);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_commentary",
+        role: "assistant",
+        phase: "commentary",
+        content: [],
+      },
+    });
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_commentary",
+      output_index: 0,
+      content_index: 0,
+      delta: "Working",
+    });
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_commentary",
+      output_index: 0,
+      content_index: 0,
+      delta: "...",
+    });
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      output_index: 1,
+      item: {
+        type: "message",
+        id: "item_final",
+        role: "assistant",
+        phase: "final_answer",
+        content: [],
+      },
+    });
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_final",
+      output_index: 1,
+      content_index: 0,
+      delta: "Done.",
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        id: "resp_phase_stream",
+        object: "response",
+        created_at: Date.now(),
+        status: "completed",
+        model: "gpt-5.2",
+        output: [
+          {
+            type: "message",
+            id: "item_commentary",
+            role: "assistant",
+            phase: "commentary",
+            content: [{ type: "output_text", text: "Working..." }],
+          },
+          {
+            type: "message",
+            id: "item_final",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Done." }],
+          },
+        ],
+        usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+      },
+    });
+
+    await done;
+
+    const deltas = events.filter((event) => event.type === "text_delta");
+    expect(deltas).toHaveLength(3);
+    expect(deltas[0]).toMatchObject({ delta: "Working" });
+    expect(deltas[0]?.partial?.phase).toBe("commentary");
+    expect(deltas[0]?.partial?.content).toEqual([
+      {
+        type: "text",
+        text: "Working",
+        textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+      },
+    ]);
+    expect(deltas[1]).toMatchObject({ delta: "..." });
+    expect(deltas[1]?.partial?.phase).toBe("commentary");
+    expect(deltas[1]?.partial?.content).toEqual([
+      {
+        type: "text",
+        text: "Working...",
+        textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+      },
+    ]);
+    expect(deltas[2]).toMatchObject({ delta: "Done." });
+    expect(deltas[2]?.partial?.phase).toBe("final_answer");
+    expect(deltas[2]?.partial?.content).toEqual([
+      {
+        type: "text",
+        text: "Done.",
+        textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+      },
+    ]);
+  });
+
+  it("buffers text deltas until item mapping is available", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-late-map");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: Array<{
+      type?: string;
+      delta?: string;
+      partial?: { phase?: string; content?: unknown[] };
+    }> = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev as (typeof events)[number]);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_late",
+      output_index: 0,
+      content_index: 0,
+      delta: "Working",
+    });
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_late",
+        role: "assistant",
+        phase: "commentary",
+        content: [],
+      },
+    });
+    manager.simulateEvent({
+      type: "response.output_text.delta",
+      item_id: "item_late",
+      output_index: 0,
+      content_index: 0,
+      delta: "...",
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        id: "resp_phase_late_map",
+        object: "response",
+        created_at: Date.now(),
+        status: "completed",
+        model: "gpt-5.2",
+        output: [
+          {
+            type: "message",
+            id: "item_late",
+            role: "assistant",
+            phase: "commentary",
+            content: [{ type: "output_text", text: "Working..." }],
+          },
+        ],
+        usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+      },
+    });
+
+    await done;
+
+    const deltas = events.filter((event) => event.type === "text_delta");
+    expect(deltas).toHaveLength(2);
+    expect(deltas[0]).toMatchObject({ delta: "Working" });
+    expect(deltas[0]?.partial?.phase).toBe("commentary");
+    expect(deltas[0]?.partial?.content).toEqual([
+      {
+        type: "text",
+        text: "Working",
+        textSignature: JSON.stringify({ v: 1, id: "item_late", phase: "commentary" }),
+      },
+    ]);
+    expect(deltas[1]).toMatchObject({ delta: "..." });
+    expect(deltas[1]?.partial?.phase).toBe("commentary");
+    expect(deltas[1]?.partial?.content).toEqual([
+      {
+        type: "text",
+        text: "Working...",
+        textSignature: JSON.stringify({ v: 1, id: "item_late", phase: "commentary" }),
+      },
+    ]);
   });
 
   it("falls back to HTTP when WebSocket connect fails (session pre-broken via flag)", async () => {
@@ -1356,10 +2047,203 @@ describe("createOpenAIWebSocketStreamFn", () => {
       // streamSimple was called as part of HTTP fallback
       expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
 
-      // manager.close() must be called to cancel background reconnect attempts
-      expect(MockManager.lastInstance!.closeCallCount).toBeGreaterThanOrEqual(1);
+      // The failed manager is closed before the replacement session manager is installed.
+      expect(MockManager.instances.some((instance) => instance.closeCallCount >= 1)).toBe(true);
     } finally {
       MockManager.globalConnectShouldFail = false;
+    }
+  });
+
+  it("falls back to HTTP when WebSocket errors before any output in auto mode", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-runtime-fallback");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "auto" } as Parameters<typeof streamFn>[2],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "error",
+      message: "temporary upstream glitch",
+      code: "ws_runtime_error",
+    });
+
+    const events: Array<{ type?: string; message?: { content?: Array<{ text?: string }> } }> = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev as { type?: string; message?: { content?: Array<{ text?: string }> } });
+    }
+
+    expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
+    expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
+    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const doneEvent = events.find((event) => event.type === "done");
+    expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
+  });
+
+  it("falls back to HTTP when OpenAI sends a nested websocket error payload", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-runtime-fallback-nested");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "auto" } as Parameters<typeof streamFn>[2],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "error",
+      status: 400,
+      error: {
+        type: "invalid_request_error",
+        code: "previous_response_not_found",
+        message: "Previous response with id 'resp_abc' not found.",
+        param: "previous_response_id",
+      },
+    });
+
+    const events: Array<{ type?: string; message?: { content?: Array<{ text?: string }> } }> = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev as { type?: string; message?: { content?: Array<{ text?: string }> } });
+    }
+
+    expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
+    expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
+    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const doneEvent = events.find((event) => event.type === "done");
+    expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
+  });
+
+  it("retries one retryable mid-request close before falling back in auto mode", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-runtime-retry");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "auto" } as Parameters<typeof streamFn>[2],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const firstManager = MockManager.lastInstance!;
+    firstManager.simulateClose(1006, "connection lost");
+
+    await new Promise((r) => setImmediate(r));
+    const secondManager = MockManager.lastInstance!;
+    expect(secondManager).not.toBe(firstManager);
+    expect(secondManager.connectCallCount).toBe(1);
+
+    secondManager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-retried", "retry succeeded"),
+    });
+
+    const events: Array<{ type?: string; message?: { content?: Array<{ text?: string }> } }> = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev as { type?: string; message?: { content?: Array<{ text?: string }> } });
+    }
+
+    expect(streamSimpleCalls).toHaveLength(0);
+    expect(firstManager.closeCallCount).toBeGreaterThanOrEqual(1);
+    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    const doneEvent = events.find((event) => event.type === "done");
+    expect(doneEvent?.message?.content?.[0]?.text).toBe("retry succeeded");
+  });
+
+  it("keeps native turn metadata stable across websocket retries and increments attempt", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-turn-metadata-retry");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "auto" } as Parameters<typeof streamFn>[2],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const firstManager = MockManager.lastInstance!;
+    firstManager.simulateClose(1006, "connection lost");
+
+    await new Promise((r) => setImmediate(r));
+    const secondManager = MockManager.lastInstance!;
+    secondManager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-retried-meta", "retry succeeded"),
+    });
+
+    for await (const _ of await resolveStream(stream)) {
+      // consume
+    }
+
+    const firstPayload = firstManager.sentEvents[0] as { metadata?: Record<string, string> };
+    const secondPayload = secondManager.sentEvents[0] as { metadata?: Record<string, string> };
+    expect(firstPayload.metadata?.openclaw_session_id).toBe("sess-turn-metadata-retry");
+    expect(firstPayload.metadata?.openclaw_transport).toBe("websocket");
+    expect(firstPayload.metadata?.openclaw_turn_id).toBeTruthy();
+    expect(secondPayload.metadata?.openclaw_turn_id).toBe(firstPayload.metadata?.openclaw_turn_id);
+    expect(firstPayload.metadata?.openclaw_turn_attempt).toBe("1");
+    expect(secondPayload.metadata?.openclaw_turn_attempt).toBe("2");
+  });
+
+  it("keeps websocket degraded for the session until the cool-down expires", async () => {
+    openAIWsStreamTesting.setWsDegradeCooldownMsForTest(50);
+    MockManager.globalConnectShouldFail = true;
+
+    try {
+      const sessionId = "sess-degraded-cooldown";
+      const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+      const firstStream = streamFn(
+        modelStub as Parameters<typeof streamFn>[0],
+        contextStub as Parameters<typeof streamFn>[1],
+        { transport: "auto" } as Parameters<typeof streamFn>[2],
+      );
+      void firstStream;
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(streamSimpleCalls.length).toBe(1);
+      expect(MockManager.instances).toHaveLength(2);
+      const cooledManager = MockManager.lastInstance!;
+      expect(cooledManager.connectCallCount).toBe(0);
+
+      MockManager.globalConnectShouldFail = false;
+
+      const secondStream = streamFn(
+        modelStub as Parameters<typeof streamFn>[0],
+        contextStub as Parameters<typeof streamFn>[1],
+        { transport: "auto" } as Parameters<typeof streamFn>[2],
+      );
+      void secondStream;
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(streamSimpleCalls.length).toBe(2);
+      expect(MockManager.instances).toHaveLength(2);
+      expect(cooledManager.connectCallCount).toBe(0);
+
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const thirdStream = streamFn(
+        modelStub as Parameters<typeof streamFn>[0],
+        contextStub as Parameters<typeof streamFn>[1],
+        { transport: "auto" } as Parameters<typeof streamFn>[2],
+      );
+
+      void thirdStream;
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(cooledManager.connectCallCount).toBe(1);
+      expect(streamSimpleCalls.length).toBe(2);
+      cooledManager.simulateEvent({
+        type: "response.completed",
+        response: makeResponseObject("resp-after-cooldown", "ws recovered"),
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      MockManager.globalConnectShouldFail = false;
+      openAIWsStreamTesting.setWsDegradeCooldownMsForTest();
+      releaseWsSession("sess-degraded-cooldown");
+      releaseWsSession("sess-turn-metadata-retry");
     }
   });
 
@@ -1453,7 +2337,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -1560,7 +2444,37 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect((sent.tools ?? []).length).toBeGreaterThan(0);
   });
 
-  it("resets session state and falls back to HTTP when send() throws", async () => {
+  it("strips the internal cache boundary from websocket instructions", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-boundary");
+    const ctx = {
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+      messages: [userMsg("Hello")] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      ctx as Parameters<typeof streamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_boundary", "ok"),
+    });
+
+    for await (const _ of await resolveStream(stream)) {
+      // consume
+    }
+
+    const sent = manager.sentEvents[0] as {
+      instructions?: string;
+    };
+    expect(sent.instructions).toBe("Stable prefix\nDynamic suffix");
+  });
+
+  it("falls back to HTTP after the websocket send retry budget is exhausted", async () => {
     const sessionId = "sess-send-fail-reset";
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
 
@@ -1588,8 +2502,8 @@ describe("createOpenAIWebSocketStreamFn", () => {
     });
     expect(hasWsSession(sessionId)).toBe(true);
 
-    // 2. Arm send failure and record pre-call streamSimpleCalls count
-    MockManager.lastInstance!.sendShouldFail = true;
+    // 2. Exhaust both websocket send attempts so auto mode must fall back.
+    MockManager.globalSendFailuresRemaining = 2;
     const callsBefore = streamSimpleCalls.length;
 
     // 3. Second call: send throws → must fall back to HTTP and clear registry
@@ -1601,10 +2515,68 @@ describe("createOpenAIWebSocketStreamFn", () => {
       /* consume */
     }
 
-    // Registry cleared after send failure
+    // Registry cleared after retry budget exhaustion + HTTP fallback
     expect(hasWsSession(sessionId)).toBe(false);
     // HTTP fallback invoked
     expect(streamSimpleCalls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it("routes websocket HTTP fallback through the configured HTTP fallback builder", async () => {
+    const httpFallbackCalls: Array<{ model: unknown; context: unknown; options?: unknown }> = [];
+    const httpFallbackStreamFn = vi.fn((model: unknown, context: unknown, options?: unknown) => {
+      httpFallbackCalls.push({ model, context, options });
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const msg = makeFakeAssistantMessage("boundary-safe fallback");
+        stream.push({ type: "done", reason: "stop", message: msg });
+        stream.end();
+      });
+      return stream;
+    });
+    mockCreateHttpFallbackStreamFn.mockReturnValue(httpFallbackStreamFn as never);
+    const sessionId = "sess-boundary-http-fallback";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-ok", "OK"),
+          });
+          for await (const _ of await resolveStream(stream1)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    MockManager.globalSendFailuresRemaining = 2;
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      {
+        ...contextStub,
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+      } as Parameters<typeof streamFn>[1],
+    );
+    for await (const _ of await resolveStream(stream2)) {
+      /* consume */
+    }
+
+    expect(mockCreateHttpFallbackStreamFn).toHaveBeenCalled();
+    expect(streamSimpleCalls).toHaveLength(0);
+    expect(httpFallbackCalls).toHaveLength(1);
+    expect(httpFallbackCalls[0]?.context).toMatchObject({
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+    });
   });
 
   it("forwards temperature and maxTokens to response.create", async () => {
@@ -1832,6 +2804,42 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.text).toEqual({ verbosity: "low" });
     expect(sent.service_tier).toBe("priority");
   });
+
+  it("awaits async onPayload mutations before sending response.create", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-onpayload-async");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      {
+        onPayload: async (payload: unknown) => {
+          const request = payload as Record<string, unknown>;
+          await Promise.resolve();
+          request.metadata = { async_hook: "applied" };
+          return undefined;
+        },
+      } as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-onpayload-async", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.metadata).toMatchObject({ async_hook: "applied" });
+  });
   it("forwards topP and toolChoice to response.create", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-topp");
     const opts = { topP: 0.9, toolChoice: "auto" };
@@ -1863,12 +2871,12 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.tool_choice).toBe("auto");
   });
 
-  it("rejects promise when WebSocket drops mid-request", async () => {
+  it("keeps explicit websocket mode surfacing mid-request drops", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-drop");
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
       contextStub as Parameters<typeof streamFn>[1],
-      {} as Parameters<typeof streamFn>[2],
+      { transport: "websocket" } as Parameters<typeof streamFn>[2],
     );
     // Let the send go through, then simulate connection drop before response.completed
     await new Promise<void>((resolve) => {
@@ -1964,6 +2972,7 @@ describe("releaseWsSession / hasWsSession", () => {
     MockManager.reset();
     openAIWsStreamTesting.setDepsForTest({
       createManager: (() => new MockManager()) as never,
+      createHttpFallbackStreamFn: mockCreateHttpFallbackStreamFn as never,
       streamSimple: mockStreamSimple,
     });
   });
@@ -1983,7 +2992,7 @@ describe("releaseWsSession / hasWsSession", () => {
       {
         api: "openai-responses",
         provider: "openai",
-        id: "gpt-5.2",
+        id: "gpt-5.4",
         contextWindow: 128000,
         maxTokens: 4096,
         reasoning: false,
@@ -2019,7 +3028,7 @@ describe("releaseWsSession / hasWsSession", () => {
       {
         api: "openai-responses",
         provider: "openai",
-        id: "gpt-5.2",
+        id: "gpt-5.4",
         contextWindow: 128000,
         maxTokens: 4096,
         reasoning: false,

@@ -22,7 +22,8 @@
     }
   ],
   "contracts": {
-    "imageGenerationProviders": ["fal"]
+    "imageGenerationProviders": ["fal"],
+    "videoGenerationProviders": ["fal"]
   },
   "configSchema": {
     "type": "object",

@@ -1,16 +1,29 @@
+import { listBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
 import { isRecord } from "../utils.js";
 
-export const UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
+const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
   "commands.ownerDisplaySecret",
   "hooks.token",
   "hooks.gmail.pushToken",
   "hooks.mappings[].sessionKey",
   "auth-profiles.oauth.*",
-  "channels.discord.threadBindings.webhookToken",
-  "channels.discord.accounts.*.threadBindings.webhookToken",
-  "channels.whatsapp.creds.json",
-  "channels.whatsapp.accounts.*.creds.json",
 ] as const;
+
+function collectChannelUnsupportedSecretRefSurfacePatterns(): string[] {
+  return listBootstrapChannelPlugins().flatMap(
+    (plugin) => plugin.secrets?.unsupportedSecretRefSurfacePatterns ?? [],
+  );
+}
+
+let cachedUnsupportedSecretRefSurfacePatterns: string[] | null = null;
+
+export function getUnsupportedSecretRefSurfacePatterns(): string[] {
+  cachedUnsupportedSecretRefSurfacePatterns ??= [
+    ...CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS,
+    ...collectChannelUnsupportedSecretRefSurfacePatterns(),
+  ];
+  return cachedUnsupportedSecretRefSurfacePatterns;
+}
 
 export type UnsupportedSecretRefConfigCandidate = {
   path: string;
@@ -60,68 +73,14 @@ export function collectUnsupportedSecretRefConfigCandidates(
     }
   }
 
-  const channels = isRecord(raw.channels) ? raw.channels : null;
-  if (!channels) {
-    return candidates;
-  }
-
-  const discord = isRecord(channels.discord) ? channels.discord : null;
-  if (discord) {
-    const threadBindings = isRecord(discord.threadBindings) ? discord.threadBindings : null;
-    if (threadBindings) {
-      candidates.push({
-        path: "channels.discord.threadBindings.webhookToken",
-        value: threadBindings.webhookToken,
-      });
-    }
-    const accounts = isRecord(discord.accounts) ? discord.accounts : null;
-    if (accounts) {
-      for (const [accountId, account] of Object.entries(accounts)) {
-        if (!isRecord(account)) {
-          continue;
-        }
-        const accountThreadBindings = isRecord(account.threadBindings)
-          ? account.threadBindings
-          : null;
-        if (!accountThreadBindings) {
-          continue;
-        }
-        candidates.push({
-          path: `channels.discord.accounts.${accountId}.threadBindings.webhookToken`,
-          value: accountThreadBindings.webhookToken,
-        });
+  if (isRecord(raw.channels)) {
+    for (const plugin of listBootstrapChannelPlugins()) {
+      const channelCandidates = plugin.secrets?.collectUnsupportedSecretRefConfigCandidates?.(raw);
+      if (!channelCandidates?.length) {
+        continue;
       }
+      candidates.push(...channelCandidates);
     }
-  }
-
-  const whatsapp = isRecord(channels.whatsapp) ? channels.whatsapp : null;
-  if (!whatsapp) {
-    return candidates;
-  }
-
-  const creds = isRecord(whatsapp.creds) ? whatsapp.creds : null;
-  if (creds) {
-    candidates.push({
-      path: "channels.whatsapp.creds.json",
-      value: creds.json,
-    });
-  }
-  const accounts = isRecord(whatsapp.accounts) ? whatsapp.accounts : null;
-  if (!accounts) {
-    return candidates;
-  }
-  for (const [accountId, account] of Object.entries(accounts)) {
-    if (!isRecord(account)) {
-      continue;
-    }
-    const accountCreds = isRecord(account.creds) ? account.creds : null;
-    if (!accountCreds) {
-      continue;
-    }
-    candidates.push({
-      path: `channels.whatsapp.accounts.${accountId}.creds.json`,
-      value: accountCreds.json,
-    });
   }
 
   return candidates;

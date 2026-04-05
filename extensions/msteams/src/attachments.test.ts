@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { PluginRuntime, SsrFPolicy } from "../runtime-api.js";
-import { downloadMSTeamsAttachments, downloadMSTeamsGraphMedia } from "./attachments.js";
+import { downloadMSTeamsAttachments } from "./attachments/download.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const GRAPH_HOST = "graph.microsoft.com";
@@ -110,7 +109,7 @@ const fetchRemoteMediaMock = vi.fn(async (params: RemoteMediaFetchParams) => {
   return await fetchRemoteMediaWithRedirects(params);
 });
 
-const runtimeStub: PluginRuntime = createPluginRuntimeMock({
+const runtimeStub = {
   media: {
     detectMime: detectMimeMock,
   },
@@ -120,10 +119,9 @@ const runtimeStub: PluginRuntime = createPluginRuntimeMock({
       saveMediaBuffer: saveMediaBufferMock,
     },
   },
-});
+} as unknown as PluginRuntime;
 
 type DownloadAttachmentsParams = Parameters<typeof downloadMSTeamsAttachments>[0];
-type DownloadGraphMediaParams = Parameters<typeof downloadMSTeamsGraphMedia>[0];
 type DownloadedMedia = Awaited<ReturnType<typeof downloadMSTeamsAttachments>>;
 type DownloadAttachmentsBuildOverrides = Partial<
   Omit<DownloadAttachmentsParams, "attachments" | "maxBytes" | "allowHosts">
@@ -133,21 +131,14 @@ type DownloadAttachmentsNoFetchOverrides = Partial<
   Omit<DownloadAttachmentsParams, "attachments" | "maxBytes" | "allowHosts" | "fetchFn">
 > &
   Pick<DownloadAttachmentsParams, "allowHosts">;
-type DownloadGraphMediaOverrides = Partial<
-  Omit<DownloadGraphMediaParams, "messageUrl" | "tokenProvider" | "maxBytes">
->;
 type FetchFn = typeof fetch;
 type MSTeamsAttachments = DownloadAttachmentsParams["attachments"];
 type LabeledCase = { label: string };
 type FetchCallExpectation = { expectFetchCalled?: boolean };
 type DownloadedMediaExpectation = { path?: string; placeholder?: string };
 
-const DEFAULT_MESSAGE_URL = `https://${GRAPH_HOST}/v1.0/chats/19%3Achat/messages/123`;
-const GRAPH_SHARES_URL_PREFIX = `https://${GRAPH_HOST}/v1.0/shares/`;
 const DEFAULT_MAX_BYTES = 1024 * 1024;
 const DEFAULT_ALLOW_HOSTS = [TEST_HOST];
-const DEFAULT_SHAREPOINT_ALLOW_HOSTS = [GRAPH_HOST, SHAREPOINT_HOST];
-const DEFAULT_SHARE_REFERENCE_URL = createUrlForHost(SHAREPOINT_HOST, "site/file");
 const MEDIA_PLACEHOLDER_IMAGE = "<media:image>";
 const MEDIA_PLACEHOLDER_DOCUMENT = "<media:document>";
 const formatImagePlaceholder = (count: number) =>
@@ -301,15 +292,6 @@ type AttachmentAuthRetryCase = LabeledCase & {
   expectedMediaLength: number;
   expectTokenFetch: boolean;
 };
-type GraphMediaDownloadResult = {
-  fetchMock: ReturnType<typeof createGraphFetchMock>;
-  media: Awaited<ReturnType<typeof downloadMSTeamsGraphMedia>>;
-};
-type GraphMediaSuccessCase = LabeledCase & {
-  buildOptions: () => GraphFetchMockOptions;
-  expectedLength: number;
-  assert?: (params: GraphMediaDownloadResult) => void;
-};
 const ATTACHMENT_DOWNLOAD_SUCCESS_CASES: AttachmentDownloadSuccessCase[] = [
   withLabel("downloads and stores image contentUrl attachments", {
     attachments: asSingleItemArray(IMAGE_ATTACHMENT),
@@ -369,123 +351,6 @@ const ATTACHMENT_AUTH_RETRY_CASES: AttachmentAuthRetryCase[] = [
     expectTokenFetch: false,
   }),
 ];
-const GRAPH_MEDIA_SUCCESS_CASES: GraphMediaSuccessCase[] = [
-  withLabel("downloads hostedContents images", {
-    buildOptions: () => ({ hostedContents: createHostedImageContents("1") }),
-    expectedLength: 1,
-    assert: ({ fetchMock }) => {
-      expect(fetchMock).toHaveBeenCalled();
-      expectMediaBufferSaved();
-    },
-  }),
-  withLabel("merges SharePoint reference attachments with hosted content", {
-    buildOptions: () => {
-      return {
-        hostedContents: createHostedImageContents("hosted-1"),
-        ...buildDefaultShareReferenceGraphFetchOptions({
-          onShareRequest: () => createPdfResponse(),
-        }),
-      };
-    },
-    expectedLength: 2,
-  }),
-];
-type GraphFetchMockOptions = {
-  hostedContents?: unknown[];
-  attachments?: unknown[];
-  messageAttachments?: unknown[];
-  onShareRequest?: (url: string) => Response | Promise<Response>;
-  onUnhandled?: (url: string) => Response | Promise<Response> | undefined;
-};
-
-const createReferenceAttachment = (shareUrl = DEFAULT_SHARE_REFERENCE_URL) => ({
-  id: "ref-1",
-  contentType: "reference",
-  contentUrl: shareUrl,
-  name: "report.pdf",
-});
-const buildShareReferenceGraphFetchOptions = (params: {
-  referenceAttachment: ReturnType<typeof createReferenceAttachment>;
-  onShareRequest?: GraphFetchMockOptions["onShareRequest"];
-  onUnhandled?: GraphFetchMockOptions["onUnhandled"];
-}) => ({
-  attachments: [params.referenceAttachment],
-  messageAttachments: [params.referenceAttachment],
-  ...(params.onShareRequest ? { onShareRequest: params.onShareRequest } : {}),
-  ...(params.onUnhandled ? { onUnhandled: params.onUnhandled } : {}),
-});
-const buildDefaultShareReferenceGraphFetchOptions = (
-  params: Omit<Parameters<typeof buildShareReferenceGraphFetchOptions>[0], "referenceAttachment">,
-) =>
-  buildShareReferenceGraphFetchOptions({
-    referenceAttachment: createReferenceAttachment(),
-    ...params,
-  });
-type GraphEndpointResponseHandler = {
-  suffix: string;
-  buildResponse: () => Response;
-};
-const createGraphEndpointResponseHandlers = (params: {
-  hostedContents: unknown[];
-  attachments: unknown[];
-  messageAttachments: unknown[];
-}): GraphEndpointResponseHandler[] => [
-  {
-    suffix: "/hostedContents",
-    buildResponse: () => createGraphCollectionResponse(params.hostedContents),
-  },
-  {
-    suffix: "/attachments",
-    buildResponse: () => createGraphCollectionResponse(params.attachments),
-  },
-  {
-    suffix: "/messages/123",
-    buildResponse: () => createJsonResponse({ attachments: params.messageAttachments }),
-  },
-];
-const resolveGraphEndpointResponse = (
-  url: string,
-  handlers: GraphEndpointResponseHandler[],
-): Response | undefined => {
-  const handler = handlers.find((entry) => url.endsWith(entry.suffix));
-  return handler ? handler.buildResponse() : undefined;
-};
-
-const createGraphFetchMock = (options: GraphFetchMockOptions = {}) => {
-  const hostedContents = options.hostedContents ?? [];
-  const attachments = options.attachments ?? [];
-  const messageAttachments = options.messageAttachments ?? [];
-  const endpointHandlers = createGraphEndpointResponseHandlers({
-    hostedContents,
-    attachments,
-    messageAttachments,
-  });
-  return vi.fn(async (url: string) => {
-    const endpointResponse = resolveGraphEndpointResponse(url, endpointHandlers);
-    if (endpointResponse) {
-      return endpointResponse;
-    }
-    if (url.startsWith(GRAPH_SHARES_URL_PREFIX) && options.onShareRequest) {
-      return options.onShareRequest(url);
-    }
-    const unhandled = options.onUnhandled ? await options.onUnhandled(url) : undefined;
-    return unhandled ?? createNotFoundResponse();
-  });
-};
-const downloadGraphMediaWithMockOptions = async (
-  options: GraphFetchMockOptions = {},
-  overrides: DownloadGraphMediaOverrides = {},
-): Promise<GraphMediaDownloadResult> => {
-  const fetchMock = createGraphFetchMock(options);
-  const media = await downloadMSTeamsGraphMedia({
-    messageUrl: DEFAULT_MESSAGE_URL,
-    tokenProvider: createTokenProvider(),
-    maxBytes: DEFAULT_MAX_BYTES,
-    fetchFn: asFetchFn(fetchMock),
-    ...overrides,
-  });
-  return { fetchMock, media };
-};
 const runAttachmentDownloadSuccessCase = async ({
   attachments,
   buildFetchFn,
@@ -515,15 +380,6 @@ const runAttachmentAuthRetryCase = async ({
   );
   expectAttachmentMediaLength(media, expectedMediaLength);
   expectMockCallState(tokenProvider.getAccessToken, expectTokenFetch);
-};
-const runGraphMediaSuccessCase = async ({
-  buildOptions,
-  expectedLength,
-  assert,
-}: GraphMediaSuccessCase) => {
-  const { fetchMock, media } = await downloadGraphMediaWithMockOptions(buildOptions());
-  expectAttachmentMediaLength(media.media, expectedLength);
-  assert?.({ fetchMock, media });
 };
 
 describe("msteams attachments", () => {
@@ -693,78 +549,6 @@ describe("msteams attachments", () => {
 
       expectAttachmentMediaLength(media, 0);
       expect(fetchMock).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  describe("downloadMSTeamsGraphMedia", () => {
-    it.each<GraphMediaSuccessCase>(GRAPH_MEDIA_SUCCESS_CASES)("$label", runGraphMediaSuccessCase);
-
-    it("does not forward Authorization for SharePoint redirects outside auth allowlist", async () => {
-      const tokenProvider = createTokenProvider("top-secret-token");
-      const escapedUrl = "https://example.com/collect";
-      const seen: Array<{ url: string; auth: string }> = [];
-      const referenceAttachment = createReferenceAttachment();
-      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        const auth = new Headers(init?.headers).get("Authorization") ?? "";
-        seen.push({ url, auth });
-
-        if (url === DEFAULT_MESSAGE_URL) {
-          return createJsonResponse({ attachments: [referenceAttachment] });
-        }
-        if (url === `${DEFAULT_MESSAGE_URL}/hostedContents`) {
-          return createGraphCollectionResponse([]);
-        }
-        if (url === `${DEFAULT_MESSAGE_URL}/attachments`) {
-          return createGraphCollectionResponse([referenceAttachment]);
-        }
-        if (url.startsWith(GRAPH_SHARES_URL_PREFIX)) {
-          return createRedirectResponse(escapedUrl);
-        }
-        if (url === escapedUrl) {
-          return createPdfResponse();
-        }
-        return createNotFoundResponse();
-      });
-
-      const media = await downloadMSTeamsGraphMedia({
-        messageUrl: DEFAULT_MESSAGE_URL,
-        tokenProvider,
-        maxBytes: DEFAULT_MAX_BYTES,
-        allowHosts: [...DEFAULT_SHAREPOINT_ALLOW_HOSTS, "example.com"],
-        authAllowHosts: DEFAULT_SHAREPOINT_ALLOW_HOSTS,
-        fetchFn: asFetchFn(fetchMock),
-      });
-
-      expectAttachmentMediaLength(media.media, 1);
-      const redirected = seen.find((entry) => entry.url === escapedUrl);
-      expect(redirected).toBeDefined();
-      expect(redirected?.auth).toBe("");
-    });
-
-    it("blocks SharePoint redirects to hosts outside allowHosts", async () => {
-      const escapedUrl = "https://evil.example/internal.pdf";
-      const { fetchMock, media } = await downloadGraphMediaWithMockOptions(
-        {
-          ...buildDefaultShareReferenceGraphFetchOptions({
-            onShareRequest: () => createRedirectResponse(escapedUrl),
-            onUnhandled: (url) => {
-              if (url === escapedUrl) {
-                return createPdfResponse("should-not-be-fetched");
-              }
-              return undefined;
-            },
-          }),
-        },
-        {
-          allowHosts: DEFAULT_SHAREPOINT_ALLOW_HOSTS,
-        },
-      );
-
-      expectAttachmentMediaLength(media.media, 0);
-      const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
-      expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(true);
-      expect(calledUrls).not.toContain(escapedUrl);
     });
   });
 });

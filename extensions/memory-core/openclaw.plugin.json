@@ -1,9 +1,332 @@
 {
   "id": "memory-core",
   "kind": "memory",
+  "uiHints": {
+    "dreaming.timezone": {
+      "label": "Dreaming Timezone",
+      "placeholder": "America/Los_Angeles",
+      "help": "IANA timezone used for dreaming schedules and day bucketing."
+    },
+    "dreaming.verboseLogging": {
+      "label": "Dreaming Verbose Logging",
+      "placeholder": "false",
+      "help": "Emit detailed per-run dreaming logs for phase scheduling, ranking, and writes."
+    },
+    "dreaming.storage.mode": {
+      "label": "Dreaming Storage Mode",
+      "placeholder": "inline",
+      "help": "Write inline to MEMORY.md and daily notes, to separate reports, or both."
+    },
+    "dreaming.phases.light.cron": {
+      "label": "Light Sleep Cron",
+      "placeholder": "0 3 * * *",
+      "help": "Cron cadence for light sleep sorting runs."
+    },
+    "dreaming.phases.light.lookbackDays": {
+      "label": "Light Sleep Lookback Days",
+      "placeholder": "2",
+      "help": "How many prior days light sleep may inspect."
+    },
+    "dreaming.phases.light.limit": {
+      "label": "Light Sleep Limit",
+      "placeholder": "100",
+      "help": "Maximum staged light-sleep candidates per run."
+    },
+    "dreaming.phases.deep.cron": {
+      "label": "Deep Sleep Cron",
+      "placeholder": "0 3 * * *",
+      "help": "Cron cadence for deep sleep promotion and recovery runs."
+    },
+    "dreaming.phases.deep.limit": {
+      "label": "Deep Sleep Limit",
+      "placeholder": "10",
+      "help": "Maximum candidates promoted into MEMORY.md per deep-sleep run."
+    },
+    "dreaming.phases.deep.minScore": {
+      "label": "Deep Sleep Min Score",
+      "placeholder": "0.8",
+      "help": "Minimum weighted rank required for durable promotion."
+    },
+    "dreaming.phases.deep.minRecallCount": {
+      "label": "Deep Sleep Min Recalls",
+      "placeholder": "3",
+      "help": "Minimum recall count required for durable promotion."
+    },
+    "dreaming.phases.deep.minUniqueQueries": {
+      "label": "Deep Sleep Min Queries",
+      "placeholder": "3",
+      "help": "Minimum unique query count required for durable promotion."
+    },
+    "dreaming.phases.deep.recencyHalfLifeDays": {
+      "label": "Deep Sleep Recency Half-Life Days",
+      "placeholder": "14",
+      "help": "Days for the recency score to decay by half during deep-sleep ranking."
+    },
+    "dreaming.phases.deep.maxAgeDays": {
+      "label": "Deep Sleep Max Age Days",
+      "placeholder": "30",
+      "help": "Optional maximum candidate age in days for deep-sleep promotion."
+    },
+    "dreaming.phases.deep.recovery.lookbackDays": {
+      "label": "Recovery Lookback Days",
+      "placeholder": "30",
+      "help": "How many prior days deep sleep may scan when memory recovery is triggered."
+    },
+    "dreaming.phases.rem.cron": {
+      "label": "REM Sleep Cron",
+      "placeholder": "0 5 * * 0",
+      "help": "Cron cadence for REM sleep reflection runs."
+    },
+    "dreaming.phases.rem.lookbackDays": {
+      "label": "REM Sleep Lookback Days",
+      "placeholder": "7",
+      "help": "How many prior days REM sleep may inspect for patterns."
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "dreaming": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "verboseLogging": {
+            "type": "boolean"
+          },
+          "storage": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["inline", "separate", "both"]
+              },
+              "separateReports": {
+                "type": "boolean"
+              }
+            }
+          },
+          "execution": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "defaults": {
+                "$ref": "#/$defs/execution"
+              }
+            }
+          },
+          "phases": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "light": {
+                "$ref": "#/$defs/lightPhase"
+              },
+              "deep": {
+                "$ref": "#/$defs/deepPhase"
+              },
+              "rem": {
+                "$ref": "#/$defs/remPhase"
+              }
+            }
+          }
+        }
+      }
+    },
+    "$defs": {
+      "execution": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "speed": {
+            "type": "string",
+            "enum": ["fast", "balanced", "slow"]
+          },
+          "thinking": {
+            "type": "string",
+            "enum": ["low", "medium", "high"]
+          },
+          "budget": {
+            "type": "string",
+            "enum": ["cheap", "medium", "expensive"]
+          },
+          "model": {
+            "type": "string"
+          },
+          "maxOutputTokens": {
+            "type": "number",
+            "minimum": 1
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "timeoutMs": {
+            "type": "number",
+            "minimum": 1
+          }
+        }
+      },
+      "lightPhase": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "cron": {
+            "type": "string"
+          },
+          "lookbackDays": {
+            "type": "number",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 0
+          },
+          "dedupeSimilarity": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["daily", "sessions", "recall"]
+            }
+          },
+          "execution": {
+            "$ref": "#/$defs/execution"
+          }
+        }
+      },
+      "deepRecovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "triggerBelowHealth": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "lookbackDays": {
+            "type": "number",
+            "minimum": 0
+          },
+          "maxRecoveredCandidates": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minRecoveryConfidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "autoWriteMinConfidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      },
+      "deepPhase": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "cron": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minScore": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "minRecallCount": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minUniqueQueries": {
+            "type": "number",
+            "minimum": 0
+          },
+          "recencyHalfLifeDays": {
+            "type": "number",
+            "minimum": 0
+          },
+          "maxAgeDays": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["daily", "memory", "sessions", "logs", "recall"]
+            }
+          },
+          "recovery": {
+            "$ref": "#/$defs/deepRecovery"
+          },
+          "execution": {
+            "$ref": "#/$defs/execution"
+          }
+        }
+      },
+      "remPhase": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "cron": {
+            "type": "string"
+          },
+          "lookbackDays": {
+            "type": "number",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minPatternStrength": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["memory", "daily", "deep"]
+            }
+          },
+          "execution": {
+            "$ref": "#/$defs/execution"
+          }
+        }
+      }
+    }
   }
 }

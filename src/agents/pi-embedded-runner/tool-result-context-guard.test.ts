@@ -4,6 +4,7 @@ import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
   PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE,
+  PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE,
   PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER,
   installToolResultContextGuard,
 } from "./tool-result-context-guard.js";
@@ -93,29 +94,37 @@ async function applyGuardToContext(
   return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
 }
 
-function expectCompactedToolResultsWithoutContextNotice(
-  contextForNextCall: AgentMessage[],
-  oldIndex: number,
-  newIndex: number,
-) {
-  const oldResultText = getToolResultText(contextForNextCall[oldIndex]);
-  const newResultText = getToolResultText(contextForNextCall[newIndex]);
-  expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-  expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-  expect(newResultText).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+function expectReadableCompaction(text: string, prefix: string) {
+  expect(text.includes(PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE)).toBe(true);
+  expect(text).toContain(prefix.repeat(64));
+  expect(text).not.toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+  expect(text).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+}
+
+function expectReadableToolSlice(text: string, prefix: string) {
+  expect(text).toContain(prefix.repeat(64));
+  expect(text).not.toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+  expect(
+    text.includes(PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE) ||
+      text.includes(CONTEXT_LIMIT_TRUNCATION_NOTICE),
+  ).toBe(true);
 }
 
 describe("installToolResultContextGuard", () => {
-  it("compacts oldest-first when total context overflows, even if each result fits individually", async () => {
+  it("returns a cloned guarded context so original tool output stays visible", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = makeTwoToolResultOverflowContext();
     const transformed = await applyGuardToContext(agent, contextForNextCall);
 
-    expect(transformed).toBe(contextForNextCall);
-    expectCompactedToolResultsWithoutContextNotice(contextForNextCall, 1, 2);
+    expect(transformed).not.toBe(contextForNextCall);
+    const transformedMessages = transformed as AgentMessage[];
+    expectReadableCompaction(getToolResultText(transformedMessages[1]), "x");
+    expectReadableCompaction(getToolResultText(transformedMessages[2]), "y");
+    expect(getToolResultText(contextForNextCall[1])).toBe("x".repeat(1_000));
+    expect(getToolResultText(contextForNextCall[2])).toBe("y".repeat(1_000));
   });
 
-  it("keeps compacting oldest-first until context is back under budget", async () => {
+  it("keeps readable slices of overflowing tool results before using a placeholder", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -130,18 +139,21 @@ describe("installToolResultContextGuard", () => {
       makeToolResult("call_3", "c".repeat(800)),
     ];
 
-    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+    const transformed = (await agent.transformContext?.(
+      contextForNextCall,
+      new AbortController().signal,
+    )) as AgentMessage[];
 
-    const first = getToolResultText(contextForNextCall[1]);
-    const second = getToolResultText(contextForNextCall[2]);
-    const third = getToolResultText(contextForNextCall[3]);
+    const first = getToolResultText(transformed[1]);
+    const second = getToolResultText(transformed[2]);
+    const third = getToolResultText(transformed[3]);
 
-    expect(first).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    expect(second).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expectReadableCompaction(first, "a");
+    expectReadableCompaction(second, "b");
     expect(third).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 
-  it("survives repeated large tool results by compacting older outputs before later turns", async () => {
+  it("survives repeated large tool results by compacting the newest output each turn", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -150,18 +162,24 @@ describe("installToolResultContextGuard", () => {
     });
 
     const contextForNextCall: AgentMessage[] = [makeUser("stress")];
+    let transformed: AgentMessage[] | undefined;
     for (let i = 1; i <= 4; i++) {
       contextForNextCall.push(makeToolResult(`call_${i}`, String(i).repeat(95_000)));
-      await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+      transformed = (await agent.transformContext?.(
+        contextForNextCall,
+        new AbortController().signal,
+      )) as AgentMessage[];
     }
 
-    const toolResultTexts = contextForNextCall
+    const toolResultTexts = (transformed ?? [])
       .filter((msg) => msg.role === "toolResult")
       .map((msg) => getToolResultText(msg as AgentMessage));
 
-    expect(toolResultTexts[0]).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    expect(toolResultTexts[3]?.length).toBe(95_000);
-    expect(toolResultTexts.join("\n")).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+    // Large outputs are capped per-tool before aggregate compaction kicks in.
+    expect(toolResultTexts[0]?.length).toBe(50_000);
+    expect(toolResultTexts[0]).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+    expectReadableCompaction(toolResultTexts[3] ?? "", "4");
+    expect(toolResultTexts[3]).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   });
 
   it("truncates an individually oversized tool result with a context-limit notice", async () => {
@@ -174,14 +192,17 @@ describe("installToolResultContextGuard", () => {
 
     const contextForNextCall = [makeToolResult("call_big", "z".repeat(5_000))];
 
-    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+    const transformed = (await agent.transformContext?.(
+      contextForNextCall,
+      new AbortController().signal,
+    )) as AgentMessage[];
 
-    const newResultText = getToolResultText(contextForNextCall[0]);
+    const newResultText = getToolResultText(transformed[0]);
     expect(newResultText.length).toBeLessThan(5_000);
     expect(newResultText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   });
 
-  it("keeps compacting oldest-first until overflow clears, including the newest tool result when needed", async () => {
+  it("keeps compacting newest-first until overflow clears, reaching older tool results when needed", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -195,8 +216,12 @@ describe("installToolResultContextGuard", () => {
       makeToolResult("call_new", "y".repeat(1_000)),
     ];
 
-    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
-    expectCompactedToolResultsWithoutContextNotice(contextForNextCall, 1, 2);
+    const transformed = (await agent.transformContext?.(
+      contextForNextCall,
+      new AbortController().signal,
+    )) as AgentMessage[];
+    expectReadableCompaction(getToolResultText(transformed[1]), "x");
+    expect(getToolResultText(transformed[2])).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 
   it("wraps an existing transformContext and guards the transformed output", async () => {
@@ -213,7 +238,7 @@ describe("installToolResultContextGuard", () => {
     expect(transformed).not.toBe(contextForNextCall);
     const transformedMessages = transformed as AgentMessage[];
     const oldResultText = getToolResultText(transformedMessages[1]);
-    expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expectReadableCompaction(oldResultText, "x");
   });
 
   it("handles legacy role=tool string outputs when enforcing context budget", async () => {
@@ -230,13 +255,18 @@ describe("installToolResultContextGuard", () => {
       makeLegacyToolResult("call_new", "y".repeat(1_000)),
     ];
 
-    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+    const transformed = (await agent.transformContext?.(
+      contextForNextCall,
+      new AbortController().signal,
+    )) as AgentMessage[];
 
-    const oldResultText = (contextForNextCall[1] as { content?: unknown }).content;
-    const newResultText = (contextForNextCall[2] as { content?: unknown }).content;
+    const oldResultText = (transformed[1] as { content?: unknown }).content;
+    const newResultText = (transformed[2] as { content?: unknown }).content;
 
-    expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expect(typeof oldResultText).toBe("string");
+    expect(typeof newResultText).toBe("string");
+    expect(oldResultText).toContain(PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE);
+    expect(newResultText).toContain(PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE);
   });
 
   it("drops oversized read-tool details payloads when compacting tool results", async () => {
@@ -253,19 +283,22 @@ describe("installToolResultContextGuard", () => {
       makeToolResultWithDetails("call_new", "y".repeat(900), "d".repeat(8_000)),
     ];
 
-    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+    const transformed = (await agent.transformContext?.(
+      contextForNextCall,
+      new AbortController().signal,
+    )) as AgentMessage[];
 
-    const oldResult = contextForNextCall[1] as {
+    const oldResult = transformed[1] as {
       details?: unknown;
     };
-    const newResult = contextForNextCall[2] as {
+    const newResult = transformed[2] as {
       details?: unknown;
     };
-    const oldResultText = getToolResultText(contextForNextCall[1]);
-    const newResultText = getToolResultText(contextForNextCall[2]);
+    const oldResultText = getToolResultText(transformed[1]);
+    const newResultText = getToolResultText(transformed[2]);
 
-    expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expectReadableToolSlice(oldResultText, "x");
+    expectReadableToolSlice(newResultText, "y");
     expect(oldResult.details).toBeUndefined();
     expect(newResult.details).toBeUndefined();
   });
@@ -320,12 +353,11 @@ describe("installToolResultContextGuard", () => {
       makeToolResult("call_old", "x".repeat(2_000)),
     ];
 
-    await expect(
-      agent.transformContext?.(contextForNextCall, new AbortController().signal),
-    ).rejects.toThrow(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+    const guarded = agent.transformContext?.(contextForNextCall, new AbortController().signal);
+    await expect(guarded).rejects.toThrow(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
 
     // Tool result should have been compacted before the overflow check.
     const toolResultText = getToolResultText(contextForNextCall[1]);
-    expect(toolResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expect(toolResultText).toBe("x".repeat(2_000));
   });
 });

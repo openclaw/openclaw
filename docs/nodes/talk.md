@@ -13,7 +13,7 @@ Talk mode is a continuous voice conversation loop:
 1. Listen for speech
 2. Send transcript to the model (main session, chat.send)
 3. Wait for the response
-4. Speak it via ElevenLabs (streaming playback)
+4. Speak it via the configured Talk provider (`talk.speak`)
 
 ## Behavior (macOS)
 
@@ -86,7 +86,7 @@ Defaults:
 
 - Requires Speech + Microphone permissions.
 - Uses `chat.send` against session key `main`.
-- TTS uses ElevenLabs streaming API with `ELEVENLABS_API_KEY` and incremental playback on macOS/iOS/Android for lower latency.
+- The gateway resolves Talk playback through `talk.speak` using the active Talk provider. Android falls back to local system TTS only when that RPC is unavailable.
 - `stability` for `eleven_v3` is validated to `0.0`, `0.5`, or `1.0`; other models accept `0..1`.
 - `latency_tier` is validated to `0..4` when set.
 - Android supports `pcm_16000`, `pcm_22050`, `pcm_24000`, and `pcm_44100` output formats for low-latency AudioTrack streaming.

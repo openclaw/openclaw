@@ -15,6 +15,7 @@ import {
 import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
 
 export const GUARDED_FETCH_MODE = {
   STRICT: "strict",
@@ -93,8 +94,83 @@ function assertExplicitProxySupportsPinnedDns(
   }
 }
 
+function createPolicyDispatcherWithoutPinnedDns(
+  dispatcherPolicy?: PinnedDispatcherPolicy,
+): Dispatcher | null {
+  if (!dispatcherPolicy) {
+    return null;
+  }
+  const { Agent, EnvHttpProxyAgent, ProxyAgent } = loadUndiciRuntimeDeps();
+
+  if (dispatcherPolicy.mode === "direct") {
+    return new Agent(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {});
+  }
+
+  if (dispatcherPolicy.mode === "env-proxy") {
+    return new EnvHttpProxyAgent({
+      ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
+      ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
+    });
+  }
+
+  const proxyUrl = dispatcherPolicy.proxyUrl.trim();
+  return dispatcherPolicy.proxyTls
+    ? new ProxyAgent({
+        uri: proxyUrl,
+        requestTls: { ...dispatcherPolicy.proxyTls },
+      })
+    : new ProxyAgent(proxyUrl);
+}
+
+async function assertExplicitProxyAllowed(
+  dispatcherPolicy: PinnedDispatcherPolicy | undefined,
+  lookupFn: LookupFn | undefined,
+  policy: SsrFPolicy | undefined,
+): Promise<void> {
+  if (!dispatcherPolicy || dispatcherPolicy.mode !== "explicit-proxy") {
+    return;
+  }
+  let parsedProxyUrl: URL;
+  try {
+    parsedProxyUrl = new URL(dispatcherPolicy.proxyUrl);
+  } catch {
+    throw new Error("Invalid explicit proxy URL");
+  }
+  if (!["http:", "https:"].includes(parsedProxyUrl.protocol)) {
+    throw new Error("Explicit proxy URL must use http or https");
+  }
+  await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
+    lookupFn,
+    policy:
+      dispatcherPolicy.allowPrivateProxy === true
+        ? {
+            ...policy,
+            allowPrivateNetwork: true,
+          }
+        : policy,
+  });
+}
+
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function isMockedFetch(fetchImpl: FetchLike | undefined): boolean {
+  if (typeof fetchImpl !== "function") {
+    return false;
+  }
+  return typeof (fetchImpl as FetchLike & { mock?: unknown }).mock === "object";
+}
+
+function isAmbientGlobalFetch(params: {
+  fetchImpl: FetchLike | undefined;
+  globalFetch: FetchLike | undefined;
+}): boolean {
+  return (
+    typeof params.fetchImpl === "function" &&
+    typeof params.globalFetch === "function" &&
+    params.fetchImpl === params.globalFetch
+  );
 }
 
 export function retainSafeHeadersForCrossOriginRedirectHeaders(
@@ -110,9 +186,61 @@ function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestIni
   return { ...init, headers: retainSafeRedirectHeaders(init.headers) };
 }
 
+function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
+  if (!headers) {
+    return headers;
+  }
+  const nextHeaders = new Headers(headers);
+  nextHeaders.delete("content-encoding");
+  nextHeaders.delete("content-language");
+  nextHeaders.delete("content-length");
+  nextHeaders.delete("content-location");
+  nextHeaders.delete("content-type");
+  nextHeaders.delete("transfer-encoding");
+  return nextHeaders;
+}
+
+function rewriteRedirectInitForMethod(params: {
+  init?: RequestInit;
+  status: number;
+}): RequestInit | undefined {
+  const { init, status } = params;
+  if (!init) {
+    return init;
+  }
+
+  const currentMethod = init.method?.toUpperCase() ?? "GET";
+  const shouldForceGet =
+    status === 303
+      ? currentMethod !== "GET" && currentMethod !== "HEAD"
+      : (status === 301 || status === 302) && currentMethod === "POST";
+
+  if (!shouldForceGet) {
+    return init;
+  }
+
+  return {
+    ...init,
+    method: "GET",
+    body: undefined,
+    headers: dropBodyHeaders(init.headers),
+  };
+}
+
+async function fetchWithRuntimeDispatcher(
+  input: string,
+  init: DispatcherAwareRequestInit,
+): Promise<Response> {
+  const runtimeFetch = loadUndiciRuntimeDeps().fetch as unknown as (
+    input: string,
+    init?: DispatcherAwareRequestInit,
+  ) => Promise<unknown>;
+  return (await runtimeFetch(input, init)) as Response;
+}
+
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
-  const fetcher: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
-  if (!fetcher) {
+  const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
+  if (!defaultFetch) {
     throw new Error("fetch is not available");
   }
 
@@ -137,7 +265,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     await closeDispatcher(dispatcher ?? undefined);
   };
 
-  const visited = new Set<string>();
+  const visited = new Set<string>([params.url]);
   let currentUrl = params.url;
   let currentInit = params.init ? { ...params.init } : undefined;
   let redirectCount = 0;
@@ -158,6 +286,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     let dispatcher: Dispatcher | null = null;
     try {
       assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
+      await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
       const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
         lookupFn: params.lookupFn,
         policy: params.policy,
@@ -167,18 +296,34 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (canUseTrustedEnvProxy) {
         const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
         dispatcher = new EnvHttpProxyAgent();
-      } else if (params.pinDns !== false) {
+      } else if (params.pinDns === false) {
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
+      } else {
         dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
       }
 
-      const init: RequestInit & { dispatcher?: Dispatcher } = {
+      const init: DispatcherAwareRequestInit = {
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
         ...(signal ? { signal } : {}),
       };
 
-      const response = await fetcher(parsedUrl.toString(), init);
+      const supportsDispatcherInit =
+        (params.fetchImpl !== undefined &&
+          !isAmbientGlobalFetch({
+            fetchImpl: params.fetchImpl,
+            globalFetch: globalThis.fetch,
+          })) ||
+        isMockedFetch(defaultFetch);
+      // Explicit caller stubs and test-installed fetch mocks should win.
+      // Otherwise, fall back to undici's fetch whenever we attach a dispatcher,
+      // because the default global fetch path will not honor per-request
+      // dispatchers.
+      const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
+      const response = shouldUseRuntimeFetch
+        ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+        : await defaultFetch(parsedUrl.toString(), init);
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");
@@ -197,6 +342,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
           await release(dispatcher);
           throw new Error("Redirect loop detected");
         }
+        currentInit = rewriteRedirectInitForMethod({ init: currentInit, status: response.status });
         if (nextParsedUrl.origin !== parsedUrl.origin) {
           currentInit = retainSafeHeadersForCrossOriginRedirect(currentInit);
         }

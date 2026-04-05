@@ -22,7 +22,6 @@ function baseParams(overrides?: Record<string, unknown>) {
 
 describe("deliverReplies identity passthrough", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ deliverReplies } = await import("./replies.js"));
   });
 

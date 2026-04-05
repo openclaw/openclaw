@@ -57,8 +57,8 @@ const mockGatewayClientCtor = vi.hoisted(() => vi.fn());
 const mockResolveGatewayConnectionAuth = vi.hoisted(() => vi.fn());
 const mockCreateOperatorApprovalsGatewayClient = vi.hoisted(() => vi.fn());
 
-vi.mock("../send.shared.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.shared.js")>();
+vi.mock("../send.shared.js", async () => {
+  const actual = await vi.importActual<typeof import("../send.shared.js")>("../send.shared.js");
   return {
     ...actual,
     createDiscordClient: () => ({
@@ -72,8 +72,10 @@ vi.mock("../send.shared.js", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
   return {
     ...actual,
     loadSessionStore: () => mockSessionStoreEntries.value,
@@ -148,8 +150,10 @@ vi.mock("../../../../src/gateway/client.js", () => ({
   },
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
+    "openclaw/plugin-sdk/text-runtime",
+  );
   return {
     ...actual,
     logDebug: vi.fn(),
@@ -296,7 +300,6 @@ beforeEach(() => {
 });
 
 beforeAll(async () => {
-  vi.resetModules();
   ({
     buildExecApprovalCustomId,
     extractDiscordChannelId,
@@ -1089,6 +1092,31 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
         }),
       }),
     );
+  });
+
+  it("omits allow-always when exec approvals disallow it", async () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      target: "dm",
+    });
+
+    mockSuccessfulDmDelivery({ throwOnUnexpectedRoute: true });
+
+    await handler.handleApprovalRequested(
+      createRequest({
+        ask: "always",
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+
+    const dmCall = mockRestPost.mock.calls.find(
+      ([route]) => route === Routes.channelMessages("dm-1"),
+    );
+    const payload = JSON.stringify(dmCall?.[1]?.body);
+    expect(payload).toContain("Allow Once");
+    expect(payload).toContain("Deny");
+    expect(payload).not.toContain("Allow Always");
   });
 });
 

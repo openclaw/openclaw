@@ -10,7 +10,6 @@ export const DEFAULT_TIMEOUT_MS = 5000;
 export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
   anthropic: "Claude",
   "github-copilot": "Copilot",
-  "google-gemini-cli": "Gemini",
   minimax: "MiniMax",
   "openai-codex": "Codex",
   xiaomi: "Xiaomi",
@@ -20,7 +19,6 @@ export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
 export const usageProviders: UsageProviderId[] = [
   "anthropic",
   "github-copilot",
-  "google-gemini-cli",
   "minimax",
   "openai-codex",
   "xiaomi",
@@ -32,6 +30,13 @@ export function resolveUsageProviderId(provider?: string | null): UsageProviderI
     return undefined;
   }
   const normalized = normalizeProviderId(provider);
+  if (
+    normalized === "minimax-portal" ||
+    normalized === "minimax-cn" ||
+    normalized === "minimax-portal-cn"
+  ) {
+    return "minimax";
+  }
   return usageProviders.includes(normalized as UsageProviderId)
     ? (normalized as UsageProviderId)
     : undefined;

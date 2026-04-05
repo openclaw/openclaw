@@ -2,34 +2,46 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   colorize,
   defaultRuntime,
   formatErrorMessage,
+  getMemorySearchManager,
   isRich,
+  listMemoryFiles,
+  loadConfig,
+  normalizeExtraMemoryPaths,
   resolveCommandSecretRefsViaGateway,
+  resolveDefaultAgentId,
+  resolveSessionTranscriptsDirForAgent,
+  resolveStateDir,
   setVerbose,
   shortenHomeInString,
   shortenHomePath,
   theme,
+  type OpenClawConfig,
   withManager,
   withProgress,
   withProgressTotals,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+} from "./cli.host.runtime.js";
+import type {
+  MemoryCommandOptions,
+  MemoryPromoteCommandOptions,
+  MemorySearchCommandOptions,
+} from "./cli.types.js";
+import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import {
-  loadConfig,
-  resolveDefaultAgentId,
-  resolveSessionTranscriptsDirForAgent,
-  resolveStateDir,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import {
-  listMemoryFiles,
-  normalizeExtraMemoryPaths,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
-import { getMemorySearchManager } from "./memory/index.js";
+  applyShortTermPromotions,
+  auditShortTermPromotionArtifacts,
+  repairShortTermPromotionArtifacts,
+  recordShortTermRecalls,
+  rankShortTermPromotionCandidates,
+  resolveShortTermRecallLockPath,
+  resolveShortTermRecallStorePath,
+  type RepairShortTermPromotionArtifactsResult,
+  type ShortTermAuditSummary,
+} from "./short-term-promotion.js";
 
 type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
@@ -52,6 +64,13 @@ type LoadedMemoryCommandConfig = {
   config: OpenClawConfig;
   diagnostics: string[];
 };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
 
 function getMemoryCommandSecretTargetIds(): Set<string> {
   return new Set([
@@ -88,6 +107,57 @@ function emitMemorySecretResolveDiagnostics(
       defaultRuntime.log(message);
     }
   }
+}
+
+function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
+  const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
+  return asRecord(entry?.config) ?? {};
+}
+
+function formatDreamingSummary(cfg: OpenClawConfig): string {
+  const pluginConfig = resolveMemoryPluginConfig(cfg);
+  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  if (!dreaming.enabled) {
+    return "off";
+  }
+  const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
+  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"}`;
+}
+
+function formatAuditCounts(audit: ShortTermAuditSummary): string {
+  const scriptCoverage = audit.conceptTagScripts
+    ? [
+        audit.conceptTagScripts.latinEntryCount > 0
+          ? `${audit.conceptTagScripts.latinEntryCount} latin`
+          : null,
+        audit.conceptTagScripts.cjkEntryCount > 0
+          ? `${audit.conceptTagScripts.cjkEntryCount} cjk`
+          : null,
+        audit.conceptTagScripts.mixedEntryCount > 0
+          ? `${audit.conceptTagScripts.mixedEntryCount} mixed`
+          : null,
+        audit.conceptTagScripts.otherEntryCount > 0
+          ? `${audit.conceptTagScripts.otherEntryCount} other`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(", ")
+    : "";
+  const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";
+  return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced${suffix}`;
+}
+
+function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): string {
+  const actions: string[] = [];
+  if (repair.rewroteStore) {
+    actions.push(
+      `rewrote store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
+    );
+  }
+  if (repair.removedStaleLock) {
+    actions.push("removed stale lock");
+  }
+  return actions.length > 0 ? actions.join(" · ") : "no changes";
 }
 
 function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {
@@ -361,6 +431,8 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     embeddingProbe?: Awaited<ReturnType<MemoryManager["probeEmbeddingAvailability"]>>;
     indexError?: string;
     scan?: MemorySourceScan;
+    audit?: ShortTermAuditSummary;
+    repair?: RepairShortTermPromotionArtifactsResult;
   }> = [];
 
   for (const agentId of agentIds) {
@@ -434,7 +506,28 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
               extraPaths: status.extraPaths,
             })
           : undefined;
-        allResults.push({ agentId, status, embeddingProbe, indexError, scan });
+        let audit: ShortTermAuditSummary | undefined;
+        let repair: RepairShortTermPromotionArtifactsResult | undefined;
+        if (workspaceDir) {
+          if (opts.fix) {
+            repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+          }
+          const customQmd = asRecord(asRecord(status.custom)?.qmd);
+          audit = await auditShortTermPromotionArtifacts({
+            workspaceDir,
+            qmd:
+              status.backend === "qmd"
+                ? {
+                    dbPath: status.dbPath,
+                    collections:
+                      typeof customQmd?.collections === "number"
+                        ? customQmd.collections
+                        : undefined,
+                  }
+                : undefined,
+          });
+        }
+        allResults.push({ agentId, status, embeddingProbe, indexError, scan, audit, repair });
       },
     });
   }
@@ -454,7 +547,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const label = (text: string) => muted(`${text}:`);
 
   for (const result of allResults) {
-    const { agentId, status, embeddingProbe, indexError, scan } = result;
+    const { agentId, status, embeddingProbe, indexError, scan, audit, repair } = result;
     const filesIndexed = status.files ?? 0;
     const chunksIndexed = status.chunks ?? 0;
     const totalFiles = scan?.totalFiles ?? null;
@@ -484,6 +577,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
       `${label("Store")} ${info(storePath)}`,
       `${label("Workspace")} ${info(workspacePath)}`,
+      `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];
     if (embeddingProbe) {
       const state = embeddingProbe.ok ? "ready" : "unavailable";
@@ -574,6 +668,24 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`${label("Batch error")} ${warn(status.batch.lastError)}`);
       }
     }
+    if (audit) {
+      lines.push(`${label("Recall store")} ${info(formatAuditCounts(audit))}`);
+      lines.push(`${label("Recall path")} ${info(shortenHomePath(audit.storePath))}`);
+      if (audit.updatedAt) {
+        lines.push(`${label("Recall updated")} ${info(audit.updatedAt)}`);
+      }
+      if (status.backend === "qmd" && audit.qmd) {
+        const qmdBits = [
+          audit.qmd.dbPath ? shortenHomePath(audit.qmd.dbPath) : "<unknown>",
+          typeof audit.qmd.dbBytes === "number" ? `${audit.qmd.dbBytes} bytes` : null,
+          typeof audit.qmd.collections === "number" ? `${audit.qmd.collections} collections` : null,
+        ].filter(Boolean);
+        lines.push(`${label("QMD audit")} ${info(qmdBits.join(" · "))}`);
+      }
+    }
+    if (repair) {
+      lines.push(`${label("Repair")} ${info(formatRepairSummary(repair))}`);
+    }
     if (status.fallback?.reason) {
       lines.push(muted(status.fallback.reason));
     }
@@ -584,6 +696,17 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       lines.push(label("Issues"));
       for (const issue of scan.issues) {
         lines.push(`  ${warn(issue)}`);
+      }
+    }
+    if (audit?.issues.length) {
+      if (!scan?.issues.length) {
+        lines.push(label("Issues"));
+      }
+      for (const issue of audit.issues) {
+        lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
+      }
+      if (!opts.fix) {
+        lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
       }
     }
     defaultRuntime.log(lines.join("\n"));
@@ -732,6 +855,10 @@ export async function runMemorySearch(
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory search");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
+  const dreaming = resolveShortTermPromotionDreamingConfig({
+    pluginConfig: resolveMemoryPluginConfig(cfg),
+    cfg,
+  });
   await withMemoryManagerForAgent({
     cfg,
     agentId,
@@ -750,6 +877,18 @@ export async function runMemorySearch(
         process.exitCode = 1;
         return;
       }
+      const workspaceDir =
+        typeof (manager as { status?: () => { workspaceDir?: string } }).status === "function"
+          ? manager.status().workspaceDir
+          : undefined;
+      void recordShortTermRecalls({
+        workspaceDir,
+        query,
+        results,
+        timezone: dreaming.timezone,
+      }).catch(() => {
+        // Recall tracking is best-effort and must not block normal search results.
+      });
       if (opts.json) {
         defaultRuntime.writeJson({ results });
         return;
@@ -770,6 +909,171 @@ export async function runMemorySearch(
         );
         lines.push(colorize(rich, theme.muted, result.snippet));
         lines.push("");
+      }
+      defaultRuntime.log(lines.join("\n").trim());
+    },
+  });
+}
+
+export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory promote");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentId = resolveAgent(cfg, opts.agent);
+
+  await withMemoryManagerForAgent({
+    cfg,
+    agentId,
+    purpose: "status",
+    run: async (manager) => {
+      const status = manager.status();
+      const workspaceDir = status.workspaceDir?.trim();
+      const dreaming = resolveShortTermPromotionDreamingConfig({
+        pluginConfig: resolveMemoryPluginConfig(cfg),
+        cfg,
+      });
+      if (!workspaceDir) {
+        defaultRuntime.error("Memory promote requires a resolvable workspace directory.");
+        process.exitCode = 1;
+        return;
+      }
+
+      let candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>;
+      try {
+        candidates = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          limit: opts.limit,
+          minScore: opts.minScore ?? dreaming.minScore,
+          minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
+          minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
+          recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
+          maxAgeDays: dreaming.maxAgeDays,
+          includePromoted: Boolean(opts.includePromoted),
+        });
+      } catch (err) {
+        defaultRuntime.error(`Memory promote ranking failed: ${formatErrorMessage(err)}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let applyResult: Awaited<ReturnType<typeof applyShortTermPromotions>> | undefined;
+      if (opts.apply) {
+        try {
+          applyResult = await applyShortTermPromotions({
+            workspaceDir,
+            candidates,
+            limit: opts.limit,
+            minScore: opts.minScore ?? dreaming.minScore,
+            minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
+            minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
+            maxAgeDays: dreaming.maxAgeDays,
+            timezone: dreaming.timezone,
+          });
+        } catch (err) {
+          defaultRuntime.error(`Memory promote apply failed: ${formatErrorMessage(err)}`);
+          process.exitCode = 1;
+          return;
+        }
+      }
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const lockPath = resolveShortTermRecallLockPath(workspaceDir);
+      const customQmd = asRecord(asRecord(status.custom)?.qmd);
+      const audit = await auditShortTermPromotionArtifacts({
+        workspaceDir,
+        qmd:
+          status.backend === "qmd"
+            ? {
+                dbPath: status.dbPath,
+                collections:
+                  typeof customQmd?.collections === "number" ? customQmd.collections : undefined,
+              }
+            : undefined,
+      });
+
+      if (opts.json) {
+        defaultRuntime.writeJson({
+          workspaceDir,
+          storePath,
+          lockPath,
+          audit,
+          candidates,
+          apply: applyResult
+            ? {
+                applied: applyResult.applied,
+                memoryPath: applyResult.memoryPath,
+                appliedCandidates: applyResult.appliedCandidates,
+              }
+            : undefined,
+        });
+        return;
+      }
+
+      if (candidates.length === 0) {
+        defaultRuntime.log("No short-term recall candidates.");
+        defaultRuntime.log(`Recall store: ${shortenHomePath(storePath)}`);
+        if (audit.issues.length > 0) {
+          for (const issue of audit.issues) {
+            defaultRuntime.log(issue.message);
+          }
+        }
+        return;
+      }
+
+      const rich = isRich();
+      const lines: string[] = [];
+      lines.push(
+        `${colorize(rich, theme.heading, "Short-Term Promotion Candidates")} ${colorize(
+          rich,
+          theme.muted,
+          `(${agentId})`,
+        )}`,
+      );
+      lines.push(`${colorize(rich, theme.muted, "Recall store:")} ${shortenHomePath(storePath)}`);
+      lines.push(colorize(rich, theme.muted, `Store health: ${formatAuditCounts(audit)}`));
+      for (const candidate of candidates) {
+        lines.push(
+          `${colorize(rich, theme.success, candidate.score.toFixed(3))} ${colorize(
+            rich,
+            theme.accent,
+            `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`,
+          )}`,
+        );
+        lines.push(
+          colorize(
+            rich,
+            theme.muted,
+            `recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
+          ),
+        );
+        if (candidate.conceptTags.length > 0) {
+          lines.push(colorize(rich, theme.muted, `concepts=${candidate.conceptTags.join(", ")}`));
+        }
+        if (candidate.snippet) {
+          lines.push(colorize(rich, theme.muted, candidate.snippet));
+        }
+        lines.push("");
+      }
+      if (audit.issues.length > 0) {
+        lines.push(colorize(rich, theme.warn, "Audit issues:"));
+        for (const issue of audit.issues) {
+          lines.push(
+            colorize(rich, issue.severity === "error" ? theme.warn : theme.muted, issue.message),
+          );
+        }
+        lines.push("");
+      }
+      if (applyResult) {
+        if (applyResult.applied > 0) {
+          lines.push(
+            colorize(
+              rich,
+              theme.success,
+              `Promoted ${applyResult.applied} candidate(s) to ${shortenHomePath(applyResult.memoryPath)}.`,
+            ),
+          );
+        } else {
+          lines.push(colorize(rich, theme.warn, "No candidates met apply criteria."));
+        }
       }
       defaultRuntime.log(lines.join("\n").trim());
     },

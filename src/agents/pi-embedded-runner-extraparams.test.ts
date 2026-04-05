@@ -8,36 +8,14 @@ import {
   resolveAnthropicBetas,
   resolveAnthropicFastMode,
   resolveAnthropicServiceTier,
-} from "../../extensions/anthropic/api.js";
-import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama.js";
+} from "../../test/helpers/providers/anthropic-contract.js";
+import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama-runtime.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "./pi-embedded-runner/proxy-stream-wrappers.js";
-import type { ProviderCapabilities } from "./provider-capabilities.js";
-import { __testing as providerCapabilitiesTesting } from "./provider-capabilities.js";
-
-const resolveProviderCapabilitiesWithPluginMock = vi.fn(
-  (params: {
-    provider: string;
-    config?: import("../config/config.js").OpenClawConfig;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-  }): Partial<ProviderCapabilities> | undefined => {
-    if (
-      params.provider === "workspace-anthropic-proxy" &&
-      params.workspaceDir === "/tmp/workspace-capabilities"
-    ) {
-      return {
-        anthropicToolSchemaMode: "openai-functions",
-        anthropicToolChoiceMode: "openai-string-modes",
-      };
-    }
-    return undefined;
-  },
-);
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-3", "grok-3-fast"],
@@ -70,13 +48,75 @@ function createTestXaiFastModeWrapper(
   };
 }
 
+import { createAnthropicToolPayloadCompatibilityWrapper } from "./pi-embedded-runner/anthropic-family-tool-payload-compat.js";
+import {
+  createBedrockNoCacheWrapper,
+  isAnthropicBedrockModel,
+} from "./pi-embedded-runner/bedrock-stream-wrappers.js";
 import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,
   resolveExtraParams,
   resolvePreparedExtraParams,
-} from "./pi-embedded-runner.js";
+} from "./pi-embedded-runner/extra-params.js";
+import { createGoogleThinkingPayloadWrapper } from "./pi-embedded-runner/google-stream-wrappers.js";
 import { log } from "./pi-embedded-runner/logger.js";
+import { createMinimaxFastModeWrapper } from "./pi-embedded-runner/minimax-stream-wrappers.js";
+import {
+  createMoonshotThinkingWrapper,
+  resolveMoonshotThinkingType,
+} from "./pi-embedded-runner/moonshot-stream-wrappers.js";
+import {
+  createCodexNativeWebSearchWrapper,
+  createOpenAIAttributionHeadersWrapper,
+  createOpenAIDefaultTransportWrapper,
+  createOpenAIFastModeWrapper,
+  createOpenAIReasoningCompatibilityWrapper,
+  createOpenAIResponsesContextManagementWrapper,
+  createOpenAIServiceTierWrapper,
+  createOpenAITextVerbosityWrapper,
+  resolveOpenAIFastMode,
+  resolveOpenAIServiceTier,
+  resolveOpenAITextVerbosity,
+} from "./pi-embedded-runner/openai-stream-wrappers.js";
+
+type WrapProviderStreamFnParams = Parameters<
+  typeof import("../plugins/provider-runtime.js").wrapProviderStreamFn
+>[0];
+
+function createTestOpenAIProviderWrapper(
+  params: WrapProviderStreamFnParams,
+  withDefaultTransport: boolean,
+): StreamFn {
+  let streamFn = params.context.streamFn;
+  if (withDefaultTransport) {
+    streamFn = createOpenAIDefaultTransportWrapper(streamFn);
+  }
+  streamFn = createOpenAIAttributionHeadersWrapper(streamFn);
+
+  if (resolveOpenAIFastMode(params.context.extraParams)) {
+    streamFn = createOpenAIFastModeWrapper(streamFn);
+  }
+
+  const serviceTier = resolveOpenAIServiceTier(params.context.extraParams);
+  if (serviceTier) {
+    streamFn = createOpenAIServiceTierWrapper(streamFn, serviceTier);
+  }
+
+  const textVerbosity = resolveOpenAITextVerbosity(params.context.extraParams);
+  if (textVerbosity) {
+    streamFn = createOpenAITextVerbosityWrapper(streamFn, textVerbosity);
+  }
+
+  streamFn = createCodexNativeWebSearchWrapper(streamFn, {
+    config: params.context.config,
+    agentDir: params.context.agentDir,
+  });
+  return createOpenAIResponsesContextManagementWrapper(
+    createOpenAIReasoningCompatibilityWrapper(streamFn),
+    params.context.extraParams,
+  );
+}
 
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({
@@ -94,6 +134,48 @@ beforeEach(() => {
       };
     },
     wrapProviderStreamFn: (params) => {
+      if (params.provider === "openai") {
+        return createTestOpenAIProviderWrapper(params, true);
+      }
+      if (params.provider === "openai-codex") {
+        return createTestOpenAIProviderWrapper(params, false);
+      }
+      if (params.provider === "azure-openai" || params.provider === "azure-openai-responses") {
+        return createTestOpenAIProviderWrapper(params, false);
+      }
+      if (params.provider === "amazon-bedrock") {
+        return isAnthropicBedrockModel(params.context.modelId)
+          ? params.context.streamFn
+          : createBedrockNoCacheWrapper(params.context.streamFn);
+      }
+      if (params.provider === "moonshot") {
+        const thinkingType = resolveMoonshotThinkingType({
+          configuredThinking: params.context.extraParams?.thinking,
+          thinkingLevel: params.context.thinkingLevel,
+        });
+        return createMoonshotThinkingWrapper(params.context.streamFn, thinkingType);
+      }
+      if (params.provider === "google") {
+        return createGoogleThinkingPayloadWrapper(
+          params.context.streamFn,
+          params.context.thinkingLevel,
+        );
+      }
+      if (params.provider === "test-anthropic-tool-compat") {
+        return createAnthropicToolPayloadCompatibilityWrapper(params.context.streamFn, {
+          toolSchemaMode: "openai-functions",
+          toolChoiceMode: "openai-string-modes",
+        });
+      }
+      if (params.provider === "kimi") {
+        return params.context.streamFn;
+      }
+      if (params.provider === "minimax" || params.provider === "minimax-portal") {
+        return createMinimaxFastModeWrapper(
+          params.context.streamFn,
+          params.context.extraParams?.fastMode === true,
+        );
+      }
       if (params.provider === "ollama") {
         return createConfiguredOllamaCompatNumCtxWrapper(params.context);
       }
@@ -151,15 +233,10 @@ beforeEach(() => {
       return createOpenRouterSystemCacheWrapper(createOpenRouterWrapper(streamFn, thinkingLevel));
     },
   });
-  providerCapabilitiesTesting.setResolveProviderCapabilitiesWithPluginForTest(
-    resolveProviderCapabilitiesWithPluginMock,
-  );
-  resolveProviderCapabilitiesWithPluginMock.mockClear();
 });
 
 afterEach(() => {
   extraParamsTesting.resetProviderRuntimeDepsForTest();
-  providerCapabilitiesTesting.resetDepsForTests();
 });
 
 describe("resolveExtraParams", () => {
@@ -171,6 +248,20 @@ describe("resolveExtraParams", () => {
     });
 
     expect(result).toBeUndefined();
+  });
+
+  it("applies default runtime params for OpenAI GPT-5 models", () => {
+    const result = resolveExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5.4",
+    });
+
+    expect(result).toEqual({
+      parallel_tool_calls: true,
+      text_verbosity: "low",
+      openaiWsWarmup: true,
+    });
   });
 
   it("returns params for exact provider/model key", () => {
@@ -336,6 +427,8 @@ describe("resolveExtraParams", () => {
     });
 
     expect(result).toEqual({
+      openaiWsWarmup: true,
+      parallel_tool_calls: true,
       text_verbosity: "low",
     });
   });
@@ -552,6 +645,30 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.reasoning).toEqual({ effort: "low" });
   });
 
+  it("disables thinking for MiniMax anthropic-messages payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "minimax", "MiniMax-M2.7");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "minimax",
+      id: "MiniMax-M2.7",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
+  });
+
   it("removes legacy reasoning_effort and keeps reasoning unset when thinkingLevel is off", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -631,6 +748,66 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]).not.toHaveProperty("reasoning");
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("keeps disabled reasoning payloads for native OpenAI responses routes", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        reasoning: { effort: "none", summary: "auto" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5", undefined, "off");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+      baseUrl: "https://api.openai.com/v1",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toEqual({
+      context_management: [{ type: "compaction", compact_threshold: 80000 }],
+      parallel_tool_calls: true,
+      reasoning: { effort: "none", summary: "auto" },
+      store: true,
+      text: { verbosity: "low" },
+    });
+  });
+
+  it("keeps disabled reasoning payloads for proxied OpenAI responses routes", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        reasoning: { effort: "none", summary: "auto" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5", undefined, "off");
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+      baseUrl: "https://proxy.example.com/v1",
+    } as Model<"openai-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("reasoning");
   });
 
   it("injects parallel_tool_calls for openai-completions payloads when configured", () => {
@@ -1090,7 +1267,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("does not rewrite tool schema for Kimi (native Anthropic format)", () => {
+  it("keeps anthropic tool payloads native for Kimi", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1194,16 +1371,7 @@ describe("applyExtraParamsToAgent", () => {
       payloads.push(payload);
       return {} as ReturnType<StreamFn>;
     };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(
-      agent,
-      undefined,
-      "custom-anthropic-proxy",
-      "proxy-model",
-      undefined,
-      "low",
-    );
+    const streamFn = createAnthropicToolPayloadCompatibilityWrapper(baseStreamFn);
 
     const model = {
       api: "anthropic-messages",
@@ -1214,7 +1382,7 @@ describe("applyExtraParamsToAgent", () => {
       },
     } as unknown as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
+    void streamFn(model, context, {});
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.tools).toEqual([
@@ -1229,7 +1397,7 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
-  it("uses workspace plugin capability metadata for anthropic tool payload normalization", () => {
+  it("lets provider-owned wrappers normalize anthropic tool payloads", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1250,18 +1418,16 @@ describe("applyExtraParamsToAgent", () => {
 
     applyExtraParamsToAgent(
       agent,
-      { plugins: { enabled: true } },
-      "workspace-anthropic-proxy",
+      undefined,
+      "test-anthropic-tool-compat",
       "proxy-model",
       undefined,
       "low",
-      undefined,
-      "/tmp/workspace-capabilities",
     );
 
     const model = {
       api: "anthropic-messages",
-      provider: "workspace-anthropic-proxy",
+      provider: "test-anthropic-tool-compat",
       id: "proxy-model",
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
@@ -1279,12 +1445,6 @@ describe("applyExtraParamsToAgent", () => {
       },
     ]);
     expect(payloads[0]?.tool_choice).toBe("required");
-    expect(resolveProviderCapabilitiesWithPluginMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "workspace-anthropic-proxy",
-        workspaceDir: "/tmp/workspace-capabilities",
-      }),
-    );
   });
 
   it("sanitizes invalid Atproxy Gemini negative thinking budgets", () => {
@@ -1460,7 +1620,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("defaults OpenAI transport to auto without websocket warm-up", () => {
+  it("defaults OpenAI transport to auto with websocket warm-up", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
@@ -1475,7 +1635,23 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
-    expect(calls[0]?.openaiWsWarmup).toBe(false);
+    expect(calls[0]?.openaiWsWarmup).toBe(true);
+  });
+
+  it("injects GPT-5 default parallel tool calls and low verbosity for OpenAI Responses payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as Model<"openai-responses">,
+      payload: {},
+    });
+
+    expect(payload.parallel_tool_calls).toBe(true);
+    expect(payload.text).toEqual({ verbosity: "low" });
   });
 
   it("injects native Codex web_search for direct openai-codex Responses models", () => {
@@ -1862,6 +2038,54 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.cacheRetention).toBe("long");
   });
 
+  it("passes through explicit cacheRetention for custom anthropic-messages providers", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "litellm/claude-sonnet-4-6": {
+              params: {
+                cacheRetention: "long",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(
+      agent,
+      cfg,
+      "litellm",
+      "claude-sonnet-4-6",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        api: "anthropic-messages",
+        provider: "litellm",
+        id: "claude-sonnet-4-6",
+      } as Model<"anthropic-messages">,
+    );
+
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(
+      {
+        api: "anthropic-messages",
+        provider: "litellm",
+        id: "claude-sonnet-4-6",
+      } as Model<"anthropic-messages">,
+      context,
+      {},
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("long");
+  });
+
   it("adds Anthropic 1M beta header when context1m is enabled for Opus/Sonnet", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", { context1m: true });
@@ -2005,7 +2229,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(true);
   });
 
-  it("strips disabled OpenAI reasoning payloads instead of sending effort:none", () => {
+  it("keeps disabled OpenAI reasoning payloads on native Responses routes", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5-mini",
@@ -2020,10 +2244,10 @@ describe("applyExtraParamsToAgent", () => {
         reasoning: { effort: "none" },
       },
     });
-    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload.reasoning).toEqual({ effort: "none" });
   });
 
-  it("strips disabled Azure OpenAI Responses reasoning payloads", () => {
+  it("keeps disabled Azure OpenAI Responses reasoning payloads", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "azure-openai-responses",
       applyModelId: "gpt-5-mini",
@@ -2038,7 +2262,7 @@ describe("applyExtraParamsToAgent", () => {
         reasoning: { effort: "none" },
       },
     });
-    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload.reasoning).toEqual({ effort: "none" });
   });
 
   it("injects configured OpenAI service_tier into Responses payloads", () => {
@@ -2380,7 +2604,7 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
     expect(payload).not.toHaveProperty("reasoning");
-    expect(payload).not.toHaveProperty("text");
+    expect(payload.text).toEqual({ verbosity: "low" });
     expect(payload.service_tier).toBe("priority");
   });
 
@@ -2797,7 +3021,7 @@ describe("applyExtraParamsToAgent", () => {
       },
     });
     expect(payload).not.toHaveProperty("reasoning");
-    expect(payload).not.toHaveProperty("text");
+    expect(payload.text).toEqual({ verbosity: "low" });
     expect(payload.service_tier).toBe("priority");
   });
 

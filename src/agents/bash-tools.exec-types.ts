@@ -1,8 +1,10 @@
+import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { ExecAsk, ExecHost, ExecSecurity, ExecTarget } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 export type ExecToolDefaults = {
+  hasCronTool?: boolean;
   host?: ExecTarget;
   security?: ExecSecurity;
   ask?: ExecAsk;
@@ -51,6 +53,7 @@ export type ExecToolDetails =
       exitCode: number | null;
       durationMs: number;
       aggregated: string;
+      timedOut?: boolean;
       cwd?: string;
     }
   | {
@@ -58,6 +61,7 @@ export type ExecToolDetails =
       approvalId: string;
       approvalSlug: string;
       expiresAtMs: number;
+      allowedDecisions?: readonly ExecApprovalDecision[];
       host: ExecHost;
       command: string;
       cwd?: string;
@@ -70,7 +74,9 @@ export type ExecToolDetails =
         | "initiating-platform-disabled"
         | "initiating-platform-unsupported"
         | "no-approval-route";
+      channel?: string;
       channelLabel?: string;
+      accountId?: string;
       sentApproverDms?: boolean;
       host: ExecHost;
       command: string;

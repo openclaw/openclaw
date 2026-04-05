@@ -177,7 +177,7 @@ vi.mock("../../runtime.js", () => ({
     config: {
       loadConfig: () => ({
         channels: {
-          matrix: {},
+          matrix: hoisted.accountConfig,
         },
       }),
       writeConfigFile: vi.fn(),
@@ -205,8 +205,8 @@ vi.mock("../../runtime.js", () => ({
   setMatrixRuntime: hoisted.setMatrixRuntime,
 }));
 
-vi.mock("../accounts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../accounts.js")>();
+vi.mock("../accounts.js", async () => {
+  const actual = await vi.importActual<typeof import("../accounts.js")>("../accounts.js");
   return {
     ...actual,
     resolveConfiguredMatrixBotUserIds: vi.fn(() => new Set<string>()),

@@ -167,7 +167,7 @@ pluggable interface, lifecycle hooks, and configuration.
 `/context` prefers the latest **run-built** system prompt report when available:
 
 - `System prompt (run)` = captured from the last embedded (tool-capable) run and persisted in the session store.
-- `System prompt (estimate)` = computed on the fly when no run report exists (or when running via a CLI backend that doesn’t generate the report).
+- `System prompt (estimate)` = computed on the fly when no run report exists yet.
 
 Either way, it reports sizes and top contributors; it does **not** dump the full system prompt or tool schemas.
 

@@ -36,12 +36,12 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 
 ## Supported providers
 
-| Provider | Default model                    | Edit support            | API key                              |
-| -------- | -------------------------------- | ----------------------- | ------------------------------------ |
-| OpenAI   | `gpt-image-1`                    | No                      | `OPENAI_API_KEY`                     |
-| Google   | `gemini-3.1-flash-image-preview` | Yes                     | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
-| fal      | `fal-ai/flux/dev`                | Yes                     | `FAL_KEY`                            |
-| MiniMax  | `image-01`                       | Yes (subject reference) | `MINIMAX_API_KEY`                    |
+| Provider | Default model                    | Edit support            | API key                                               |
+| -------- | -------------------------------- | ----------------------- | ----------------------------------------------------- |
+| OpenAI   | `gpt-image-1`                    | Yes (up to 5 images)    | `OPENAI_API_KEY`                                      |
+| Google   | `gemini-3.1-flash-image-preview` | Yes                     | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| fal      | `fal-ai/flux/dev`                | Yes                     | `FAL_KEY`                                             |
+| MiniMax  | `image-01`                       | Yes (subject reference) | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -75,7 +75,7 @@ Not all providers support all parameters. The tool passes what each provider sup
   agents: {
     defaults: {
       // String form: primary model only
-      imageGenerationModel: "google/gemini-3-pro-image-preview",
+      imageGenerationModel: "google/gemini-3.1-flash-image-preview",
 
       // Object form: primary + ordered fallbacks
       imageGenerationModel: {
@@ -94,29 +94,43 @@ When generating an image, OpenClaw tries providers in this order:
 1. **`model` parameter** from the tool call (if the agent specifies one)
 2. **`imageGenerationModel.primary`** from config
 3. **`imageGenerationModel.fallbacks`** in order
-4. **Auto-detection** — queries all registered providers for defaults, preferring: configured primary provider, then OpenAI, then Google, then others
+4. **Auto-detection** — uses auth-backed provider defaults only:
+   - current default provider first
+   - remaining registered image-generation providers in provider-id order
 
 If a provider fails (auth error, rate limit, etc.), the next candidate is tried automatically. If all fail, the error includes details from each attempt.
 
+Notes:
+
+- Auto-detection is auth-aware. A provider default only enters the candidate list
+  when OpenClaw can actually authenticate that provider.
+- Use `action: "list"` to inspect the currently registered providers, their
+  default models, and auth env-var hints.
+
 ### Image editing
 
-Google, fal, and MiniMax support editing reference images. Pass a reference image path or URL:
+OpenAI, Google, fal, and MiniMax support editing reference images. Pass a reference image path or URL:
 
 ```
 "Generate a watercolor version of this photo" + image: "/path/to/photo.jpg"
 ```
 
-Google supports up to 5 reference images via the `images` parameter. fal and MiniMax support 1.
+OpenAI and Google support up to 5 reference images via the `images` parameter. fal and MiniMax support 1.
+
+MiniMax image generation is available through both bundled MiniMax auth paths:
+
+- `minimax/image-01` for API-key setups
+- `minimax-portal/image-01` for OAuth setups
 
 ## Provider capabilities
 
-| Capability            | OpenAI        | Google               | fal                 | MiniMax                    |
-| --------------------- | ------------- | -------------------- | ------------------- | -------------------------- |
-| Generate              | Yes (up to 4) | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 9)              |
-| Edit/reference        | No            | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image, subject ref) |
-| Size control          | Yes           | Yes                  | Yes                 | No                         |
-| Aspect ratio          | No            | Yes                  | Yes (generate only) | Yes                        |
-| Resolution (1K/2K/4K) | No            | Yes                  | Yes                 | No                         |
+| Capability            | OpenAI               | Google               | fal                 | MiniMax                    |
+| --------------------- | -------------------- | -------------------- | ------------------- | -------------------------- |
+| Generate              | Yes (up to 4)        | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 9)              |
+| Edit/reference        | Yes (up to 5 images) | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image, subject ref) |
+| Size control          | Yes                  | Yes                  | Yes                 | No                         |
+| Aspect ratio          | No                   | Yes                  | Yes (generate only) | Yes                        |
+| Resolution (1K/2K/4K) | No                   | Yes                  | Yes                 | No                         |
 
 ## Related
 

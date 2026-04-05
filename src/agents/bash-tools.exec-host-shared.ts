@@ -9,9 +9,10 @@ import {
 } from "../infra/exec-approval-surface.js";
 import {
   maxAsk,
-  minSecurity,
+  resolveExecApprovalAllowedDecisions,
   resolveExecApprovals,
   type ExecAsk,
+  type ExecApprovalDecision,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
@@ -163,7 +164,6 @@ export function createDefaultExecApprovalRequestContext(params: {
 export function resolveBaseExecApprovalDecision(params: {
   decision: string | null;
   askFallback: ResolvedExecApprovals["agent"]["askFallback"];
-  obfuscationDetected: boolean;
 }): {
   approvedByAsk: boolean;
   deniedReason: string | null;
@@ -173,13 +173,6 @@ export function resolveBaseExecApprovalDecision(params: {
     return { approvedByAsk: false, deniedReason: "user-denied", timedOut: false };
   }
   if (!params.decision) {
-    if (params.obfuscationDetected) {
-      return {
-        approvedByAsk: false,
-        deniedReason: "approval-timeout (obfuscation-detected)",
-        timedOut: true,
-      };
-    }
     if (params.askFallback === "full") {
       return { approvedByAsk: true, deniedReason: null, timedOut: true };
     }
@@ -201,7 +194,13 @@ export function resolveExecHostApprovalContext(params: {
     security: params.security,
     ask: params.ask,
   });
-  const hostSecurity = minSecurity(params.security, approvals.agent.security);
+  // exec-approvals.json is the authoritative security policy and must be able to grant
+  // a less-restrictive level (e.g. "full") even when tool/runtime defaults are stricter
+  // (e.g. "allowlist"). This matches node-host behavior and mirrors the ask=off special
+  // case: exec-approvals.json can suppress prompts AND grant broader execution rights.
+  // When exec-approvals.json has no explicit agent or defaults entry, approvals.agent.security
+  // falls back to params.security, so this is backward-compatible.
+  const hostSecurity = approvals.agent.security;
   // An explicit ask=off policy in exec-approvals.json must be able to suppress
   // prompts even when tool/runtime defaults are stricter (for example on-miss).
   const hostAsk = approvals.agent.ask === "off" ? "off" : maxAsk(params.ask, approvals.agent.ask);
@@ -330,12 +329,10 @@ export function buildExecApprovalFollowupTarget(
 export function createExecApprovalDecisionState(params: {
   decision: string | null | undefined;
   askFallback: ResolvedExecApprovals["agent"]["askFallback"];
-  obfuscationDetected: boolean;
 }) {
   const baseDecision = resolveBaseExecApprovalDecision({
     decision: params.decision ?? null,
     askFallback: params.askFallback,
-    obfuscationDetected: params.obfuscationDetected,
   });
   return {
     baseDecision,
@@ -401,7 +398,7 @@ export async function sendExecApprovalFollowupResult(
 export function buildExecApprovalPendingToolResult(params: {
   host: "gateway" | "node";
   command: string;
-  cwd: string;
+  cwd: string | undefined;
   warningText: string;
   approvalId: string;
   approvalSlug: string;
@@ -409,8 +406,10 @@ export function buildExecApprovalPendingToolResult(params: {
   initiatingSurface: ExecApprovalInitiatingSurfaceState;
   sentApproverDms: boolean;
   unavailableReason: ExecApprovalUnavailableReason | null;
+  allowedDecisions?: readonly ExecApprovalDecision[];
   nodeId?: string;
 }): AgentToolResult<ExecToolDetails> {
+  const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
   return {
     content: [
       {
@@ -420,13 +419,16 @@ export function buildExecApprovalPendingToolResult(params: {
             ? (buildExecApprovalUnavailableReplyPayload({
                 warningText: params.warningText,
                 reason: params.unavailableReason,
+                channel: params.initiatingSurface.channel,
                 channelLabel: params.initiatingSurface.channelLabel,
+                accountId: params.initiatingSurface.accountId,
                 sentApproverDms: params.sentApproverDms,
               }).text ?? "")
             : buildApprovalPendingMessage({
                 warningText: params.warningText,
                 approvalSlug: params.approvalSlug,
                 approvalId: params.approvalId,
+                allowedDecisions,
                 command: params.command,
                 cwd: params.cwd,
                 host: params.host,
@@ -439,7 +441,9 @@ export function buildExecApprovalPendingToolResult(params: {
         ? ({
             status: "approval-unavailable",
             reason: params.unavailableReason,
+            channel: params.initiatingSurface.channel,
             channelLabel: params.initiatingSurface.channelLabel,
+            accountId: params.initiatingSurface.accountId,
             sentApproverDms: params.sentApproverDms,
             host: params.host,
             command: params.command,
@@ -452,6 +456,7 @@ export function buildExecApprovalPendingToolResult(params: {
             approvalId: params.approvalId,
             approvalSlug: params.approvalSlug,
             expiresAtMs: params.expiresAtMs,
+            allowedDecisions,
             host: params.host,
             command: params.command,
             cwd: params.cwd,

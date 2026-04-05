@@ -6,15 +6,19 @@ read_when:
 title: "Mattermost"
 ---
 
-# Mattermost (plugin)
+# Mattermost
 
-Status: supported via plugin (bot token + WebSocket events). Channels, groups, and DMs are supported.
+Status: bundled plugin (bot token + WebSocket events). Channels, groups, and DMs are supported.
 Mattermost is a self-hostable team messaging platform; see the official site at
 [mattermost.com](https://mattermost.com) for product details and downloads.
 
-## Plugin required
+## Bundled plugin
 
-Mattermost ships as a plugin and is not bundled with the core install.
+Mattermost ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Mattermost,
+install it manually:
 
 Install via CLI (npm registry):
 
@@ -28,14 +32,13 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./path/to/local/mattermost-plugin
 ```
 
-If you choose Mattermost during setup and a git checkout is detected,
-OpenClaw will offer the local install path automatically.
-
 Details: [Plugins](/tools/plugin)
 
 ## Quick setup
 
-1. Install the Mattermost plugin.
+1. Ensure the Mattermost plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create a Mattermost bot account and copy the **bot token**.
 3. Copy the Mattermost **base URL** (e.g., `https://chat.example.com`).
 4. Configure OpenClaw and start the gateway.
@@ -82,7 +85,10 @@ Notes:
 - If `callbackUrl` is omitted, OpenClaw derives one from gateway host/port + `callbackPath`.
 - For multi-account setups, `commands` can be set at the top level or under
   `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
-- Command callbacks are validated with per-command tokens and fail closed when token checks fail.
+- Command callbacks are validated with the per-command tokens returned by
+  Mattermost when OpenClaw registers `oc_*` commands.
+- Slash callbacks fail closed when registration failed, startup was partial, or
+  the callback token does not match one of the registered commands.
 - Reachability requirement: the callback endpoint must be reachable from the Mattermost server.
   - Do not set `callbackUrl` to `localhost` unless Mattermost runs on the same host/network namespace as OpenClaw.
   - Do not set `callbackUrl` to your Mattermost base URL unless that URL reverse-proxies `/api/channels/mattermost/command` to OpenClaw.
@@ -170,9 +176,27 @@ Notes:
 
 - Default: `channels.mattermost.groupPolicy = "allowlist"` (mention-gated).
 - Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs recommended).
+- Per-channel mention overrides live under `channels.mattermost.groups.<channelId>.requireMention`
+  or `channels.mattermost.groups["*"].requireMention` for a default.
 - `@username` matching is mutable and only enabled when `channels.mattermost.dangerouslyAllowNameMatching: true`.
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
 - Runtime note: if `channels.mattermost` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
+
+Example:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      groupPolicy: "open",
+      groups: {
+        "*": { requireMention: true },
+        "team-channel-id": { requireMention: false },
+      },
+    },
+  },
+}
+```
 
 ## Targets for outbound delivery
 
@@ -418,6 +442,19 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 - No replies in channels: ensure the bot is in the channel and mention it (oncall), use a trigger prefix (onchar), or set `chatmode: "onmessage"`.
 - Auth errors: check the bot token, base URL, and whether the account is enabled.
 - Multi-account issues: env vars only apply to the `default` account.
+- Native slash commands return `Unauthorized: invalid command token.`: OpenClaw
+  did not accept the callback token. Typical causes:
+  - slash command registration failed or only partially completed at startup
+  - the callback is hitting the wrong gateway/account
+  - Mattermost still has old commands pointing at a previous callback target
+  - the gateway restarted without reactivating slash commands
+- If native slash commands stop working, check logs for
+  `mattermost: failed to register slash commands` or
+  `mattermost: native slash commands enabled but no commands could be registered`.
+- If `callbackUrl` is omitted and logs warn that the callback resolved to
+  `http://127.0.0.1:18789/...`, that URL is probably only reachable when
+  Mattermost runs on the same host/network namespace as OpenClaw. Set an
+  explicit externally reachable `commands.callbackUrl` instead.
 - Buttons appear as white boxes: the agent may be sending malformed button data. Check that each button has both `text` and `callback_data` fields.
 - Buttons render but clicks do nothing: verify `AllowedUntrustedInternalConnections` in Mattermost server config includes `127.0.0.1 localhost`, and that `EnablePostActionIntegration` is `true` in ServiceSettings.
 - Buttons return 404 on click: the button `id` likely contains hyphens or underscores. Mattermost's action router breaks on non-alphanumeric IDs. Use `[a-zA-Z0-9]` only.

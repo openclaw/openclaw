@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
-import { resolveBundledWebSearchPluginId } from "../plugins/bundled-web-search-provider-ids.js";
+import { resolveManifestContractOwnerPluginId } from "../plugins/manifest-registry.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
   type UnresolvedCommandSecretAssignment,
@@ -55,21 +55,11 @@ type GatewaySecretsResolveResult = {
   inactiveRefPaths?: string[];
 };
 
-const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = [
-  "tools.web.search",
-  "plugins.entries.",
-  "tools.web.fetch.firecrawl",
-  "tools.web.x_search",
-] as const;
-const WEB_RUNTIME_SECRET_PATH_PREFIXES = [
-  "tools.web.search.",
-  "plugins.entries.",
-  "tools.web.fetch.firecrawl.",
-  "tools.web.x_search.",
-] as const;
+const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = ["tools.web.search", "plugins.entries."] as const;
+const WEB_RUNTIME_SECRET_PATH_PREFIXES = ["tools.web.search.", "plugins.entries."] as const;
 
 function pluginIdFromRuntimeWebPath(path: string): string | undefined {
-  const match = /^plugins\.entries\.([^.]+)\.config\.webSearch\.apiKey$/.exec(path);
+  const match = /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path);
   return match?.[1];
 }
 
@@ -111,21 +101,31 @@ function classifyRuntimeWebTargetPathState(params: {
   config: OpenClawConfig;
   path: string;
 }): "active" | "inactive" | "unknown" {
-  if (params.path === "tools.web.fetch.firecrawl.apiKey") {
-    const fetch = params.config.tools?.web?.fetch;
-    return fetch?.enabled !== false && fetch?.firecrawl?.enabled !== false ? "active" : "inactive";
-  }
-
-  if (params.path === "tools.web.x_search.apiKey") {
-    return params.config.tools?.web?.x_search?.enabled !== false ? "active" : "inactive";
-  }
-
   if (params.path === "tools.web.search.apiKey") {
     return params.config.tools?.web?.search?.enabled !== false ? "active" : "inactive";
   }
 
   const pluginId = pluginIdFromRuntimeWebPath(params.path);
   if (pluginId) {
+    if (params.path.endsWith(".config.webFetch.apiKey")) {
+      const fetch = params.config.tools?.web?.fetch;
+      if (fetch?.enabled === false) {
+        return "inactive";
+      }
+      const configuredProvider =
+        typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
+      if (!configuredProvider) {
+        return "active";
+      }
+      return resolveManifestContractOwnerPluginId({
+        contract: "webFetchProviders",
+        value: configuredProvider,
+        origin: "bundled",
+        config: params.config,
+      }) === pluginId
+        ? "active"
+        : "inactive";
+    }
     const search = params.config.tools?.web?.search;
     if (search?.enabled === false) {
       return "inactive";
@@ -135,7 +135,14 @@ function classifyRuntimeWebTargetPathState(params: {
     if (!configuredProvider) {
       return "active";
     }
-    return resolveBundledWebSearchPluginId(configuredProvider) === pluginId ? "active" : "inactive";
+    return resolveManifestContractOwnerPluginId({
+      contract: "webSearchProviders",
+      value: configuredProvider,
+      origin: "bundled",
+      config: params.config,
+    }) === pluginId
+      ? "active"
+      : "inactive";
   }
 
   const match = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
@@ -161,23 +168,6 @@ function describeInactiveRuntimeWebTargetPath(params: {
   config: OpenClawConfig;
   path: string;
 }): string | undefined {
-  if (params.path === "tools.web.fetch.firecrawl.apiKey") {
-    const fetch = params.config.tools?.web?.fetch;
-    if (fetch?.enabled === false) {
-      return "tools.web.fetch is disabled.";
-    }
-    if (fetch?.firecrawl?.enabled === false) {
-      return "tools.web.fetch.firecrawl.enabled is false.";
-    }
-    return undefined;
-  }
-
-  if (params.path === "tools.web.x_search.apiKey") {
-    return params.config.tools?.web?.x_search?.enabled === false
-      ? "tools.web.x_search is disabled."
-      : undefined;
-  }
-
   if (params.path === "tools.web.search.apiKey") {
     return params.config.tools?.web?.search?.enabled === false
       ? "tools.web.search is disabled."
@@ -186,6 +176,18 @@ function describeInactiveRuntimeWebTargetPath(params: {
 
   const pluginId = pluginIdFromRuntimeWebPath(params.path);
   if (pluginId) {
+    if (params.path.endsWith(".config.webFetch.apiKey")) {
+      const fetch = params.config.tools?.web?.fetch;
+      if (fetch?.enabled === false) {
+        return "tools.web.fetch is disabled.";
+      }
+      const configuredProvider =
+        typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
+      if (configuredProvider) {
+        return `tools.web.fetch.provider is "${configuredProvider}".`;
+      }
+      return undefined;
+    }
     const search = params.config.tools?.web?.search;
     if (search?.enabled === false) {
       return "tools.web.search is disabled.";
@@ -193,7 +195,12 @@ function describeInactiveRuntimeWebTargetPath(params: {
     const configuredProvider =
       typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
     const configuredPluginId = configuredProvider
-      ? resolveBundledWebSearchPluginId(configuredProvider)
+      ? resolveManifestContractOwnerPluginId({
+          contract: "webSearchProviders",
+          value: configuredProvider,
+          origin: "bundled",
+          config: params.config,
+        })
       : undefined;
     if (configuredPluginId && configuredPluginId !== pluginId) {
       return `tools.web.search.provider is "${configuredProvider}".`;
@@ -367,8 +374,7 @@ function isUnsupportedSecretsResolveError(err: unknown): boolean {
 
 function isDirectRuntimeWebTargetPath(path: string): boolean {
   return (
-    path === "tools.web.fetch.firecrawl.apiKey" ||
-    path === "tools.web.x_search.apiKey" ||
+    /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(path) ||
     /^tools\.web\.search\.[^.]+\.apiKey$/.test(path)
   );
 }

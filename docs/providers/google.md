@@ -1,9 +1,9 @@
 ---
 title: "Google (Gemini)"
-summary: "Google Gemini setup (API key + OAuth, image generation, media understanding, web search)"
+summary: "Google Gemini setup (API key, image generation, media understanding, web search)"
 read_when:
   - You want to use Google Gemini models with OpenClaw
-  - You need the API key or OAuth auth flow
+  - You need the API key auth flow
 ---
 
 # Google (Gemini)
@@ -15,14 +15,13 @@ Gemini Grounding.
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
-- Alternative provider: `google-gemini-cli` (OAuth)
 
 ## Quick start
 
 1. Set the API key:
 
 ```bash
-openclaw onboard --auth-choice google-api-key
+openclaw onboard --auth-choice gemini-api-key
 ```
 
 2. Set a default model:
@@ -42,22 +41,9 @@ openclaw onboard --auth-choice google-api-key
 ```bash
 openclaw onboard --non-interactive \
   --mode local \
-  --auth-choice google-api-key \
+  --auth-choice gemini-api-key \
   --gemini-api-key "$GEMINI_API_KEY"
 ```
-
-## OAuth (Gemini CLI)
-
-An alternative provider `google-gemini-cli` uses PKCE OAuth instead of an API
-key. This is an unofficial integration; some users report account
-restrictions. Use at your own risk.
-
-Environment variables:
-
-- `OPENCLAW_GEMINI_OAUTH_CLIENT_ID`
-- `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET`
-
-(Or the `GEMINI_CLI_*` variants.)
 
 ## Capabilities
 
@@ -70,6 +56,49 @@ Environment variables:
 | Video understanding    | Yes               |
 | Web search (Grounding) | Yes               |
 | Thinking/reasoning     | Yes (Gemini 3.1+) |
+
+## Direct Gemini cache reuse
+
+For direct Gemini API runs (`api: "google-generative-ai"`), OpenClaw now
+passes a configured `cachedContent` handle through to Gemini requests.
+
+- Configure per-model or global params with either
+  `cachedContent` or legacy `cached_content`
+- If both are present, `cachedContent` wins
+- Example value: `cachedContents/prebuilt-context`
+- Gemini cache-hit usage is normalized into OpenClaw `cacheRead` from
+  upstream `cachedContentTokenCount`
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "google/gemini-2.5-pro": {
+          params: {
+            cachedContent: "cachedContents/prebuilt-context",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+## Image generation
+
+The bundled `google` image-generation provider defaults to
+`google/gemini-3.1-flash-image-preview`.
+
+- Also supports `google/gemini-3-pro-image-preview`
+- Generate: up to 4 images per request
+- Edit mode: enabled, up to 5 input images
+- Geometry controls: `size`, `aspectRatio`, and `resolution`
+
+Image generation, media understanding, and Gemini Grounding all stay on the
+`google` provider id.
 
 ## Environment note
 

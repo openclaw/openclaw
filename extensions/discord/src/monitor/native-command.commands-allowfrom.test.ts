@@ -3,7 +3,7 @@ import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as pluginCommandsModule from "openclaw/plugin-sdk/plugin-runtime";
-import * as dispatcherModule from "openclaw/plugin-sdk/reply-runtime";
+import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing as nativeCommandTesting, createDiscordNativeCommand } from "./native-command.js";
 import {
@@ -39,7 +39,7 @@ function createConfig(): OpenClawConfig {
           "345678901234567890": {
             channels: {
               "234567890123456789": {
-                allow: true,
+                enabled: true,
                 requireMention: false,
               },
             },
@@ -121,6 +121,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
 
   it("authorizes guild slash commands when commands.allowFrom.discord matches the sender", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand();
+    expect(interaction.defer).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     expectNotUnauthorizedReply(interaction);
   });
@@ -222,7 +223,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
           "345678901234567890": {
             channels: {
               "234567890123456789": {
-                allow: true,
+                enabled: true,
                 requireMention: false,
               },
             },
@@ -238,6 +239,31 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     await dispatchCall?.dispatcherOptions.deliver({ text: longReply }, { kind: "final" });
 
     expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({ content: longReply }));
+    expect(interaction.followUp).not.toHaveBeenCalled();
+  });
+
+  it("swallows expired slash interactions before dispatch when defer returns Unknown interaction", async () => {
+    const cfg = createConfig();
+    const command = createCommand(cfg);
+    const interaction = createInteraction();
+    interaction.defer.mockRejectedValue({
+      status: 404,
+      discordCode: 10062,
+      rawBody: {
+        message: "Unknown interaction",
+        code: 10062,
+      },
+    });
+    vi.spyOn(pluginCommandsModule, "matchPluginCommand").mockReturnValue(null);
+    const dispatchSpy = createDispatchSpy();
+
+    await expect(
+      (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown),
+    ).resolves.toBeUndefined();
+
+    expect(interaction.defer).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.followUp).not.toHaveBeenCalled();
   });
 });

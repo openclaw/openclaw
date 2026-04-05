@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions.js";
-import { slackNativeApprovalAdapter } from "./approval-native.js";
+import { slackApprovalCapability, slackNativeApprovalAdapter } from "./approval-native.js";
 
 function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>>,
@@ -33,6 +33,49 @@ function writeStore(store: Record<string, unknown>) {
 }
 
 describe("slack native approval adapter", () => {
+  it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
+    const cfg = buildConfig({
+      execApprovals: {
+        enabled: false,
+        approvers: ["U123APPROVER"],
+        target: "channel",
+      },
+    });
+
+    expect(
+      slackNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+        cfg,
+        accountId: "default",
+        action: "approve",
+      }),
+    ).toEqual({ kind: "enabled" });
+    expect(
+      slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request: {
+          id: "req-disabled-1",
+          request: {
+            command: "echo hi",
+            turnSourceChannel: "slack",
+            turnSourceTo: "channel:C123",
+            turnSourceAccountId: "default",
+            sessionKey: "agent:main:slack:channel:c123",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 1000,
+        },
+      }),
+    ).toEqual({
+      enabled: false,
+      preferredSurface: "origin",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: true,
+      notifyOriginWhenDmOnly: true,
+    });
+  });
+
   it("describes native slack approval delivery capabilities", () => {
     const capabilities = slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
       cfg: buildConfig(),
@@ -59,6 +102,29 @@ describe("slack native approval adapter", () => {
       supportsApproverDmSurface: true,
       notifyOriginWhenDmOnly: true,
     });
+  });
+
+  it("describes the correct Slack exec-approval setup path", () => {
+    const text = slackApprovalCapability.describeExecApprovalSetup?.({
+      channel: "slack",
+      channelLabel: "Slack",
+    });
+
+    expect(text).toContain("`channels.slack.execApprovals.approvers`");
+    expect(text).toContain("`commands.ownerAllowFrom`");
+    expect(text).not.toContain("`channels.slack.dm.allowFrom`");
+  });
+
+  it("describes the named-account Slack exec-approval setup path", () => {
+    const text = slackApprovalCapability.describeExecApprovalSetup?.({
+      channel: "slack",
+      channelLabel: "Slack",
+      accountId: "work",
+    });
+
+    expect(text).toContain("`channels.slack.accounts.work.execApprovals.approvers`");
+    expect(text).toContain("`commands.ownerAllowFrom`");
+    expect(text).not.toContain("`channels.slack.execApprovals.approvers`");
   });
 
   it("resolves origin targets from slack turn source", async () => {
@@ -258,7 +324,7 @@ describe("slack native approval adapter", () => {
   });
 
   it("suppresses generic slack fallback only for slack-originated approvals", () => {
-    const shouldSuppress = slackNativeApprovalAdapter.delivery.shouldSuppressForwardingFallback;
+    const shouldSuppress = slackNativeApprovalAdapter.delivery?.shouldSuppressForwardingFallback;
     if (!shouldSuppress) {
       throw new Error("slack native delivery suppression unavailable");
     }
@@ -266,12 +332,17 @@ describe("slack native approval adapter", () => {
     expect(
       shouldSuppress({
         cfg: buildConfig(),
-        target: { channel: "slack", accountId: "default" },
+        approvalKind: "exec",
+        target: { channel: "slack", to: "channel:C123ROOM", accountId: "default" },
         request: {
+          id: "approval-1",
           request: {
+            command: "echo hi",
             turnSourceChannel: "slack",
             turnSourceAccountId: "default",
           },
+          createdAtMs: 0,
+          expiresAtMs: 1_000,
         },
       }),
     ).toBe(true);
@@ -279,12 +350,17 @@ describe("slack native approval adapter", () => {
     expect(
       shouldSuppress({
         cfg: buildConfig(),
-        target: { channel: "slack", accountId: "default" },
+        approvalKind: "exec",
+        target: { channel: "slack", to: "channel:C123ROOM", accountId: "default" },
         request: {
+          id: "approval-1",
           request: {
+            command: "echo hi",
             turnSourceChannel: "discord",
             turnSourceAccountId: "default",
           },
+          createdAtMs: 0,
+          expiresAtMs: 1_000,
         },
       }),
     ).toBe(false);
@@ -301,7 +377,7 @@ describe("slack native approval adapter", () => {
     });
 
     expect(
-      slackNativeApprovalAdapter.auth.authorizeActorAction({
+      slackNativeApprovalAdapter.auth.authorizeActorAction?.({
         cfg,
         accountId: "default",
         senderId: "U123OWNER",
@@ -311,7 +387,7 @@ describe("slack native approval adapter", () => {
     ).toEqual({ authorized: true });
 
     expect(
-      slackNativeApprovalAdapter.auth.authorizeActorAction({
+      slackNativeApprovalAdapter.auth.authorizeActorAction?.({
         cfg,
         accountId: "default",
         senderId: "U999EXEC",
@@ -324,7 +400,7 @@ describe("slack native approval adapter", () => {
     });
 
     expect(
-      slackNativeApprovalAdapter.auth.authorizeActorAction({
+      slackNativeApprovalAdapter.auth.authorizeActorAction?.({
         cfg,
         accountId: "default",
         senderId: "U999EXEC",

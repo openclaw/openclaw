@@ -357,19 +357,15 @@ export class AcpSessionManager {
         state: "idle",
         lastActivityAt: Date.now(),
       };
+
+      let persisted: SessionEntry | null = null;
       try {
-        const persisted = await this.writeSessionMeta({
+        persisted = await this.writeSessionMeta({
           cfg: input.cfg,
           sessionKey,
           mutate: () => meta,
           failOnError: true,
         });
-        if (!persisted?.acp) {
-          throw new AcpRuntimeError(
-            "ACP_SESSION_INIT_FAILED",
-            `Could not persist ACP metadata for ${sessionKey}.`,
-          );
-        }
       } catch (error) {
         await runtime
           .close({
@@ -382,6 +378,24 @@ export class AcpSessionManager {
             );
           });
         throw error;
+      }
+
+      if (!persisted?.acp) {
+        await runtime
+          .close({
+            handle,
+            reason: "init-meta-failed",
+          })
+          .catch((closeError) => {
+            logVerbose(
+              `acp-manager: cleanup close failed after metadata write error for ${sessionKey}: ${String(closeError)}`,
+            );
+          });
+
+        throw new AcpRuntimeError(
+          "ACP_SESSION_INIT_FAILED",
+          `Could not persist ACP metadata for ${sessionKey}.`,
+        );
       }
       this.setCachedRuntimeState(sessionKey, {
         runtime,
@@ -1340,6 +1354,7 @@ export class AcpSessionManager {
     const runtime = backend.runtime;
     const previousMeta = params.meta;
     const previousIdentity = resolveSessionIdentityFromMeta(previousMeta);
+    let identityForEnsure = previousIdentity;
     const persistedResumeSessionId =
       mode === "persistent" ? resolveRuntimeResumeSessionId(previousIdentity) : undefined;
     const ensureSession = async (resumeSessionId?: string) =>
@@ -1371,6 +1386,19 @@ export class AcpSessionManager {
         logVerbose(
           `acp-manager: resume init failed for ${params.sessionKey}; retrying without persisted ACP session id: ${acpError.message}`,
         );
+        if (identityForEnsure) {
+          const {
+            acpxSessionId: _staleAcpxSessionId,
+            agentSessionId: _staleAgentSessionId,
+            ...retryIdentity
+          } = identityForEnsure;
+          // The persisted resume identifiers already failed, so do not merge them back into the
+          // fresh named-session handle returned by the retry path.
+          identityForEnsure = {
+            ...retryIdentity,
+            state: "pending",
+          };
+        }
         ensured = await ensureSession();
       }
     } else {
@@ -1385,13 +1413,13 @@ export class AcpSessionManager {
     });
     const nextIdentity =
       mergeSessionIdentity({
-        current: previousIdentity,
+        current: identityForEnsure,
         incoming: createIdentityFromEnsure({
           handle: ensured,
           now,
         }),
         now,
-      }) ?? previousIdentity;
+      }) ?? identityForEnsure;
     const nextHandleIdentifiers = resolveRuntimeHandleIdentifiersFromIdentity(nextIdentity);
     const nextHandle: AcpRuntimeHandle = {
       ...ensured,

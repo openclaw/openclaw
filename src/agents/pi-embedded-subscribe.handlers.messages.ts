@@ -1,9 +1,11 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -13,10 +15,12 @@ import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
+  extractAssistantVisibleText,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
   formatReasoningMessage,
@@ -62,6 +66,10 @@ const coerceText = (value: unknown): string => {
   }
   return "";
 };
+
+function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
+  return resolveAssistantMessagePhase(message) === "commentary";
+}
 
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
@@ -195,6 +203,7 @@ export function handleMessageUpdate(
   }
 
   ctx.noteLastAssistant(msg);
+  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
   if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }
@@ -253,6 +262,10 @@ export function handleMessageUpdate(
     content,
   });
 
+  if (suppressVisibleAssistantOutput) {
+    return;
+  }
+
   let chunk = "";
   if (evtType === "text_delta") {
     chunk = delta;
@@ -272,12 +285,25 @@ export function handleMessageUpdate(
     }
   }
 
+  const partialAssistant =
+    assistantRecord?.partial && typeof assistantRecord.partial === "object"
+      ? (assistantRecord.partial as AssistantMessage)
+      : msg;
+  const phaseAwareVisibleText = coerceText(extractAssistantVisibleText(partialAssistant)).trim();
+  const deliveryPhase = resolveAssistantMessagePhase(partialAssistant);
+  if (deliveryPhase === "commentary" && !phaseAwareVisibleText) {
+    return;
+  }
+  const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
+
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
-    if (ctx.blockChunker) {
-      ctx.blockChunker.append(chunk);
-    } else {
-      ctx.state.blockBuffer += chunk;
+    if (!shouldUsePhaseAwareBlockReply) {
+      if (ctx.blockChunker) {
+        ctx.blockChunker.append(chunk);
+      } else {
+        ctx.state.blockBuffer += chunk;
+      }
     }
   }
 
@@ -285,14 +311,15 @@ export function handleMessageUpdate(
     // Handle partial <think> tags: stream whatever reasoning is visible so far.
     ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
   }
-
-  const next = ctx
-    .stripBlockTags(ctx.state.deltaBuffer, {
-      thinking: false,
-      final: false,
-      inlineCode: createInlineCodeState(),
-    })
-    .trim();
+  const next =
+    phaseAwareVisibleText ||
+    ctx
+      .stripBlockTags(ctx.state.deltaBuffer, {
+        thinking: false,
+        final: false,
+        inlineCode: createInlineCodeState(),
+      })
+      .trim();
   if (next) {
     const wasThinking = ctx.state.partialBlockState.thinking;
     const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
@@ -321,6 +348,30 @@ export function handleMessageUpdate(
       shouldEmit = replace
         ? cleanedText !== previousCleaned || hasMedia || hasAudio
         : Boolean(deltaText || hasMedia || hasAudio);
+    }
+
+    if (shouldUsePhaseAwareBlockReply) {
+      if (replace) {
+        ctx.state.blockBuffer = "";
+        ctx.blockChunker?.reset();
+      }
+      const blockReplyChunk = replace ? cleanedText : deltaText;
+      if (blockReplyChunk) {
+        if (ctx.blockChunker) {
+          ctx.blockChunker.append(blockReplyChunk);
+        } else {
+          ctx.state.blockBuffer += blockReplyChunk;
+        }
+      }
+
+      if (evtType === "text_end" && !ctx.state.lastBlockReplyText && cleanedText) {
+        if (ctx.blockChunker) {
+          ctx.blockChunker.reset();
+          ctx.blockChunker.append(cleanedText);
+        } else {
+          ctx.state.blockBuffer = cleanedText;
+        }
+      }
     }
 
     ctx.state.lastStreamedAssistant = next;
@@ -367,7 +418,12 @@ export function handleMessageUpdate(
     evtType === "text_end" &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
-    ctx.flushBlockReplyBuffer();
+    const assistantMessageIndex = ctx.state.assistantMessageIndex;
+    void Promise.resolve()
+      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex }))
+      .catch((err) => {
+        ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
+      });
   }
 }
 
@@ -381,6 +437,7 @@ export function handleMessageEnd(
   }
 
   const assistantMessage = msg;
+  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   if (ctx.state.deterministicApprovalPromptSent) {
@@ -389,6 +446,7 @@ export function handleMessageEnd(
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = coerceText(extractAssistantText(assistantMessage));
+  const rawVisibleText = coerceText(extractAssistantVisibleText(assistantMessage));
   appendRawStream({
     ts: Date.now(),
     event: "assistant_message_end",
@@ -399,7 +457,7 @@ export function handleMessageEnd(
   });
 
   const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
+    text: ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }),
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =
@@ -412,25 +470,47 @@ export function handleMessageEnd(
   let cleanedText = parsedText?.text ?? "";
   let { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
 
-  if (!cleanedText && !hasMedia && !ctx.params.enforceFinalTag) {
-    const rawTrimmed = coerceText(rawText).trim();
-    const rawStrippedFinal = rawTrimmed.replace(/<\s*\/?\s*final\s*>/gi, "").trim();
-    const rawCandidate = rawStrippedFinal || rawTrimmed;
-    if (rawCandidate) {
-      const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidate));
-      cleanedText = parsedFallback.text ?? rawCandidate;
-      ({ mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedFallback));
-    }
+  const finalizeMessageEnd = () => {
+    ctx.state.deltaBuffer = "";
+    ctx.state.blockBuffer = "";
+    ctx.blockChunker?.reset();
+    ctx.state.blockState.thinking = false;
+    ctx.state.blockState.final = false;
+    ctx.state.blockState.inlineCode = createInlineCodeState();
+    ctx.state.lastStreamedAssistant = undefined;
+    ctx.state.lastStreamedAssistantCleaned = undefined;
+    ctx.state.reasoningStreamOpen = false;
+  };
+
+  if (suppressVisibleAssistantOutput) {
+    emitReasoningEnd(ctx);
+    finalizeMessageEnd();
+    return;
   }
+
+  const previousStreamedText = ctx.state.lastStreamedAssistantCleaned ?? "";
+  const shouldReplaceFinalStream = Boolean(
+    previousStreamedText && cleanedText && !cleanedText.startsWith(previousStreamedText),
+  );
+  const didTextChangeWithinCurrentMessage = Boolean(
+    previousStreamedText && cleanedText !== previousStreamedText,
+  );
+  const finalStreamDelta = shouldReplaceFinalStream
+    ? ""
+    : cleanedText.slice(previousStreamedText.length);
 
   if (
     !ctx.params.silentExpected &&
-    !ctx.state.emittedAssistantUpdate &&
-    (cleanedText || hasMedia)
+    (cleanedText || hasMedia) &&
+    (!ctx.state.emittedAssistantUpdate ||
+      shouldReplaceFinalStream ||
+      didTextChangeWithinCurrentMessage ||
+      hasMedia)
   ) {
     const data = buildAssistantStreamData({
       text: cleanedText,
-      delta: cleanedText,
+      delta: finalStreamDelta,
+      replace: shouldReplaceFinalStream,
       mediaUrls,
     });
     emitAgentEvent({
@@ -443,6 +523,7 @@ export function handleMessageEnd(
       data,
     });
     ctx.state.emittedAssistantUpdate = true;
+    ctx.state.lastStreamedAssistantCleaned = cleanedText;
   }
 
   const silentExpectedWithoutSentinel =
@@ -457,16 +538,6 @@ export function handleMessageEnd(
   });
 
   const onBlockReply = ctx.params.onBlockReply;
-  const emitBlockReplySafely = (payload: Parameters<NonNullable<typeof onBlockReply>>[0]) => {
-    if (!onBlockReply) {
-      return;
-    }
-    void Promise.resolve()
-      .then(() => onBlockReply(payload))
-      .catch((err) => {
-        ctx.log.warn(`block reply callback failed: ${String(err)}`);
-      });
-  };
   const shouldEmitReasoning = Boolean(
     !ctx.params.silentExpected &&
     ctx.state.includeReasoning &&
@@ -481,7 +552,7 @@ export function handleMessageEnd(
       return;
     }
     ctx.state.lastReasoningSent = formattedReasoning;
-    emitBlockReplySafely({ text: formattedReasoning, isReasoning: true });
+    ctx.emitBlockReply({ text: formattedReasoning, isReasoning: true });
   };
 
   if (shouldEmitReasoningBeforeAnswer) {
@@ -515,31 +586,49 @@ export function handleMessageEnd(
     }
   };
 
+  const hasBufferedBlockReply = ctx.blockChunker
+    ? ctx.blockChunker.hasBuffered()
+    : ctx.state.blockBuffer.length > 0;
+
   if (
     !ctx.params.silentExpected &&
-    (ctx.state.blockReplyBreak === "message_end" ||
-      (ctx.blockChunker ? ctx.blockChunker.hasBuffered() : ctx.state.blockBuffer.length > 0)) &&
     text &&
-    onBlockReply
+    onBlockReply &&
+    (ctx.state.blockReplyBreak === "message_end" ||
+      hasBufferedBlockReply ||
+      text !== ctx.state.lastBlockReplyText)
   ) {
-    if (ctx.blockChunker?.hasBuffered()) {
+    if (hasBufferedBlockReply && ctx.blockChunker?.hasBuffered()) {
       ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
       ctx.blockChunker.reset();
     } else if (text !== ctx.state.lastBlockReplyText) {
-      // Check for duplicates before emitting (same logic as emitBlockChunk).
-      const normalizedText = normalizeTextForComparison(text);
-      if (
-        isMessagingToolDuplicateNormalized(
-          normalizedText,
-          ctx.state.messagingToolSentTextsNormalized,
-        )
-      ) {
+      // Guard: for text_end channels, if text_end already delivered content
+      // (lastBlockReplyText is set), skip this safety send. The text comparison
+      // here uses a different stripping pipeline (stripBlockTags with reset state)
+      // than emitBlockChunk (stripBlockTags with running blockState +
+      // stripDowngradedToolCallText), which can false-positive. When text_end
+      // didn't deliver (e.g. commentary suppressed, provider skipped text_end),
+      // lastBlockReplyText is still null and message_end must deliver.
+      if (ctx.state.blockReplyBreak === "text_end" && ctx.state.lastBlockReplyText != null) {
         ctx.log.debug(
-          `Skipping message_end block reply - already sent via messaging tool: ${text.slice(0, 50)}...`,
+          `Skipping message_end safety send for text_end channel - content already delivered via text_end`,
         );
       } else {
-        ctx.state.lastBlockReplyText = text;
-        emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
+        // Check for duplicates before emitting (same logic as emitBlockChunk).
+        const normalizedText = normalizeTextForComparison(text);
+        if (
+          isMessagingToolDuplicateNormalized(
+            normalizedText,
+            ctx.state.messagingToolSentTextsNormalized,
+          )
+        ) {
+          ctx.log.debug(
+            `Skipping message_end block reply - already sent via messaging tool: ${text.slice(0, 50)}...`,
+          );
+        } else {
+          ctx.state.lastBlockReplyText = text;
+          emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
+        }
       }
     }
   }
@@ -560,16 +649,26 @@ export function handleMessageEnd(
     ctx.state.blockReplyBreak === "message_end" &&
     ctx.params.onBlockReplyFlush
   ) {
-    void ctx.params.onBlockReplyFlush();
+    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+    if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
+      return flushBlockReplyBufferResult
+        .then(() => {
+          const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+          if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+            return onBlockReplyFlushResult;
+          }
+        })
+        .finally(() => {
+          finalizeMessageEnd();
+        });
+    }
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush();
+    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+      return onBlockReplyFlushResult.finally(() => {
+        finalizeMessageEnd();
+      });
+    }
   }
 
-  ctx.state.deltaBuffer = "";
-  ctx.state.blockBuffer = "";
-  ctx.blockChunker?.reset();
-  ctx.state.blockState.thinking = false;
-  ctx.state.blockState.final = false;
-  ctx.state.blockState.inlineCode = createInlineCodeState();
-  ctx.state.lastStreamedAssistant = undefined;
-  ctx.state.lastStreamedAssistantCleaned = undefined;
-  ctx.state.reasoningStreamOpen = false;
+  finalizeMessageEnd();
 }
