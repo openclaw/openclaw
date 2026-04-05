@@ -1,17 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 
-const readClaudeCliCredentialsForSetup = vi.hoisted(() => vi.fn());
+const { readClaudeCliCredentialsForSetup, readClaudeCliCredentialsForSetupNonInteractive } =
+  vi.hoisted(() => ({
+    readClaudeCliCredentialsForSetup: vi.fn(),
+    readClaudeCliCredentialsForSetupNonInteractive: vi.fn(),
+  }));
 
 vi.mock("./cli-auth-seam.js", async (importActual) => {
   const actual = await importActual<typeof import("./cli-auth-seam.js")>();
   return {
     ...actual,
     readClaudeCliCredentialsForSetup,
+    readClaudeCliCredentialsForSetupNonInteractive,
   };
 });
 
-const { buildAnthropicCliMigrationResult, buildClaudeCliRuntimeAuthProfile, hasClaudeCliAuth } =
-  await import("./cli-migration.js");
+const { buildAnthropicCliMigrationResult, hasClaudeCliAuth } = await import("./cli-migration.js");
 
 describe("anthropic cli migration", () => {
   it("detects local Claude CLI auth", () => {
@@ -20,23 +24,15 @@ describe("anthropic cli migration", () => {
     expect(hasClaudeCliAuth()).toBe(true);
   });
 
-  it("builds a claude-cli runtime auth profile from native setup credentials", () => {
-    readClaudeCliCredentialsForSetup.mockReturnValue({
-      type: "oauth",
-      provider: "anthropic",
-      access: "setup-access-token",
-      refresh: "refresh-token",
-      expires: 123,
-    });
+  it("uses the non-interactive Claude auth probe without keychain prompts", () => {
+    readClaudeCliCredentialsForSetup.mockReset();
+    readClaudeCliCredentialsForSetupNonInteractive.mockReset();
+    readClaudeCliCredentialsForSetup.mockReturnValue(null);
+    readClaudeCliCredentialsForSetupNonInteractive.mockReturnValue({ type: "oauth" });
 
-    expect(buildClaudeCliRuntimeAuthProfile()).toEqual({
-      profileId: "claude-cli:default",
-      credential: {
-        type: "token",
-        provider: "claude-cli",
-        token: "setup-access-token",
-      },
-    });
+    expect(hasClaudeCliAuth({ allowKeychainPrompt: false })).toBe(true);
+    expect(readClaudeCliCredentialsForSetup).not.toHaveBeenCalled();
+    expect(readClaudeCliCredentialsForSetupNonInteractive).toHaveBeenCalledTimes(1);
   });
 
   it("rewrites anthropic defaults to claude-cli defaults", () => {

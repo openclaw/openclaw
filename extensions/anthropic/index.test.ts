@@ -164,13 +164,6 @@ describe("anthropic provider replay hooks", () => {
       config: {},
     } as never);
 
-    expect(result?.profiles).toContainEqual({
-      profileId: "claude-cli:default",
-      credential: {
-        type: "token",
-        provider: "claude-cli",
-        token: "setup-access-token",
-      },
-    });
+    expect(result?.profiles).toEqual([]);
   });
 });
