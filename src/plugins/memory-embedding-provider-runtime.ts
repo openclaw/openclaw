@@ -6,12 +6,16 @@ import {
   type MemoryEmbeddingProviderAdapter,
 } from "./memory-embedding-providers.js";
 
+export function listRegisteredMemoryEmbeddingProviderAdapters(): MemoryEmbeddingProviderAdapter[] {
+  return listRegisteredMemoryEmbeddingProviders().map((entry) => entry.adapter);
+}
+
 export function listMemoryEmbeddingProviders(
   cfg?: OpenClawConfig,
 ): MemoryEmbeddingProviderAdapter[] {
-  const registered = listRegisteredMemoryEmbeddingProviders();
+  const registered = listRegisteredMemoryEmbeddingProviderAdapters();
   if (registered.length > 0) {
-    return registered.map((entry) => entry.adapter);
+    return registered;
   }
   return resolvePluginCapabilityProviders({
     key: "memoryEmbeddingProviders",

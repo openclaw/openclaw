@@ -13,7 +13,7 @@ import {
   createOpenAiEmbeddingProvider,
   createVoyageEmbeddingProvider,
   hasNonTextEmbeddingParts,
-  listMemoryEmbeddingProviders,
+  listRegisteredMemoryEmbeddingProviderAdapters,
   runGeminiEmbeddingBatches,
   runOpenAiEmbeddingBatches,
   runVoyageEmbeddingBatches,
@@ -334,7 +334,12 @@ export function getBuiltinMemoryEmbeddingProviderAdapter(
 export function registerBuiltInMemoryEmbeddingProviders(register: {
   registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
 }): void {
-  const existingIds = new Set(listMemoryEmbeddingProviders().map((adapter) => adapter.id));
+  // Only inspect providers already registered in the current load. Falling back
+  // to capability discovery here can recursively trigger plugin loading while
+  // memory-core itself is still registering.
+  const existingIds = new Set(
+    listRegisteredMemoryEmbeddingProviderAdapters().map((adapter) => adapter.id),
+  );
   for (const adapter of builtinMemoryEmbeddingProviderAdapters) {
     if (existingIds.has(adapter.id)) {
       continue;
