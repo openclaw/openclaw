@@ -1,5 +1,6 @@
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
 
 const mocks = vi.hoisted(() => ({
   listRegisteredMemoryEmbeddingProviderAdapters: vi.fn<() => MemoryEmbeddingProviderAdapter[]>(
@@ -22,14 +23,10 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async () => {
   };
 });
 
-let registerBuiltInMemoryEmbeddingProviders: typeof import("./provider-adapters.js").registerBuiltInMemoryEmbeddingProviders;
-
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   mocks.listRegisteredMemoryEmbeddingProviderAdapters.mockReset();
   mocks.listRegisteredMemoryEmbeddingProviderAdapters.mockReturnValue([]);
   mocks.listMemoryEmbeddingProviders.mockClear();
-  ({ registerBuiltInMemoryEmbeddingProviders } = await import("./provider-adapters.js"));
 });
 
 describe("registerBuiltInMemoryEmbeddingProviders", () => {
