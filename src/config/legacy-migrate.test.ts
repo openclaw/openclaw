@@ -281,7 +281,7 @@ describe("legacy migrate tts provider shape", () => {
 });
 
 describe("legacy migrate talk provider shape", () => {
-  it("moves legacy talk fields into talk.providers.elevenlabs", () => {
+  it("does not migrate extension-owned talk legacy fields during config-load migration", () => {
     const res = migrateLegacyConfig({
       talk: {
         voiceId: "voice-1",
@@ -291,106 +291,8 @@ describe("legacy migrate talk provider shape", () => {
       },
     });
 
-    expect(res.changes).toContain(
-      "Moved talk legacy fields (voiceId, modelId, outputFormat, apiKey) → talk.providers.elevenlabs (filled missing provider fields only).",
-    );
-    expect(res.config?.talk).toEqual({
-      providers: {
-        elevenlabs: {
-          voiceId: "voice-1",
-          modelId: "eleven_v3",
-          outputFormat: "pcm_44100",
-          apiKey: "test-key",
-        },
-      },
-    });
-  });
-
-  it("merges legacy talk fields into the active provider without overwriting explicit provider values", () => {
-    const res = migrateLegacyConfig({
-      talk: {
-        provider: "acme",
-        providers: {
-          acme: {
-            voiceId: "provider-voice",
-          },
-        },
-        voiceId: "legacy-voice",
-        modelId: "acme-model",
-      },
-    });
-
-    expect(res.changes).toContain(
-      "Moved talk legacy fields (voiceId, modelId) → talk.providers.acme (filled missing provider fields only).",
-    );
-    expect(res.config?.talk).toEqual({
-      provider: "acme",
-      providers: {
-        acme: {
-          voiceId: "provider-voice",
-          modelId: "acme-model",
-        },
-      },
-    });
-  });
-
-  it("treats empty talk.providers as legacy-only talk config", () => {
-    const res = migrateLegacyConfig({
-      talk: {
-        providers: {},
-        voiceId: "voice-1",
-        modelId: "eleven_v3",
-      },
-    });
-
-    expect(res.changes).toContain(
-      "Moved talk legacy fields (voiceId, modelId) → talk.providers.elevenlabs (filled missing provider fields only).",
-    );
-    expect(res.config?.talk).toMatchObject({
-      providers: {
-        elevenlabs: {
-          voiceId: "voice-1",
-          modelId: "eleven_v3",
-        },
-      },
-    });
-  });
-
-  it("does not trust blocked talk.provider ids during migration", () => {
-    const res = migrateLegacyConfig({
-      talk: {
-        provider: "__proto__",
-        voiceId: "legacy-voice",
-      },
-    });
-
-    expect(res.changes).toContain(
-      "Skipped talk legacy field migration because talk.providers defines multiple providers and talk.provider is unset; move talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey under the intended provider manually.",
-    );
     expect(res.config).toBeNull();
-    expect(res.changes).toContain(
-      "Migration applied, but config still invalid; fix remaining issues manually.",
-    );
-  });
-
-  it("leaves legacy talk fields in place when the target provider is ambiguous", () => {
-    const res = migrateLegacyConfig({
-      talk: {
-        providers: {
-          acme: { voiceId: "acme-voice" },
-          elevenlabs: { voiceId: "eleven-voice" },
-        },
-        voiceId: "legacy-voice",
-      },
-    });
-
-    expect(res.changes).toContain(
-      "Skipped talk legacy field migration because talk.providers defines multiple providers and talk.provider is unset; move talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey under the intended provider manually.",
-    );
-    expect(res.config).toBeNull();
-    expect(res.changes).toContain(
-      "Migration applied, but config still invalid; fix remaining issues manually.",
-    );
+    expect(res.changes).toEqual([]);
   });
 });
 

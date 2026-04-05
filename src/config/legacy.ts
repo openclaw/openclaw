@@ -4,6 +4,7 @@ import {
 } from "../channels/plugins/legacy-config.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy.migrations.js";
 import { LEGACY_CONFIG_RULES } from "./legacy.rules.js";
+import type { LegacyConfigRule } from "./legacy.shared.js";
 import type { LegacyConfigIssue } from "./types.js";
 
 function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
@@ -17,7 +18,11 @@ function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
   return cursor;
 }
 
-export function findLegacyConfigIssues(raw: unknown, sourceRaw?: unknown): LegacyConfigIssue[] {
+export function findLegacyConfigIssues(
+  raw: unknown,
+  sourceRaw?: unknown,
+  extraRules: LegacyConfigRule[] = [],
+): LegacyConfigIssue[] {
   if (!raw || typeof raw !== "object") {
     return [];
   }
@@ -25,7 +30,11 @@ export function findLegacyConfigIssues(raw: unknown, sourceRaw?: unknown): Legac
   const sourceRoot =
     sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
   const issues: LegacyConfigIssue[] = [];
-  for (const rule of [...LEGACY_CONFIG_RULES, ...collectChannelLegacyConfigRules()]) {
+  for (const rule of [
+    ...LEGACY_CONFIG_RULES,
+    ...collectChannelLegacyConfigRules(),
+    ...extraRules,
+  ]) {
     const cursor = getPathValue(root, rule.path);
     if (cursor !== undefined && (!rule.match || rule.match(cursor, root))) {
       if (rule.requireSourceLiteral) {

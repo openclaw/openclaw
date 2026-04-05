@@ -592,7 +592,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("accepts legacy talk flat fields via auto-migration and reports legacyIssues", async () => {
+  it("reports legacy talk flat fields without auto-migrating them at config load", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         talk: {
@@ -604,22 +604,13 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
+      expect(snap.valid).toBe(false);
       expect(snap.legacyIssues.some((issue) => issue.path === "talk")).toBe(true);
-      expect(snap.sourceConfig.talk?.providers?.elevenlabs).toEqual({
+      expect(snap.sourceConfig.talk).toEqual({
         voiceId: "voice-1",
         modelId: "eleven_v3",
         apiKey: "test-key",
       });
-      expect(
-        (snap.sourceConfig.talk as Record<string, unknown> | undefined)?.voiceId,
-      ).toBeUndefined();
-      expect(
-        (snap.sourceConfig.talk as Record<string, unknown> | undefined)?.modelId,
-      ).toBeUndefined();
-      expect(
-        (snap.sourceConfig.talk as Record<string, unknown> | undefined)?.apiKey,
-      ).toBeUndefined();
     });
   });
 

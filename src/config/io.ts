@@ -13,6 +13,7 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
+import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
@@ -1640,7 +1641,11 @@ function resolveLegacyConfigForRead(
   resolvedConfigRaw: unknown,
   sourceRaw: unknown,
 ): LegacyMigrationResolution {
-  const sourceLegacyIssues = findLegacyConfigIssues(resolvedConfigRaw, sourceRaw);
+  const sourceLegacyIssues = findLegacyConfigIssues(
+    resolvedConfigRaw,
+    sourceRaw,
+    listPluginDoctorLegacyConfigRules(),
+  );
   if (sourceLegacyIssues.length === 0) {
     return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
   }

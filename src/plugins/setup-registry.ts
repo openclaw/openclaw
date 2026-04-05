@@ -18,7 +18,6 @@ import type {
   CliBackendPlugin,
   OpenClawPluginModule,
   PluginConfigMigration,
-  PluginLegacyConfigMigration,
   PluginLogger,
   PluginSetupAutoEnableProbe,
   ProviderPlugin,
@@ -45,11 +44,6 @@ type SetupConfigMigrationEntry = {
   migrate: PluginConfigMigration;
 };
 
-type SetupLegacyConfigMigrationEntry = {
-  pluginId: string;
-  migrate: PluginLegacyConfigMigration;
-};
-
 type SetupAutoEnableProbeEntry = {
   pluginId: string;
   probe: PluginSetupAutoEnableProbe;
@@ -59,7 +53,6 @@ type PluginSetupRegistry = {
   providers: SetupProviderEntry[];
   cliBackends: SetupCliBackendEntry[];
   configMigrations: SetupConfigMigrationEntry[];
-  legacyConfigMigrations: SetupLegacyConfigMigrationEntry[];
   autoEnableProbes: SetupAutoEnableProbeEntry[];
 };
 
@@ -167,7 +160,6 @@ export function resolvePluginSetupRegistry(params?: {
   const providers: SetupProviderEntry[] = [];
   const cliBackends: SetupCliBackendEntry[] = [];
   const configMigrations: SetupConfigMigrationEntry[] = [];
-  const legacyConfigMigrations: SetupLegacyConfigMigrationEntry[] = [];
   const autoEnableProbes: SetupAutoEnableProbeEntry[] = [];
   const providerKeys = new Set<string>();
   const cliBackendKeys = new Set<string>();
@@ -247,12 +239,6 @@ export function resolvePluginSetupRegistry(params?: {
             migrate,
           });
         },
-        registerLegacyConfigMigration(migrate) {
-          legacyConfigMigrations.push({
-            pluginId: record.id,
-            migrate,
-          });
-        },
         registerAutoEnableProbe(probe) {
           autoEnableProbes.push({
             pluginId: record.id,
@@ -276,7 +262,6 @@ export function resolvePluginSetupRegistry(params?: {
     providers,
     cliBackends,
     configMigrations,
-    legacyConfigMigrations,
     autoEnableProbes,
   } satisfies PluginSetupRegistry;
   setupRegistryCache.set(cacheKey, registry);
@@ -325,17 +310,6 @@ export function runPluginSetupConfigMigrations(params: {
   }
 
   return { config: next, changes };
-}
-
-export function runPluginSetupLegacyConfigMigrations(params: {
-  raw: Record<string, unknown>;
-  changes: string[];
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): void {
-  for (const entry of resolvePluginSetupRegistry(params).legacyConfigMigrations) {
-    entry.migrate(params.raw, params.changes);
-  }
 }
 
 export function resolvePluginSetupAutoEnableReasons(params: {

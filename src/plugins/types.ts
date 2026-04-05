@@ -1996,8 +1996,6 @@ export type PluginConfigMigration = (config: OpenClawConfig) =>
   | null
   | undefined;
 
-export type PluginLegacyConfigMigration = (raw: Record<string, unknown>, changes: string[]) => void;
-
 export type PluginSetupAutoEnableContext = {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -2070,8 +2068,6 @@ export type OpenClawPluginApi = {
   registerCliBackend: (backend: CliBackendPlugin) => void;
   /** Register a lightweight config migration that can run before plugin runtime loads. */
   registerConfigMigration: (migrate: PluginConfigMigration) => void;
-  /** Register a lightweight raw legacy-config migration for pre-schema config repair. */
-  registerLegacyConfigMigration: (migrate: PluginLegacyConfigMigration) => void;
   /** Register a lightweight config probe that can auto-enable this plugin generically. */
   registerAutoEnableProbe: (probe: PluginSetupAutoEnableProbe) => void;
   /** Register a native model/provider plugin (text inference capability). */
