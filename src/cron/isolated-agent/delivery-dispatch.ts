@@ -113,21 +113,26 @@ export type DispatchCronDeliveryState = {
 };
 
 function isDirectSilentReplyOnly(payloads: readonly ReplyPayload[]): boolean {
-  if (payloads.length !== 1) {
+  const textOnlyPayloads = payloads.filter((payload) => {
+    if (!payload) {
+      return false;
+    }
+    return !(
+      payload.mediaUrl ||
+      (payload.mediaUrls?.length ?? 0) > 0 ||
+      payload.interactive ||
+      payload.btw ||
+      payload.audioAsVoice === true ||
+      Object.keys(payload.channelData ?? {}).length > 0
+    );
+  });
+  if (textOnlyPayloads.length !== 1 || textOnlyPayloads.length !== payloads.length) {
     return false;
   }
-  const [payload] = payloads;
-  if (!payload || !isSilentReplyText(payload.text, SILENT_REPLY_TOKEN)) {
-    return false;
-  }
-  return !(
-    payload.mediaUrl ||
-    (payload.mediaUrls?.length ?? 0) > 0 ||
-    payload.interactive ||
-    payload.btw ||
-    payload.audioAsVoice === true ||
-    Object.keys(payload.channelData ?? {}).length > 0
-  );
+  // Direct cron suppression is intentionally limited to an exact single
+  // text-only NO_REPLY payload. Anything with media or structured content
+  // must continue through normal delivery.
+  return isSilentReplyText(textOnlyPayloads[0]?.text, SILENT_REPLY_TOKEN);
 }
 
 const TRANSIENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
@@ -568,6 +573,7 @@ export async function dispatchCronDelivery(
       });
     }
     if (isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN)) {
+      await cleanupDirectCronSessionIfNeeded();
       return params.withRunSession({
         status: "ok",
         summary,

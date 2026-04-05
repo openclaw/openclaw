@@ -103,4 +103,33 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });
+
+  it('delivers forum-topic media payloads even when text is exact "NO_REPLY"', async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "NO_REPLY", mediaUrl: "https://example.com/img.png" }]);
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: { mode: "announce", channel: "telegram", to: "123:topic:42" },
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(true);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
+      expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
+        "123",
+        "NO_REPLY",
+        expect.objectContaining({
+          cfg: expect.any(Object),
+          messageThreadId: 42,
+          mediaUrl: "https://example.com/img.png",
+        }),
+      );
+    });
+  });
 });

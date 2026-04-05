@@ -262,6 +262,51 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("deletes the direct cron session when last-target text delivery resolves to NO_REPLY", async () => {
+    await withTempHome(async (home) => {
+      const { storePath, deps } = await createTelegramDeliveryFixture(home);
+
+      mockEmbeddedAgentPayloads([{ text: "NO_REPLY" }]);
+
+      vi.mocked(deps.sendMessageTelegram as (...args: unknown[]) => unknown).mockClear();
+      vi.mocked(runSubagentAnnounceFlow).mockClear();
+      vi.mocked(callGateway).mockClear();
+
+      const deleteRes = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: {
+          ...makeJob({
+            kind: "agentTurn",
+            message: "do it",
+          }),
+          deleteAfterRun: true,
+          delivery: { mode: "announce", channel: "last" },
+        },
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(deleteRes.status).toBe("ok");
+      expect(deleteRes.delivered).toBe(false);
+      expect(deleteRes.deliveryAttempted).toBe(true);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "sessions.delete",
+          params: expect.objectContaining({
+            key: "agent:main:cron:job-1",
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+          }),
+        }),
+      );
+    });
+  });
+
   it("skips structured outbound delivery when timeout abort is already set", async () => {
     await withTempHome(async (home) => {
       const { storePath, deps } = await createTelegramDeliveryFixture(home);
