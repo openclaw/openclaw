@@ -104,11 +104,12 @@
 
   "channels": {
     // WhatsApp — preserved from existing config
+    // Replace $WHATSAPP_ALLOW_NUMBER with actual phone number at deploy time
     "whatsapp": {
       "enabled": true,
       "dmPolicy": "pairing",
       "allowFrom": [
-        "+393519168570"
+        "$WHATSAPP_ALLOW_NUMBER"
       ],
       "groupPolicy": "allowlist",
       "debounceMs": 0,
