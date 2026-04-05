@@ -447,6 +447,9 @@ importers:
 
   extensions/lobster:
     dependencies:
+      '@clawdbot/lobster':
+        specifier: 2026.1.24
+        version: 2026.1.24
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
@@ -1107,6 +1110,11 @@ packages:
 
   '@clack/prompts@1.2.0':
     resolution: {integrity: sha512-4jmztR9fMqPMjz6H/UZXj0zEmE43ha1euENwkckKKel4XpSfokExPo5AiVStdHSAlHekz4d0CA/r45Ok1E4D3w==}
+
+  '@clawdbot/lobster@2026.1.24':
+    resolution: {integrity: sha512-vHrMy4NErcq6suyGByfQSdalnvaMu4dRd10BJdeMp60V6cYtuHJSR2Ay5l0kb4iSPyk4dZKrXNNpLzeqHRcAfA==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   '@cloudflare/workers-types@4.20260120.0':
     resolution: {integrity: sha512-B8pueG+a5S+mdK3z8oKu1ShcxloZ7qWb68IEyLLaepvdryIbNC7JVPcY0bWsjS56UQVKc5fnyRge3yZIwc9bxw==}
@@ -7387,6 +7395,11 @@ snapshots:
       fast-string-width: 1.1.0
       fast-wrap-ansi: 0.1.6
       sisteransi: 1.0.5
+
+  '@clawdbot/lobster@2026.1.24':
+    dependencies:
+      ajv: 8.18.0
+      yaml: 2.8.3
 
   '@cloudflare/workers-types@4.20260120.0':
     optional: true
