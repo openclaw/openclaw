@@ -34,12 +34,10 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   const hasAudioAttachment = audioAttachments.length > 0;
   const hasTypedText = Boolean(params.message.content?.trim());
   const needsPreflightTranscription =
-    !params.isDirectMessage &&
-    params.shouldRequireMention &&
     hasAudioAttachment &&
     // `baseText` includes media placeholders; gate on typed text only.
     !hasTypedText &&
-    params.mentionRegexes.length > 0;
+    (params.isDirectMessage || (params.shouldRequireMention && params.mentionRegexes.length > 0));
 
   let transcript: string | undefined;
   if (needsPreflightTranscription) {
