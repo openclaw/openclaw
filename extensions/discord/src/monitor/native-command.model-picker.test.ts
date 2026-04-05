@@ -1,8 +1,16 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { ChannelType } from "discord-api-types/v10";
 import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
 import type { ChatCommandDefinition, CommandArgsParsing } from "openclaw/plugin-sdk/command-auth";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  loadSessionStore,
+  resolveStorePath,
+  saveSessionStore,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/config-runtime";
 import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
 import * as commandTextModule from "openclaw/plugin-sdk/text-runtime";
@@ -39,6 +47,8 @@ type MockInteraction = {
   client: object;
 };
 
+let tempDir: string;
+
 function createModelsProviderData(entries: Record<string, string[]>): ModelsProviderData {
   return createBaseModelsProviderData(entries, { defaultProviderOrder: "sorted" });
 }
@@ -60,6 +70,9 @@ async function waitForCondition(
 
 function createModelPickerContext(): ModelPickerContext {
   const cfg = {
+    session: {
+      store: path.join(tempDir, "sessions.json"),
+    },
     channels: {
       discord: {
         dm: {
@@ -247,7 +260,8 @@ function createDispatchSpy() {
 }
 
 describe("Discord model picker interactions", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-discord-model-picker-"));
     vi.useRealTimers();
     vi.restoreAllMocks();
     nativeCommandTesting.setDispatchReplyWithDispatcher(
@@ -255,8 +269,9 @@ describe("Discord model picker interactions", () => {
     );
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
+    await rm(tempDir, { recursive: true, force: true });
   });
 
   it("registers distinct fallback ids for button and select handlers", () => {
@@ -469,6 +484,63 @@ describe("Discord model picker interactions", () => {
       String(call[0] ?? "").includes("model picker override mismatch"),
     )?.[0];
     expect(mismatchLog).toContain("session key agent:worker:subagent:bound");
+  });
+
+  it("persists the routed session override when dispatch leaves the session store stale", async () => {
+    const context = createModelPickerContext();
+    context.threadBindings = createBoundThreadBindingManager({
+      accountId: "default",
+      threadId: "thread-bound",
+      targetSessionKey: "agent:worker:subagent:bound",
+      agentId: "worker",
+    });
+    const pickerData = createDefaultModelPickerData();
+    const modelCommand = createModelCommandDefinition();
+    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
+    await saveSessionStore(storePath, {
+      "agent:worker:subagent:bound": {
+        updatedAt: Date.now(),
+        sessionId: "bound-session",
+      },
+    });
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+    createDispatchSpy();
+
+    const select = createDiscordModelPickerFallbackSelect(context);
+    const selectInteraction = createInteraction({
+      userId: "owner",
+      values: ["gpt-4o"],
+    });
+    selectInteraction.channel = {
+      type: ChannelType.PublicThread,
+      id: "thread-bound",
+    };
+    await select.run(
+      selectInteraction as unknown as PickerSelectInteraction,
+      createModelsViewSelectData(),
+    );
+
+    const button = createDiscordModelPickerFallbackButton(context);
+    const submitInteraction = createInteraction({ userId: "owner" });
+    submitInteraction.channel = {
+      type: ChannelType.PublicThread,
+      id: "thread-bound",
+    };
+
+    await button.run(
+      submitInteraction as unknown as PickerButtonInteraction,
+      createModelsViewSubmitData(),
+    );
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store["agent:worker:subagent:bound"]?.providerOverride).toBe("openai");
+    expect(store["agent:worker:subagent:bound"]?.modelOverride).toBe("gpt-4o");
+    expect(submitInteraction.followUp).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(submitInteraction.followUp.mock.calls[0]?.[0])).toContain(
+      "✅ Model set to openai/gpt-4o.",
+    );
   });
 
   it("loads model picker data from the effective bound route", async () => {
