@@ -1,5 +1,5 @@
 ---
-summary: "Generate videos using configured providers such as Alibaba, OpenAI, Google, Qwen, and MiniMax"
+summary: "Generate videos using configured providers such as Alibaba, OpenAI, Google, Qwen, MiniMax, and Runway"
 read_when:
   - Generating videos via the agent
   - Configuring video generation providers and models
@@ -21,7 +21,7 @@ In agent sessions, `video_generate` returns immediately with a task id/run id. T
 
 ## Quick start
 
-1. Set an API key for at least one provider (for example `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MODELSTUDIO_API_KEY`, or `QWEN_API_KEY`).
+1. Set an API key for at least one provider (for example `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MODELSTUDIO_API_KEY`, `QWEN_API_KEY`, or `RUNWAYML_API_SECRET`).
 2. Optionally set your preferred model:
 
 ```json5
@@ -53,6 +53,7 @@ For direct synchronous contexts without a session-backed agent run, the tool sti
 | MiniMax  | `MiniMax-Hailuo-2.3`            | 1 image            | `MINIMAX_API_KEY`                                          |
 | OpenAI   | `sora-2`                        | 1 image or 1 video | `OPENAI_API_KEY`                                           |
 | Qwen     | `wan2.6-t2v`                    | Yes, remote URLs   | `QWEN_API_KEY`, `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
+| Runway   | `gen4.5`                        | 1 image or 1 video | `RUNWAYML_API_SECRET`, `RUNWAY_API_KEY`                    |
 | Together | `Wan-AI/Wan2.2-T2V-A14B`        | 1 image            | `TOGETHER_API_KEY`                                         |
 | xAI      | `grok-imagine-video`            | 1 image or 1 video | `XAI_API_KEY`                                              |
 
@@ -127,6 +128,7 @@ If a provider fails, the next candidate is tried automatically. If all fail, the
 - MiniMax, Together, BytePlus, and fal currently support a single image reference input.
 - OpenAI uses the native video endpoint and currently defaults to `sora-2`.
 - Qwen supports image/video references, but the upstream DashScope video endpoint currently requires remote `http(s)` URLs for those references.
+- Runway uses the native async task API with `GET /v1/tasks/{id}` polling and currently defaults to `gen4.5`.
 - xAI uses the native xAI video API and supports text-to-video, image-to-video, and remote video edit/extend flows.
 - fal uses the queue-backed fal video flow for long-running jobs instead of a single blocking inference request.
 
@@ -143,6 +145,7 @@ The bundled Qwen provider supports text-to-video plus image/video reference mode
 - [MiniMax](/providers/minimax) — Hailuo provider setup
 - [OpenAI](/providers/openai) — Sora provider setup
 - [Qwen](/providers/qwen) — Qwen-specific setup and limits
+- [Runway](/providers/runway) — Runway setup and current model/input notes
 - [Together AI](/providers/together) — Together Wan provider setup
 - [xAI](/providers/xai) — Grok video provider setup
 - [Configuration Reference](/gateway/configuration-reference#agent-defaults) — `videoGenerationModel` config
