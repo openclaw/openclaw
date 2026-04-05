@@ -36,6 +36,7 @@ import {
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
+  isDeliverableMessageChannel,
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
@@ -402,6 +403,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
+    const isSubagentSpawn = request.deliver === false && request.lane === "subagent";
     const channelHints = [request.channel, request.replyChannel]
       .filter((value): value is string => typeof value === "string")
       .map((value) => value.trim())
@@ -409,6 +411,16 @@ export const agentHandlers: GatewayRequestHandlers = {
     for (const rawChannel of channelHints) {
       const normalized = normalizeMessageChannel(rawChannel);
       if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {
+        // Subagent spawns use channel only as metadata context for routing
+        // announcement results. The spawned agent communicates internally via
+        // the spawn mechanism, not through the channel directly. Skip strict
+        // validation to avoid rejecting valid plugin channels that may not be
+        // registered in the active plugin channel registry (split-brain state)
+        // or when the registry is temporarily empty during a swap cycle.
+        // Refs: #61358, #59181, #48790, #55338
+        if (isSubagentSpawn) {
+          continue;
+        }
         respond(
           false,
           undefined,
