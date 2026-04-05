@@ -2,10 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { runAcpRuntimeAdapterContract } from "openclaw/plugin-sdk/testing";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
 import { resolveAcpxPluginConfig } from "./config.js";
-import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
+import {
+  AcpxRuntime,
+  decodeAcpxRuntimeHandleState,
+  encodeAcpxRuntimeHandleState,
+} from "./runtime.js";
 import {
   cleanupMockRuntimeFixtures,
   createMockRuntimeFixture,
@@ -13,12 +17,13 @@ import {
   readMockRuntimeLogEntries,
 } from "./test-utils/runtime-fixtures.js";
 
-let sharedFixture: Awaited<ReturnType<typeof createMockRuntimeFixture>> | null = null;
-let missingCommandRuntime: AcpxRuntime | null = null;
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await cleanupMockRuntimeFixtures();
+});
 
-beforeAll(async () => {
-  sharedFixture = await createMockRuntimeFixture();
-  missingCommandRuntime = new AcpxRuntime(
+function createMissingCommandRuntime(): AcpxRuntime {
+  return new AcpxRuntime(
     {
       command: "/definitely/missing/acpx",
       allowPluginLocalInstall: false,
@@ -34,13 +39,7 @@ beforeAll(async () => {
     },
     { logger: NOOP_LOGGER },
   );
-});
-
-afterAll(async () => {
-  sharedFixture = null;
-  missingCommandRuntime = null;
-  await cleanupMockRuntimeFixtures();
-});
+}
 
 async function expectSessionEnsureFallback(params: {
   sessionKey: string;
@@ -457,9 +456,10 @@ describe("AcpxRuntime", () => {
 
   it("serializes text plus image attachments into ACP prompt blocks", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
+    const sessionKey = "agent:codex:acp:with-image";
 
     const handle = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:with-image",
+      sessionKey,
       agent: "codex",
       mode: "persistent",
     });
@@ -477,7 +477,7 @@ describe("AcpxRuntime", () => {
     const logs = await readMockRuntimeLogEntries(logPath);
     const prompt = logs.find(
       (entry) =>
-        entry.kind === "prompt" && String(entry.sessionName ?? "") === "agent:codex:acp:with-image",
+        entry.kind === "prompt" && String(entry.sessionName ?? "") === handle.agentSessionId,
     );
     expect(prompt).toBeDefined();
 
@@ -494,8 +494,9 @@ describe("AcpxRuntime", () => {
 
     try {
       const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:codex:acp:custom-env";
       const handle = await runtime.ensureSession({
-        sessionKey: "agent:codex:acp:custom-env",
+        sessionKey,
         agent: "codex",
         mode: "persistent",
       });
@@ -512,8 +513,7 @@ describe("AcpxRuntime", () => {
       const logs = await readMockRuntimeLogEntries(logPath);
       const prompt = logs.find(
         (entry) =>
-          entry.kind === "prompt" &&
-          String(entry.sessionName ?? "") === "agent:codex:acp:custom-env",
+          entry.kind === "prompt" && String(entry.sessionName ?? "") === handle.agentSessionId,
       );
       expect(prompt?.openaiApiKey).toBe("openai-secret");
       expect(prompt?.githubToken).toBe("gh-secret");
@@ -523,11 +523,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("preserves leading spaces across streamed text deltas", async () => {
-    const runtime = sharedFixture?.runtime;
-    expect(runtime).toBeDefined();
-    if (!runtime) {
-      throw new Error("shared runtime fixture missing");
-    }
+    const { runtime } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:space",
       agent: "codex",
@@ -555,7 +551,7 @@ describe("AcpxRuntime", () => {
     const logs = await readMockRuntimeLogEntries(String(activeLogPath));
     const prompt = logs.find(
       (entry) =>
-        entry.kind === "prompt" && String(entry.sessionName ?? "") === "agent:codex:acp:space",
+        entry.kind === "prompt" && String(entry.sessionName ?? "") === handle.agentSessionId,
     );
     expect(prompt).toBeDefined();
     const promptArgs = (prompt?.args as string[]) ?? [];
@@ -565,11 +561,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("emits done once when ACP stream repeats stop reason responses", async () => {
-    const runtime = sharedFixture?.runtime;
-    expect(runtime).toBeDefined();
-    if (!runtime) {
-      throw new Error("shared runtime fixture missing");
-    }
+    const { runtime } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:double-done",
       agent: "codex",
@@ -591,11 +583,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("maps acpx error events into ACP runtime error events", async () => {
-    const runtime = sharedFixture?.runtime;
-    expect(runtime).toBeDefined();
-    if (!runtime) {
-      throw new Error("shared runtime fixture missing");
-    }
+    const { runtime } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:456",
       agent: "codex",
@@ -621,11 +609,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("maps acpx permission-denied exits to actionable guidance", async () => {
-    const runtime = sharedFixture?.runtime;
-    expect(runtime).toBeDefined();
-    if (!runtime) {
-      throw new Error("shared runtime fixture missing");
-    }
+    const { runtime } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:permission-denied",
       agent: "codex",
@@ -675,7 +659,7 @@ describe("AcpxRuntime", () => {
     const logs = await readMockRuntimeLogEntries(logPath);
     const cancel = logs.find((entry) => entry.kind === "cancel");
     const close = logs.find((entry) => entry.kind === "close");
-    expect(cancel?.sessionName).toBe("agent:claude:acp:789");
+    expect(cancel?.sessionName).toBe(handle.agentSessionId);
     expect(close?.sessionName).toBe("agent:claude:acp:789");
   });
 
@@ -934,10 +918,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("marks runtime unhealthy when command is missing", async () => {
-    expect(missingCommandRuntime).toBeDefined();
-    if (!missingCommandRuntime) {
-      throw new Error("missing-command runtime fixture missing");
-    }
+    const missingCommandRuntime = createMissingCommandRuntime();
     await missingCommandRuntime.probeAvailability();
     expect(missingCommandRuntime.isHealthy()).toBe(false);
   });
@@ -985,10 +966,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("returns doctor report for missing command", async () => {
-    expect(missingCommandRuntime).toBeDefined();
-    if (!missingCommandRuntime) {
-      throw new Error("missing-command runtime fixture missing");
-    }
+    const missingCommandRuntime = createMissingCommandRuntime();
     const report = await missingCommandRuntime.doctor();
     expect(report.ok).toBe(false);
     expect(report.code).toBe("ACP_BACKEND_UNAVAILABLE");
@@ -1039,6 +1017,178 @@ describe("AcpxRuntime", () => {
     } finally {
       delete process.env.MOCK_ACPX_ENSURE_EMPTY;
       delete process.env.MOCK_ACPX_NEW_EMPTY;
+    }
+  });
+
+  it("stores agent session IDs returned after prompt-time load fallback and reuses them", async () => {
+    process.env.MOCK_ACPX_ENSURE_NO_AGENT_SESSION_ID = "1";
+    process.env.MOCK_ACPX_PROMPT_LOAD_INVALID = "1";
+    process.env.MOCK_ACPX_PROMPT_NEW_AGENT_SESSION_ID = "gemini-session-123";
+    try {
+      const { runtime, logPath } = await createMockRuntimeFixture();
+      const sessionKey = "agent:gemini:acp:load-fallback";
+      const handle = await runtime.ensureSession({
+        sessionKey,
+        agent: "gemini",
+        mode: "persistent",
+      });
+
+      expect(handle.agentSessionId).toBeUndefined();
+
+      for await (const _event of runtime.runTurn({
+        handle,
+        text: "first turn",
+        mode: "prompt",
+        requestId: "req-gemini-1",
+      })) {
+        // Drain the prompt stream so the fallback session id can be captured.
+      }
+
+      expect(handle.agentSessionId).toBe("gemini-session-123");
+      expect(decodeAcpxRuntimeHandleState(handle.runtimeSessionName)?.agentSessionId).toBe(
+        "gemini-session-123",
+      );
+
+      const status = await runtime.getStatus({ handle });
+      expect(status.agentSessionId).toBe("gemini-session-123");
+
+      for await (const _event of runtime.runTurn({
+        handle,
+        text: "second turn",
+        mode: "prompt",
+        requestId: "req-gemini-2",
+      })) {
+        // The second turn should reuse the learned agent session id.
+      }
+
+      const promptEntries = (await readMockRuntimeLogEntries(logPath)).filter(
+        (entry) => entry.kind === "prompt",
+      );
+      expect(promptEntries).toHaveLength(2);
+      expect(promptEntries[0]?.sessionName).toBe(sessionKey);
+      expect(promptEntries[1]?.sessionName).toBe("gemini-session-123");
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_NO_AGENT_SESSION_ID;
+      delete process.env.MOCK_ACPX_PROMPT_LOAD_INVALID;
+      delete process.env.MOCK_ACPX_PROMPT_NEW_AGENT_SESSION_ID;
+    }
+  });
+
+  it("prefers decoded runtime session identifiers over stale handle fallbacks", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+    const sessionKey = "agent:gemini:acp:stale-handle-fallback";
+    const handle = await runtime.ensureSession({
+      sessionKey,
+      agent: "gemini",
+      mode: "persistent",
+    });
+
+    const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+    expect(decoded).not.toBeNull();
+
+    handle.runtimeSessionName = encodeAcpxRuntimeHandleState({
+      ...decoded!,
+      backendSessionId: "sid-decoded-gemini-session",
+      agentSessionId: "decoded-gemini-session",
+    });
+    handle.backendSessionId = "sid-stale-gemini-session";
+    handle.agentSessionId = "stale-gemini-session";
+
+    await runtime.getStatus({ handle });
+
+    const statusEntries = (await readMockRuntimeLogEntries(logPath)).filter(
+      (entry) => entry.kind === "status",
+    );
+    expect(statusEntries.length).toBeGreaterThan(0);
+    expect(statusEntries.at(-1)?.sessionName).toBe("decoded-gemini-session");
+  });
+
+  it("refreshes encoded runtime session identifiers after status learns a newer agent id", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture();
+    const sessionKey = "agent:gemini:acp:status-refresh";
+    const handle = await runtime.ensureSession({
+      sessionKey,
+      agent: "gemini",
+      mode: "persistent",
+    });
+
+    const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
+    expect(decoded).not.toBeNull();
+
+    handle.runtimeSessionName = encodeAcpxRuntimeHandleState({
+      ...decoded!,
+      agentSessionId: "decoded-gemini-session",
+    });
+    handle.agentSessionId = "fresh-gemini-session";
+
+    const statePath = process.env.MOCK_ACPX_STATE;
+    expect(statePath).toBeTruthy();
+    fs.writeFileSync(
+      String(statePath),
+      JSON.stringify({
+        byName: {
+          [sessionKey]: {
+            acpxRecordId: `rec-${sessionKey}`,
+            acpxSessionId: `sid-${sessionKey}`,
+            agentSessionId: "fresh-gemini-session",
+          },
+        },
+        byAgentSessionId: {
+          "decoded-gemini-session": sessionKey,
+          "fresh-gemini-session": sessionKey,
+        },
+      }),
+      "utf8",
+    );
+
+    const status = await runtime.getStatus({ handle });
+    expect(status.agentSessionId).toBe("fresh-gemini-session");
+    expect(handle.agentSessionId).toBe("fresh-gemini-session");
+    expect(decodeAcpxRuntimeHandleState(handle.runtimeSessionName)?.agentSessionId).toBe(
+      "fresh-gemini-session",
+    );
+
+    await runtime.cancel({ handle, reason: "test-refresh" });
+
+    const statusEntries = (await readMockRuntimeLogEntries(logPath)).filter(
+      (entry) => entry.kind === "status",
+    );
+    const cancelEntries = (await readMockRuntimeLogEntries(logPath)).filter(
+      (entry) => entry.kind === "cancel",
+    );
+    expect(statusEntries.at(-1)?.sessionName).toBe("decoded-gemini-session");
+    expect(cancelEntries.at(-1)?.sessionName).toBe("fresh-gemini-session");
+  });
+
+  it("does not promote session/update params.sessionId into the runtime handle", async () => {
+    process.env.MOCK_ACPX_ENSURE_NO_AGENT_SESSION_ID = "1";
+    process.env.MOCK_ACPX_PROMPT_OMIT_LOAD_RESULT = "1";
+    try {
+      const { runtime } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:update-echo",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      expect(handle.agentSessionId).toBeUndefined();
+
+      for await (const _event of runtime.runTurn({
+        handle,
+        text: "session-update-echo",
+        mode: "prompt",
+        requestId: "req-session-update-echo",
+      })) {
+        // Drain the prompt stream so any stray identifier promotion would be applied.
+      }
+
+      expect(handle.agentSessionId).toBeUndefined();
+      expect(
+        decodeAcpxRuntimeHandleState(handle.runtimeSessionName)?.agentSessionId,
+      ).toBeUndefined();
+    } finally {
+      delete process.env.MOCK_ACPX_ENSURE_NO_AGENT_SESSION_ID;
+      delete process.env.MOCK_ACPX_PROMPT_OMIT_LOAD_RESULT;
     }
   });
 });

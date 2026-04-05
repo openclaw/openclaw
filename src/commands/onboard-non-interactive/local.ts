@@ -84,7 +84,11 @@ export async function runNonInteractiveLocalSetup(params: {
 
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
 
-  const inferredAuthChoice = inferAuthChoiceFromFlags(opts);
+  const inferredAuthChoice = inferAuthChoiceFromFlags(opts, {
+    config: nextConfig,
+    workspaceDir,
+    env: process.env,
+  });
   if (!opts.authChoice && inferredAuthChoice.matches.length > 1) {
     runtime.error(
       [

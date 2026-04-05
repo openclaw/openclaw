@@ -1,6 +1,6 @@
 import type { Api } from "@mariozechner/pi-ai";
 import type { ModelDefinitionConfig } from "../config/types.js";
-import type { ConfiguredProviderRequest } from "../config/types.provider-request.js";
+import type { ConfiguredModelProviderRequest } from "../config/types.provider-request.js";
 import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import type {
@@ -172,7 +172,7 @@ function sanitizeConfiguredRequestString(value: unknown, path: string): string |
 }
 
 export function sanitizeConfiguredProviderRequest(
-  request: ConfiguredProviderRequest | ProviderRequestTransportOverrides | undefined,
+  request: ConfiguredModelProviderRequest | ProviderRequestTransportOverrides | undefined,
 ): ProviderRequestTransportOverrides | undefined {
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     return undefined;
@@ -295,6 +295,12 @@ export function sanitizeConfiguredProviderRequest(
     ...(proxy ? { proxy } : {}),
     ...(tls ? { tls } : {}),
   };
+}
+
+export function sanitizeConfiguredModelProviderRequest(
+  request: ConfiguredModelProviderRequest | undefined,
+): ProviderRequestTransportOverrides | undefined {
+  return sanitizeConfiguredProviderRequest(request);
 }
 
 export function mergeProviderRequestOverrides(
@@ -677,4 +683,30 @@ export function resolveProviderRequestHeaders(params: {
     precedence: params.precedence,
     request: params.request,
   }).headers;
+}
+
+const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
+  "openclaw.modelProviderRequestTransport",
+);
+
+type ModelWithProviderRequestTransport = {
+  [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]?: ProviderRequestTransportOverrides;
+};
+
+export function attachModelProviderRequestTransport<TModel extends object>(
+  model: TModel,
+  request: ProviderRequestTransportOverrides | undefined,
+): TModel {
+  if (!request) {
+    return model;
+  }
+  const next = { ...model } as TModel & ModelWithProviderRequestTransport;
+  next[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL] = request;
+  return next;
+}
+
+export function getModelProviderRequestTransport(
+  model: object,
+): ProviderRequestTransportOverrides | undefined {
+  return (model as ModelWithProviderRequestTransport)[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL];
 }

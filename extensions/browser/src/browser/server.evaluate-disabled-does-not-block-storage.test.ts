@@ -35,8 +35,8 @@ const routeCtxMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => ({
@@ -57,8 +57,8 @@ vi.mock("./pw-ai-module.js", () => ({
   getPwAiModule: vi.fn(async () => pwMocks),
 }));
 
-vi.mock("./server-context.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./server-context.js")>();
+vi.mock("./server-context.js", async () => {
+  const actual = await vi.importActual<typeof import("./server-context.js")>("./server-context.js");
   return {
     ...actual,
     createBrowserRouteContext: routeCtxMocks.createBrowserRouteContext,

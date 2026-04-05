@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { gatewayStatusCommand } from "./gateway-status.js";
+
+let gatewayStatusCommand: typeof import("./gateway-status.js").gatewayStatusCommand;
 
 const mocks = vi.hoisted(() => {
   const sshStop = vi.fn(async () => {});
@@ -132,8 +133,10 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
-vi.mock("../infra/bonjour-discovery.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/bonjour-discovery.js")>();
+vi.mock("../infra/bonjour-discovery.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/bonjour-discovery.js")>(
+    "../infra/bonjour-discovery.js",
+  );
   return {
     ...actual,
     discoverGatewayBeacons: mocks.discoverGatewayBeacons,
@@ -144,8 +147,9 @@ vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
 }));
 
-vi.mock("../infra/ssh-tunnel.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/ssh-tunnel.js")>();
+vi.mock("../infra/ssh-tunnel.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/ssh-tunnel.js")>("../infra/ssh-tunnel.js");
   return {
     ...actual,
     startSshPortForward: mocks.startSshPortForward,
@@ -223,6 +227,12 @@ function findUnresolvedSecretRefWarning(runtimeLogs: string[]) {
 }
 
 describe("gateway-status command", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    ({ gatewayStatusCommand } = await import("./gateway-status.js"));
+  });
+
   it("prints human output by default", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
 

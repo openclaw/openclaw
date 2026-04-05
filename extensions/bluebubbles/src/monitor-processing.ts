@@ -3,6 +3,7 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
@@ -20,6 +21,25 @@ import {
   type NormalizedWebhookMessage,
   type NormalizedWebhookReaction,
 } from "./monitor-normalize.js";
+import {
+  DM_GROUP_ACCESS_REASON,
+  createChannelPairingController,
+  createChannelReplyPipeline,
+  evictOldHistoryKeys,
+  evaluateSupplementalContextVisibility,
+  logAckFailure,
+  logInboundDrop,
+  logTypingFailure,
+  mapAllowFromEntries,
+  readStoreAllowFromForDmPolicy,
+  recordPendingHistoryEntryIfEnabled,
+  resolveAckReaction,
+  resolveChannelContextVisibilityMode,
+  resolveDmGroupAccessWithLists,
+  resolveControlCommandGate,
+  stripMarkdown,
+  type HistoryEntry,
+} from "./monitor-processing-api.js";
 import {
   getShortIdForUuid,
   rememberBlueBubblesReplyCache,
@@ -39,25 +59,6 @@ import { enrichBlueBubblesParticipantsWithContactNames } from "./participant-con
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import {
-  DM_GROUP_ACCESS_REASON,
-  createChannelPairingController,
-  createChannelReplyPipeline,
-  evictOldHistoryKeys,
-  evaluateSupplementalContextVisibility,
-  logAckFailure,
-  logInboundDrop,
-  logTypingFailure,
-  mapAllowFromEntries,
-  readStoreAllowFromForDmPolicy,
-  recordPendingHistoryEntryIfEnabled,
-  resolveAckReaction,
-  resolveChannelContextVisibilityMode,
-  resolveDmGroupAccessWithLists,
-  resolveControlCommandGate,
-  stripMarkdown,
-  type HistoryEntry,
-} from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import {
@@ -934,7 +935,7 @@ export async function processMessage(
         chatGuid: message.chatGuid,
         chatId: message.chatId,
         chatIdentifier: message.chatIdentifier,
-        allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+        allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
       });
       if (fetchedParticipants?.length) {
         message.participants = fetchedParticipants;
@@ -1147,7 +1148,7 @@ export async function processMessage(
           baseUrl,
           password,
           target: resolveTarget,
-          allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+          allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
         })) ?? undefined;
     }
   }

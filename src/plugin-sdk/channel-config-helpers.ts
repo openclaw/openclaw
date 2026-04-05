@@ -1,4 +1,3 @@
-import { resolveMergedAccountConfig } from "../channels/plugins/account-helpers.js";
 import {
   deleteAccountFromConfigSection as deleteAccountFromConfigSectionInSection,
   setAccountEnabledInConfigSection as setAccountEnabledInConfigSectionInSection,
@@ -10,17 +9,6 @@ import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 
-type SimpleDirectMessageConfig = {
-  allowFrom?: Array<string | number>;
-  defaultTo?: string | number | null;
-};
-
-type SimpleScopedChannelConfig = SimpleDirectMessageConfig & {
-  accounts?: Record<string, Partial<SimpleDirectMessageConfig>>;
-};
-
-const WHATSAPP_USER_JID_RE = /^(\d+)(?::\d+)?@s\.whatsapp\.net$/i;
-const WHATSAPP_LID_RE = /^(\d+)@lid$/i;
 const INTERNAL_MESSAGE_CHANNEL = "webchat";
 
 type AccountConfigWithWrites = {
@@ -115,49 +103,6 @@ function buildAccountScopedDmSecurityPolicy(params: {
       params.approveHint ?? formatPairingApproveHint(params.approveChannelId ?? params.channelKey),
     normalizeEntry: params.normalizeEntry,
   };
-}
-
-function normalizeLocalE164(number: string): string {
-  const withoutPrefix = number.replace(/^whatsapp:/i, "").trim();
-  const digits = withoutPrefix.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) {
-    return `+${digits.slice(1)}`;
-  }
-  return `+${digits}`;
-}
-
-function stripWhatsAppTargetPrefixes(value: string): string {
-  let candidate = value.trim();
-  for (;;) {
-    const before = candidate;
-    candidate = candidate.replace(/^whatsapp:/i, "").trim();
-    if (candidate === before) {
-      return candidate;
-    }
-  }
-}
-
-function normalizeLocalWhatsAppTarget(value: string): string | null {
-  const candidate = stripWhatsAppTargetPrefixes(value);
-  if (!candidate) {
-    return null;
-  }
-  if (candidate.toLowerCase().endsWith("@g.us")) {
-    const localPart = candidate.slice(0, candidate.length - "@g.us".length);
-    return /^[0-9]+(-[0-9]+)*$/.test(localPart) ? `${localPart}@g.us` : null;
-  }
-  const userMatch = candidate.match(WHATSAPP_USER_JID_RE);
-  const lidMatch = candidate.match(WHATSAPP_LID_RE);
-  const phone = userMatch?.[1] ?? lidMatch?.[1];
-  if (phone) {
-    const normalized = normalizeLocalE164(phone);
-    return normalized.length > 1 ? normalized : null;
-  }
-  if (candidate.includes("@")) {
-    return null;
-  }
-  const normalized = normalizeLocalE164(candidate);
-  return normalized.length > 1 ? normalized : null;
 }
 
 function resolveChannelConfig(
@@ -841,86 +786,3 @@ export function createScopedDmSecurityResolver<
 }
 
 export { buildAccountScopedDmSecurityPolicy };
-function resolveMergedSimpleChannelAccountConfig(params: {
-  cfg: OpenClawConfig;
-  channelKey: string;
-  accountId?: string | null;
-  omitKeys?: string[];
-}): SimpleDirectMessageConfig {
-  const channelRoot = params.cfg.channels?.[params.channelKey] as
-    | SimpleScopedChannelConfig
-    | undefined;
-  return resolveMergedAccountConfig<SimpleDirectMessageConfig>({
-    channelConfig: channelRoot,
-    accounts: channelRoot?.accounts,
-    accountId: normalizeAccountId(params.accountId),
-    omitKeys: params.omitKeys,
-  });
-}
-
-/** Read the effective WhatsApp allowlist from merged root/account config without registry indirection. */
-export function resolveWhatsAppConfigAllowFrom(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] {
-  return mapAllowFromEntries(
-    resolveMergedSimpleChannelAccountConfig({
-      cfg: params.cfg,
-      channelKey: "whatsapp",
-      accountId: params.accountId,
-      omitKeys: ["defaultAccount"],
-    }).allowFrom,
-  );
-}
-
-/** Format WhatsApp allowlist entries with the same normalization used by the channel plugin. */
-export function formatWhatsAppConfigAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return allowFrom
-    .map((entry) => String(entry).trim())
-    .filter((entry): entry is string => Boolean(entry))
-    .map((entry) => (entry === "*" ? entry : normalizeLocalWhatsAppTarget(entry)))
-    .filter((entry): entry is string => Boolean(entry));
-}
-
-/** Resolve the effective WhatsApp default recipient after account and root config fallback. */
-export function resolveWhatsAppConfigDefaultTo(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string | undefined {
-  return resolveOptionalConfigString(
-    resolveMergedSimpleChannelAccountConfig({
-      cfg: params.cfg,
-      channelKey: "whatsapp",
-      accountId: params.accountId,
-      omitKeys: ["defaultAccount"],
-    }).defaultTo,
-  );
-}
-
-/** Read iMessage allowlist entries from merged root/account config without registry indirection. */
-export function resolveIMessageConfigAllowFrom(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] {
-  return mapAllowFromEntries(
-    resolveMergedSimpleChannelAccountConfig({
-      cfg: params.cfg,
-      channelKey: "imessage",
-      accountId: params.accountId,
-    }).allowFrom,
-  );
-}
-
-/** Resolve the effective iMessage default recipient from merged root/account config. */
-export function resolveIMessageConfigDefaultTo(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string | undefined {
-  return resolveOptionalConfigString(
-    resolveMergedSimpleChannelAccountConfig({
-      cfg: params.cfg,
-      channelKey: "imessage",
-      accountId: params.accountId,
-    }).defaultTo,
-  );
-}

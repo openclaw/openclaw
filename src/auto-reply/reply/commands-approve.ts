@@ -1,12 +1,13 @@
 import {
-  isTelegramExecApprovalAuthorizedSender,
-  isTelegramExecApprovalClientEnabled,
-} from "../../../extensions/telegram/api.js";
+  getChannelPlugin,
+  resolveChannelApprovalCapability,
+} from "../../channels/plugins/index.js";
 import { callGateway } from "../../gateway/call.js";
-import { ErrorCodes } from "../../gateway/protocol/index.js";
 import { logVerbose } from "../../globals.js";
+import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { resolveChannelAccountId } from "./channel-context.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -77,50 +78,6 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   return `${channel}:${sender}`;
 }
 
-function isAuthorizedTelegramExecSender(params: Parameters<CommandHandler>[0]): boolean {
-  if (params.command.channel !== "telegram") {
-    return false;
-  }
-  return isTelegramExecApprovalAuthorizedSender({
-    cfg: params.cfg,
-    accountId: params.ctx.AccountId,
-    senderId: params.command.senderId,
-  });
-}
-
-function readErrorCode(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
-function readApprovalNotFoundDetailsReason(value: unknown): string | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const reason = (value as { reason?: unknown }).reason;
-  return typeof reason === "string" && reason.trim() ? reason : null;
-}
-
-function isApprovalNotFoundError(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  const gatewayCode = readErrorCode((err as { gatewayCode?: unknown }).gatewayCode);
-  if (gatewayCode === ErrorCodes.APPROVAL_NOT_FOUND) {
-    return true;
-  }
-
-  const detailsReason = readApprovalNotFoundDetailsReason((err as { details?: unknown }).details);
-  if (
-    gatewayCode === ErrorCodes.INVALID_REQUEST &&
-    detailsReason === ErrorCodes.APPROVAL_NOT_FOUND
-  ) {
-    return true;
-  }
-
-  // Legacy server/client combinations may only include the message text.
-  return /unknown or expired approval id/i.test(err.message);
-}
-
 function formatApprovalSubmitError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -178,18 +135,37 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
 
   const isPluginId = parsed.id.startsWith("plugin:");
-  const telegramExecAuthorizedSender = isAuthorizedTelegramExecSender(params);
+  const effectiveAccountId = resolveChannelAccountId({
+    cfg: params.cfg,
+    ctx: params.ctx,
+    command: params.command,
+  });
+  const approvalCapability = resolveChannelApprovalCapability(
+    getChannelPlugin(params.command.channel),
+  );
+  const approveCommandBehavior = approvalCapability?.resolveApproveCommandBehavior?.({
+    cfg: params.cfg,
+    accountId: effectiveAccountId,
+    senderId: params.command.senderId,
+    approvalKind: isPluginId ? "plugin" : "exec",
+  });
+  if (approveCommandBehavior?.kind === "ignore") {
+    return { shouldContinue: false };
+  }
+  if (approveCommandBehavior?.kind === "reply") {
+    return { shouldContinue: false, reply: { text: approveCommandBehavior.text } };
+  }
   const execApprovalAuthorization = resolveApprovalCommandAuthorization({
     cfg: params.cfg,
     channel: params.command.channel,
-    accountId: params.ctx.AccountId,
+    accountId: effectiveAccountId,
     senderId: params.command.senderId,
     kind: "exec",
   });
   const pluginApprovalAuthorization = resolveApprovalCommandAuthorization({
     cfg: params.cfg,
     channel: params.command.channel,
-    accountId: params.ctx.AccountId,
+    accountId: effectiveAccountId,
     senderId: params.command.senderId,
     kind: "plugin",
   });
@@ -201,18 +177,6 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
-  }
-
-  if (
-    params.command.channel === "telegram" &&
-    !isPluginId &&
-    !telegramExecAuthorizedSender &&
-    !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
-  ) {
-    return {
-      shouldContinue: false,
-      reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
-    };
   }
 
   const missingScope = requireGatewayClientScopeForInternalChannel(params, {

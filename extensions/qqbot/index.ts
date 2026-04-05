@@ -1,5 +1,9 @@
-import type { ChannelPlugin, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import type {
+  ChannelPlugin,
+  OpenClawPluginApi,
+  PluginCommandContext,
+} from "openclaw/plugin-sdk/channel-core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 import { qqbotPlugin } from "./src/channel.js";
 import { resolveQQBotAccount } from "./src/config.js";
 import { sendDocument, type MediaTargetContext } from "./src/outbound.js";
@@ -30,7 +34,7 @@ export default defineChannelPluginEntry({
         description: cmd.description,
         requireAuth: true,
         acceptsArgs: true,
-        handler: async (ctx) => {
+        handler: async (ctx: PluginCommandContext) => {
           // Derive the QQBot message type from ctx.from so that handlers that
           // inspect SlashCommandContext.type get the correct value.
           // ctx.from format: "qqbot:<type>:<id>" e.g. "qqbot:c2c:<senderId>"

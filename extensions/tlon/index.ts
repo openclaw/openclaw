@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 import { tlonPlugin } from "./src/channel.js";
 import { setTlonRuntime } from "./src/runtime.js";
 

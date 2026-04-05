@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveSession } from "../../agents/command/session.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import { updateSessionStoreAfterAgentRun } from "./session-store.js";
@@ -123,5 +124,71 @@ describe("updateSessionStoreAfterAgentRun", () => {
     expect(sessionStore[sessionKey]?.systemPromptReport?.bootstrapTruncation?.warningMode).toBe(
       "once",
     );
+  });
+
+  it("stores and reloads CLI bindings for explicit session-id-only runs", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const cfg = {
+      session: {
+        store: storePath,
+        mainKey: "main",
+      },
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {},
+          },
+        },
+      },
+    } as never;
+
+    const first = resolveSession({
+      cfg,
+      sessionId: "explicit-session-123",
+    });
+
+    expect(first.sessionKey).toBe("agent:main:explicit:explicit-session-123");
+
+    await updateSessionStoreAfterAgentRun({
+      cfg,
+      sessionId: first.sessionId,
+      sessionKey: first.sessionKey!,
+      storePath: first.storePath,
+      sessionStore: first.sessionStore!,
+      defaultProvider: "claude-cli",
+      defaultModel: "claude-sonnet-4-6",
+      result: {
+        payloads: [],
+        meta: {
+          agentMeta: {
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            sessionId: "claude-cli-session-1",
+            cliSessionBinding: {
+              sessionId: "claude-cli-session-1",
+              authEpoch: "auth-epoch-1",
+            },
+          },
+        },
+      } as never,
+    });
+
+    const second = resolveSession({
+      cfg,
+      sessionId: "explicit-session-123",
+    });
+
+    expect(second.sessionKey).toBe(first.sessionKey);
+    expect(second.sessionEntry?.cliSessionBindings?.["claude-cli"]).toEqual({
+      sessionId: "claude-cli-session-1",
+      authEpoch: "auth-epoch-1",
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[first.sessionKey!];
+    expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
+      sessionId: "claude-cli-session-1",
+      authEpoch: "auth-epoch-1",
+    });
   });
 });

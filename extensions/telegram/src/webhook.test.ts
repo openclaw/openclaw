@@ -72,8 +72,8 @@ function createSingleSettlement<T>(params: {
   };
 }
 
-vi.mock("grammy", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("grammy")>();
+vi.mock("grammy", async () => {
+  const actual = await vi.importActual<typeof import("grammy")>("grammy");
   return {
     ...actual,
     API_CONSTANTS: actual.API_CONSTANTS ?? {

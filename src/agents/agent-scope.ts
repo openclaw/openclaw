@@ -11,7 +11,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
-import { normalizeSkillFilter } from "./skills/filter.js";
+import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
@@ -160,7 +160,7 @@ export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {
-  return normalizeSkillFilter(resolveAgentConfig(cfg, agentId)?.skills);
+  return resolveEffectiveAgentSkillFilter(cfg, agentId);
 }
 
 function resolveModelPrimary(raw: unknown): string | undefined {
@@ -272,12 +272,17 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
     return stripNullBytes(resolveUserPath(configured));
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
+  const fallback = cfg.agents?.defaults?.workspace?.trim();
   if (id === defaultAgentId) {
-    const fallback = cfg.agents?.defaults?.workspace?.trim();
     if (fallback) {
       return stripNullBytes(resolveUserPath(fallback));
     }
     return stripNullBytes(resolveDefaultAgentWorkspaceDir(process.env));
+  }
+  // Non-default agents: use the configured default workspace as a base so that
+  // agents.defaults.workspace is respected for all agents, not just the default.
+  if (fallback) {
+    return stripNullBytes(path.join(resolveUserPath(fallback), id));
   }
   const stateDir = resolveStateDir(process.env);
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));

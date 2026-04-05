@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { withSessionStoreLockForTest } from "../config/sessions/store.js";
@@ -11,7 +10,6 @@ import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-h
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { performGatewaySessionReset } from "./session-reset-service.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   connectOk,
@@ -105,8 +103,10 @@ vi.mock("../auto-reply/reply/abort.js", async () => {
   };
 });
 
-vi.mock("../agents/bootstrap-cache.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/bootstrap-cache.js")>();
+vi.mock("../agents/bootstrap-cache.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/bootstrap-cache.js")>(
+    "../agents/bootstrap-cache.js",
+  );
   return {
     ...actual,
     clearBootstrapSnapshot: bootstrapCacheMocks.clearBootstrapSnapshot,
@@ -124,8 +124,10 @@ vi.mock("../hooks/internal-hooks.js", async () => {
   };
 });
 
-vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/hook-runner-global.js")>();
+vi.mock("../plugins/hook-runner-global.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
+    "../plugins/hook-runner-global.js",
+  );
   return {
     ...actual,
     getGlobalHookRunner: vi.fn(() => ({
@@ -142,26 +144,24 @@ vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/runtime/runtime-discord.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/runtime/runtime-discord.js")>();
+vi.mock("../infra/outbound/session-binding-service.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../infra/outbound/session-binding-service.js")
+  >("../infra/outbound/session-binding-service.js");
   return {
     ...actual,
-    createRuntimeDiscord: () => {
-      const runtime = actual.createRuntimeDiscord();
-      return {
-        ...runtime,
-        threadBindings: {
-          ...runtime.threadBindings,
-          unbindBySessionKey: (params: unknown) =>
-            threadBindingMocks.unbindThreadBindingsBySessionKey(params),
-        },
-      };
-    },
+    getSessionBindingService: () => ({
+      ...actual.getSessionBindingService(),
+      unbind: async (params: unknown) =>
+        threadBindingMocks.unbindThreadBindingsBySessionKey(params),
+    }),
   };
 });
 
-vi.mock("../acp/runtime/registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../acp/runtime/registry.js")>();
+vi.mock("../acp/runtime/registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../acp/runtime/registry.js")>(
+    "../acp/runtime/registry.js",
+  );
   return {
     ...actual,
     getAcpRuntimeBackend: acpRuntimeMocks.getAcpRuntimeBackend,
@@ -181,6 +181,16 @@ vi.mock("../acp/control-plane/manager.js", () => ({
     closeSession: acpManagerMocks.closeSession,
   }),
 }));
+
+vi.mock("../../extensions/browser/runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("../../extensions/browser/runtime-api.js")>(
+    "../../extensions/browser/runtime-api.js",
+  );
+  return {
+    ...actual,
+    closeTrackedBrowserTabsForSessions: browserSessionTabMocks.closeTrackedBrowserTabsForSessions,
+  };
+});
 
 vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions: browserSessionTabMocks.closeTrackedBrowserTabsForSessions,
@@ -587,7 +597,7 @@ describe("gateway server sessions", () => {
           sessionId: "sess-child",
           updatedAt: Date.now() - 1_000,
           modelProvider: "anthropic",
-          model: "claude-sonnet-4-5",
+          model: "claude-sonnet-4-6",
           parentSessionKey: "agent:main:main",
           totalTokens: 0,
           totalTokensFresh: false,
@@ -970,7 +980,7 @@ describe("gateway server sessions", () => {
     expect(list1.ok).toBe(true);
     expect(list1.payload?.path).toBe(storePath);
     expect(list1.payload?.sessions.some((s) => s.key === "global")).toBe(false);
-    expect(list1.payload?.defaults?.modelProvider).toBe(DEFAULT_PROVIDER);
+    expect(list1.payload?.defaults?.modelProvider).toBe("anthropic");
     const main = list1.payload?.sessions.find((s) => s.key === "agent:main:main");
     expect(main?.totalTokens).toBeUndefined();
     expect(main?.totalTokensFresh).toBe(false);
@@ -1862,9 +1872,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:discord:group:dev",
-      targetKind: "acp",
       reason: "session-delete",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2022,9 +2030,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:worker",
-      targetKind: "subagent",
       reason: "session-delete",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2053,9 +2059,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:worker",
-      targetKind: "subagent",
       reason: "session-delete",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2083,9 +2087,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:worker",
-      targetKind: "subagent",
       reason: "session-delete",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2140,9 +2142,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:main",
-      targetKind: "acp",
       reason: "session-reset",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2308,9 +2308,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:subagent:worker",
-      targetKind: "subagent",
       reason: "session-reset",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2338,9 +2336,7 @@ describe("gateway server sessions", () => {
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledTimes(1);
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledWith({
       targetSessionKey: "agent:main:main",
-      targetKind: "acp",
       reason: "session-reset",
-      sendFarewell: true,
     });
 
     ws.close();
@@ -2580,7 +2576,10 @@ describe("gateway server sessions", () => {
       key: "main",
     }).storePath;
 
-    let pendingReset: ReturnType<typeof performGatewaySessionReset> | undefined;
+    let pendingReset:
+      | ReturnType<(typeof import("./session-reset-service.js"))["performGatewaySessionReset"]>
+      | undefined;
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
     await withSessionStoreLockForTest(gatewayStorePath, async () => {
       pendingReset = performGatewaySessionReset({
         key: "main",

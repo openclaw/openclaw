@@ -11,17 +11,27 @@ import type {
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { mattermostApprovalAuth } from "./approval-auth.js";
+import {
+  chunkTextForOutbound,
+  createAccountStatusSink,
+  DEFAULT_ACCOUNT_ID,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  type ChannelPlugin,
+} from "./channel-api.js";
 import { MattermostChannelConfigSchema } from "./config-surface.js";
+import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
   listMattermostAccountIds,
@@ -38,17 +48,11 @@ import { monitorMattermostProvider } from "./mattermost/monitor.js";
 import { probeMattermost } from "./mattermost/probe.js";
 import { addMattermostReaction, removeMattermostReaction } from "./mattermost/reactions.js";
 import { sendMessageMattermost } from "./mattermost/send.js";
+import { collectMattermostSlashCallbackPaths } from "./mattermost/slash-commands.js";
 import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
-import {
-  chunkTextForOutbound,
-  createAccountStatusSink,
-  DEFAULT_ACCOUNT_ID,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  type ChannelPlugin,
-} from "./runtime-api.js";
 import { getMattermostRuntime } from "./runtime.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
@@ -69,11 +73,17 @@ const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedM
 
 function describeMattermostMessageTool({
   cfg,
+  accountId,
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
-  const enabledAccounts = listMattermostAccountIds(cfg)
-    .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
+  const enabledAccounts = (
+    accountId
+      ? [resolveMattermostAccount({ cfg, accountId })]
+      : listMattermostAccountIds(cfg).map((listedAccountId) =>
+          resolveMattermostAccount({ cfg, accountId: listedAccountId }),
+        )
+  )
     .filter((account) => account.enabled)
     .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
 
@@ -322,10 +332,15 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         }),
     },
     auth: mattermostApprovalAuth,
+    doctor: mattermostDoctor,
     groups: {
       resolveRequireMention: resolveMattermostGroupRequireMention,
     },
     actions: mattermostMessageActions,
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
+    },
     directory: createChannelDirectoryAdapter({
       listGroups: async (params) => listMattermostDirectoryGroups(params),
       listGroupsLive: async (params) => listMattermostDirectoryGroups(params),
@@ -333,6 +348,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       listPeersLive: async (params) => listMattermostDirectoryPeers(params),
     }),
     messaging: {
+      defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
       resolveOutboundSessionRoute: (params) => resolveMattermostOutboundSessionRoute(params),
       targetResolver: {
@@ -377,7 +393,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
           baseUrl,
           token,
           timeoutMs,
-          account.config.allowPrivateNetwork === true,
+          isPrivateNetworkOptInEnabled(account.config),
         );
       },
       resolveAccountSnapshot: ({ account, runtime }) => ({
@@ -395,6 +411,34 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       }),
     }),
     gateway: {
+      resolveGatewayAuthBypassPaths: ({ cfg }) => {
+        const base = cfg.channels?.mattermost;
+        const callbackPaths = new Set(
+          collectMattermostSlashCallbackPaths(base?.commands).filter(
+            (path) =>
+              path === "/api/channels/mattermost/command" ||
+              path.startsWith("/api/channels/mattermost/"),
+          ),
+        );
+        const accounts = base?.accounts ?? {};
+        for (const account of Object.values(accounts)) {
+          const accountConfig =
+            account && typeof account === "object" && !Array.isArray(account)
+              ? (account as {
+                  commands?: Parameters<typeof collectMattermostSlashCallbackPaths>[0];
+                })
+              : undefined;
+          for (const path of collectMattermostSlashCallbackPaths(accountConfig?.commands)) {
+            if (
+              path === "/api/channels/mattermost/command" ||
+              path.startsWith("/api/channels/mattermost/")
+            ) {
+              callbackPaths.add(path);
+            }
+          }
+        }
+        return [...callbackPaths];
+      },
       startAccount: async (ctx) => {
         const account = ctx.account;
         const statusSink = createAccountStatusSink({
@@ -431,7 +475,10 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
   threading: {
     scopedAccountReplyToMode: {
       resolveAccount: (cfg, accountId) =>
-        resolveMattermostAccount({ cfg, accountId: accountId ?? "default" }),
+        resolveMattermostAccount({
+          cfg,
+          accountId: accountId ?? resolveDefaultMattermostAccountId(cfg),
+        }),
       resolveReplyToMode: (account, chatType) =>
         resolveMattermostReplyToMode(
           account,

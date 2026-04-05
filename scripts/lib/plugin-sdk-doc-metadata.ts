@@ -20,6 +20,24 @@ export const pluginSdkDocMetadata = {
   core: {
     category: "core",
   },
+  "approval-runtime": {
+    category: "runtime",
+  },
+  "approval-auth-runtime": {
+    category: "runtime",
+  },
+  "approval-client-runtime": {
+    category: "runtime",
+  },
+  "approval-delivery-runtime": {
+    category: "runtime",
+  },
+  "approval-native-runtime": {
+    category: "runtime",
+  },
+  "approval-reply-runtime": {
+    category: "runtime",
+  },
   "plugin-entry": {
     category: "core",
   },
@@ -51,6 +69,9 @@ export const pluginSdkDocMetadata = {
     category: "channel",
   },
   "provider-onboard": {
+    category: "provider",
+  },
+  elevenlabs: {
     category: "provider",
   },
   "runtime-store": {

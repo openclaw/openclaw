@@ -2,12 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import JSON5 from "json5";
+import { resolveConfigPath } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { resolveBundledPluginPublicSurfacePath } from "../plugins/bundled-plugin-metadata.js";
 import {
+  createPluginActivationSource,
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../plugins/config-state.js";
@@ -44,7 +48,7 @@ let cachedBoundaryResolvedConfig:
       rawConfig: OpenClawConfig;
       config: OpenClawConfig;
       normalizedPluginsConfig: ReturnType<typeof normalizePluginsConfig>;
-      sourceNormalizedPluginsConfig: ReturnType<typeof normalizePluginsConfig>;
+      activationSource: ReturnType<typeof createPluginActivationSource>;
       autoEnabledReasons: Record<string, string[]>;
     }
   | undefined;
@@ -135,8 +139,19 @@ function getJiti(modulePath: string) {
 
 function readFacadeBoundaryConfigSafely(): OpenClawConfig {
   try {
-    const config = loadConfig();
-    return config && typeof config === "object" ? config : EMPTY_FACADE_BOUNDARY_CONFIG;
+    const runtimeSnapshot = getRuntimeConfigSnapshot();
+    if (runtimeSnapshot) {
+      return runtimeSnapshot;
+    }
+    const configPath = resolveConfigPath();
+    if (!fs.existsSync(configPath)) {
+      return EMPTY_FACADE_BOUNDARY_CONFIG;
+    }
+    const raw = fs.readFileSync(configPath, "utf8");
+    const parsed = JSON5.parse(raw);
+    return parsed && typeof parsed === "object"
+      ? (parsed as OpenClawConfig)
+      : EMPTY_FACADE_BOUNDARY_CONFIG;
   } catch {
     return EMPTY_FACADE_BOUNDARY_CONFIG;
   }
@@ -157,7 +172,7 @@ function getFacadeBoundaryResolvedConfig() {
     rawConfig,
     config,
     normalizedPluginsConfig: normalizePluginsConfig(config?.plugins),
-    sourceNormalizedPluginsConfig: normalizePluginsConfig(rawConfig?.plugins),
+    activationSource: createPluginActivationSource({ config: rawConfig }),
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
   };
   cachedBoundaryRawConfig = rawConfig;
@@ -165,20 +180,38 @@ function getFacadeBoundaryResolvedConfig() {
   return resolved;
 }
 
-function resolveBundledPluginManifestRecordByDirName(dirName: string): PluginManifestRecord | null {
+function resolveBundledPluginManifestRecord(params: {
+  dirName: string;
+  artifactBasename: string;
+}): PluginManifestRecord | null {
   const { config } = getFacadeBoundaryResolvedConfig();
-  return (
-    loadPluginManifestRegistry({
-      config,
-      cache: true,
-    }).plugins.find(
-      (plugin) => plugin.origin === "bundled" && path.basename(plugin.rootDir) === dirName,
-    ) ?? null
-  );
+  const registry = loadPluginManifestRegistry({
+    config,
+    cache: true,
+  }).plugins;
+  const location = resolveFacadeModuleLocation(params);
+  if (location) {
+    const normalizedModulePath = path.resolve(location.modulePath);
+    const matchedRecord = registry.find((plugin) => {
+      const normalizedRootDir = path.resolve(plugin.rootDir);
+      return (
+        normalizedModulePath === normalizedRootDir ||
+        normalizedModulePath.startsWith(`${normalizedRootDir}${path.sep}`)
+      );
+    });
+    if (matchedRecord) {
+      return matchedRecord;
+    }
+  }
+
+  return registry.find((plugin) => path.basename(plugin.rootDir) === params.dirName) ?? null;
 }
 
-function resolveTrackedFacadePluginId(dirName: string): string {
-  return resolveBundledPluginManifestRecordByDirName(dirName)?.id ?? dirName;
+function resolveTrackedFacadePluginId(params: {
+  dirName: string;
+  artifactBasename: string;
+}): string {
+  return resolveBundledPluginManifestRecord(params)?.id ?? params.dirName;
 }
 
 function resolveBundledPluginPublicSurfaceAccess(params: {
@@ -195,28 +228,22 @@ function resolveBundledPluginPublicSurfaceAccess(params: {
     };
   }
 
-  const manifestRecord = resolveBundledPluginManifestRecordByDirName(params.dirName);
+  const manifestRecord = resolveBundledPluginManifestRecord(params);
   if (!manifestRecord) {
     return {
       allowed: false,
       reason: `no bundled plugin manifest found for ${params.dirName}`,
     };
   }
-  const {
-    rawConfig,
-    config,
-    normalizedPluginsConfig,
-    sourceNormalizedPluginsConfig,
-    autoEnabledReasons,
-  } = getFacadeBoundaryResolvedConfig();
+  const { config, normalizedPluginsConfig, activationSource, autoEnabledReasons } =
+    getFacadeBoundaryResolvedConfig();
   const activationState = resolveEffectivePluginActivationState({
     id: manifestRecord.id,
     origin: manifestRecord.origin,
     config: normalizedPluginsConfig,
     rootConfig: config,
     enabledByDefault: manifestRecord.enabledByDefault,
-    sourceConfig: sourceNormalizedPluginsConfig,
-    sourceRootConfig: rawConfig,
+    activationSource,
     autoEnabledReason: autoEnabledReasons[manifestRecord.id]?.[0],
   });
   if (activationState.enabled) {
@@ -338,11 +365,14 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
 
   let loaded: T;
   try {
-    // Track the owning plugin once module evaluation begins. Facade top-level
-    // code may have already executed even if the module later throws.
-    loadedFacadePluginIds.add(resolveTrackedFacadePluginId(params.dirName));
     loaded = getJiti(location.modulePath)(location.modulePath) as T;
+    // Back-fill the sentinel before resolving plugin ownership. That lookup can
+    // trigger config loading, plugin auto-enable, and other facade reads that
+    // re-enter this loader for the same module path.
     Object.assign(sentinel, loaded);
+    // Track the owning plugin after the module exports are visible through the
+    // sentinel, so re-entrant callers never observe an empty facade object.
+    loadedFacadePluginIds.add(resolveTrackedFacadePluginId(params));
   } catch (err) {
     loadedFacadeModules.delete(location.modulePath);
     throw err;

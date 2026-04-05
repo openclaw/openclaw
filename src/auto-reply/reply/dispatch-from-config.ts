@@ -8,12 +8,9 @@ import {
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { parseSessionThreadInfo } from "../../config/sessions/delivery-info.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionStore, resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
   deriveInboundMessageHookContext,
   toPluginInboundClaimContext,
@@ -48,6 +45,13 @@ import {
   type GetReplyOptions,
   type ReplyPayload,
 } from "../types.js";
+import {
+  createInternalHookEvent,
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+  triggerInternalHook,
+} from "./dispatch-from-config.runtime.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
@@ -338,7 +342,12 @@ export async function dispatchReplyFromConfig(params: {
     inboundClaimContext.conversationId && inboundClaimContext.channelId
       ? resolveConversationBindingRecord({
           channel: inboundClaimContext.channelId,
-          accountId: inboundClaimContext.accountId ?? "default",
+          accountId:
+            inboundClaimContext.accountId ??
+            ((
+              cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
+            )?.[inboundClaimContext.channelId]?.defaultAccount as string | undefined) ??
+            "default",
           conversationId: inboundClaimContext.conversationId,
           parentConversationId: inboundClaimContext.parentConversationId,
         })
@@ -588,10 +597,90 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
-    // Forum topics are threaded conversations within a group — verbose tool
-    // summaries should be delivered into the topic thread, same as DMs.
-    const shouldSendToolSummaries =
-      (ctx.ChatType !== "group" || ctx.IsForum === true) && ctx.CommandSource !== "native";
+    // Forum topics are threaded conversations within a group — tool visibility
+    // should be delivered into the topic thread, same as DMs.
+    const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const toolStartStatusesSent = new Set<string>();
+    let toolStartStatusCount = 0;
+    const normalizeWorkingLabel = (label: string) => {
+      const collapsed = label.replace(/\s+/g, " ").trim();
+      if (collapsed.length <= 80) {
+        return collapsed;
+      }
+      return `${collapsed.slice(0, 77).trimEnd()}...`;
+    };
+    const formatPlanUpdateText = (payload: { explanation?: string; steps?: string[] }) => {
+      const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
+      const steps = (payload.steps ?? [])
+        .map((step) => step.replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      const parts: string[] = [];
+      if (explanation) {
+        parts.push(explanation);
+      }
+      if (steps.length > 0) {
+        parts.push(steps.map((step, index) => `${index + 1}. ${step}`).join("\n"));
+      }
+      return parts.join("\n\n").trim() || "Planning next steps.";
+    };
+    const maybeSendWorkingStatus = (label: string) => {
+      const normalizedLabel = normalizeWorkingLabel(label);
+      if (
+        !shouldSendToolStartStatuses ||
+        !normalizedLabel ||
+        toolStartStatusCount >= 2 ||
+        toolStartStatusesSent.has(normalizedLabel)
+      ) {
+        return;
+      }
+      toolStartStatusesSent.add(normalizedLabel);
+      toolStartStatusCount += 1;
+      const payload: ReplyPayload = {
+        text: `Working: ${normalizedLabel}`,
+      };
+      if (shouldRouteToOriginating) {
+        return sendPayloadAsync(payload, undefined, false);
+      }
+      dispatcher.sendToolResult(payload);
+    };
+    const sendPlanUpdate = (payload: { explanation?: string; steps?: string[] }) => {
+      const replyPayload: ReplyPayload = {
+        text: formatPlanUpdateText(payload),
+      };
+      if (shouldRouteToOriginating) {
+        return sendPayloadAsync(replyPayload, undefined, false);
+      }
+      dispatcher.sendToolResult(replyPayload);
+    };
+    const summarizeApprovalLabel = (payload: {
+      status?: string;
+      command?: string;
+      message?: string;
+    }) => {
+      if (payload.status === "pending") {
+        if (payload.command?.trim()) {
+          return normalizeWorkingLabel(`awaiting approval: ${payload.command}`);
+        }
+        return "awaiting approval";
+      }
+      if (payload.status === "unavailable") {
+        if (payload.message?.trim()) {
+          return normalizeWorkingLabel(payload.message);
+        }
+        return "approval unavailable";
+      }
+      return "";
+    };
+    const summarizePatchLabel = (payload: { summary?: string; title?: string }) => {
+      if (payload.summary?.trim()) {
+        return normalizeWorkingLabel(payload.summary);
+      }
+      if (payload.title?.trim()) {
+        return normalizeWorkingLabel(payload.title);
+      }
+      return "";
+    };
     const acpDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
       ctx,
       cfg,
@@ -689,6 +778,32 @@ export async function dispatchReplyFromConfig(params: {
             }
           };
           return run();
+        },
+        onPlanUpdate: ({ phase, explanation, steps }) => {
+          if (phase !== "update") {
+            return;
+          }
+          return sendPlanUpdate({ explanation, steps });
+        },
+        onApprovalEvent: ({ phase, status, command, message }) => {
+          if (phase !== "requested") {
+            return;
+          }
+          const label = summarizeApprovalLabel({ status, command, message });
+          if (!label) {
+            return;
+          }
+          return maybeSendWorkingStatus(label);
+        },
+        onPatchSummary: ({ phase, summary, title }) => {
+          if (phase !== "end") {
+            return;
+          }
+          const label = summarizePatchLabel({ summary, title });
+          if (!label) {
+            return;
+          }
+          return maybeSendWorkingStatus(label);
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {

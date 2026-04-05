@@ -4,7 +4,7 @@ node_modules
 docker-compose.override.yml
 docker-compose.extra.yml
 dist
-dist-runtime
+dist-runtime/
 pnpm-lock.yaml
 bun.lock
 bun.lockb
@@ -136,8 +136,15 @@ ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
 docs/superpowers
 
+# Generated docs baseline artifacts (locally generated, only hashes tracked)
+docs/.generated/*.json
+docs/.generated/*.jsonl
+
 # Deprecated changelog fragment workflow
 changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+.artifacts/
+test/fixtures/openclaw-vitest-unit-report.json
+analysis/

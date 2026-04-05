@@ -33,7 +33,7 @@ describe("doctor config flow steps", () => {
     expect(result.issueLines).toEqual([expect.stringContaining("- heartbeat:")]);
     expect(result.changeLines).not.toEqual([]);
     expect(result.state.fixHints).toContain(
-      'Run "openclaw doctor --fix" to apply compatibility migrations.',
+      'Run "openclaw doctor --fix" to migrate legacy config keys.',
     );
   });
 

@@ -1,6 +1,6 @@
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-let expectInboundContextContract: typeof import("openclaw/plugin-sdk/testing").expectChannelInboundContextContract;
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/test-helpers.js";
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
 let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
 
@@ -31,8 +31,10 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: sendReadReceiptMock,
 }));
 
-vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
+vi.mock("../../../../src/auto-reply/dispatch.js", async () => {
+  const actual = await vi.importActual<typeof import("../../../../src/auto-reply/dispatch.js")>(
+    "../../../../src/auto-reply/dispatch.js",
+  );
   return {
     ...actual,
     dispatchInboundMessage: dispatchInboundMessageMock,
@@ -51,8 +53,6 @@ let createSignalEventHandler: typeof import("./event-handler.js").createSignalEv
 describe("signal createSignalEventHandler inbound context", () => {
   beforeAll(async () => {
     vi.useRealTimers();
-    ({ expectChannelInboundContextContract: expectInboundContextContract } =
-      await import("openclaw/plugin-sdk/testing"));
     ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
       await import("./event-handler.test-harness.js"));
     ({ createSignalEventHandler } = await import("./event-handler.js"));

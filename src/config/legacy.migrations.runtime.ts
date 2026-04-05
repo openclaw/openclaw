@@ -1,4 +1,9 @@
 import {
+  ELEVENLABS_TALK_LEGACY_CONFIG_RULES,
+  hasLegacyTalkFields,
+} from "../plugin-sdk/elevenlabs.js";
+import { runPluginSetupLegacyConfigMigrations } from "../plugins/setup-registry.js";
+import {
   buildDefaultControlUiAllowedOrigins,
   hasConfiguredControlUiAllowedOrigins,
   isGatewayNonLoopbackBindMode,
@@ -36,6 +41,10 @@ const AGENT_HEARTBEAT_KEYS = new Set([
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 const LEGACY_TTS_PLUGIN_IDS = new Set(["voice-call"]);
+
+function sandboxScopeFromPerSession(perSession: boolean): "session" | "shared" {
+  return perSession ? "session" : "shared";
+}
 
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   if (typeof value !== "string") {
@@ -135,21 +144,17 @@ function hasLegacyTtsProviderKeys(value: unknown): boolean {
   return LEGACY_TTS_PROVIDER_KEYS.some((key) => Object.prototype.hasOwnProperty.call(tts, key));
 }
 
-function hasLegacyDiscordAccountTtsProviderKeys(value: unknown): boolean {
-  const accounts = getRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.entries(accounts).some(([accountId, accountValue]) => {
-    if (isBlockedObjectKey(accountId)) {
-      return false;
-    }
-    const account = getRecord(accountValue);
-    const voice = getRecord(account?.voice);
-    return hasLegacyTtsProviderKeys(voice?.tts);
-  });
+function hasLegacySandboxPerSession(value: unknown): boolean {
+  const sandbox = getRecord(value);
+  return Boolean(sandbox && Object.prototype.hasOwnProperty.call(sandbox, "perSession"));
 }
 
+function hasLegacyAgentListSandboxPerSession(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => hasLegacySandboxPerSession(getRecord(agent)?.sandbox));
+}
 function hasLegacyPluginEntryTtsProviderKeys(value: unknown): boolean {
   const entries = getRecord(value);
   if (!entries) {
@@ -216,34 +221,10 @@ function migrateLegacyTtsConfig(
   }
 }
 
-function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
-  groups: Record<string, unknown>;
-  entry: Record<string, unknown>;
-} | null {
-  const existingGroups = section.groups;
-  if (existingGroups !== undefined && !getRecord(existingGroups)) {
-    return null;
-  }
-  const groups = getRecord(existingGroups) ?? {};
-  const defaultKey = "*";
-  const existingEntry = groups[defaultKey];
-  if (existingEntry !== undefined && !getRecord(existingEntry)) {
-    return null;
-  }
-  const entry = getRecord(existingEntry) ?? {};
-  return { groups, entry };
-}
-
 const MEMORY_SEARCH_RULE: LegacyConfigRule = {
   path: ["memorySearch"],
   message:
     "top-level memorySearch was moved; use agents.defaults.memorySearch instead (auto-migrated on load).",
-};
-
-const GROUP_MENTIONS_ONLY_RULE: LegacyConfigRule = {
-  path: ["channels", "telegram", "groupMentionsOnly"],
-  message:
-    'channels.telegram.groupMentionsOnly was removed; use channels.telegram.groups."*".requireMention instead (auto-migrated on load).',
 };
 
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
@@ -274,18 +255,6 @@ const LEGACY_TTS_RULES: LegacyConfigRule[] = [
     match: (value) => hasLegacyTtsProviderKeys(value),
   },
   {
-    path: ["channels", "discord", "voice", "tts"],
-    message:
-      "channels.discord.voice.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use channels.discord.voice.tts.providers.<provider> (auto-migrated on load).",
-    match: (value) => hasLegacyTtsProviderKeys(value),
-  },
-  {
-    path: ["channels", "discord", "accounts"],
-    message:
-      "channels.discord.accounts.<id>.voice.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use channels.discord.accounts.<id>.voice.tts.providers.<provider> (auto-migrated on load).",
-    match: (value) => hasLegacyDiscordAccountTtsProviderKeys(value),
-  },
-  {
     path: ["plugins", "entries"],
     message:
       "plugins.entries.voice-call.config.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use plugins.entries.voice-call.config.tts.providers.<provider> (auto-migrated on load).",
@@ -293,7 +262,84 @@ const LEGACY_TTS_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "sandbox"],
+    message:
+      "agents.defaults.sandbox.perSession is legacy; use agents.defaults.sandbox.scope instead (auto-migrated on load).",
+    match: (value) => hasLegacySandboxPerSession(value),
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      "agents.list[].sandbox.perSession is legacy; use agents.list[].sandbox.scope instead (auto-migrated on load).",
+    match: (value) => hasLegacyAgentListSandboxPerSession(value),
+  },
+];
+
+function migrateLegacySandboxPerSession(
+  sandbox: Record<string, unknown>,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!Object.prototype.hasOwnProperty.call(sandbox, "perSession")) {
+    return;
+  }
+  const rawPerSession = sandbox.perSession;
+  if (typeof rawPerSession === "boolean") {
+    if (sandbox.scope === undefined) {
+      sandbox.scope = sandboxScopeFromPerSession(rawPerSession);
+      changes.push(
+        `Moved ${pathLabel}.perSession → ${pathLabel}.scope (${String(sandbox.scope)}).`,
+      );
+    } else {
+      changes.push(`Removed ${pathLabel}.perSession (${pathLabel}.scope already set).`);
+    }
+    delete sandbox.perSession;
+  } else {
+    // Preserve invalid values so normal schema validation still surfaces the
+    // type error instead of silently falling back to the default sandbox scope.
+    return;
+  }
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "agents.sandbox.perSession->scope",
+    describe: "Move legacy agent sandbox perSession aliases to sandbox.scope",
+    legacyRules: LEGACY_SANDBOX_SCOPE_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      const defaultSandbox = getRecord(defaults?.sandbox);
+      if (defaultSandbox) {
+        migrateLegacySandboxPerSession(defaultSandbox, "agents.defaults.sandbox", changes);
+      }
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        const agentRecord = getRecord(agent);
+        const sandbox = getRecord(agentRecord?.sandbox);
+        if (!sandbox) {
+          continue;
+        }
+        migrateLegacySandboxPerSession(sandbox, `agents.list.${index}.sandbox`, changes);
+      }
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "talk.legacy-fields->talk.providers",
+    describe: "Move legacy Talk flat fields into talk.providers.<provider>",
+    legacyRules: ELEVENLABS_TALK_LEGACY_CONFIG_RULES,
+    apply: (raw, changes) => {
+      if (!hasLegacyTalkFields(raw.talk)) {
+        return;
+      }
+      runPluginSetupLegacyConfigMigrations({ raw, changes });
+    },
+  }),
   defineLegacyConfigMigration({
     id: "tools.web.x_search.apiKey->plugins.entries.xai.config.webSearch.apiKey",
     describe: "Move legacy x_search auth into the xAI plugin webSearch config",
@@ -352,53 +398,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
         `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} for bind=${String(bind)}. ` +
           "Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.",
       );
-    },
-  }),
-  defineLegacyConfigMigration({
-    // v2026.2.23 replaced channels.telegram.groupMentionsOnly with
-    // channels.telegram.groups."*".requireMention. Existing configs crash on
-    // startup because gateway auto-migration only runs for registered legacy
-    // keys, and this removed key previously fell through as an unknown field.
-    id: "channels.telegram.groupMentionsOnly->channels.telegram.groups.*.requireMention",
-    describe:
-      "Move channels.telegram.groupMentionsOnly to channels.telegram.groups.*.requireMention",
-    legacyRules: [GROUP_MENTIONS_ONLY_RULE],
-    apply: (raw, changes) => {
-      const channels = ensureRecord(raw, "channels");
-      const telegram = getRecord(channels.telegram);
-      if (!telegram || telegram.groupMentionsOnly === undefined) {
-        return;
-      }
-
-      const groupMentionsOnly = telegram.groupMentionsOnly;
-      const defaultGroupEntry = resolveCompatibleDefaultGroupEntry(telegram);
-      const defaultKey = "*";
-
-      if (!defaultGroupEntry) {
-        changes.push(
-          "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
-        );
-        return;
-      }
-
-      const { groups, entry } = defaultGroupEntry;
-
-      if (entry.requireMention === undefined) {
-        entry.requireMention = groupMentionsOnly;
-        groups[defaultKey] = entry;
-        telegram.groups = groups;
-        changes.push(
-          'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention.',
-        );
-      } else {
-        changes.push(
-          'Removed channels.telegram.groupMentionsOnly (channels.telegram.groups."*" already set).',
-        );
-      }
-
-      delete telegram.groupMentionsOnly;
-      channels.telegram = telegram;
-      raw.channels = channels;
     },
   }),
   defineLegacyConfigMigration({
@@ -472,27 +471,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
     apply: (raw, changes) => {
       const messages = getRecord(raw.messages);
       migrateLegacyTtsConfig(getRecord(messages?.tts), "messages.tts", changes);
-
-      const channels = getRecord(raw.channels);
-      const discord = getRecord(channels?.discord);
-      const discordVoice = getRecord(discord?.voice);
-      migrateLegacyTtsConfig(getRecord(discordVoice?.tts), "channels.discord.voice.tts", changes);
-
-      const discordAccounts = getRecord(discord?.accounts);
-      if (discordAccounts) {
-        for (const [accountId, accountValue] of Object.entries(discordAccounts)) {
-          if (isBlockedObjectKey(accountId)) {
-            continue;
-          }
-          const account = getRecord(accountValue);
-          const voice = getRecord(account?.voice);
-          migrateLegacyTtsConfig(
-            getRecord(voice?.tts),
-            `channels.discord.accounts.${accountId}.voice.tts`,
-            changes,
-          );
-        }
-      }
 
       const plugins = getRecord(raw.plugins);
       const pluginEntries = getRecord(plugins?.entries);

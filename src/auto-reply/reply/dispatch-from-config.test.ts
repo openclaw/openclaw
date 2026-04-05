@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type {
@@ -131,13 +131,23 @@ vi.mock("./route-reply.runtime.js", () => ({
   routeReply: mocks.routeReply,
 }));
 
-vi.mock("./route-reply.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./route-reply.js")>();
-  return {
-    ...actual,
-    routeReply: mocks.routeReply,
-  };
-});
+vi.mock("./route-reply.js", () => ({
+  isRoutableChannel: (channel: string | undefined) =>
+    Boolean(
+      channel &&
+      [
+        "telegram",
+        "slack",
+        "discord",
+        "signal",
+        "imessage",
+        "whatsapp",
+        "feishu",
+        "mattermost",
+      ].includes(channel),
+    ),
+  routeReply: mocks.routeReply,
+}));
 
 vi.mock("./abort.runtime.js", () => ({
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
@@ -155,29 +165,17 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
 }));
-vi.mock("../../config/sessions/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/store.js")>();
-  return {
-    ...actual,
-    loadSessionStore: sessionStoreMocks.loadSessionStore,
-    resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
-  };
-});
-vi.mock("../../config/sessions/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/paths.js")>();
-  return {
-    ...actual,
-    resolveStorePath: sessionStoreMocks.resolveStorePath,
-  };
-});
+vi.mock("./dispatch-from-config.runtime.js", () => ({
+  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
+  loadSessionStore: sessionStoreMocks.loadSessionStore,
+  resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
+  resolveStorePath: sessionStoreMocks.resolveStorePath,
+  triggerInternalHook: internalHookMocks.triggerInternalHook,
+}));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
   getGlobalPluginRegistry: () => hookMocks.registry,
-}));
-vi.mock("../../hooks/internal-hooks.js", () => ({
-  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
-  triggerInternalHook: internalHookMocks.triggerInternalHook,
 }));
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
@@ -187,36 +185,27 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
 vi.mock("../../acp/runtime/registry.js", () => ({
   requireAcpRuntimeBackend: acpMocks.requireAcpRuntimeBackend,
 }));
-vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
-  return {
-    ...actual,
-    getSessionBindingService: () => ({
-      bind: vi.fn(async () => {
-        throw new Error("bind not mocked");
-      }),
-      getCapabilities: vi.fn(() => ({
-        adapterAvailable: true,
-        bindSupported: true,
-        unbindSupported: true,
-        placements: ["current", "child"] as const,
-      })),
-      listBySession: (targetSessionKey: string) =>
-        sessionBindingMocks.listBySession(targetSessionKey),
-      resolveByConversation: sessionBindingMocks.resolveByConversation,
-      touch: sessionBindingMocks.touch,
-      unbind: vi.fn(async () => []),
+vi.mock("../../infra/outbound/session-binding-service.js", () => ({
+  getSessionBindingService: () => ({
+    bind: vi.fn(async () => {
+      throw new Error("bind not mocked");
     }),
-  };
-});
-vi.mock("../../infra/agent-events.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/agent-events.js")>();
-  return {
-    ...actual,
-    emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
-  };
-});
+    getCapabilities: vi.fn(() => ({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current", "child"] as const,
+    })),
+    listBySession: (targetSessionKey: string) =>
+      sessionBindingMocks.listBySession(targetSessionKey),
+    resolveByConversation: sessionBindingMocks.resolveByConversation,
+    touch: sessionBindingMocks.touch,
+    unbind: vi.fn(async () => []),
+  }),
+}));
+vi.mock("../../infra/agent-events.js", () => ({
+  emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
+}));
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
@@ -295,13 +284,15 @@ async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs,
 }
 
 describe("dispatchReplyFromConfig", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     ({ __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js"));
     ({ __testing: pluginBindingTesting } = await import("../../plugins/conversation-binding.js"));
     ({ AcpRuntimeError: AcpRuntimeErrorClass } = await import("../../acp/runtime/errors.js"));
+  });
+
+  beforeEach(() => {
     const discordTestPlugin = {
       ...createChannelTestPluginBase({
         id: "discord",
@@ -867,7 +858,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses native tool summaries but still forwards tool media", async () => {
+  it("delivers native tool summaries and tool media", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -892,13 +883,91 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
-    const sent = firstToolResultPayload(dispatcher);
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "🔧 tools/sessions_send" }),
+    );
+    const sent = (dispatcher.sendToolResult as Mock).mock.calls[1]?.[0] as ReplyPayload | undefined;
     expect(sent?.mediaUrl).toBe("https://example.com/tts-native.opus");
     expect(sent?.text).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("renders plain-text plan updates and concise approval progress for direct sessions", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Inspect code, patch it, run tests.",
+        steps: ["Inspect code", "Patch code", "Run tests"],
+      });
+      await opts?.onApprovalEvent?.({
+        phase: "requested",
+        status: "pending",
+        command: "pnpm test",
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "Inspect code, patch it, run tests.\n\n1. Inspect code\n2. Patch code\n3. Run tests",
+      }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "Working: awaiting approval: pnpm test" }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("renders concise patch summaries for direct sessions", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onPatchSummary?.({
+        phase: "end",
+        title: "apply patch",
+        summary: "1 added, 2 modified",
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "Working: 1 added, 2 modified" }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
   it("delivers deterministic exec approval tool payloads for native commands", async () => {
     setNoAbort();
     const cfg = emptyConfig;
@@ -1407,6 +1476,71 @@ describe("dispatchReplyFromConfig", () => {
     expect(noticePayload?.text).toContain("Session ids resolved");
     expect(noticePayload?.text).toContain("agent session id: inner-123");
     expect(noticePayload?.text).toContain("acpx session id: acpx-123");
+  });
+
+  it("honors the configured default account when resolving plugin-owned binding fallbacks", async () => {
+    setNoAbort();
+    sessionBindingMocks.resolveByConversation.mockImplementation(
+      (ref: {
+        channel: string;
+        accountId: string;
+        conversationId: string;
+        parentConversationId?: string;
+      }) =>
+        ref.channel === "discord" && ref.accountId === "work" && ref.conversationId === "thread-1"
+          ? ({
+              bindingId: "plugin:work:thread-1",
+              targetSessionKey: "plugin-binding:missing-plugin",
+              targetKind: "session",
+              conversation: {
+                channel: "discord",
+                accountId: "work",
+                conversationId: "thread-1",
+              },
+              status: "active",
+              boundAt: Date.now(),
+              metadata: {
+                pluginBindingOwner: "plugin",
+                pluginId: "missing-plugin",
+                pluginRoot: "/plugins/missing-plugin",
+                pluginName: "Missing Plugin",
+              },
+            } satisfies SessionBindingRecord)
+          : null,
+    );
+
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      To: "discord:thread-1",
+      SessionKey: "main",
+      BodyForAgent: "fallback",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "work",
+        conversationId: "thread-1",
+      }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("not currently loaded"),
+      }),
+    );
+    expect(replyResolver).toHaveBeenCalled();
   });
 
   it("honors send-policy deny before ACP runtime dispatch", async () => {

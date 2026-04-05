@@ -12,13 +12,10 @@ import {
   readChannelAllowFromStore,
   removeChannelAllowFromStoreEntry,
 } from "../../pairing/pairing-store.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-} from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeOptionalAccountId } from "../../routing/session-key.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import {
+  rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScopeForInternalChannel,
@@ -56,6 +53,22 @@ type AllowlistCommand =
 
 const ACTIONS = new Set(["list", "add", "remove"]);
 const SCOPES = new Set<AllowlistScope>(["dm", "group", "all"]);
+
+function resolveAllowlistAccountId(params: {
+  cfg: OpenClawConfig;
+  channelId: ChannelId;
+  parsedAccount?: string;
+  ctxAccountId?: string;
+}): string {
+  const explicitAccountId = normalizeOptionalAccountId(params.parsedAccount);
+  if (explicitAccountId) {
+    return explicitAccountId;
+  }
+  const plugin = getChannelPlugin(params.channelId);
+  const configuredDefaultAccountId = plugin?.config.defaultAccountId?.(params.cfg)?.trim();
+  const ctxAccountId = normalizeOptionalAccountId(params.ctxAccountId);
+  return configuredDefaultAccountId || ctxAccountId || DEFAULT_ACCOUNT_ID;
+}
 
 function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   const trimmed = raw.trim();
@@ -275,7 +288,12 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       },
     };
   }
-  const accountId = normalizeAccountId(parsed.account ?? params.ctx.AccountId);
+  const accountId = resolveAllowlistAccountId({
+    cfg: params.cfg,
+    channelId,
+    parsedAccount: parsed.account,
+    ctxAccountId: params.ctx.AccountId,
+  });
   const plugin = getChannelPlugin(channelId);
 
   if (parsed.action === "list") {
@@ -387,6 +405,11 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
   }
 
+  const nonOwner = rejectNonOwnerCommand(params, "/allowlist");
+  if (nonOwner) {
+    return nonOwner;
+  }
+
   const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
     label: "/allowlist write",
     allowedScopes: ["operator.admin"],
@@ -458,7 +481,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       cfg: params.cfg,
       channel: params.command.channel,
       channelId,
-      accountId: params.ctx.AccountId,
+      accountId,
       gatewayClientScopes: params.ctx.GatewayClientScopes,
       target: editResult.writeTarget,
     });
