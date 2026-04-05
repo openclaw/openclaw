@@ -14,6 +14,8 @@ const optionNamesAdd = [
   "account",
   "name",
   "token",
+  "communityId",
+  "communityAccessToken",
   "privateKey",
   "tokenFile",
   "botToken",
@@ -166,8 +168,10 @@ export function registerChannelsCli(program: Command) {
     .option("--account <id>", "Account id (default when omitted)")
     .option("--name <name>", "Display name for this account")
     .option("--token <token>", "Bot token (Telegram/Discord)")
+    .option("--community-id <id>", "VK community id")
+    .option("--community-access-token <token>", "VK community access token")
     .option("--private-key <key>", "Nostr private key (nsec... or hex)")
-    .option("--token-file <path>", "Bot token file (Telegram)")
+    .option("--token-file <path>", "Bot/community token file (Telegram/VK)")
     .option("--bot-token <token>", "Slack bot token (xoxb-...)")
     .option("--app-token <token>", "Slack app token (xapp-...)")
     .option("--signal-number <e164>", "Signal account number (E.164)")

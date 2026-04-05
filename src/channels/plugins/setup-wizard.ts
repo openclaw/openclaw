@@ -80,6 +80,7 @@ export type ChannelSetupWizardCredential = {
   inputKey: keyof ChannelSetupInput;
   providerHint: string;
   credentialLabel: string;
+  secretInputMode?: "plaintext" | "ref";
   preferredEnvVar?: string;
   helpTitle?: string;
   helpLines?: string[];
@@ -252,6 +253,7 @@ export type ChannelSetupWizardFinalize = (params: {
 
 export type ChannelSetupWizard = {
   channel: string;
+  deferApplyUntilValidated?: boolean;
   status: ChannelSetupWizardStatus;
   introNote?: ChannelSetupWizardNote;
   envShortcut?: ChannelSetupWizardEnvShortcut;
@@ -283,6 +285,75 @@ export type ChannelSetupWizard = {
 };
 
 type ChannelSetupWizardPlugin = Pick<ChannelPlugin, "id" | "meta" | "config" | "setup">;
+
+function resolveSetupCandidate(params: {
+  plugin: ChannelSetupWizardPlugin;
+  cfg: OpenClawConfig;
+  accountId: string;
+  input: ChannelSetupInput;
+}) {
+  const setup = params.plugin.setup;
+  if (!setup?.applyAccountConfig) {
+    throw new Error(`${params.plugin.id} does not support setup`);
+  }
+  const resolvedAccountId =
+    setup.resolveAccountId?.({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      input: params.input,
+    }) ?? params.accountId;
+  let next = setup.applyAccountConfig({
+    cfg: params.cfg,
+    accountId: resolvedAccountId,
+    input: params.input,
+  });
+  if (params.input.name?.trim() && setup.applyAccountName) {
+    next = setup.applyAccountName({
+      cfg: next,
+      accountId: resolvedAccountId,
+      name: params.input.name,
+    });
+  }
+  return {
+    cfg: next,
+    accountId: resolvedAccountId,
+  };
+}
+
+async function validateSetupCandidate(params: {
+  plugin: ChannelSetupWizardPlugin;
+  cfg: OpenClawConfig;
+  candidateCfg: OpenClawConfig;
+  accountId: string;
+  input: ChannelSetupInput;
+}) {
+  const setup = params.plugin.setup;
+  const validationError = setup?.validateInput?.({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    input: params.input,
+  });
+  if (validationError) {
+    return validationError;
+  }
+  const completeValidationError = setup?.validateCompleteInput?.({
+    cfg: params.cfg,
+    candidateCfg: params.candidateCfg,
+    accountId: params.accountId,
+    input: params.input,
+  });
+  if (completeValidationError) {
+    return completeValidationError;
+  }
+  return (
+    (await setup?.validateInputAsync?.({
+      cfg: params.cfg,
+      candidateCfg: params.candidateCfg,
+      accountId: params.accountId,
+      input: params.input,
+    })) ?? null
+  );
+}
 
 async function buildStatus(
   plugin: ChannelSetupWizardPlugin,
@@ -325,40 +396,16 @@ function applySetupInput(params: {
   accountId: string;
   input: ChannelSetupInput;
 }) {
-  const setup = params.plugin.setup;
-  if (!setup?.applyAccountConfig) {
-    throw new Error(`${params.plugin.id} does not support setup`);
-  }
-  const resolvedAccountId =
-    setup.resolveAccountId?.({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      input: params.input,
-    }) ?? params.accountId;
-  const validationError = setup.validateInput?.({
+  const candidate = resolveSetupCandidate(params);
+  const validationError = params.plugin.setup?.validateInput?.({
     cfg: params.cfg,
-    accountId: resolvedAccountId,
+    accountId: candidate.accountId,
     input: params.input,
   });
   if (validationError) {
     throw new Error(validationError);
   }
-  let next = setup.applyAccountConfig({
-    cfg: params.cfg,
-    accountId: resolvedAccountId,
-    input: params.input,
-  });
-  if (params.input.name?.trim() && setup.applyAccountName) {
-    next = setup.applyAccountName({
-      cfg: next,
-      accountId: resolvedAccountId,
-      name: params.input.name,
-    });
-  }
-  return {
-    cfg: next,
-    accountId: resolvedAccountId,
-  };
+  return candidate;
 }
 
 function trimResolvedValue(value?: string): string | undefined {
@@ -457,12 +504,20 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           }));
 
       let next = cfg;
+      let draftInput: ChannelSetupInput = {};
+      let draftAccountId = accountId;
       let credentialValues = collectCredentialValues({
         wizard,
         cfg: next,
         accountId,
       });
       let usedEnvShortcut = false;
+      const recordDraftInput = (patch: Partial<ChannelSetupInput>) => {
+        draftInput = {
+          ...draftInput,
+          ...patch,
+        };
+      };
 
       if (wizard.envShortcut?.isAvailable({ cfg: next, accountId })) {
         const useEnvShortcut = await prompter.confirm({
@@ -476,6 +531,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             cfg: next,
             accountId,
           });
+          recordDraftInput({ useEnv: true });
           usedEnvShortcut = true;
         }
       }
@@ -544,7 +600,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             prompter,
             providerHint: credential.providerHint,
             credentialLabel: credential.credentialLabel,
-            secretInputMode: options?.secretInputMode,
+            secretInputMode: credential.secretInputMode ?? options?.secretInputMode,
             accountConfigured: credentialState.accountConfigured,
             hasConfigToken: credentialState.hasConfiguredValue,
             allowEnv,
@@ -562,8 +618,12 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
                     );
                   }
                 : undefined,
-            applyUseEnv: async (currentCfg) =>
-              credential.applyUseEnv
+            applyUseEnv: async (currentCfg) => {
+              recordDraftInput({
+                [credential.inputKey]: undefined,
+                useEnv: true,
+              });
+              return credential.applyUseEnv
                 ? await credential.applyUseEnv({
                     cfg: currentCfg,
                     accountId,
@@ -576,9 +636,14 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
                       [credential.inputKey]: undefined,
                       useEnv: true,
                     },
-                  }).cfg,
+                  }).cfg;
+            },
             applySet: async (currentCfg, value, resolvedValue) => {
               resolvedCredentialValue = resolvedValue;
+              recordDraftInput({
+                [credential.inputKey]: value as ChannelSetupInput[keyof ChannelSetupInput],
+                useEnv: false,
+              });
               return credential.applySet
                 ? await credential.applySet({
                     cfg: currentCfg,
@@ -641,6 +706,9 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             if (currentValue) {
               credentialValues[textInput.inputKey] = currentValue;
               if (textInput.applyCurrentValue) {
+                recordDraftInput({
+                  [textInput.inputKey]: currentValue as ChannelSetupInput[keyof ChannelSetupInput],
+                });
                 next = await applyWizardTextInputValue({
                   plugin,
                   input: textInput,
@@ -672,6 +740,9 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             if (keep) {
               credentialValues[textInput.inputKey] = currentValue;
               if (textInput.applyCurrentValue) {
+                recordDraftInput({
+                  [textInput.inputKey]: currentValue as ChannelSetupInput[keyof ChannelSetupInput],
+                });
                 next = await applyWizardTextInputValue({
                   plugin,
                   input: textInput,
@@ -713,6 +784,9 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           const trimmedValue = rawValue.trim();
           if (!trimmedValue && textInput.required === false) {
             if (textInput.applyEmptyValue) {
+              recordDraftInput({
+                [textInput.inputKey]: "" as ChannelSetupInput[keyof ChannelSetupInput],
+              });
               next = await applyWizardTextInputValue({
                 plugin,
                 input: textInput,
@@ -736,6 +810,9 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             delete credentialValues[textInput.inputKey];
             continue;
           }
+          recordDraftInput({
+            [textInput.inputKey]: normalizedValue as ChannelSetupInput[keyof ChannelSetupInput],
+          });
           next = await applyWizardTextInputValue({
             plugin,
             input: textInput,
@@ -855,6 +932,25 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             ...credentialValues,
             ...finalized.credentialValues,
           };
+        }
+      }
+
+      if (wizard.deferApplyUntilValidated) {
+        draftAccountId =
+          plugin.setup?.resolveAccountId?.({
+            cfg,
+            accountId,
+            input: draftInput,
+          }) ?? accountId;
+        const validationError = await validateSetupCandidate({
+          plugin,
+          cfg,
+          candidateCfg: next,
+          accountId: draftAccountId,
+          input: draftInput,
+        });
+        if (validationError) {
+          throw new Error(validationError);
         }
       }
 
