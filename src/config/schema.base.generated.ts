@@ -19565,6 +19565,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Target agent ID for mapping execution when action routing should not use defaults. Use dedicated automation agents to isolate webhook behavior from interactive operator sessions.",
                 },
+                sessionTarget: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "isolated",
+                    },
+                    {
+                      type: "string",
+                      const: "main",
+                    },
+                    {
+                      type: "string",
+                      const: "current",
+                    },
+                    {
+                      type: "string",
+                      pattern: "^session:[^\\s]+$",
+                    },
+                  ],
+                  description: 'Session target: "isolated" | "main" | "current" | "session:<id>"',
+                },
                 sessionKey: {
                   type: "string",
                   title: "Hook Mapping Session Key",

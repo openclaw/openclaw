@@ -8,6 +8,7 @@ import {
   extractHookToken,
   isHookAgentAllowed,
   normalizeHookDispatchSessionKey,
+  resolveHookRuntimeSessionKey,
   resolveHookSessionKey,
   resolveHookTargetAgentId,
   normalizeAgentPayload,
@@ -313,6 +314,81 @@ describe("gateway hooks helpers", () => {
         targetAgentId: "hooks",
       }),
     ).toBe("agent:hooks:slack:channel:c123");
+  });
+
+  test("resolveHookRuntimeSessionKey agent-scopes plain session keys", () => {
+    expect(
+      resolveHookRuntimeSessionKey({
+        sessionKey: "foo",
+        targetAgentId: "dev",
+      }),
+    ).toBe("agent:dev:foo");
+  });
+
+  test("resolveHookRuntimeSessionKey preserves already agent-scoped keys", () => {
+    expect(
+      resolveHookRuntimeSessionKey({
+        sessionKey: "agent:dev:bar",
+        targetAgentId: "dev",
+      }),
+    ).toBe("agent:dev:bar");
+  });
+
+  test("resolveHookRuntimeSessionKey rebinds cross-agent keys and scopes", () => {
+    expect(
+      resolveHookRuntimeSessionKey({
+        sessionKey: "agent:main:slack:channel:c123",
+        targetAgentId: "hooks",
+      }),
+    ).toBe("agent:hooks:slack:channel:c123");
+  });
+
+  test("resolveHookRuntimeSessionKey scopes main alias to agent", () => {
+    expect(
+      resolveHookRuntimeSessionKey({
+        sessionKey: "main",
+        targetAgentId: "dev",
+      }),
+    ).toBe("agent:dev:main");
+  });
+
+  test("resolveHookRuntimeSessionKey falls back to defaultAgentId when targetAgentId is omitted", () => {
+    expect(
+      resolveHookRuntimeSessionKey({
+        sessionKey: "foo",
+        targetAgentId: undefined,
+        defaultAgentId: "main",
+      }),
+    ).toBe("agent:main:foo");
+  });
+
+  test("resolveHookRuntimeSessionKey returns unscoped key when both agentIds are omitted", () => {
+    expect(
+      resolveHookRuntimeSessionKey({
+        sessionKey: "foo",
+        targetAgentId: undefined,
+      }),
+    ).toBe("foo");
+  });
+
+  test("resolveHookRuntimeSessionKey canonicalizes main alias when cfg.session.mainKey differs", () => {
+    expect(
+      resolveHookRuntimeSessionKey({
+        sessionKey: "main",
+        targetAgentId: "dev",
+        cfg: { session: { mainKey: "primary" } },
+      }),
+    ).toBe("agent:dev:primary");
+  });
+
+  test("resolveHookRuntimeSessionKey canonicalizes agent:id:main to configured mainKey", () => {
+    expect(
+      resolveHookRuntimeSessionKey({
+        sessionKey: "agent:dev:main",
+        targetAgentId: "dev",
+        cfg: { session: { mainKey: "work" } },
+      }),
+    ).toBe("agent:dev:work");
   });
 
   test("resolveHooksConfig validates defaultSessionKey and generated fallback against prefixes", () => {

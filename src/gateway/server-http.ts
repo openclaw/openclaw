@@ -13,6 +13,7 @@ import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { listBundledChannelPlugins } from "../channels/plugins/bundled.js";
 import { loadConfig } from "../config/config.js";
+import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -51,6 +52,7 @@ import {
   normalizeWakePayload,
   readJsonBody,
   normalizeHookDispatchSessionKey,
+  resolveHookRuntimeSessionKey,
   resolveHookSessionKey,
   resolveHookTargetAgentId,
   resolveHookChannel,
@@ -551,16 +553,68 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
         return true;
       }
-      const sessionKey = resolveHookSessionKey({
-        hooksConfig,
-        source: "request",
-        sessionKey: normalized.value.sessionKey,
-      });
-      if (!sessionKey.ok) {
-        sendJson(res, 400, { ok: false, error: sessionKey.error });
-        return true;
+      // Normalize "current" to "isolated" before policy checks — hooks have no active
+      // conversation context, so "current" is equivalent to "isolated".
+      const requestSessionTarget =
+        normalized.value.sessionTarget === "current" ? "isolated" : normalized.value.sessionTarget;
+      // sessionTarget values other than "isolated" override the policy-checked sessionKey
+      // in dispatchAgentHook. Enforce session policy for all non-isolated targets from requests.
+      if (requestSessionTarget && requestSessionTarget !== "isolated") {
+        if (!hooksConfig.sessionPolicy.allowRequestSessionKey) {
+          sendJson(res, 400, {
+            ok: false,
+            error: 'sessionTarget other than "isolated" requires hooks.allowRequestSessionKey=true',
+          });
+          return true;
+        }
+      }
+      const effectiveIsolated = !requestSessionTarget || requestSessionTarget === "isolated";
+      // Only validate request sessionKey when the target is "isolated" — for non-isolated
+      // targets (main, session:<id>) dispatch overrides the session key, so the request
+      // sessionKey is irrelevant and should not cause spurious 400 rejections.
+      let resolvedSessionKeyValue = "";
+      if (effectiveIsolated) {
+        const sessionKey = resolveHookSessionKey({
+          hooksConfig,
+          source: "request",
+          sessionKey: normalized.value.sessionKey,
+        });
+        if (!sessionKey.ok) {
+          sendJson(res, 400, { ok: false, error: sessionKey.error });
+          return true;
+        }
+        resolvedSessionKeyValue = sessionKey.value;
       }
       const targetAgentId = resolveHookTargetAgentId(hooksConfig, normalized.value.agentId);
+      // For "session:<id>" and "main", validate the resolved session key against prefix policy.
+      // Done after agent resolution so the check covers the agent-normalized key.
+      if (requestSessionTarget?.startsWith("session:")) {
+        const extractedId = requestSessionTarget.slice("session:".length);
+        const runtimeKey = resolveHookRuntimeSessionKey({
+          sessionKey: extractedId,
+          targetAgentId,
+          defaultAgentId: hooksConfig.agentPolicy.defaultAgentId,
+          cfg: loadConfig(),
+        });
+        const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+        if (allowedPrefixes && !isSessionKeyAllowedByPrefix(runtimeKey, allowedPrefixes)) {
+          sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
+          return true;
+        }
+      } else if (requestSessionTarget === "main") {
+        const mainKey = resolveMainSessionKeyFromConfig();
+        const runtimeKey = resolveHookRuntimeSessionKey({
+          sessionKey: mainKey,
+          targetAgentId,
+          defaultAgentId: hooksConfig.agentPolicy.defaultAgentId,
+          cfg: loadConfig(),
+        });
+        const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+        if (allowedPrefixes && !isSessionKeyAllowedByPrefix(runtimeKey, allowedPrefixes)) {
+          sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
+          return true;
+        }
+      }
       const replayKey = buildHookReplayCacheKey({
         pathKey: "agent",
         token,
@@ -572,6 +626,7 @@ export function createHooksRequestHandler(
           message: normalized.value.message,
           name: normalized.value.name,
           wakeMode: normalized.value.wakeMode,
+          sessionTarget: normalized.value.sessionTarget ?? "isolated",
           deliver: normalized.value.deliver,
           channel: normalized.value.channel,
           to: normalized.value.to ?? null,
@@ -585,17 +640,21 @@ export function createHooksRequestHandler(
         sendJson(res, 200, { ok: true, runId: cachedRunId });
         return true;
       }
+      // For isolated targets, validate the normalized dispatch session key against prefix policy.
+      // Non-isolated targets have already been validated above against the actual runtime key.
       const normalizedDispatchSessionKey = normalizeHookDispatchSessionKey({
-        sessionKey: sessionKey.value,
+        sessionKey: resolvedSessionKeyValue,
         targetAgentId,
       });
-      const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
-      if (
-        allowedPrefixes &&
-        !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
-      ) {
-        sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
-        return true;
+      if (effectiveIsolated) {
+        const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+        if (
+          allowedPrefixes &&
+          !isSessionKeyAllowedByPrefix(normalizedDispatchSessionKey, allowedPrefixes)
+        ) {
+          sendJson(res, 400, { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) });
+          return true;
+        }
       }
       const runId = dispatchAgentHook({
         ...normalized.value,
@@ -658,6 +717,38 @@ export function createHooksRequestHandler(
             sessionKey: sessionKey.value,
             targetAgentId,
           });
+          // Validate session:<id> and "main" targets against allowedSessionKeyPrefixes.
+          // Normalize through agent rebinding first so the check covers the final key.
+          const mappingSessionTarget = mapped.action.sessionTarget;
+          if (mappingSessionTarget?.startsWith("session:")) {
+            const extractedId = mappingSessionTarget.slice("session:".length);
+            const runtimeKey = resolveHookRuntimeSessionKey({
+              sessionKey: extractedId,
+              targetAgentId,
+            });
+            const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+            if (allowedPrefixes && !isSessionKeyAllowedByPrefix(runtimeKey, allowedPrefixes)) {
+              sendJson(res, 400, {
+                ok: false,
+                error: getHookSessionKeyPrefixError(allowedPrefixes),
+              });
+              return true;
+            }
+          } else if (mappingSessionTarget === "main") {
+            const mainKey = resolveMainSessionKeyFromConfig();
+            const runtimeKey = resolveHookRuntimeSessionKey({
+              sessionKey: mainKey,
+              targetAgentId,
+            });
+            const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+            if (allowedPrefixes && !isSessionKeyAllowedByPrefix(runtimeKey, allowedPrefixes)) {
+              sendJson(res, 400, {
+                ok: false,
+                error: getHookSessionKeyPrefixError(allowedPrefixes),
+              });
+              return true;
+            }
+          }
           const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
           if (
             allowedPrefixes &&
@@ -677,6 +768,7 @@ export function createHooksRequestHandler(
               message: mapped.action.message,
               name: mapped.action.name ?? "Hook",
               wakeMode: mapped.action.wakeMode,
+              sessionTarget: mapped.action.sessionTarget ?? "isolated",
               deliver: resolveHookDeliver(mapped.action.deliver),
               channel,
               to: mapped.action.to ?? null,
@@ -696,6 +788,7 @@ export function createHooksRequestHandler(
             idempotencyKey,
             agentId: targetAgentId,
             wakeMode: mapped.action.wakeMode,
+            sessionTarget: mapped.action.sessionTarget,
             sessionKey: normalizedDispatchSessionKey,
             deliver: resolveHookDeliver(mapped.action.deliver),
             channel,

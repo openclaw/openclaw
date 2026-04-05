@@ -4,8 +4,14 @@ import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+import type { CronSessionTarget } from "../cron/types.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
@@ -205,6 +211,7 @@ export type HookAgentPayload = {
   agentId?: string;
   idempotencyKey?: string;
   wakeMode: "now" | "next-heartbeat";
+  sessionTarget?: CronSessionTarget;
   sessionKey?: string;
   deliver: boolean;
   channel: HookMessageChannel;
@@ -352,6 +359,45 @@ export function normalizeHookDispatchSessionKey(params: {
   return `agent:${targetAgentId}:${parsed.rest}`;
 }
 
+/**
+ * Resolve the full runtime session key that will actually be used by
+ * runCronIsolatedAgentTurn. This applies both the agent-scoping normalization
+ * (toAgentStoreSessionKey) and the dispatch-level rebinding, matching the key
+ * that the cron runner will ultimately use. Use this for prefix policy checks
+ * so that policy is enforced against the actual runtime key, not a
+ * pre-normalization intermediate.
+ */
+export function resolveHookRuntimeSessionKey(params: {
+  sessionKey: string;
+  targetAgentId: string | undefined;
+  defaultAgentId?: string | undefined;
+  cfg?: { session?: { mainKey?: string } };
+}): string {
+  // First apply the dispatch-level normalization (agent rebinding).
+  const dispatched = normalizeHookDispatchSessionKey(params);
+  // When targetAgentId is omitted, the cron runner falls back to the default
+  // agent (resolveDefaultAgentId). Use the same fallback for policy checks so
+  // the prefix is validated against the actual runtime key.
+  const effectiveAgentId = params.targetAgentId ?? params.defaultAgentId;
+  if (!effectiveAgentId) {
+    return dispatched;
+  }
+  // Apply the same agent-store scoping that resolveCronAgentSessionKey uses.
+  // This ensures plain keys like "foo" become "agent:<id>:foo" and already-scoped
+  // keys are preserved, matching the runtime behavior.
+  const storeKey = toAgentStoreSessionKey({
+    agentId: effectiveAgentId,
+    requestKey: dispatched,
+  });
+  // Canonicalize main-key aliases (e.g. "agent:<id>:main" → "agent:<id>:primary"
+  // when session.mainKey="primary") so policy checks match the final runtime key.
+  return canonicalizeMainSessionAlias({
+    cfg: params.cfg,
+    agentId: effectiveAgentId,
+    sessionKey: storeKey,
+  });
+}
+
 export function normalizeAgentPayload(payload: Record<string, unknown>):
   | {
       ok: true;
@@ -383,6 +429,15 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
   if (modelRaw !== undefined && !model) {
     return { ok: false, error: "model required" };
   }
+  const sessionTargetRaw = payload.sessionTarget;
+  let sessionTarget: CronSessionTarget | undefined;
+  if (typeof sessionTargetRaw === "string" && sessionTargetRaw.trim()) {
+    const v = sessionTargetRaw.trim();
+    if (v === "isolated" || v === "main" || v === "current" || /^session:[^\s]+$/.test(v)) {
+      sessionTarget = v as CronSessionTarget;
+    }
+    // Invalid values are silently ignored → defaults to "isolated" at dispatch
+  }
   const deliver = resolveHookDeliver(payload.deliver);
   const thinkingRaw = payload.thinking;
   const thinking =
@@ -400,6 +455,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       agentId,
       idempotencyKey,
       wakeMode,
+      sessionTarget,
       sessionKey,
       deliver,
       channel,

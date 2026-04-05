@@ -1,3 +1,5 @@
+import type { CronSessionTarget } from "../cron/types.js";
+
 export type HookMappingMatch = {
   path?: string;
   source?: string;
@@ -16,6 +18,8 @@ export type HookMappingConfig = {
   name?: string;
   /** Route this hook to a specific agent (unknown ids fall back to the default agent). */
   agentId?: string;
+  /** Session target for the hook dispatch ("isolated" | "main" | "current" | "session:<id>"). Defaults to "isolated". */
+  sessionTarget?: CronSessionTarget;
   sessionKey?: string;
   messageTemplate?: string;
   textTemplate?: string;
