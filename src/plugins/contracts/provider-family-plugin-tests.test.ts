@@ -2,7 +2,10 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BUNDLED_PLUGIN_ROOT_DIR, bundledPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
+import {
+  BUNDLED_PLUGIN_ROOT_DIR,
+  bundledPluginRoot,
+} from "../../../test/helpers/bundled-plugin-paths.js";
 
 type SharedFamilyHookKind = "replay" | "stream" | "tool-compat";
 
@@ -38,6 +41,9 @@ const EXPECTED_SHARED_FAMILY_CONTRACTS: Record<string, ExpectedSharedFamilyContr
   },
   "anthropic-vertex": {
     replayFamilies: ["anthropic-by-model"],
+  },
+  fireworks: {
+    replayFamilies: ["openai-compatible"],
   },
   google: {
     replayFamilies: ["google-gemini"],
@@ -168,12 +174,9 @@ function listMatchingFamilies(source: string, pattern: RegExp): string[] {
 
 function collectSharedFamilyAssignments(): Map<string, ExpectedSharedFamilyContract> {
   const inventory = new Map<string, ExpectedSharedFamilyContract>();
-  const replayPattern =
-    /buildProviderReplayFamilyHooks\s*\(\s*\{\s*family:\s*"([^"]+)"/gu;
-  const streamPattern =
-    /buildProviderStreamFamilyHooks\s*\(\s*"([^"]+)"/gu;
-  const toolCompatPattern =
-    /buildProviderToolCompatFamilyHooks\s*\(\s*"([^"]+)"/gu;
+  const replayPattern = /buildProviderReplayFamilyHooks\s*\(\s*\{\s*family:\s*"([^"]+)"/gu;
+  const streamPattern = /buildProviderStreamFamilyHooks\s*\(\s*"([^"]+)"/gu;
+  const toolCompatPattern = /buildProviderToolCompatFamilyHooks\s*\(\s*"([^"]+)"/gu;
 
   for (const filePath of listFiles(EXTENSIONS_DIR)) {
     if (!filePath.endsWith(".ts") || filePath.endsWith(".test.ts")) {
@@ -183,7 +186,11 @@ function collectSharedFamilyAssignments(): Map<string, ExpectedSharedFamilyContr
     const replayFamilies = listMatchingFamilies(source, replayPattern);
     const streamFamilies = listMatchingFamilies(source, streamPattern);
     const toolCompatFamilies = listMatchingFamilies(source, toolCompatPattern);
-    if (replayFamilies.length === 0 && streamFamilies.length === 0 && toolCompatFamilies.length === 0) {
+    if (
+      replayFamilies.length === 0 &&
+      streamFamilies.length === 0 &&
+      toolCompatFamilies.length === 0
+    ) {
       continue;
     }
     const pluginId = resolveBundledPluginId(filePath);
@@ -192,13 +199,19 @@ function collectSharedFamilyAssignments(): Map<string, ExpectedSharedFamilyContr
     }
     const entry = inventory.get(pluginId) ?? {};
     if (replayFamilies.length > 0) {
-      entry.replayFamilies = [...new Set([...(entry.replayFamilies ?? []), ...replayFamilies])].toSorted();
+      entry.replayFamilies = [
+        ...new Set([...(entry.replayFamilies ?? []), ...replayFamilies]),
+      ].toSorted();
     }
     if (streamFamilies.length > 0) {
-      entry.streamFamilies = [...new Set([...(entry.streamFamilies ?? []), ...streamFamilies])].toSorted();
+      entry.streamFamilies = [
+        ...new Set([...(entry.streamFamilies ?? []), ...streamFamilies]),
+      ].toSorted();
     }
     if (toolCompatFamilies.length > 0) {
-      entry.toolCompatFamilies = [...new Set([...(entry.toolCompatFamilies ?? []), ...toolCompatFamilies])].toSorted();
+      entry.toolCompatFamilies = [
+        ...new Set([...(entry.toolCompatFamilies ?? []), ...toolCompatFamilies]),
+      ].toSorted();
     }
     inventory.set(pluginId, entry);
   }

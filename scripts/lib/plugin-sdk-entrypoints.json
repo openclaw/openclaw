@@ -221,6 +221,7 @@
   "state-paths",
   "synthetic",
   "target-resolver-runtime",
+  "telegram-command-config",
   "thread-ownership",
   "tlon",
   "tool-send",
