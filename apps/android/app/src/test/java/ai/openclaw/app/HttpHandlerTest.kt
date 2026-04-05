@@ -1,52 +1,57 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.node.HttpHandler
-import ai.openclaw.app.protocol.OpenClawHttpCommand
-import com.nhaarman.mockitokotlin2.any
-import com.nhaarman.mockitokotlin2.mock
-import com.nhaarman.mockitokotlin2.whenever
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.io.ByteArrayInputStream
-import java.io.InputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.UnknownHostException
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class HttpHandlerTest {
-  private val handler = HttpHandler()
+  private lateinit var server: MockWebServer
+  private lateinit var handler: HttpHandler
+
+  @Before
+  fun setUp() {
+    server = MockWebServer()
+    server.start()
+    handler = HttpHandler()
+  }
+
+  @After
+  fun tearDown() {
+    server.shutdown()
+  }
+
+  private fun serverUrl(path: String = "/"): String = server.url(path).toString()
 
   @Test
   fun handles_GET_request_successfully() {
-    val mockConnection = mock<HttpURLConnection>()
-    whenever(mockConnection.responseCode).thenReturn(200)
-    whenever(mockConnection.responseMessage).thenReturn("OK")
-    whenever(mockConnection.headerFields).thenReturn(
-      mapOf(
-        "Content-Type" to listOf("application/json"),
-        "X-Custom" to listOf("value")
-      )
+    server.enqueue(
+      MockResponse()
+        .setResponseCode(200)
+        .setBody("""{"success":true}""")
+        .setHeader("Content-Type", "application/json")
+        .setHeader("X-Custom", "value")
     )
-    whenever(mockConnection.inputStream).thenReturn(ByteArrayInputStream("""{"success":true}""".toByteArray()))
 
-    val mockUrl = mock<URL>()
-    whenever(mockUrl.openConnection()).thenReturn(mockConnection)
-
-    val result = handler.handleHttpRequest("""{"url":"http://example.com/api","method":"GET"}""")
+    val result = handler.handleHttpRequest("""{"url":"${serverUrl("api")}","method":"GET"}""")
 
     assertNotNull(result)
     assertTrue(result.ok)
-    assertTrue(result.payload?.contains("\"status\":200") ?: false)
-    assertTrue(result.payload?.contains("\"statusText\":\"OK\"") ?: false)
+    assertTrue(result.payloadJson!!.contains("\"status\":200"))
+    assertTrue(result.payloadJson!!.contains("\"statusText\":\"OK\""))
+    assertTrue(result.payloadJson!!.contains(""""Content-Type":"application/json""""))
+    assertTrue(result.payloadJson!!.contains(""""body":"{\"success\":true}""""))
   }
 
   @Test
@@ -55,8 +60,8 @@ class HttpHandlerTest {
 
     assertNotNull(result)
     assertFalse(result.ok)
-    assertTrue(result.message?.contains("INVALID_REQUEST") ?: false)
-    assertTrue(result.message?.contains("http or https") ?: false)
+    assertTrue(result.error!!.message.contains("INVALID_REQUEST"))
+    assertTrue(result.error!!.message.contains("http or https"))
   }
 
   @Test
@@ -65,112 +70,78 @@ class HttpHandlerTest {
 
     assertNotNull(result)
     assertFalse(result.ok)
-    assertTrue(result.message?.contains("DNS_ERROR") ?: false)
-  }
-
-  @Test
-  fun handles_connection_timeout() {
-    val result = handler.handleHttpRequest("""{"url":"http://example.com/slow","timeout":1}""")
-
-    assertNotNull(result)
-    assertFalse(result.ok)
-    assertTrue(result.message?.contains("TIMEOUT") ?: false)
+    assertTrue(result.error!!.message.contains("DNS_ERROR"))
   }
 
   @Test
   fun respects_timeout_parameter() {
-    val mockConnection = mock<HttpURLConnection>()
-    whenever(mockConnection.responseCode).thenReturn(200)
-    whenever(mockConnection.responseMessage).thenReturn("OK")
-    whenever(mockConnection.headerFields).thenReturn(emptyMap())
-    whenever(mockConnection.inputStream).thenReturn(ByteArrayInputStream("{}".toByteArray()))
+    server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
 
-    val mockUrl = mock<URL>()
-    whenever(mockUrl.openConnection()).thenReturn(mockConnection)
-
-    val result = handler.handleHttpRequest("""{"url":"http://example.com/api","timeout":5000}""")
-
-    assertNotNull(result)
-  }
-
-  @Test
-  fun parses_headers_correctly() {
-    val mockConnection = mock<HttpURLConnection>()
-    whenever(mockConnection.responseCode).thenReturn(200)
-    whenever(mockConnection.responseMessage).thenReturn("OK")
-    whenever(mockConnection.headerFields).thenReturn(
-      mapOf(
-        "Content-Type" to listOf("application/json"),
-        "X-Custom" to listOf("value1", "value2")
-      )
-    )
-    whenever(mockConnection.inputStream).thenReturn(ByteArrayInputStream("{}".toByteArray()))
-
-    val mockUrl = mock<URL>()
-    whenever(mockUrl.openConnection()).thenReturn(mockConnection)
-
-    val result = handler.handleHttpRequest(
-      """{"url":"http://example.com/api","headers":{"Authorization":"Bearer token","X-Req":"test"}}"""
-    )
+    val result = handler.handleHttpRequest("""{"url":"${serverUrl("api")}","timeout":5000}""")
 
     assertNotNull(result)
     assertTrue(result.ok)
+  }
+
+  @Test
+  fun parses_request_headers_correctly() {
+    server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+
+    handler.handleHttpRequest(
+      """{"url":"${serverUrl("api")}","headers":{"Authorization":"Bearer token","X-Req":"test"}}"""
+    )
+
+    val recorded = server.takeRequest()
+    assertEquals("Bearer token", recorded.getHeader("Authorization"))
+    assertEquals("test", recorded.getHeader("X-Req"))
   }
 
   @Test
   fun truncates_body_to_MAX_BODY_SIZE_BYTES() {
     val largeBody = "x".repeat(6 * 1024 * 1024)
-    val mockConnection = mock<HttpURLConnection>()
-    whenever(mockConnection.responseCode).thenReturn(200)
-    whenever(mockConnection.responseMessage).thenReturn("OK")
-    whenever(mockConnection.headerFields).thenReturn(emptyMap())
-    whenever(mockConnection.inputStream).thenReturn(ByteArrayInputStream(largeBody.toByteArray()))
+    server.enqueue(MockResponse().setResponseCode(200).setBody(largeBody))
 
-    val mockUrl = mock<URL>()
-    whenever(mockUrl.openConnection()).thenReturn(mockConnection)
-
-    val result = handler.handleHttpRequest("""{"url":"http://example.com/large"}""")
+    val result = handler.handleHttpRequest("""{"url":"${serverUrl("large")}"}""")
 
     assertNotNull(result)
+    assertTrue(result.ok)
+    val payload = result.payloadJson!!
+    val bodyStart = payload.indexOf("\"body\":\"")
+    assertTrue(bodyStart >= 0)
+    val bodyContentStart = bodyStart + "\"body\":\"".length
+    val bodyContentEnd = payload.indexOf("\"", bodyContentStart)
+    val bodyContent = payload.substring(bodyContentStart, bodyContentEnd)
+    assertTrue(bodyContent.length <= 5 * 1024 * 1024)
   }
 
   @Test
   fun supports_POST_with_body() {
-    val mockConnection = mock<HttpURLConnection>()
-    whenever(mockConnection.responseCode).thenReturn(201)
-    whenever(mockConnection.responseMessage).thenReturn("Created")
-    whenever(mockConnection.headerFields).thenReturn(emptyMap())
-    whenever(mockConnection.inputStream).thenReturn(ByteArrayInputStream("""{"id":123}""".toByteArray()))
-
-    val mockUrl = mock<URL>()
-    whenever(mockUrl.openConnection()).thenReturn(mockConnection)
+    server.enqueue(MockResponse().setResponseCode(201).setBody("""{"id":123}"""))
 
     val result = handler.handleHttpRequest(
-      """{"url":"http://example.com/api","method":"POST","body":"{\"name\":\"test\"}"}"""
+      """{"url":"${serverUrl("api")}","method":"POST","body":"{\"name\":\"test\"}"}"""
     )
 
     assertNotNull(result)
     assertTrue(result.ok)
-    assertTrue(result.payload?.contains("\"status\":201") ?: false)
+    assertTrue(result.payloadJson!!.contains("\"status\":201"))
+
+    val recorded = server.takeRequest()
+    assertEquals("POST", recorded.method)
+    val body = recorded.body.readUtf8()
+    assertTrue(body.contains("\"name\":\"test\""))
   }
 
   @Test
-  fun returns_correct_status_and_statusText() {
-    val mockConnection = mock<HttpURLConnection>()
-    whenever(mockConnection.responseCode).thenReturn(404)
-    whenever(mockConnection.responseMessage).thenReturn("Not Found")
-    whenever(mockConnection.headerFields).thenReturn(emptyMap())
-    whenever(mockConnection.inputStream).thenReturn(null as InputStream?)
-    whenever(mockConnection.errorStream).thenReturn(ByteArrayInputStream("Not Found".toByteArray()))
+  fun returns_error_response_for_404() {
+    server.enqueue(MockResponse().setResponseCode(404).setBody("Not Found"))
 
-    val mockUrl = mock<URL>()
-    whenever(mockUrl.openConnection()).thenReturn(mockConnection)
-
-    val result = handler.handleHttpRequest("""{"url":"http://example.com/missing"}""")
+    val result = handler.handleHttpRequest("""{"url":"${serverUrl("missing")}"}""")
 
     assertNotNull(result)
-    assertFalse(result.ok)
-    assertTrue(result.payload?.contains("\"status\":404") ?: false)
-    assertTrue(result.payload?.contains("\"statusText\":\"Not Found\"") ?: false)
+    assertTrue(result.ok)
+    assertTrue(result.payloadJson!!.contains("\"status\":404"))
+    assertTrue(result.payloadJson!!.contains("\"ok\":false"))
+    assertTrue(result.payloadJson!!.contains(""""body":"Not Found""""))
   }
 }

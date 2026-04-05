@@ -143,6 +143,7 @@ class InvokeCommandRegistryTest {
           motionActivityAvailable = true,
           motionPedometerAvailable = false,
           debugBuild = false,
+          httpEnabled = false,
         ),
       )
 
@@ -242,6 +243,7 @@ class InvokeCommandRegistryTest {
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
     debugBuild: Boolean = false,
+    httpEnabled: Boolean = false,
   ): NodeRuntimeFlags =
     NodeRuntimeFlags(
       cameraEnabled = cameraEnabled,
@@ -254,6 +256,7 @@ class InvokeCommandRegistryTest {
       motionActivityAvailable = motionActivityAvailable,
       motionPedometerAvailable = motionPedometerAvailable,
       debugBuild = debugBuild,
+      httpEnabled = httpEnabled,
     )
 
   private fun assertContainsAll(actual: List<String>, expected: Set<String>) {

@@ -83,6 +83,7 @@ class InvokeDispatcher(
   private val onCanvasA2uiReset: () -> Unit,
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
+  private val httpEnabled: () -> Boolean,
 ) {
   suspend fun handleInvoke(command: String, paramsJson: String?): GatewaySession.InvokeResult {
     val spec =
@@ -330,7 +331,14 @@ class InvokeDispatcher(
           )
         }
       InvokeCommandAvailability.HttpEnabled ->
-        null
+        if (httpEnabled()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "HTTP_DISABLED",
+            message = "HTTP_DISABLED: enable HTTP Access in Settings",
+          )
+        }
       InvokeCommandAvailability.DebugBuild ->
         if (debugBuild()) {
           null

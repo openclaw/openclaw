@@ -191,6 +191,7 @@ class NodeRuntime(
     onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
     motionActivityAvailable = { motionHandler.isActivityAvailable() },
     motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
+    httpEnabled = { prefs.httpAccessEnabled.value },
   )
 
   data class GatewayTrustPrompt(

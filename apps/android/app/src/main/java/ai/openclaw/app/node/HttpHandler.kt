@@ -23,6 +23,7 @@ internal data class HttpRequest(
 
 class HttpHandler(
   private val json: Json = Json { ignoreUnknownKeys = true },
+  private val urlFactory: (String) -> URL = ::URL,
 ) {
   fun handleHttpRequest(paramsJson: String?): GatewaySession.InvokeResult {
     val request =
@@ -43,7 +44,7 @@ class HttpHandler(
 
   private fun validateUrl(url: String): URL? {
     return try {
-      val parsed = URL(url)
+      val parsed = urlFactory(url)
       if (parsed.protocol !in listOf("http", "https")) return null
       parsed
     } catch (_: Throwable) {
@@ -103,8 +104,10 @@ class HttpHandler(
       val responseBody = try {
         val inputStream = if (responseCode >= 400) connection.errorStream else connection.inputStream
         if (inputStream != null) {
-          inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-            reader.readText().take(MAX_BODY_SIZE_BYTES)
+          inputStream.use { stream ->
+            val buffer = ByteArray(MAX_BODY_SIZE_BYTES)
+            val bytesRead = stream.read(buffer, 0, MAX_BODY_SIZE_BYTES)
+            if (bytesRead > 0) String(buffer, 0, bytesRead, Charsets.UTF_8) else null
           }
         } else {
           null

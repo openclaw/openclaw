@@ -37,7 +37,7 @@ class SecurePrefs(
     private const val notificationsForwardingMaxEventsPerMinuteKey =
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
-  private const val httpAccessEnabledKey = "http.access.enabled"
+    private const val httpAccessEnabledKey = "http.access.enabled"
   }
 
   private val appContext = context.applicationContext
