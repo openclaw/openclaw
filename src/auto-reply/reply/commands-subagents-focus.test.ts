@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  addSubagentRunForTests,
-  resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.js";
+import { subagentRuns } from "../../agents/subagent-registry-memory.js";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { installSubagentsCommandCoreMocks } from "./commands-subagents.test-mocks.js";
@@ -186,21 +184,13 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 vi.mock("../../acp/runtime/session-meta.js", async () => {
-  const actual = await vi.importActual<typeof import("../../acp/runtime/session-meta.js")>(
-    "../../acp/runtime/session-meta.js",
-  );
   return {
-    ...actual,
     readAcpSessionEntry: (params: unknown) => hoisted.readAcpSessionEntryMock(params),
   };
 });
 
-vi.mock("../../infra/outbound/session-binding-service.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../infra/outbound/session-binding-service.js")
-  >("../../infra/outbound/session-binding-service.js");
+vi.mock("../../infra/outbound/session-binding-service.js", () => {
   return {
-    ...actual,
     getSessionBindingService: () => buildFocusSessionBindingService(),
   };
 });
@@ -222,6 +212,14 @@ const { buildCommandTestParams } = await import("./commands-spawn.test-harness.j
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
+
+function resetSubagentRegistryForTests() {
+  subagentRuns.clear();
+}
+
+function addSubagentRunForTests(entry: SubagentRunRecord) {
+  subagentRuns.set(entry.runId, entry);
+}
 
 function createThreadCommandParams(commandBody: string) {
   const params = buildCommandTestParams(commandBody, baseCfg, {
@@ -655,6 +653,8 @@ describe("/focus, /unfocus, /agents", () => {
     const result = await handleSubagentsCommand(createThreadCommandParams("/agents"), true);
     const text = result?.reply?.text ?? "";
 
+    expect(text).toContain("Agent: main");
+    expect(text).toContain("Workspace: /tmp");
     expect(text).toContain("agents:");
     expect(text).toContain("binding:thread-1");
     expect(text).toContain("acp/session bindings:");

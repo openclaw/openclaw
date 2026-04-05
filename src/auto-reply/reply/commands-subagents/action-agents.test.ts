@@ -65,6 +65,8 @@ describe("handleSubagentsAgentsAction", () => {
 
     const result = handleSubagentsAgentsAction({
       params: {
+        agentId: "main",
+        workspaceDir: "/tmp/openclaw-workspace-main",
         ctx: {
           Provider: THREAD_CHANNEL,
           Surface: THREAD_CHANNEL,
@@ -101,6 +103,8 @@ describe("handleSubagentsAgentsAction", () => {
       restTokens: [],
     } as never);
 
+    expect(result.reply?.text).toContain("Agent: main");
+    expect(result.reply?.text).toContain("Workspace: /tmp/openclaw-workspace-main");
     expect(result.reply?.text).toContain("current worker label");
     expect(result.reply?.text).not.toContain("stale worker label");
   });

@@ -10,7 +10,7 @@ vi.mock("../../../agents/subagent-control.js", () => ({
   steerControlledSubagentRun,
 }));
 
-vi.mock("./shared.js", () => ({
+vi.mock("./core.js", () => ({
   COMMAND: "/subagents",
   resolveCommandSubagentController: () => ({
     controllerSessionKey: "agent:main:main",
@@ -18,6 +18,13 @@ vi.mock("./shared.js", () => ({
     callerIsSubagent: false,
     controlScope: "children",
   }),
+  stopWithText: (text: string) => ({
+    shouldContinue: false,
+    reply: { text },
+  }),
+}));
+
+vi.mock("../commands-subagents-read.js", () => ({
   resolveSubagentEntryForToken: () => ({
     entry: {
       runId: "run-target",
@@ -30,10 +37,6 @@ vi.mock("./shared.js", () => ({
       createdAt: Date.now() - 5_000,
       startedAt: Date.now() - 4_000,
     },
-  }),
-  stopWithText: (text: string) => ({
-    shouldContinue: false,
-    reply: { text },
   }),
 }));
 
