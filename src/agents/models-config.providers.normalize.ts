@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { registerProviderRetryConfig } from "./provider-retry.js";
+import { clearProviderRetryRunners, registerProviderRetryConfig } from "./provider-retry.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   normalizeProviderSpecificConfig,
@@ -44,6 +44,10 @@ export function normalizeProviders(params: {
   };
   let mutated = false;
   const next: Record<string, ProviderConfig> = {};
+
+  // Rebuild the provider retry runner registry on every normalization pass
+  // so removed/changed retry configs take effect without a process restart.
+  clearProviderRetryRunners();
 
   for (const [key, provider] of Object.entries(providers)) {
     const normalizedKey = key.trim();
@@ -133,14 +137,16 @@ export function normalizeProviders(params: {
         ...normalizedProvider,
         models: normalizedProvider.models ?? existing.models,
       };
-      continue;
+    } else {
+      next[normalizedKey] = normalizedProvider;
     }
-    next[normalizedKey] = normalizedProvider;
 
     // Register provider-level retry config when present so the transport
     // layer can wrap LLM API calls with retry on transient failures.
-    if (normalizedProvider.retry) {
-      registerProviderRetryConfig(normalizedKey, normalizedProvider.retry);
+    // Uses the final merged value so duplicate-key merges are covered.
+    const finalRetry = next[normalizedKey]?.retry;
+    if (finalRetry) {
+      registerProviderRetryConfig(normalizedKey, finalRetry);
     }
   }
 

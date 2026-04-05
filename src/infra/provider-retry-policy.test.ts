@@ -107,6 +107,20 @@ describe("createProviderApiRetryRunner", () => {
     expect(attempts).toBe(1);
   });
 
+  it("does not retry on 422 Unprocessable Entity", async () => {
+    let attempts = 0;
+    const runner = createProviderApiRetryRunner({ retry: ZERO_DELAY_RETRY });
+    await expect(
+      runner(async () => {
+        attempts += 1;
+        const error = new Error("Unprocessable Entity") as Error & { status: number };
+        error.status = 422;
+        throw error;
+      }, "test"),
+    ).rejects.toThrow("Unprocessable Entity");
+    expect(attempts).toBe(1);
+  });
+
   it("respects attempt limit", async () => {
     let attempts = 0;
     const runner = createProviderApiRetryRunner({

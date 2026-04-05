@@ -121,7 +121,7 @@ function isNonRetryableProviderError(err: unknown): boolean {
   }
   const status = "status" in err ? (err.status as number) : undefined;
   // Client errors that are never retryable
-  return status === 400 || status === 401 || status === 403 || status === 404;
+  return status === 400 || status === 401 || status === 403 || status === 404 || status === 422;
 }
 
 export function createProviderApiRetryRunner(params: {
