@@ -181,13 +181,13 @@ export async function resolveTelegramInboundBody(params: {
 
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
-    isGroup &&
-    requireMention &&
     hasAudio &&
     !hasUserText &&
-    mentionRegexes.length > 0 &&
-    !disableAudioPreflight &&
-    senderAllowedForAudioPreflight;
+    (!isGroup ||
+      (requireMention &&
+        mentionRegexes.length > 0 &&
+        !disableAudioPreflight &&
+        senderAllowedForAudioPreflight));
 
   if (needsPreflightTranscription) {
     try {
