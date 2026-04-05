@@ -231,10 +231,14 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
 
 describe("createApproverRestrictedNativeApprovalCapability", () => {
   it("builds the canonical approval capability and preserves legacy split compatibility", () => {
+    const describeExecApprovalSetup = vi.fn(
+      ({ channel, channelLabel }: { channel: string; channelLabel: string }) =>
+        `${channelLabel}:${channel}:setup`,
+    );
     const capability = createApproverRestrictedNativeApprovalCapability({
       channel: "matrix",
       channelLabel: "Matrix",
-      describeExecApprovalSetup: ({ channel, channelLabel }) => `${channelLabel}:${channel}:setup`,
+      describeExecApprovalSetup,
       listAccountIds: () => ["work"],
       hasApprovers: () => true,
       isExecAuthorizedSender: ({ senderId }) => senderId === "@owner:example.com",
@@ -283,6 +287,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     const legacy = createApproverRestrictedNativeApprovalAdapter({
       channel: "matrix",
       channelLabel: "Matrix",
+      describeExecApprovalSetup,
       listAccountIds: () => ["work"],
       hasApprovers: () => true,
       isExecAuthorizedSender: ({ senderId }) => senderId === "@owner:example.com",
@@ -335,5 +340,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
         approvalKind: "exec",
       }),
     );
+    expect(split.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
+    expect(legacy.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
   });
 });

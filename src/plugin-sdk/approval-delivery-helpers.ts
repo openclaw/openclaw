@@ -195,6 +195,7 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
   delivery: ChannelApprovalCapability["delivery"];
   render: ChannelApprovalCapability["render"];
   native: ChannelApprovalCapability["native"];
+  describeExecApprovalSetup: ChannelApprovalCapability["describeExecApprovalSetup"];
 } {
   return {
     auth: {
@@ -205,6 +206,7 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
     delivery: capability.delivery,
     render: capability.render,
     native: capability.native,
+    describeExecApprovalSetup: capability.describeExecApprovalSetup,
   };
 }
 
