@@ -23,7 +23,7 @@ That's it. islo automatically:
 
 ## What you need
 
-- [islo CLI](https://docs.islo.dev) installed and logged in (`islo auth login`)
+- [islo CLI](https://docs.islo.dev) installed and logged in (`islo login`)
 - Anthropic API key — via [islo.dev integrations](https://app.islo.dev/settings/integrations) (recommended) or `--env`
 
 ## Interactive Mode
