@@ -30,9 +30,10 @@ import {
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
 import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
+import { formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
+import type { GatewaySessionRow, SessionsListResult, TaskFlowDetail } from "../types.ts";
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
@@ -58,6 +59,10 @@ export type ChatProps = {
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
+  taskFlow?: TaskFlowDetail | null;
+  taskFlowLoading?: boolean;
+  taskFlowActionBusy?: boolean;
+  taskFlowError?: string | null;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -83,6 +88,9 @@ export type ChatProps = {
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
+  onTaskFlowRefresh?: () => void;
+  onTaskFlowRetry?: () => void;
+  onTaskFlowCancel?: () => void;
   onClearHistory?: () => void;
   agentsList: {
     agents: Array<{ id: string; name?: string; identity?: { name?: string; avatarUrl?: string } }>;
@@ -353,6 +361,106 @@ function formatTokensCompact(n: number): string {
     return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
   }
   return String(n);
+}
+
+function renderTaskFlowCard(props: ChatProps) {
+  const flow = props.taskFlow ?? null;
+  const loading = Boolean(props.taskFlowLoading);
+  const busy = Boolean(props.taskFlowActionBusy);
+  const error = props.taskFlowError ?? null;
+  if (!flow && !loading && !error) {
+    return nothing;
+  }
+  const retry = flow?.retry;
+  const resolution = flow?.resolution;
+  const activeTasks = flow?.taskSummary.active ?? 0;
+  const latestTask = flow?.tasks?.[0];
+  return html`
+    <section class="task-flow-card" aria-live="polite">
+      <div class="task-flow-card__header">
+        <div>
+          <div class="task-flow-card__eyebrow">Task flow</div>
+          <div class="task-flow-card__title">
+            ${flow ? flow.goal : loading ? "Loading latest flow…" : "Task flow unavailable"}
+          </div>
+        </div>
+        <div class="task-flow-card__actions">
+          <button
+            class="btn btn--ghost"
+            type="button"
+            ?disabled=${loading || busy || !props.onTaskFlowRefresh}
+            @click=${() => props.onTaskFlowRefresh?.()}
+          >
+            ${icons.refresh} Refresh
+          </button>
+          <button
+            class="btn btn--ghost"
+            type="button"
+            ?disabled=${busy || !flow || !retry?.eligible || !props.onTaskFlowRetry}
+            @click=${() => props.onTaskFlowRetry?.()}
+            title=${retry?.reason ?? "Retry latest task flow"}
+          >
+            ${busy ? icons.loader : icons.refresh} Retry
+          </button>
+          <button
+            class="btn btn--ghost"
+            type="button"
+            ?disabled=${busy ||
+            !flow ||
+            flow.status === "cancelled" ||
+            flow.status === "succeeded" ||
+            !props.onTaskFlowCancel}
+            @click=${() => props.onTaskFlowCancel?.()}
+          >
+            ${icons.stop} Cancel
+          </button>
+        </div>
+      </div>
+
+      ${flow
+        ? html`
+            <div class="task-flow-card__meta">
+              <span class="task-flow-card__pill task-flow-card__pill--status">${flow.status}</span>
+              ${flow.currentStep
+                ? html`<span class="task-flow-card__pill">Step: ${flow.currentStep}</span>`
+                : nothing}
+              <span class="task-flow-card__pill"
+                >Updated ${formatRelativeTimestamp(flow.updatedAt)}</span
+              >
+              <span class="task-flow-card__pill">Tasks ${flow.taskSummary.total}</span>
+              ${activeTasks > 0
+                ? html`<span class="task-flow-card__pill">Active ${activeTasks}</span>`
+                : nothing}
+              ${typeof flow.retryCount === "number"
+                ? html`<span class="task-flow-card__pill">Retries ${flow.retryCount}</span>`
+                : nothing}
+            </div>
+            ${resolution?.summary ||
+            retry?.reason ||
+            flow.blocked?.summary ||
+            latestTask?.progressSummary ||
+            latestTask?.terminalSummary
+              ? html`
+                  <div class="task-flow-card__summary">
+                    ${resolution?.summary ??
+                    flow.blocked?.summary ??
+                    latestTask?.progressSummary ??
+                    latestTask?.terminalSummary ??
+                    retry?.reason}
+                  </div>
+                `
+              : nothing}
+            ${retry?.reason
+              ? html`<div class="task-flow-card__reason">Retry: ${retry.reason}</div>`
+              : nothing}
+            ${retry?.command
+              ? html`<div class="task-flow-card__command"><code>${retry.command}</code></div>`
+              : nothing}
+          `
+        : nothing}
+      ${error ? html`<div class="task-flow-card__error">${error}</div>` : nothing}
+    </section>
+  `;
 }
 
 function generateAttachmentId(): string {
@@ -1209,6 +1317,7 @@ export function renderChat(props: ChatProps) {
           : nothing}
       </div>
 
+      ${renderTaskFlowCard(props)}
       ${props.queue.length
         ? html`
             <div class="chat-queue" role="status" aria-live="polite">

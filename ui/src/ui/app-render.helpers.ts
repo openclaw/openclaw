@@ -13,6 +13,7 @@ import {
 import { refreshVisibleToolsEffectiveForCurrentSession } from "./controllers/agents.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
+import { loadLatestTaskFlow } from "./controllers/task-flows.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
@@ -511,6 +512,8 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   (state as unknown as { chatQueue: unknown[] }).chatQueue = [];
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
   state.chatRunId = null;
+  state.taskFlowDetail = null;
+  state.taskFlowError = null;
   (state as unknown as OpenClawApp).resetToolStream();
   (state as unknown as OpenClawApp).resetChatScroll();
   state.applySettings({
@@ -525,6 +528,7 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
     true,
   );
   void loadChatHistory(state as unknown as ChatState);
+  void loadLatestTaskFlow(state as unknown as Parameters<typeof loadLatestTaskFlow>[0]);
   void refreshSessionOptions(state);
 }
 

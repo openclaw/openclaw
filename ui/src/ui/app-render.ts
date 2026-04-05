@@ -91,6 +91,11 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import {
+  cancelLatestTaskFlow,
+  loadLatestTaskFlow,
+  retryLatestTaskFlow,
+} from "./controllers/task-flows.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
@@ -1542,6 +1547,8 @@ export function renderApp(state: AppViewState) {
                 state.chatStreamStartedAt = null;
                 state.chatRunId = null;
                 state.chatQueue = [];
+                state.taskFlowDetail = null;
+                state.taskFlowError = null;
                 state.resetToolStream();
                 state.resetChatScroll();
                 state.applySettings({
@@ -1552,6 +1559,7 @@ export function renderApp(state: AppViewState) {
                 void state.loadAssistantIdentity();
                 void loadChatHistory(state);
                 void refreshChatAvatar(state);
+                void loadLatestTaskFlow(state);
               },
               thinkingLevel: state.chatThinkingLevel,
               showThinking,
@@ -1576,7 +1584,11 @@ export function renderApp(state: AppViewState) {
               focusMode: chatFocus,
               onRefresh: () => {
                 state.resetToolStream();
-                return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
+                return Promise.all([
+                  loadChatHistory(state),
+                  refreshChatAvatar(state),
+                  loadLatestTaskFlow(state),
+                ]);
               },
               onToggleFocusMode: () => {
                 if (state.onboarding) {
@@ -1598,6 +1610,13 @@ export function renderApp(state: AppViewState) {
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
               onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+              taskFlow: state.taskFlowDetail,
+              taskFlowLoading: state.taskFlowLoading,
+              taskFlowActionBusy: state.taskFlowActionBusy,
+              taskFlowError: state.taskFlowError,
+              onTaskFlowRefresh: () => loadLatestTaskFlow(state),
+              onTaskFlowRetry: () => retryLatestTaskFlow(state),
+              onTaskFlowCancel: () => cancelLatestTaskFlow(state),
               onClearHistory: async () => {
                 if (!state.client || !state.connected) {
                   return;
@@ -1608,6 +1627,7 @@ export function renderApp(state: AppViewState) {
                   state.chatStream = null;
                   state.chatRunId = null;
                   await loadChatHistory(state);
+                  await loadLatestTaskFlow(state);
                 } catch (err) {
                   state.lastError = String(err);
                 }
@@ -1619,12 +1639,15 @@ export function renderApp(state: AppViewState) {
                 state.chatMessages = [];
                 state.chatStream = null;
                 state.chatRunId = null;
+                state.taskFlowDetail = null;
+                state.taskFlowError = null;
                 state.applySettings({
                   ...state.settings,
                   sessionKey: state.sessionKey,
                   lastActiveSessionKey: state.sessionKey,
                 });
                 void loadChatHistory(state);
+                void loadLatestTaskFlow(state);
                 void state.loadAssistantIdentity();
               },
               onNavigateToAgent: () => {

@@ -2410,6 +2410,96 @@ td.data-table-key-col {
   min-width: 240px;
 }
 
+/* Task flow card */
+.task-flow-card {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card) 88%, var(--accent-subtle));
+  display: grid;
+  gap: 10px;
+}
+
+.task-flow-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-flow-card__eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.task-flow-card__title {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.task-flow-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-flow-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-flow-card__pill {
+  padding: 4px 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.task-flow-card__pill--status {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.task-flow-card__summary,
+.task-flow-card__reason,
+.task-flow-card__error,
+.task-flow-card__command {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.task-flow-card__summary {
+  color: var(--text);
+}
+
+.task-flow-card__reason {
+  color: var(--muted);
+}
+
+.task-flow-card__error {
+  color: var(--danger);
+}
+
+.task-flow-card__command code {
+  display: block;
+  overflow-x: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
 /* Chat queue */
 .chat-queue {
   margin-top: 12px;

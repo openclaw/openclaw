@@ -35,6 +35,7 @@ import {
 import { loadHealthState } from "./controllers/health.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions, subscribeSessions } from "./controllers/sessions.ts";
+import { loadLatestTaskFlow } from "./controllers/task-flows.ts";
 import {
   resolveGatewayErrorDetailCode,
   type GatewayEventFrame,
@@ -251,6 +252,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       void loadHealthState(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
+      void loadLatestTaskFlow(host as unknown as OpenClawApp);
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason, error }) => {
@@ -356,6 +358,9 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   if (state === "final" && !historyReloaded && shouldReloadHistoryForFinalEvent(payload)) {
     void loadChatHistory(host as unknown as OpenClawApp);
   }
+  if (payload?.sessionKey && payload.sessionKey === host.sessionKey && state !== "delta") {
+    void loadLatestTaskFlow(host as unknown as OpenClawApp);
+  }
 }
 
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
@@ -411,6 +416,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "sessions.changed") {
     void loadSessions(host as unknown as OpenClawApp);
+    void loadLatestTaskFlow(host as unknown as OpenClawApp);
     return;
   }
 

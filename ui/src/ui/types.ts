@@ -419,6 +419,85 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   };
 };
 
+export type TaskFlowResolution = {
+  code: "retry_available" | "user_action_required";
+  retryable: boolean;
+  needsUserAction: boolean;
+  summary: string;
+};
+
+export type TaskFlowRetry = {
+  eligible: boolean;
+  needsUserAction: boolean;
+  reason: string;
+  command?: string;
+};
+
+export type TaskRunAggregateSummary = {
+  total: number;
+  active: number;
+  terminal: number;
+  failures: number;
+  byStatus: Record<string, number>;
+  byRuntime: Record<string, number>;
+};
+
+export type TaskRunView = {
+  id: string;
+  runtime: string;
+  title: string;
+  status: string;
+  deliveryStatus: string;
+  notifyPolicy: string;
+  createdAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  lastEventAt?: number;
+  progressSummary?: string;
+  terminalSummary?: string;
+  terminalOutcome?: string;
+  error?: string;
+};
+
+export type TaskFlowDetail = {
+  id: string;
+  ownerKey: string;
+  status: string;
+  notifyPolicy: string;
+  goal: string;
+  currentStep?: string;
+  retryCount?: number;
+  lastRetryAt?: number;
+  cancelRequestedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  endedAt?: number;
+  state?: unknown;
+  wait?: unknown;
+  blocked?: {
+    taskId?: string;
+    summary?: string;
+  };
+  resolution?: TaskFlowResolution;
+  retry?: TaskFlowRetry;
+  tasks: TaskRunView[];
+  taskSummary: TaskRunAggregateSummary;
+};
+
+export type TaskFlowActionResult =
+  | {
+      found: boolean;
+      retried: boolean;
+      reason?: string;
+      flow?: TaskFlowDetail | null;
+    }
+  | {
+      found: boolean;
+      cancelled: boolean;
+      reason?: string;
+      flow?: TaskFlowDetail | null;
+    };
+
 export type {
   CostUsageDailyEntry,
   CostUsageSummary,

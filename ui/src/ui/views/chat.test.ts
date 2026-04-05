@@ -351,6 +351,69 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("757.3k / 200k");
   });
 
+  it("renders a task-flow card with retry/cancel controls and reason text", async () => {
+    const container = document.createElement("div");
+    const onRetry = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          taskFlow: {
+            id: "flow-1",
+            ownerKey: "main",
+            status: "blocked",
+            notifyPolicy: "summary",
+            goal: "Retry the long-running flow",
+            currentStep: "waiting for confirmation",
+            retryCount: 1,
+            createdAt: Date.now() - 60_000,
+            updatedAt: Date.now() - 5_000,
+            resolution: {
+              code: "retry_available",
+              retryable: true,
+              needsUserAction: false,
+              summary: "Flow blocked while waiting for user confirmation.",
+            },
+            retry: {
+              eligible: true,
+              needsUserAction: false,
+              reason: "User can retry after confirming the task.",
+              command: "/retry flow-1",
+            },
+            tasks: [],
+            taskSummary: {
+              total: 2,
+              active: 0,
+              terminal: 2,
+              failures: 1,
+              byStatus: { succeeded: 1, failed: 1 },
+              byRuntime: { subagent: 2 },
+            },
+          },
+          onTaskFlowRetry: onRetry,
+          onTaskFlowCancel: onCancel,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Task flow");
+    expect(container.textContent).toContain("Retry the long-running flow");
+    expect(container.textContent).toContain("Flow blocked while waiting for user confirmation.");
+    expect(container.textContent).toContain("Retry: User can retry after confirming the task.");
+    expect(container.textContent).toContain("/retry flow-1");
+
+    (
+      container.querySelector(".task-flow-card__actions button:nth-child(2)") as HTMLButtonElement
+    ).click();
+    (
+      container.querySelector(".task-flow-card__actions button:nth-child(3)") as HTMLButtonElement
+    ).click();
+
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it("hides the context notice when totalTokens is missing even if inputTokens is high", () => {
     const container = document.createElement("div");
     render(

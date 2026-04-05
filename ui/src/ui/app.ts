@@ -90,6 +90,7 @@ import type {
   PresenceEntry,
   ChannelsStatusSnapshot,
   SessionsListResult,
+  TaskFlowDetail,
   SkillStatusReport,
   StatusSummary,
   NostrProfile,
@@ -176,6 +177,10 @@ export class OpenClawApp extends LitElement {
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
+  @state() taskFlowLoading = false;
+  @state() taskFlowActionBusy = false;
+  @state() taskFlowDetail: TaskFlowDetail | null = null;
+  @state() taskFlowError: string | null = null;
   @state() navDrawerOpen = false;
 
   onSlashAction?: (action: string) => void;

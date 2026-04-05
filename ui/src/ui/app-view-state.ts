@@ -34,6 +34,7 @@ import type {
   SessionUsageTimeSeries,
   SessionsListResult,
   SkillStatusReport,
+  TaskFlowDetail,
   StatusSummary,
   ToolsCatalogResult,
 } from "./types.ts";
@@ -81,6 +82,10 @@ export type AppViewState = {
   chatModelCatalog: ModelCatalogEntry[];
   chatQueue: ChatQueueItem[];
   chatManualRefreshInFlight: boolean;
+  taskFlowLoading: boolean;
+  taskFlowActionBusy: boolean;
+  taskFlowDetail: TaskFlowDetail | null;
+  taskFlowError: string | null;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;

@@ -116,6 +116,9 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  "tasks.flows.findLatest",
+  "tasks.flows.cancel",
+  "tasks.flows.retry",
 ];
 
 export function listGatewayMethods(): string[] {
