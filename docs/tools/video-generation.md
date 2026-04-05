@@ -15,6 +15,10 @@ The `video_generate` tool lets the agent create videos using your configured pro
 The tool only appears when at least one video-generation provider is available. If you don't see `video_generate` in your agent's tools, configure `agents.defaults.videoGenerationModel` or set up a provider API key.
 </Note>
 
+<Note>
+OpenClaw now records `video_generate` runs in the task ledger when the agent has a session key, so long-running generations can be tracked with task/run ids even though the tool still waits for completion in the current turn.
+</Note>
+
 ## Quick start
 
 1. Set an API key for at least one provider (for example `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MODELSTUDIO_API_KEY`, or `QWEN_API_KEY`).
@@ -115,6 +119,7 @@ If a provider fails, the next candidate is tried automatically. If all fail, the
 - OpenAI uses the native video endpoint and currently defaults to `sora-2`.
 - Qwen supports image/video references, but the upstream DashScope video endpoint currently requires remote `http(s)` URLs for those references.
 - xAI uses the native xAI video API and supports text-to-video, image-to-video, and remote video edit/extend flows.
+- fal uses the queue-backed fal video flow for long-running jobs instead of a single blocking inference request.
 
 ## Qwen reference inputs
 

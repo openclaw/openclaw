@@ -164,6 +164,8 @@ export function createOpenClawTools(
   const videoGenerateTool = createVideoGenerateTool({
     config: options?.config,
     agentDir: options?.agentDir,
+    agentSessionKey: options?.agentSessionKey,
+    requesterOrigin: deliveryContext ?? undefined,
     workspaceDir,
     sandbox,
     fsPolicy: options?.fsPolicy,
