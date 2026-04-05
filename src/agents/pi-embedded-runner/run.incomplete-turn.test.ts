@@ -8,6 +8,7 @@ import {
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
+import { resolvePlanningOnlyRetryInstruction } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
@@ -47,5 +48,34 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(mockedClassifyFailoverReason).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("verify before retrying");
+  });
+
+  it("detects replay-safe planning-only GPT turns", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+      }),
+    });
+
+    expect(retryInstruction).toContain("Do not restate the plan");
+  });
+
+  it("does not retry planning-only detection after tool activity", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+        toolMetas: [{ toolName: "bash", meta: "ls" }],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
   });
 });

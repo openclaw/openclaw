@@ -68,6 +68,10 @@ type GooglePromptCacheDeps = {
   now?: () => number;
 };
 
+type GooglePromptCacheStreamOptions = {
+  cachedContent?: string;
+};
+
 function resolveGooglePromptCacheTtl(cacheRetention: CacheRetention): string {
   return cacheRetention === "long" ? "3600s" : "300s";
 }

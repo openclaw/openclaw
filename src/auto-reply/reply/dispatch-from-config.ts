@@ -597,10 +597,12 @@ export async function dispatchReplyFromConfig(params: {
       }
     }
 
-    // Forum topics are threaded conversations within a group — verbose tool
-    // summaries should be delivered into the topic thread, same as DMs.
-    const shouldSendToolSummaries =
-      (ctx.ChatType !== "group" || ctx.IsForum === true) && ctx.CommandSource !== "native";
+    // Forum topics are threaded conversations within a group — tool visibility
+    // should be delivered into the topic thread, same as DMs.
+    const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const toolStartStatusesSent = new Set<string>();
+    let toolStartStatusCount = 0;
     const acpDispatch = await dispatchAcpRuntime.tryDispatchAcpReply({
       ctx,
       cfg,
@@ -698,6 +700,28 @@ export async function dispatchReplyFromConfig(params: {
             }
           };
           return run();
+        },
+        onToolStart: ({ name, phase }) => {
+          if (!shouldSendToolStartStatuses || phase !== "start") {
+            return;
+          }
+          const normalizedName = typeof name === "string" ? name.trim() : "";
+          if (
+            !normalizedName ||
+            toolStartStatusCount >= 2 ||
+            toolStartStatusesSent.has(normalizedName)
+          ) {
+            return;
+          }
+          toolStartStatusesSent.add(normalizedName);
+          toolStartStatusCount += 1;
+          const payload: ReplyPayload = {
+            text: `Working: ${normalizedName}`,
+          };
+          if (shouldRouteToOriginating) {
+            return sendPayloadAsync(payload, undefined, false);
+          }
+          dispatcher.sendToolResult(payload);
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           const run = async () => {

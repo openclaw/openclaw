@@ -67,10 +67,6 @@ export function resolveExtraParams(params: {
       ? params.cfg.agents.list.find((agent) => agent.id === params.agentId)?.params
       : undefined;
 
-  if (!defaultParams && !globalParams && !agentParams) {
-    return undefined;
-  }
-
   const merged = Object.assign({}, defaultParams, globalParams, agentParams);
   const resolvedParallelToolCalls = resolveAliasedParamValue(
     [defaultParams, globalParams, agentParams],
@@ -102,7 +98,9 @@ export function resolveExtraParams(params: {
     delete merged.cached_content;
   }
 
-  return merged;
+  applyDefaultOpenAIGptRuntimeParams(params, merged);
+
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
@@ -184,6 +182,37 @@ function sanitizeExtraParamsRecord(
       ([key]) => key !== "__proto__" && key !== "prototype" && key !== "constructor",
     ),
   );
+}
+
+function shouldApplyDefaultOpenAIGptRuntimeParams(params: {
+  provider: string;
+  modelId: string;
+}): boolean {
+  if (params.provider !== "openai" && params.provider !== "openai-codex") {
+    return false;
+  }
+  return /^gpt-5(?:[.-]|$)/i.test(params.modelId);
+}
+
+function applyDefaultOpenAIGptRuntimeParams(
+  params: { provider: string; modelId: string },
+  merged: Record<string, unknown>,
+): void {
+  if (!shouldApplyDefaultOpenAIGptRuntimeParams(params)) {
+    return;
+  }
+  if (
+    !Object.hasOwn(merged, "parallel_tool_calls") &&
+    !Object.hasOwn(merged, "parallelToolCalls")
+  ) {
+    merged.parallel_tool_calls = true;
+  }
+  if (!Object.hasOwn(merged, "text_verbosity") && !Object.hasOwn(merged, "textVerbosity")) {
+    merged.text_verbosity = "low";
+  }
+  if (!Object.hasOwn(merged, "openaiWsWarmup")) {
+    merged.openaiWsWarmup = true;
+  }
 }
 
 export function resolveAgentTransportOverride(params: {

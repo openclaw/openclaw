@@ -297,6 +297,8 @@ Convention:
 - OpenClaw strips/suppresses this in the delivery layer.
 - Exact silent-token suppression is case-insensitive, so `NO_REPLY` and
   `no_reply` both count when the whole payload is just the silent token.
+- This is for true background/no-delivery turns only; it is not a shortcut for
+  ordinary actionable user requests.
 
 As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a
 partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial

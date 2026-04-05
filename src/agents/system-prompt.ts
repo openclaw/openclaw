@@ -255,6 +255,20 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
   ];
 }
 
+function buildExecutionBiasSection(params: { isMinimal: boolean }) {
+  if (params.isMinimal) {
+    return [];
+  }
+  return [
+    "## Execution Bias",
+    "If the user asks you to do the work, start doing it in the same turn.",
+    "Use a real tool call or concrete action first when the task is actionable; do not stop at a plan or promise-to-act reply.",
+    "Commentary-only turns are incomplete when tools are available and the next action is clear.",
+    "If the work will take multiple steps or a while to finish, send one short progress update before or while acting.",
+    "",
+  ];
+}
+
 function buildExecApprovalPromptGuidance(params: {
   runtimeChannel?: string;
   inlineButtonsEnabled?: boolean;
@@ -303,6 +317,7 @@ export function buildAgentSystemPrompt(params: {
     os?: string;
     arch?: string;
     node?: string;
+    provider?: string;
     model?: string;
     defaultModel?: string;
     shell?: string;
@@ -589,6 +604,9 @@ export function buildAgentSystemPrompt(params: {
     "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
     "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
     "",
+    ...buildExecutionBiasSection({
+      isMinimal,
+    }),
     ...safetySection,
     "## OpenClaw CLI Quick Reference",
     "OpenClaw is controlled via subcommands. Do not invent commands.",
@@ -743,10 +761,12 @@ export function buildAgentSystemPrompt(params: {
   if (!isMinimal) {
     lines.push(
       "## Silent Replies",
-      `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,
+      `Use ${SILENT_REPLY_TOKEN} ONLY when no user-visible reply is required.`,
       "",
       "⚠️ Rules:",
-      "- It must be your ENTIRE message — nothing else",
+      "- Valid cases: silent housekeeping, deliberate no-op ambient wakeups, or after a messaging tool already delivered the user-visible reply.",
+      "- Never use it to avoid doing requested work or to end an actionable turn early.",
+      "- It must be your ENTIRE message - nothing else",
       `- Never append it to an actual response (never include "${SILENT_REPLY_TOKEN}" in real replies)`,
       "- Never wrap it in markdown or code blocks",
       "",
