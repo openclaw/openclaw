@@ -5,6 +5,7 @@ import type { Tone } from "../plugin-sdk/memory-core-host-status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
+import { readInstallPathStatusSummary } from "./status.install-path-summary.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
 let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
@@ -210,9 +211,10 @@ export async function statusCommand(
   });
 
   if (opts.json) {
-    const [daemon, nodeDaemon] = await Promise.all([
+    const [daemon, nodeDaemon, installPath] = await Promise.all([
       getDaemonStatusSummary(),
       getNodeDaemonStatusSummary(),
+      readInstallPathStatusSummary({ cfg, update }),
     ]);
     writeRuntimeJson(runtime, {
       ...summary,
@@ -235,6 +237,7 @@ export async function statusCommand(
       },
       gatewayService: daemon,
       nodeService: nodeDaemon,
+      installPathCheck: installPath,
       agents: agentStatus,
       securityAudit,
       secretDiagnostics,
@@ -308,9 +311,10 @@ export async function statusCommand(
         }).httpUrl
       : "disabled";
 
-  const [daemon, nodeDaemon] = await Promise.all([
+  const [daemon, nodeDaemon, installPath] = await Promise.all([
     getDaemonStatusSummary(),
     getNodeDaemonStatusSummary(),
+    readInstallPathStatusSummary({ cfg, update }),
   ]);
   const nodeOnlyGateway = await loadStatusNodeModeModule().then(({ resolveNodeOnlyGatewayInfo }) =>
     resolveNodeOnlyGatewayInfo({
@@ -516,6 +520,7 @@ export async function statusCommand(
       : []),
     { Item: "Gateway service", Value: daemonValue },
     { Item: "Node service", Value: nodeDaemonValue },
+    { Item: "Install path check", Value: installPath.formatted },
     { Item: "Agents", Value: agentsValue },
     { Item: "Memory", Value: memoryValue },
     { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
