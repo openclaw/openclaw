@@ -1469,7 +1469,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 const payloadText = payload.text;
                 const requiresFinalTextEdit =
                   quietDraftStreaming ||
-                  (Boolean(payloadText) && !draftStream.matchesPreparedText(payloadText));
+                  (typeof payloadText === "string" &&
+                    !draftStream.matchesPreparedText(payloadText));
                 if (textEditOk && payloadText && requiresFinalTextEdit) {
                   textEditOk = await editMessageMatrix(roomId, draftEventId, payloadText, {
                     client,
