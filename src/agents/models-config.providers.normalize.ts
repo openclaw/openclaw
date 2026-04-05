@@ -27,6 +27,13 @@ export function normalizeProviders(params: {
   secretRefManagedProviders?: Set<string>;
 }): ModelsConfig["providers"] {
   const { providers } = params;
+
+  // Rebuild the provider retry runner registry on every normalization pass
+  // so removed/changed retry configs take effect without a process restart.
+  // Called before the early return so clearing also happens when the provider
+  // map is empty/undefined (all providers removed).
+  clearProviderRetryRunners();
+
   if (!providers) {
     return providers;
   }
@@ -44,10 +51,6 @@ export function normalizeProviders(params: {
   };
   let mutated = false;
   const next: Record<string, ProviderConfig> = {};
-
-  // Rebuild the provider retry runner registry on every normalization pass
-  // so removed/changed retry configs take effect without a process restart.
-  clearProviderRetryRunners();
 
   for (const [key, provider] of Object.entries(providers)) {
     const normalizedKey = key.trim();
