@@ -8,6 +8,7 @@ import {
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
 import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
@@ -291,28 +292,13 @@ export function createOpenClawTools(
   }
 
   const pluginTools = resolvePluginTools({
-    context: {
-      config: options?.config,
+    ...resolveOpenClawPluginToolInputs({
+      options,
+      resolvedConfig,
       runtimeConfig: runtimeSnapshot?.config,
-      workspaceDir,
-      agentDir: options?.agentDir,
-      agentId: sessionAgentId,
-      sessionKey: options?.agentSessionKey,
-      sessionId: options?.sessionId,
-      browser: {
-        sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
-        allowHostControl: options?.allowHostBrowserControl,
-      },
-      messageChannel: options?.agentChannel,
-      agentAccountId: options?.agentAccountId,
-      deliveryContext,
-      requesterSenderId: options?.requesterSenderId ?? undefined,
-      senderIsOwner: options?.senderIsOwner ?? undefined,
-      sandboxed: options?.sandboxed,
-    },
+    }),
     existingToolNames: new Set(tools.map((tool) => tool.name)),
     toolAllowlist: options?.pluginToolAllowlist,
-    allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   });
 
   const wrappedPluginTools = applyPluginToolDeliveryDefaults({
