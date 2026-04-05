@@ -39,6 +39,41 @@ describe("searxng client", () => {
     ).toEqual([{ title: "One", url: "https://example.com/1", content: "A" }]);
   });
 
+  it("preserves img_src from image search results", () => {
+    expect(
+      __testing.parseSearxngResponseText(
+        JSON.stringify({
+          results: [
+            {
+              title: "Kitten",
+              url: "https://example.com/kitten",
+              content: "A cute kitten",
+              img_src: "https://cdn.example.com/kitten.jpg",
+            },
+            {
+              title: "No Image",
+              url: "https://example.com/text",
+              content: "Text only",
+            },
+          ],
+        }),
+        10,
+      ),
+    ).toEqual([
+      {
+        title: "Kitten",
+        url: "https://example.com/kitten",
+        content: "A cute kitten",
+        img_src: "https://cdn.example.com/kitten.jpg",
+      },
+      {
+        title: "No Image",
+        url: "https://example.com/text",
+        content: "Text only",
+      },
+    ]);
+  });
+
   it("drops malformed result rows instead of failing the whole response", () => {
     expect(
       __testing.parseSearxngResponseText(
