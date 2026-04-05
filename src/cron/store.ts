@@ -26,21 +26,30 @@ function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
   };
 }
 
-function parseCronStoreForBackupComparison(raw: string): CronStoreFile | null {
-  try {
-    const parsed = parseJsonWithJson5Fallback(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const version = (parsed as { version?: unknown }).version;
-    const jobs = (parsed as { jobs?: unknown }).jobs;
-    if (version !== 1 || !Array.isArray(jobs)) {
-      return null;
-    }
+function normalizeCronStore(parsed: unknown): CronStoreFile | null {
+  if (Array.isArray(parsed)) {
     return {
       version: 1,
-      jobs: jobs.filter(Boolean) as CronStoreFile["jobs"],
+      jobs: parsed.filter(Boolean) as CronStoreFile["jobs"],
     };
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+  const version = (parsed as { version?: unknown }).version;
+  const jobs = (parsed as { jobs?: unknown }).jobs;
+  if (version !== 1 || !Array.isArray(jobs)) {
+    return null;
+  }
+  return {
+    version: 1,
+    jobs: jobs.filter(Boolean) as CronStoreFile["jobs"],
+  };
+}
+
+function parseCronStoreForBackupComparison(raw: string): CronStoreFile | null {
+  try {
+    return normalizeCronStore(parseJsonWithJson5Fallback(raw));
   } catch {
     return null;
   }
@@ -85,15 +94,7 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
         cause: err,
       });
     }
-    const parsedRecord =
-      parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {};
-    const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
-    const store = {
-      version: 1 as const,
-      jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
-    };
+    const store = normalizeCronStore(parsed) ?? { version: 1 as const, jobs: [] };
     serializedStoreCache.set(storePath, JSON.stringify(store, null, 2));
     return store;
   } catch (err) {

@@ -89,6 +89,56 @@ describe("cron store", () => {
     });
   });
 
+  it("loads legacy plain-array cron stores", async () => {
+    const store = await makeStorePath();
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify([
+        {
+          id: "job-1",
+          name: "Job 1",
+          enabled: true,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "tick-job-1" },
+          state: {},
+        },
+      ]),
+      "utf-8",
+    );
+
+    await expect(loadCronStore(store.storePath)).resolves.toMatchObject({
+      version: 1,
+      jobs: [{ id: "job-1", enabled: true }],
+    });
+  });
+
+  it("preserves legacy plain-array jobs when loading then saving", async () => {
+    const store = await makeStorePath();
+    const legacyJob = makeStore("job-legacy", true).jobs[0];
+    const newJob = makeStore("job-new", false).jobs[0];
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify([legacyJob]), "utf-8");
+
+    const loaded = await loadCronStore(store.storePath);
+    await saveCronStore(store.storePath, {
+      ...loaded,
+      jobs: [...loaded.jobs, newJob],
+    });
+
+    await expect(loadCronStore(store.storePath)).resolves.toMatchObject({
+      version: 1,
+      jobs: [
+        { id: "job-legacy", enabled: true },
+        { id: "job-new", enabled: false },
+      ],
+    });
+  });
+
   it("does not create a backup file when saving unchanged content", async () => {
     const store = await makeStorePath();
     const payload = makeStore("job-1", true);
