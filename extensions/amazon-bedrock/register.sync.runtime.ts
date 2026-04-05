@@ -5,7 +5,7 @@ import {
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
   streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   mergeImplicitBedrockProvider,
   resolveBedrockConfigApiKey,

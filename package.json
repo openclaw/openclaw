@@ -743,6 +743,14 @@
       "types": "./dist/plugin-sdk/provider-stream.d.ts",
       "default": "./dist/plugin-sdk/provider-stream.js"
     },
+    "./plugin-sdk/provider-stream-family": {
+      "types": "./dist/plugin-sdk/provider-stream-family.d.ts",
+      "default": "./dist/plugin-sdk/provider-stream-family.js"
+    },
+    "./plugin-sdk/provider-stream-shared": {
+      "types": "./dist/plugin-sdk/provider-stream-shared.d.ts",
+      "default": "./dist/plugin-sdk/provider-stream-shared.js"
+    },
     "./plugin-sdk/provider-tools": {
       "types": "./dist/plugin-sdk/provider-tools.d.ts",
       "default": "./dist/plugin-sdk/provider-tools.js"
