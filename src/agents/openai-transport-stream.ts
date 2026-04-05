@@ -1380,3 +1380,7 @@ function mapStopReason(reason: string | null) {
       };
   }
 }
+
+export const __testing = {
+  processOpenAICompletionsStream,
+};

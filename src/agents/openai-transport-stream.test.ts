@@ -6,6 +6,7 @@ import {
   parseTransportChunkUsage,
   resolveAzureOpenAIApiVersion,
   sanitizeTransportPayloadText,
+  __testing,
 } from "./openai-transport-stream.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 import {
@@ -1522,5 +1523,98 @@ describe("openai transport stream", () => {
 
     expect(params).toHaveProperty("tools");
     expect(params).toHaveProperty("tool_choice", "required");
+  });
+
+  it("resets stopReason to stop when finish_reason is tool_calls but tool_calls array is empty", async () => {
+    const model = {
+      id: "nemotron-3-super",
+      name: "Nemotron 3 Super",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1000000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream = {
+      push: () => {},
+    };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "nemotron-3-super",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant", content: "" },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "nemotron-3-super",
+        choices: [
+          {
+            index: 0,
+            delta: { content: "4" },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "nemotron-3-super",
+        choices: [
+          {
+            index: 0,
+            delta: { tool_calls: [] },
+            logprobs: null,
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+    ];
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content.some((block) => block.type === "toolCall")).toBe(false);
   });
 });
