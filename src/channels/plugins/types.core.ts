@@ -92,6 +92,7 @@ export type ChannelSetupInput = {
   accessToken?: string;
   password?: string;
   deviceName?: string;
+  avatarUrl?: string;
   initialSyncLimit?: number;
   ship?: string;
   url?: string;
@@ -533,6 +534,7 @@ export type ChannelMessagingAdapter = {
     agentId: string;
     accountId?: string | null;
     target: string;
+    currentSessionKey?: string;
     resolvedTarget?: {
       to: string;
       kind: ChannelDirectoryEntryKind | "channel";

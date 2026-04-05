@@ -13,7 +13,6 @@ export { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../a
 export { loadModelCatalog } from "../../agents/model-catalog.js";
 export {
   getModelRefStatus,
-  isCliProvider,
   normalizeModelSelection,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,

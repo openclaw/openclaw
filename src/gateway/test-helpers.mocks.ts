@@ -3,216 +3,61 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Mock, vi } from "vitest";
-import type { MsgContext } from "../auto-reply/templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
+import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
-import type { HooksConfig } from "../config/types.hooks.js";
-import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
-import type { PluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { createDefaultGatewayTestChannels } from "./test-helpers.channels.js";
-import { createDefaultGatewayTestSpeechProviders } from "./test-helpers.speech.js";
+import {
+  getTestPluginRegistry,
+  resetTestPluginRegistry,
+  setTestPluginRegistry,
+} from "./test-helpers.plugin-registry.js";
+import {
+  agentCommand,
+  cronIsolatedRun,
+  dispatchInboundMessageMock,
+  embeddedRunMock,
+  type GetReplyFromConfigFn,
+  getReplyFromConfig,
+  getGatewayTestHoistedState,
+  mockGetReplyFromConfigOnce,
+  piSdkMock,
+  runBtwSideQuestion,
+  sendWhatsAppMock,
+  sessionStoreSaveDelayMs,
+  setTestConfigRoot,
+  testConfigRoot,
+  testIsNixMode,
+  testState,
+  testTailnetIPv4,
+  testTailscaleWhois,
+  type RunBtwSideQuestionFn,
+} from "./test-helpers.runtime-state.js";
+
+export { getTestPluginRegistry, resetTestPluginRegistry, setTestPluginRegistry };
+export {
+  agentCommand,
+  cronIsolatedRun,
+  dispatchInboundMessageMock,
+  embeddedRunMock,
+  getReplyFromConfig,
+  mockGetReplyFromConfigOnce,
+  piSdkMock,
+  runBtwSideQuestion,
+  sendWhatsAppMock,
+  sessionStoreSaveDelayMs,
+  setTestConfigRoot,
+  testIsNixMode,
+  testState,
+  testTailnetIPv4,
+  testTailscaleWhois,
+};
 
 function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
   return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
 }
 
-type GetReplyFromConfigFn = (
-  ctx: MsgContext,
-  opts?: GetReplyOptions,
-  configOverride?: OpenClawConfig,
-) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
-type CronIsolatedRunFn = (...args: unknown[]) => Promise<{ status: string; summary: string }>;
-type AgentCommandFn = (...args: unknown[]) => Promise<void>;
-type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
-type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
-type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
-
-const createStubPluginRegistry = (): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  hooks: [],
-  typedHooks: [],
-  channels: createDefaultGatewayTestChannels(),
-  channelSetups: [],
-  providers: [],
-  speechProviders: createDefaultGatewayTestSpeechProviders(),
-  realtimeTranscriptionProviders: [],
-  realtimeVoiceProviders: [],
-  mediaUnderstandingProviders: [],
-  imageGenerationProviders: [],
-  videoGenerationProviders: [],
-  webFetchProviders: [],
-  webSearchProviders: [],
-  memoryEmbeddingProviders: [],
-  gatewayHandlers: {},
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  commands: [],
-  conversationBindingResolvedHandlers: [],
-  diagnostics: [],
-});
-
-const GATEWAY_TEST_PLUGIN_REGISTRY_STATE_KEY = Symbol.for(
-  "openclaw.gatewayTestHelpers.pluginRegistryState",
-);
-const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.configRoot");
-
-const hoisted = vi.hoisted(() => {
-  const key = Symbol.for("openclaw.gatewayTestHelpers.hoisted");
-  const store = globalThis as Record<PropertyKey, unknown>;
-  if (Object.prototype.hasOwnProperty.call(store, key)) {
-    return store[key] as {
-      testTailnetIPv4: { value: string | undefined };
-      piSdkMock: {
-        enabled: boolean;
-        discoverCalls: number;
-        models: Array<{
-          id: string;
-          name?: string;
-          provider: string;
-          contextWindow?: number;
-          reasoning?: boolean;
-        }>;
-      };
-      cronIsolatedRun: Mock<CronIsolatedRunFn>;
-      agentCommand: Mock<AgentCommandFn>;
-      runBtwSideQuestion: Mock<RunBtwSideQuestionFn>;
-      dispatchInboundMessage: Mock<DispatchInboundMessageFn>;
-      testIsNixMode: { value: boolean };
-      sessionStoreSaveDelayMs: { value: number };
-      embeddedRunMock: {
-        activeIds: Set<string>;
-        abortCalls: string[];
-        waitCalls: string[];
-        waitResults: Map<string, boolean>;
-      };
-      testTailscaleWhois: { value: TailscaleWhoisIdentity | null };
-      getReplyFromConfig: Mock<GetReplyFromConfigFn>;
-      sendWhatsAppMock: Mock<SendWhatsAppFn>;
-      testState: {
-        agentConfig: Record<string, unknown> | undefined;
-        agentsConfig: Record<string, unknown> | undefined;
-        bindingsConfig: AgentBinding[] | undefined;
-        channelsConfig: Record<string, unknown> | undefined;
-        sessionStorePath: string | undefined;
-        sessionConfig: Record<string, unknown> | undefined;
-        allowFrom: string[] | undefined;
-        cronStorePath: string | undefined;
-        cronEnabled: boolean | undefined;
-        gatewayBind: "auto" | "lan" | "tailnet" | "loopback" | undefined;
-        gatewayAuth: Record<string, unknown> | undefined;
-        gatewayControlUi: Record<string, unknown> | undefined;
-        hooksConfig: HooksConfig | undefined;
-        canvasHostPort: number | undefined;
-        legacyIssues: Array<{ path: string; message: string }>;
-        legacyParsed: Record<string, unknown>;
-        migrationConfig: Record<string, unknown> | null;
-        migrationChanges: string[];
-      };
-    };
-  }
-  const created = {
-    testTailnetIPv4: { value: undefined as string | undefined },
-    piSdkMock: {
-      enabled: false,
-      discoverCalls: 0,
-      models: [] as Array<{
-        id: string;
-        name?: string;
-        provider: string;
-        contextWindow?: number;
-        reasoning?: boolean;
-      }>,
-    },
-    cronIsolatedRun: vi.fn(async () => ({ status: "ok", summary: "ok" })),
-    agentCommand: vi.fn().mockResolvedValue(undefined),
-    runBtwSideQuestion: vi.fn().mockResolvedValue(undefined),
-    dispatchInboundMessage: vi.fn(),
-    testIsNixMode: { value: false },
-    sessionStoreSaveDelayMs: { value: 0 },
-    embeddedRunMock: {
-      activeIds: new Set<string>(),
-      abortCalls: [] as string[],
-      waitCalls: [] as string[],
-      waitResults: new Map<string, boolean>(),
-    },
-    testTailscaleWhois: { value: null as TailscaleWhoisIdentity | null },
-    getReplyFromConfig: vi.fn<GetReplyFromConfigFn>().mockResolvedValue(undefined),
-    sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
-    testState: {
-      agentConfig: undefined as Record<string, unknown> | undefined,
-      agentsConfig: undefined as Record<string, unknown> | undefined,
-      bindingsConfig: undefined as AgentBinding[] | undefined,
-      channelsConfig: undefined as Record<string, unknown> | undefined,
-      sessionStorePath: undefined as string | undefined,
-      sessionConfig: undefined as Record<string, unknown> | undefined,
-      allowFrom: undefined as string[] | undefined,
-      cronStorePath: undefined as string | undefined,
-      cronEnabled: false as boolean | undefined,
-      gatewayBind: undefined as "auto" | "lan" | "tailnet" | "loopback" | undefined,
-      gatewayAuth: undefined as Record<string, unknown> | undefined,
-      gatewayControlUi: undefined as Record<string, unknown> | undefined,
-      hooksConfig: undefined as HooksConfig | undefined,
-      canvasHostPort: undefined as number | undefined,
-      legacyIssues: [] as Array<{ path: string; message: string }>,
-      legacyParsed: {} as Record<string, unknown>,
-      migrationConfig: null as Record<string, unknown> | null,
-      migrationChanges: [] as string[],
-    },
-  };
-  store[key] = created;
-  return created;
-});
-
-const pluginRegistryState = resolveGlobalSingleton(GATEWAY_TEST_PLUGIN_REGISTRY_STATE_KEY, () => ({
-  registry: createStubPluginRegistry(),
-}));
-setActivePluginRegistry(pluginRegistryState.registry);
-
-export const setTestPluginRegistry = (registry: PluginRegistry) => {
-  pluginRegistryState.registry = registry;
-  setActivePluginRegistry(registry);
-};
-
-export const resetTestPluginRegistry = () => {
-  pluginRegistryState.registry = createStubPluginRegistry();
-  setActivePluginRegistry(pluginRegistryState.registry);
-};
-
-const testConfigRoot = resolveGlobalSingleton(GATEWAY_TEST_CONFIG_ROOT_KEY, () => ({
-  value: path.join(os.tmpdir(), `openclaw-gateway-test-${process.pid}-${crypto.randomUUID()}`),
-}));
-
-export const setTestConfigRoot = (root: string) => {
-  testConfigRoot.value = root;
-  process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");
-};
-
-export const testTailnetIPv4 = hoisted.testTailnetIPv4;
-export const testTailscaleWhois = hoisted.testTailscaleWhois;
-export const piSdkMock = hoisted.piSdkMock;
-export const cronIsolatedRun: Mock<CronIsolatedRunFn> = hoisted.cronIsolatedRun;
-export const agentCommand: Mock<AgentCommandFn> = hoisted.agentCommand;
-export const runBtwSideQuestion: Mock<RunBtwSideQuestionFn> = hoisted.runBtwSideQuestion;
-export const dispatchInboundMessageMock: Mock<DispatchInboundMessageFn> =
-  hoisted.dispatchInboundMessage;
-export const getReplyFromConfig: Mock<GetReplyFromConfigFn> = hoisted.getReplyFromConfig;
-export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {
-  getReplyFromConfig.mockImplementationOnce(impl);
-};
-export const sendWhatsAppMock: Mock<SendWhatsAppFn> = hoisted.sendWhatsAppMock;
-
-export const testState = hoisted.testState;
-
-export const testIsNixMode = hoisted.testIsNixMode;
-export const sessionStoreSaveDelayMs = hoisted.sessionStoreSaveDelayMs;
-export const embeddedRunMock = hoisted.embeddedRunMock;
+const gatewayTestHoisted = getGatewayTestHoistedState();
 
 function createEmbeddedRunMockExports() {
   return {
@@ -462,7 +307,7 @@ vi.mock("../config/config.js", async () => {
     }
     const canvasHost = Object.keys(fileCanvasHost).length > 0 ? fileCanvasHost : undefined;
 
-    const hooks = testState.hooksConfig ?? (baseConfig.hooks as HooksConfig | undefined);
+    const hooks = testState.hooksConfig ?? baseConfig.hooks;
 
     const fileCron =
       baseConfig.cron && typeof baseConfig.cron === "object" && !Array.isArray(baseConfig.cron)
@@ -665,9 +510,9 @@ vi.mock("../commands/status.js", () => ({
 }));
 vi.mock(buildBundledPluginModuleId("whatsapp", "runtime-api.js"), () => ({
   sendMessageWhatsApp: (...args: unknown[]) =>
-    (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+    (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
   sendPollWhatsApp: (...args: unknown[]) =>
-    (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+    (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));
 vi.mock("../channels/web/index.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/web/index.js")>(
@@ -676,7 +521,7 @@ vi.mock("../channels/web/index.js", async () => {
   return {
     ...actual,
     sendMessageWhatsApp: (...args: unknown[]) =>
-      (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+      (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
   };
 });
 vi.mock("../commands/agent.js", () => ({
@@ -685,11 +530,11 @@ vi.mock("../commands/agent.js", () => ({
 }));
 vi.mock("../agents/btw.js", () => ({
   runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
-    hoisted.runBtwSideQuestion(...args),
+    gatewayTestHoisted.runBtwSideQuestion(...args),
 }));
 vi.mock("/src/agents/btw.js", () => ({
   runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
-    hoisted.runBtwSideQuestion(...args),
+    gatewayTestHoisted.runBtwSideQuestion(...args),
 }));
 vi.mock("../auto-reply/dispatch.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
@@ -698,9 +543,9 @@ vi.mock("../auto-reply/dispatch.js", async () => {
   return {
     ...actual,
     dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
-      const impl = hoisted.dispatchInboundMessage.getMockImplementation();
+      const impl = gatewayTestHoisted.dispatchInboundMessage.getMockImplementation();
       return impl
-        ? hoisted.dispatchInboundMessage(...args)
+        ? gatewayTestHoisted.dispatchInboundMessage(...args)
         : actual.dispatchInboundMessage(...args);
     },
   };
@@ -712,29 +557,29 @@ vi.mock("/src/auto-reply/dispatch.js", async () => {
   return {
     ...actual,
     dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
-      const impl = hoisted.dispatchInboundMessage.getMockImplementation();
+      const impl = gatewayTestHoisted.dispatchInboundMessage.getMockImplementation();
       return impl
-        ? hoisted.dispatchInboundMessage(...args)
+        ? gatewayTestHoisted.dispatchInboundMessage(...args)
         : actual.dispatchInboundMessage(...args);
     },
   };
 });
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
-    hoisted.getReplyFromConfig(...args),
+    gatewayTestHoisted.getReplyFromConfig(...args),
 }));
 
 vi.mock("/src/auto-reply/reply.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
-    hoisted.getReplyFromConfig(...args),
+    gatewayTestHoisted.getReplyFromConfig(...args),
 }));
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
-    hoisted.getReplyFromConfig(...args),
+    gatewayTestHoisted.getReplyFromConfig(...args),
 }));
 vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
-    hoisted.getReplyFromConfig(...args),
+    gatewayTestHoisted.getReplyFromConfig(...args),
 }));
 vi.mock("../cli/deps.js", async () => {
   const actual = await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");
@@ -744,7 +589,7 @@ vi.mock("../cli/deps.js", async () => {
     createDefaultDeps: () => ({
       ...base,
       sendMessageWhatsApp: (...args: unknown[]) =>
-        (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+        (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
     }),
   };
 });
@@ -754,16 +599,16 @@ vi.mock("../plugins/loader.js", async () => {
     await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
   return {
     ...actual,
-    loadOpenClawPlugins: () => pluginRegistryState.registry,
+    loadOpenClawPlugins: () => getTestPluginRegistry(),
   };
 });
 vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
   sendWebChannelMessage: (...args: unknown[]) =>
-    (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+    (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));
 vi.mock("/src/plugins/runtime/runtime-web-channel-plugin.js", () => ({
   sendWebChannelMessage: (...args: unknown[]) =>
-    (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+    (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));
 
 process.env.OPENCLAW_SKIP_CHANNELS = "1";

@@ -1258,11 +1258,16 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
+      const sessionAgentId = resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+      });
+      const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
       const catalog = await context.loadGatewayModelCatalog();
       thinkingLevel = resolveThinkingDefault({
         cfg,
-        provider: resolvedSessionModel.provider,
-        model: resolvedSessionModel.model,
+        provider: resolvedModel.provider,
+        model: resolvedModel.model,
         catalog,
       });
     }

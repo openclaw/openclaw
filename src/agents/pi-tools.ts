@@ -42,11 +42,10 @@ import {
   createSandboxedEditTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
-  normalizeToolParams,
-  patchToolSchemaForClaudeCompatibility,
+  getToolParamsRecord,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuardWithOptions,
-  wrapToolParamNormalization,
+  wrapToolParamValidation,
 } from "./pi-tools.read.js";
 import {
   cleanToolSchemaForGemini,
@@ -260,9 +259,8 @@ export function resolveToolLoopDetectionConfig(params: {
 
 export const __testing = {
   cleanToolSchemaForGemini,
-  normalizeToolParams,
-  patchToolSchemaForClaudeCompatibility,
-  wrapToolParamNormalization,
+  getToolParamsRecord,
+  wrapToolParamValidation,
   assertRequiredParams,
   applyModelProviderToolPolicy,
 } as const;

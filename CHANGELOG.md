@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 - Memory/dreaming: add configurable aging controls (`recencyHalfLifeDays`, `maxAgeDays`) plus optional verbose logging so operators can tune recall decay and inspect promotion decisions more easily.
 - Plugins/reply dispatch: add a generic `reply_dispatch` hook so bundled plugins like ACPX can own reply interception without hardcoded ACP paths in core auto-reply routing.
 - Memory/dreaming: refactor dreaming from competing modes (`off|core|rem|deep`) to three cooperative phases (light, deep, REM) with independent schedules, per-phase enable/disable, deep-only `MEMORY.md` writes, light/REM daily-note staging, deep recovery, and per-phase execution overrides.
+- Matrix/exec approvals: clarify unavailable-approval replies so Matrix no longer claims chat approvals are unsupported when native exec approvals are merely unconfigured. (#61424) Thanks @gumadeiras.
 
 ### Fixes
 
@@ -71,6 +72,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/local Bot API: honor `channels.telegram.apiRoot` for buffered media downloads, add `channels.telegram.network.dangerouslyAllowPrivateNetwork` for trusted fake-IP setups, and require `channels.telegram.trustedLocalFileRoots` before reading absolute Bot API `file_path` values. (#59544, #60705) Thanks @SARAMALI15792 and @obviyus.
 - Outbound/sanitizer: strip leaked `<tool_call>`, `<function_calls>`, and model special tokens from shared user-visible assistant text, including truncated tool-call streams, so internal scaffolding no longer bleeds into replies across surfaces. (#60619) Thanks @oliviareid-svg.
 - Agents/output delivery: suppress `phase:”commentary”` assistant text at the embedded subscribe boundary so internal planning text cannot leak into user-visible replies or Telegram partials. (#61282) Thanks @mbelinky.
+- Agents/streaming: keep commentary-only partials hidden until `final_answer` is available and buffer OpenAI Responses websocket text deltas until phase metadata arrives, so commentary does not leak into visible embedded replies. (#59643) Thanks @ringlochid.
 - Agents/errors: surface an explicit disk-full message when local session or transcript writes fail with `ENOSPC`/`disk full`, so those runs stop degrading into opaque `NO_REPLY`-style failures. Thanks @vincentkoc.
 - Exec approvals: remove heuristic command-obfuscation gating from host exec so gateway and node runs rely on explicit policy, allowlist, and strict inline-eval rules only.
 - Config/All Settings: keep the raw config view intact when sensitive fields are blank instead of corrupting or dropping the rendered snapshot. (#28214) Thanks @solodmd.
@@ -120,6 +122,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI Codex: split native `contextWindow` from runtime `contextTokens`, keep the default effective cap at `272000`, and expose a per-model `contextTokens` override on `models.providers.*.models[]`.
 - Providers/OpenAI-compatible WS: compute fallback token totals from normalized usage when providers omit or zero `total_tokens`, so DashScope-compatible sessions stop storing zero totals after alias normalization. (#54940) Thanks @lyfuci.
 - Agents/OpenAI: mark Claude-compatible file tool schemas as `additionalProperties: false` so direct OpenAI GPT-5 routes stop rejecting the `read` tool with invalid strict-schema errors.
+- Agents/OpenAI: fall back to `strict: false` for native OpenAI tool calls when a tool schema is not strict-compatible, and normalize empty-object tool schemas to include `required: []`, so direct GPT-5 routes stop failing with invalid strict-schema errors like missing `path` in `required`.
 - Agents/GPT: add explicit work-item lifecycle events for embedded runs, use them to surface real progress more reliably, and stop counting tool-started turns as planning-only retries.
 - Plugins/OpenAI: enable `gpt-image-1` reference-image edits through `/images/edits` multipart uploads, and stop inferring unsupported resolution overrides when no explicit `size` or `resolution` is provided.
 - Agents/replay: remove the malformed assistant-content canonicalization repair from replay history sanitization instead of extending that legacy repair path into replay validation.
@@ -196,6 +199,8 @@ Docs: https://docs.openclaw.ai
 - Plugins: suppress trust-warning noise during non-activating snapshot and CLI metadata loads. (#61427) Thanks @gumadeiras.
 - Agents/video generation: accept `agents.defaults.videoGenerationModel` in strict config validation and `openclaw config set/get`, so gateways using `video_generate` no longer fail to boot after enabling a video model.
 - Discord/image generation: persist volatile workspace-generated media into durable outbound media before final reply delivery so generated image replies stop failing with missing local workspace paths.
+- Matrix: move legacy top-level `avatarUrl` into the default account during multi-account promotion and keep env-backed account setup avatar config persisted. (#61437) Thanks @gumadeiras.
+- Matrix/DM sessions: add `channels.matrix.dm.sessionScope`, shared-session collision notices, and aligned outbound session reuse so separate Matrix DM rooms can keep distinct context when configured. (#61373) Thanks @gumadeiras.
 
 ## 2026.4.2
 

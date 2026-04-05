@@ -8,7 +8,6 @@ import type {
   BundledChannelEntryContract,
   BundledChannelSetupEntryContract,
 } from "../../plugin-sdk/channel-entry-contract.js";
-import { discoverOpenClawPlugins } from "../../plugins/discovery.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import {
@@ -23,20 +22,6 @@ type GeneratedBundledChannelEntry = {
   entry: BundledChannelEntryContract;
   setupEntry?: BundledChannelSetupEntryContract;
 };
-
-type BundledChannelDiscoveryCandidate = {
-  rootDir: string;
-  packageManifest?: {
-    extensions?: string[];
-  };
-};
-
-const BUNDLED_CHANNEL_ENTRY_BASENAMES = [
-  "channel-entry.ts",
-  "channel-entry.mts",
-  "channel-entry.js",
-  "channel-entry.mjs",
-] as const;
 
 const log = createSubsystemLogger("channels");
 const nodeRequire = createRequire(import.meta.url);
@@ -155,53 +140,19 @@ function resolveCompiledBundledModulePath(modulePath: string): string {
     : modulePath;
 }
 
-function resolvePreferredBundledChannelSource(
-  candidate: BundledChannelDiscoveryCandidate,
-  manifest: ReturnType<typeof loadPluginManifestRegistry>["plugins"][number],
-): string {
-  for (const basename of BUNDLED_CHANNEL_ENTRY_BASENAMES) {
-    const preferred = resolveCompiledBundledModulePath(path.resolve(candidate.rootDir, basename));
-    if (fs.existsSync(preferred)) {
-      return preferred;
-    }
-  }
-  const declaredEntry = candidate.packageManifest?.extensions?.find(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-  );
-  if (declaredEntry) {
-    return resolveCompiledBundledModulePath(path.resolve(candidate.rootDir, declaredEntry));
-  }
-  return resolveCompiledBundledModulePath(manifest.source);
-}
-
 function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelEntry[] {
-  const discovery = discoverOpenClawPlugins({ cache: false });
-  const manifestRegistry = loadPluginManifestRegistry({
-    cache: false,
-    config: {},
-    candidates: discovery.candidates,
-    diagnostics: discovery.diagnostics,
-  });
-  const manifestByRoot = new Map(
-    manifestRegistry.plugins.map((plugin) => [plugin.rootDir, plugin] as const),
-  );
-  const seenIds = new Set<string>();
+  const manifestRegistry = loadPluginManifestRegistry({ cache: false, config: {} });
   const entries: GeneratedBundledChannelEntry[] = [];
 
-  for (const candidate of discovery.candidates) {
-    const manifest = manifestByRoot.get(candidate.rootDir);
-    if (!manifest || manifest.origin !== "bundled" || manifest.channels.length === 0) {
+  for (const manifest of manifestRegistry.plugins) {
+    if (manifest.origin !== "bundled" || manifest.channels.length === 0) {
       continue;
     }
-    if (seenIds.has(manifest.id)) {
-      continue;
-    }
-    seenIds.add(manifest.id);
 
     try {
-      const sourcePath = resolvePreferredBundledChannelSource(candidate, manifest);
+      const sourcePath = resolveCompiledBundledModulePath(manifest.source);
       const entry = resolveChannelPluginModuleEntry(
-        loadBundledModule(sourcePath, candidate.rootDir),
+        loadBundledModule(sourcePath, manifest.rootDir),
       );
       if (!entry) {
         log.warn(
@@ -213,7 +164,7 @@ function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelE
         ? resolveChannelSetupModuleEntry(
             loadBundledModule(
               resolveCompiledBundledModulePath(manifest.setupSource),
-              candidate.rootDir,
+              manifest.rootDir,
             ),
           )
         : null;
@@ -225,7 +176,7 @@ function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelE
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       log.warn(
-        `[channels] failed to load bundled channel ${manifest.id} from ${candidate.source}: ${detail}`,
+        `[channels] failed to load bundled channel ${manifest.id} from ${manifest.source}: ${detail}`,
       );
     }
   }

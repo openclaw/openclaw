@@ -1,9 +1,6 @@
 import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
-  BUNDLED_PROVIDER_PLUGIN_ID_ALIASES,
-} from "./bundled-capability-metadata.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import type { PluginKind, PluginOrigin } from "./types.js";
 
@@ -74,13 +71,33 @@ export type NormalizedPluginsConfig = {
   >;
 };
 
+let bundledPluginAliasLookupCache: ReadonlyMap<string, string> | undefined;
+
+function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
+  if (bundledPluginAliasLookupCache) {
+    return bundledPluginAliasLookupCache;
+  }
+
+  const lookup = new Map<string, string>();
+  for (const plugin of loadPluginManifestRegistry({ cache: true }).plugins) {
+    if (plugin.origin !== "bundled") {
+      continue;
+    }
+    lookup.set(plugin.id.toLowerCase(), plugin.id);
+    for (const providerId of plugin.providers) {
+      lookup.set(providerId.toLowerCase(), plugin.id);
+    }
+    for (const legacyPluginId of plugin.legacyPluginIds ?? []) {
+      lookup.set(legacyPluginId.toLowerCase(), plugin.id);
+    }
+  }
+  bundledPluginAliasLookupCache = lookup;
+  return lookup;
+}
+
 export function normalizePluginId(id: string): string {
   const trimmed = id.trim();
-  return (
-    BUNDLED_LEGACY_PLUGIN_ID_ALIASES[trimmed] ??
-    BUNDLED_PROVIDER_PLUGIN_ID_ALIASES[trimmed] ??
-    trimmed
-  );
+  return getBundledPluginAliasLookup().get(trimmed.toLowerCase()) ?? trimmed;
 }
 
 const normalizeList = (value: unknown): string[] => {

@@ -11,6 +11,7 @@ import type {
 } from "../../plugin-sdk/media-understanding.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
+import { createOpenClawCodingTools } from "../pi-tools.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
@@ -18,8 +19,7 @@ import { makeZeroUsageSnapshot } from "../usage.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 
-type PiToolsModule = typeof import("../pi-tools.js");
-type CreateOpenClawCodingToolsArgs = Parameters<PiToolsModule["createOpenClawCodingTools"]>[0];
+type CreateOpenClawCodingToolsArgs = Parameters<typeof createOpenClawCodingTools>[0];
 type MockOpenClawToolsOptions = {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -125,8 +125,6 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
 }
 
 async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenClawCodingToolsArgs) {
-  vi.resetModules();
-  const freshImageTool = await import("./image-tool.js");
   const defaultImageModels = new Map<string, string>([
     ["anthropic", "claude-opus-4-6"],
     ["minimax", "MiniMax-VL-01"],
@@ -134,7 +132,7 @@ async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenCla
     ["openai", "gpt-5.4-mini"],
     ["zai", "glm-4.6v"],
   ]);
-  freshImageTool.__testing.setProviderDepsForTest({
+  __testing.setProviderDepsForTest({
     buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
       imageProviderHarness.buildProviderRegistry(overrides),
     getMediaUnderstandingProvider: (
@@ -148,7 +146,6 @@ async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenCla
     resolveDefaultMediaModel: ({ providerId, capability }) =>
       capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
   });
-  const { createOpenClawCodingTools } = await import("../pi-tools.js");
   return createOpenClawCodingTools(options);
 }
 

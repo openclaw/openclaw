@@ -25,7 +25,6 @@ export type PluginStatusReport = PluginRegistry & {
 };
 
 export type PluginCapabilityKind =
-  | "cli-backend"
   | "text-inference"
   | "speech"
   | "realtime-transcription"

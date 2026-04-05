@@ -1,7 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createConfiguredOllamaCompatNumCtxWrapper } from "../../extensions/ollama/runtime-api.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -10,6 +9,7 @@ import {
   resolveAnthropicFastMode,
   resolveAnthropicServiceTier,
 } from "../../test/helpers/providers/anthropic-contract.js";
+import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama-runtime.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
   createOpenRouterSystemCacheWrapper,

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildTalkTestProviderConfig,
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
   TALK_TEST_PROVIDER_ID,
@@ -525,22 +526,9 @@ describe("secrets apply", () => {
   });
 
   it("applies talk provider target types", async () => {
-    await fs.writeFile(
+    await writeJsonFile(
       fixture.configPath,
-      `${JSON.stringify(
-        {
-          talk: {
-            providers: {
-              [TALK_TEST_PROVIDER_ID]: {
-                apiKey: "sk-talk-plaintext", // pragma: allowlist secret
-              },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
+      buildTalkTestProviderConfig("sk-talk-plaintext"), // pragma: allowlist secret
     );
 
     const plan: SecretsApplyPlan = {

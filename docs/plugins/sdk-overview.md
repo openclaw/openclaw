@@ -122,7 +122,6 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-entry` | `defineSingleProviderPluginEntry` |
     | `plugin-sdk/provider-setup` | Curated local/self-hosted provider setup helpers |
     | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers |
-    | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth-runtime` | Runtime API-key resolution helpers for provider plugins |
     | `plugin-sdk/provider-auth-api-key` | API-key onboarding/profile-write helpers |
     | `plugin-sdk/provider-auth-result` | Standard OAuth auth-result builder |
@@ -283,7 +282,6 @@ methods:
 | Method                                           | What it registers                |
 | ------------------------------------------------ | -------------------------------- |
 | `api.registerProvider(...)`                      | Text inference (LLM)             |
-| `api.registerCliBackend(...)`                    | Local CLI inference backend      |
 | `api.registerChannel(...)`                       | Messaging channel                |
 | `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis   |
 | `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription |

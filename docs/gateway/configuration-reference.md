@@ -655,6 +655,7 @@ Matrix is extension-backed and configured under `channels.matrix`.
   - `sessionFilter`: optional session key patterns (substring or regex).
   - `target`: where to send approval prompts. `"dm"` (default), `"channel"` (originating room), or `"both"`.
   - Per-account overrides: `channels.matrix.accounts.<id>.execApprovals`.
+- `channels.matrix.dm.sessionScope` controls how Matrix DMs group into sessions: `per-user` (default) shares by routed peer, while `per-room` isolates each DM room.
 - Matrix status probes and live directory lookups use the same proxy policy as runtime traffic.
 - Full Matrix configuration, targeting rules, and setup examples are documented in [Matrix](/channels/matrix).
 
@@ -1064,7 +1065,6 @@ Z.AI GLM-4.x models automatically enable thinking mode unless you set `--thinkin
 Z.AI models enable `tool_stream` by default for tool call streaming. Set `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
 Anthropic Claude 4.6 models default to `adaptive` thinking when no explicit thinking level is set.
 
-- CLI backends are text-first; tools are always disabled.
 - Sessions supported when `sessionArg` is set.
 - Image pass-through supported when `imageArg` accepts file paths.
 
