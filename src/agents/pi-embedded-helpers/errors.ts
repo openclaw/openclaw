@@ -214,12 +214,19 @@ function isJsonSyntaxError(raw: string): boolean {
   if (!raw) {
     return false;
   }
-  // Matches Node.js JSON.parse SyntaxError messages produced when a streaming
-  // tool call is truncated mid-argument (e.g. "Expected ',' or ']' after array
-  // element in JSON at position 900").
+  // Matches JSON.parse SyntaxError messages that are unambiguous indicators of
+  // stream truncation (i.e. the JSON was cut off mid-way through a tool call
+  // argument). We deliberately avoid "Unexpected token …" because that fires at
+  // position 0 for completely malformed payloads (e.g. corrupted session history)
+  // which deserve different diagnostics.
+  //
+  // Patterns:
+  //   V8/Node.js  – "Expected ',' or ']' after array element in JSON at position 900"
+  //   V8/Node.js  – "Unexpected end of JSON input"
+  //   JSC/Safari  – "JSON Parse error: Unexpected EOF"
   return (
     /^Expected .+ in JSON at position \d+/i.test(raw) ||
-    /^Unexpected (token|end of JSON input)/i.test(raw) ||
+    /^Unexpected end of JSON input$/i.test(raw) ||
     /^JSON Parse error:/i.test(raw)
   );
 }
