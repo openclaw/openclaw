@@ -695,34 +695,7 @@ export async function runEmbeddedAttempt(
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
     });
-    const systemPromptReport = buildSystemPromptReport({
-      source: "run",
-      generatedAt: Date.now(),
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      provider: params.provider,
-      model: params.modelId,
-      workspaceDir: effectiveWorkspace,
-      bootstrapMaxChars,
-      bootstrapTotalMaxChars,
-      bootstrapTruncation: buildBootstrapTruncationReportMeta({
-        analysis: bootstrapAnalysis,
-        warningMode: bootstrapPromptWarningMode,
-        warning: bootstrapPromptWarning,
-      }),
-      sandbox: (() => {
-        const runtime = resolveSandboxRuntimeStatus({
-          cfg: params.config,
-          sessionKey: sandboxSessionKey,
-        });
-        return { mode: runtime.mode, sandboxed: runtime.sandboxed };
-      })(),
-      systemPrompt: appendPrompt,
-      bootstrapFiles: hookAdjustedBootstrapFiles,
-      injectedFiles: contextFiles,
-      skillsPrompt,
-      tools: effectiveTools,
-    });
+    let systemPromptReport: ReturnType<typeof buildSystemPromptReport> | undefined;
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
 
@@ -1545,6 +1518,36 @@ export async function runEmbeddedAttempt(
         }
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
+        systemPromptReport = buildSystemPromptReport({
+          source: "run",
+          generatedAt: Date.now(),
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          sourceRunId: params.runId,
+          ...(transcriptLeafId ? { sourceMessageId: transcriptLeafId } : {}),
+          provider: params.provider,
+          model: params.modelId,
+          workspaceDir: effectiveWorkspace,
+          bootstrapMaxChars,
+          bootstrapTotalMaxChars,
+          bootstrapTruncation: buildBootstrapTruncationReportMeta({
+            analysis: bootstrapAnalysis,
+            warningMode: bootstrapPromptWarningMode,
+            warning: bootstrapPromptWarning,
+          }),
+          sandbox: (() => {
+            const runtime = resolveSandboxRuntimeStatus({
+              cfg: params.config,
+              sessionKey: sandboxSessionKey,
+            });
+            return { mode: runtime.mode, sandboxed: runtime.sandboxed };
+          })(),
+          systemPrompt: systemPromptText,
+          bootstrapFiles: hookAdjustedBootstrapFiles,
+          injectedFiles: contextFiles,
+          skillsPrompt,
+          tools: effectiveTools,
+        });
 
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.

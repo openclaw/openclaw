@@ -101,6 +101,8 @@ export function buildSystemPromptReport(params: {
   generatedAt: number;
   sessionId?: string;
   sessionKey?: string;
+  sourceRunId?: string;
+  sourceMessageId?: string;
   provider?: string;
   model?: string;
   workspaceDir?: string;
@@ -161,6 +163,8 @@ export function buildSystemPromptReport(params: {
     generatedAt: params.generatedAt,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sourceRunId: params.sourceRunId,
+    sourceMessageId: params.sourceMessageId,
     provider: params.provider,
     model: params.model,
     workspaceDir: params.workspaceDir,

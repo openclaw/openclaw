@@ -19,10 +19,14 @@ describe("buildSystemPromptReport", () => {
     injectedContent: string;
     bootstrapMaxChars?: number;
     bootstrapTotalMaxChars?: number;
+    sourceRunId?: string;
+    sourceMessageId?: string;
   }) =>
     buildSystemPromptReport({
       source: "run",
       generatedAt: 0,
+      sourceRunId: params.sourceRunId,
+      sourceMessageId: params.sourceMessageId,
       bootstrapMaxChars: params.bootstrapMaxChars ?? 20_000,
       bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
       systemPrompt: "system",
@@ -82,7 +86,7 @@ describe("buildSystemPromptReport", () => {
     expect(report.bootstrapTotalMaxChars).toBe(22_222);
   });
 
-  it("includes prompt hash, tracked totals, and truncation severity", () => {
+  it("includes prompt hash, tracked totals, truncation severity, and run snapshot ids", () => {
     const file = makeBootstrapFile({
       path: "/tmp/workspace/policies/AGENTS.md",
       content: "abcdefghijklmnopqrstuvwxyz",
@@ -91,8 +95,12 @@ describe("buildSystemPromptReport", () => {
       file,
       injectedPath: "/tmp/workspace/policies/AGENTS.md",
       injectedContent: "trimmed",
+      sourceRunId: "run-a2",
+      sourceMessageId: "leaf-123",
     });
 
+    expect(report.sourceRunId).toBe("run-a2");
+    expect(report.sourceMessageId).toBe("leaf-123");
     expect(report.promptHash).toMatch(/^[a-f0-9]{12}$/);
     expect(report.tracked?.chars).toBeGreaterThan(report.systemPrompt.chars - 1);
     expect(report.tracked?.estimatedTokens).toBeGreaterThan(0);

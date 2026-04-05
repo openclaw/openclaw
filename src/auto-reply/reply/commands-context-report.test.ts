@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildContextReply } from "./commands-context-report.js";
+import { buildContextReply, compareContextReports } from "./commands-context-report.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 function makeParams(
@@ -124,5 +124,63 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Actual context usage (cached): unavailable");
     expect(result.text).toContain("Session tokens (cached): unknown / ctx=8,192");
     expect(result.text).not.toContain("~645 tok");
+  });
+
+  it("compares last run and current estimate drift", () => {
+    const comparison = compareContextReports(
+      {
+        source: "run",
+        generatedAt: 1,
+        promptHash: "aaaa",
+        truncationSeverity: "low",
+        systemPrompt: {
+          chars: 1_000,
+          projectContextChars: 500,
+          nonProjectContextChars: 500,
+        },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 0, entries: [] },
+        tools: { listChars: 10, schemaChars: 20, entries: [] },
+        tracked: {
+          chars: 1_020,
+          estimatedTokens: 255,
+          largestContributors: [
+            { name: "Project Context", chars: 500, estimatedTokens: 125, sharePercent: 49 },
+          ],
+        },
+      },
+      {
+        source: "estimate",
+        generatedAt: 2,
+        promptHash: "bbbb",
+        truncationSeverity: "medium",
+        systemPrompt: {
+          chars: 1_240,
+          projectContextChars: 620,
+          nonProjectContextChars: 620,
+        },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 0, entries: [] },
+        tools: { listChars: 10, schemaChars: 80, entries: [] },
+        tracked: {
+          chars: 1_320,
+          estimatedTokens: 330,
+          largestContributors: [
+            { name: "Tool schemas", chars: 700, estimatedTokens: 175, sharePercent: 53 },
+          ],
+        },
+      },
+    );
+
+    expect(comparison.trackedCharsDelta).toBe(300);
+    expect(comparison.trackedTokensDelta).toBe(75);
+    expect(comparison.systemPromptCharsDelta).toBe(240);
+    expect(comparison.projectContextCharsDelta).toBe(120);
+    expect(comparison.toolSchemaCharsDelta).toBe(60);
+    expect(comparison.promptHashChanged).toBe(true);
+    expect(comparison.truncationSeverityChanged).toBe(true);
+    expect(comparison.runTopContributor).toBe("Project Context");
+    expect(comparison.estimateTopContributor).toBe("Tool schemas");
+    expect(comparison.topContributorChanged).toBe(true);
   });
 });

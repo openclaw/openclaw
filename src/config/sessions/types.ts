@@ -350,6 +350,8 @@ export type SessionSystemPromptReport = {
   generatedAt: number;
   sessionId?: string;
   sessionKey?: string;
+  sourceRunId?: string;
+  sourceMessageId?: string;
   provider?: string;
   model?: string;
   workspaceDir?: string;

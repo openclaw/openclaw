@@ -21,6 +21,14 @@ function formatCharsAndTokens(chars: number): string {
   return `${formatInt(chars)} chars (~${formatInt(estimateTokensFromChars(chars))} tok)`;
 }
 
+function formatSignedInt(n: number): string {
+  return `${n >= 0 ? "+" : "-"}${formatInt(Math.abs(n))}`;
+}
+
+function formatDeltaCharsAndTokens(chars: number, estimatedTokens: number): string {
+  return `${formatSignedInt(chars)} chars (~${formatSignedInt(estimatedTokens)} tok)`;
+}
+
 function resolveTrackedPrompt(report: SessionSystemPromptReport): {
   chars: number;
   estimatedTokens: number;
@@ -73,6 +81,47 @@ function resolveTruncationSeverity(report: SessionSystemPromptReport): string {
   return "low";
 }
 
+export function compareContextReports(
+  runReport: SessionSystemPromptReport,
+  estimateReport: SessionSystemPromptReport,
+): {
+  trackedCharsDelta: number;
+  trackedTokensDelta: number;
+  systemPromptCharsDelta: number;
+  projectContextCharsDelta: number;
+  toolSchemaCharsDelta: number;
+  promptHashChanged: boolean;
+  runTruncationSeverity: string;
+  estimateTruncationSeverity: string;
+  truncationSeverityChanged: boolean;
+  runTopContributor?: string;
+  estimateTopContributor?: string;
+  topContributorChanged: boolean;
+} {
+  const runTracked = resolveTrackedPrompt(runReport);
+  const estimateTracked = resolveTrackedPrompt(estimateReport);
+  const runTruncationSeverity = resolveTruncationSeverity(runReport);
+  const estimateTruncationSeverity = resolveTruncationSeverity(estimateReport);
+  const runTopContributor = runTracked.largestContributors[0]?.name;
+  const estimateTopContributor = estimateTracked.largestContributors[0]?.name;
+
+  return {
+    trackedCharsDelta: estimateTracked.chars - runTracked.chars,
+    trackedTokensDelta: estimateTracked.estimatedTokens - runTracked.estimatedTokens,
+    systemPromptCharsDelta: estimateReport.systemPrompt.chars - runReport.systemPrompt.chars,
+    projectContextCharsDelta:
+      estimateReport.systemPrompt.projectContextChars - runReport.systemPrompt.projectContextChars,
+    toolSchemaCharsDelta: estimateReport.tools.schemaChars - runReport.tools.schemaChars,
+    promptHashChanged: (estimateReport.promptHash ?? "") !== (runReport.promptHash ?? ""),
+    runTruncationSeverity,
+    estimateTruncationSeverity,
+    truncationSeverityChanged: estimateTruncationSeverity !== runTruncationSeverity,
+    runTopContributor,
+    estimateTopContributor,
+    topContributorChanged: estimateTopContributor !== runTopContributor,
+  };
+}
+
 function parseContextArgs(commandBodyNormalized: string): string {
   if (commandBodyNormalized === "/context") {
     return "";
@@ -94,14 +143,16 @@ function formatListTop(
   return { lines, omitted };
 }
 
-async function resolveContextReport(
+function resolveRunContextReport(
+  params: HandleCommandsParams,
+): SessionSystemPromptReport | undefined {
+  const existing = params.sessionEntry?.systemPromptReport;
+  return existing?.source === "run" ? existing : undefined;
+}
+
+async function buildEstimateContextReport(
   params: HandleCommandsParams,
 ): Promise<SessionSystemPromptReport> {
-  const existing = params.sessionEntry?.systemPromptReport;
-  if (existing && existing.source === "run") {
-    return existing;
-  }
-
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg);
   const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
@@ -126,6 +177,12 @@ async function resolveContextReport(
   });
 }
 
+async function resolveContextReport(
+  params: HandleCommandsParams,
+): Promise<SessionSystemPromptReport> {
+  return resolveRunContextReport(params) ?? (await buildEstimateContextReport(params));
+}
+
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const args = parseContextArgs(params.command.commandBodyNormalized);
   const sub = args.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? "";
@@ -140,6 +197,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "Try:",
         "- /context list   (short breakdown)",
         "- /context detail (per-file + per-tool + per-skill + system prompt size)",
+        "- /context delta  (current estimate vs last run snapshot)",
         "- /context json   (same, machine-readable)",
         "",
         "Inline shortcut = a command token inside a normal message (e.g. “hey /status”). It runs immediately (allowlisted senders only) and is stripped before the model sees the remaining text.",
@@ -147,7 +205,6 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     };
   }
 
-  const report = await resolveContextReport(params);
   const cachedContextUsageTokens = resolveFreshSessionTotalTokens(params.sessionEntry);
   const session = {
     totalTokens: params.sessionEntry?.totalTokens ?? null,
@@ -156,20 +213,79 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     outputTokens: params.sessionEntry?.outputTokens ?? null,
     contextTokens: params.contextTokens ?? null,
   } as const;
+  const runReport = resolveRunContextReport(params);
 
   if (sub === "json") {
+    if (runReport) {
+      const estimateReport = await buildEstimateContextReport(params);
+      return {
+        text: JSON.stringify(
+          {
+            report: runReport,
+            estimateReport,
+            comparison: compareContextReports(runReport, estimateReport),
+            session,
+          },
+          null,
+          2,
+        ),
+      };
+    }
+    const report = await resolveContextReport(params);
     return { text: JSON.stringify({ report, session }, null, 2) };
+  }
+
+  if (sub === "delta") {
+    if (!runReport) {
+      return {
+        text: [
+          "No persisted run snapshot is available for this session yet.",
+          "Run the agent once, then try /context delta again.",
+        ].join("\n"),
+      };
+    }
+    const estimateReport = await buildEstimateContextReport(params);
+    const comparison = compareContextReports(runReport, estimateReport);
+    const runTracked = resolveTrackedPrompt(runReport);
+    const estimateTracked = resolveTrackedPrompt(estimateReport);
+    const cachedLine =
+      cachedContextUsageTokens != null
+        ? `Session tokens (cached): ${formatInt(cachedContextUsageTokens)} total`
+        : "Session tokens (cached): unknown";
+    return {
+      text: [
+        "🧠 Context delta (estimate vs last run)",
+        `Last run snapshot: ${runReport.sourceRunId ?? "unknown"}${runReport.sourceMessageId ? ` | leaf=${runReport.sourceMessageId}` : ""}`,
+        `Run generated: ${new Date(runReport.generatedAt).toISOString()}`,
+        `Estimate generated: ${new Date(estimateReport.generatedAt).toISOString()}`,
+        `Run tracked prompt: ${formatCharsAndTokens(runTracked.chars)}`,
+        `Current estimate: ${formatCharsAndTokens(estimateTracked.chars)}`,
+        `Tracked drift: ${formatDeltaCharsAndTokens(comparison.trackedCharsDelta, comparison.trackedTokensDelta)}`,
+        `System prompt drift: ${formatDeltaCharsAndTokens(comparison.systemPromptCharsDelta, estimateTokensFromChars(comparison.systemPromptCharsDelta))}`,
+        `Project Context drift: ${formatDeltaCharsAndTokens(comparison.projectContextCharsDelta, estimateTokensFromChars(comparison.projectContextCharsDelta))}`,
+        `Tool schema drift: ${formatDeltaCharsAndTokens(comparison.toolSchemaCharsDelta, estimateTokensFromChars(comparison.toolSchemaCharsDelta))}`,
+        `Prompt hash: ${comparison.promptHashChanged ? "changed" : "unchanged"}`,
+        comparison.truncationSeverityChanged
+          ? `Truncation severity: ${comparison.runTruncationSeverity} -> ${comparison.estimateTruncationSeverity}`
+          : `Truncation severity: unchanged (${comparison.estimateTruncationSeverity})`,
+        comparison.topContributorChanged
+          ? `Largest tracked contributor: ${comparison.runTopContributor ?? "none"} -> ${comparison.estimateTopContributor ?? "none"}`
+          : `Largest tracked contributor: unchanged (${comparison.estimateTopContributor ?? comparison.runTopContributor ?? "none"})`,
+        cachedLine,
+      ].join("\n"),
+    };
   }
 
   if (sub !== "list" && sub !== "show" && sub !== "detail" && sub !== "deep") {
     return {
       text: [
         "Unknown /context mode.",
-        "Use: /context, /context list, /context detail, or /context json",
+        "Use: /context, /context list, /context detail, /context delta, or /context json",
       ].join("\n"),
     };
   }
 
+  const report = await resolveContextReport(params);
   const trackedPrompt = resolveTrackedPrompt(report);
   const truncationSeverity = resolveTruncationSeverity(report);
   const fileLines = report.injectedWorkspaceFiles.map((f) => {

@@ -146,6 +146,7 @@ export async function prepareCliRunContext(
     generatedAt: Date.now(),
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sourceRunId: params.runId,
     provider: params.provider,
     model: modelId,
     workspaceDir,
