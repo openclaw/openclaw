@@ -1466,12 +1466,19 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 draftConsumed = true;
               } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
                 let textEditOk = !mustDeliverFinalNormally;
-                if (textEditOk && payload.text && !draftStream.matchesPreparedText(payload.text)) {
-                  textEditOk = await editMessageMatrix(roomId, draftEventId, payload.text, {
+                const payloadText = payload.text;
+                const requiresFinalTextEdit =
+                  quietDraftStreaming ||
+                  (Boolean(payloadText) && !draftStream.matchesPreparedText(payloadText));
+                if (textEditOk && payloadText && requiresFinalTextEdit) {
+                  textEditOk = await editMessageMatrix(roomId, draftEventId, payloadText, {
                     client,
                     cfg,
                     threadId: threadTarget,
                     accountId: _route.accountId,
+                    extraContent: quietDraftStreaming
+                      ? buildMatrixFinalizedPreviewContent()
+                      : undefined,
                   }).then(
                     () => true,
                     () => false,

@@ -2651,6 +2651,46 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
+  it("finalizes quiet drafts before reusing unchanged media captions", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "quiet" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "@room screenshot ready" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    deliverMatrixRepliesMock.mockClear();
+    await deliver(
+      {
+        text: "@room screenshot ready",
+        mediaUrl: "https://example.com/image.png",
+      },
+      { kind: "final" },
+    );
+
+    expect(editMessageMatrixMock).toHaveBeenCalledWith(
+      "!room:example.org",
+      "$draft1",
+      "@room screenshot ready",
+      expect.objectContaining({
+        extraContent: { [MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]: true },
+      }),
+    );
+    expect(redactEventMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            mediaUrl: "https://example.com/image.png",
+            text: undefined,
+          }),
+        ],
+      }),
+    );
+    await finish();
+  });
+
   it("redacts stale draft and sends the final once when a later preview exceeds the event limit", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness();
     const { deliver, opts, finish } = await dispatch();
