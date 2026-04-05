@@ -305,9 +305,6 @@ export async function initSessionState(params: {
   let persistedAuthProfileOverride: string | undefined;
   let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
   let persistedAuthProfileOverrideCompactionCount: number | undefined;
-  let persistedCliSessionIds: SessionEntry["cliSessionIds"];
-  let persistedCliSessionBindings: SessionEntry["cliSessionBindings"];
-  let persistedClaudeCliSessionId: string | undefined;
   let persistedLabel: string | undefined;
   let persistedSpawnedBy: SessionEntry["spawnedBy"];
   let persistedSpawnedWorkspaceDir: SessionEntry["spawnedWorkspaceDir"];
@@ -501,9 +498,8 @@ export async function initSessionState(params: {
       persistedAuthProfileOverride = entry.authProfileOverride;
       persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
-      persistedCliSessionIds = entry.cliSessionIds;
-      persistedCliSessionBindings = entry.cliSessionBindings;
-      persistedClaudeCliSessionId = entry.claudeCliSessionId;
+      // Explicit /new and /reset should rotate the underlying CLI conversation too.
+      // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
       persistedLabel = entry.label;
       persistedSpawnedBy = entry.spawnedBy;
       persistedSpawnedWorkspaceDir = entry.spawnedWorkspaceDir;
@@ -573,9 +569,9 @@ export async function initSessionState(params: {
       persistedAuthProfileOverrideSource ?? baseEntry?.authProfileOverrideSource,
     authProfileOverrideCompactionCount:
       persistedAuthProfileOverrideCompactionCount ?? baseEntry?.authProfileOverrideCompactionCount,
-    cliSessionIds: persistedCliSessionIds ?? baseEntry?.cliSessionIds,
-    cliSessionBindings: persistedCliSessionBindings ?? baseEntry?.cliSessionBindings,
-    claudeCliSessionId: persistedClaudeCliSessionId ?? baseEntry?.claudeCliSessionId,
+    cliSessionIds: baseEntry?.cliSessionIds,
+    cliSessionBindings: baseEntry?.cliSessionBindings,
+    claudeCliSessionId: baseEntry?.claudeCliSessionId,
     label: persistedLabel ?? baseEntry?.label,
     spawnedBy: persistedSpawnedBy ?? baseEntry?.spawnedBy,
     spawnedWorkspaceDir: persistedSpawnedWorkspaceDir ?? baseEntry?.spawnedWorkspaceDir,
