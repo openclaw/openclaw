@@ -551,6 +551,35 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("preserves text for direct media delivery when block streaming is disabled", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({
+        text: "caption",
+        mediaUrls: ["/tmp/output.png"],
+      });
+      return {
+        payloads: [{ text: "caption", mediaUrls: ["/tmp/output.png"] }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      blockStreamingEnabled: false,
+      opts: { onBlockReply },
+    });
+    const result = await run();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "caption",
+        mediaUrls: ["/tmp/output.png"],
+      }),
+    );
+    expect(result).toBeUndefined();
+  });
+
   it("handles typing for normal and silent tool results", async () => {
     const cases = [
       {

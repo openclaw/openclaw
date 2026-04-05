@@ -120,15 +120,17 @@ export function createBlockReplyDeliveryHandler(params: {
       });
     }
 
-    // Use pipeline if available (block streaming enabled), otherwise send directly.
+    // Use the pipeline for regular block streaming when available. If there is no
+    // pipeline, still deliver media-bearing payloads directly so tool-flush media
+    // is not dropped when block streaming is disabled.
     if (params.blockStreamingEnabled && params.blockReplyPipeline) {
       params.blockReplyPipeline.enqueue(blockPayload);
-    } else if (params.blockStreamingEnabled) {
-      // Send directly when flushing before tool execution (no pipeline but streaming enabled).
-      // Track sent key to avoid duplicate in final payloads.
+    } else if (blockHasMedia) {
+      // Track sent key to avoid duplicate delivery from the later final payload pass.
       params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
       await params.onBlockReply(blockPayload);
     }
-    // When streaming is disabled entirely, blocks are accumulated in final text instead.
+    // When streaming is disabled entirely, text-only blocks are accumulated in the
+    // final payload instead of being delivered incrementally.
   };
 }
