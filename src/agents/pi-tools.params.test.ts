@@ -1,10 +1,30 @@
+import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
 import { __testing } from "./pi-tools.js";
 import { CLAUDE_PARAM_GROUPS } from "./pi-tools.params.js";
 
-const { assertRequiredParams, wrapToolParamNormalization } = __testing;
+const { assertRequiredParams, patchToolSchemaForClaudeCompatibility, wrapToolParamNormalization } =
+  __testing;
 
 describe("assertRequiredParams", () => {
+  it("patches Claude-compatible file tool schemas to disallow unknown parameters", () => {
+    const patched = patchToolSchemaForClaudeCompatibility({
+      name: "read",
+      label: "read",
+      description: "read a file",
+      parameters: Type.Object({
+        path: Type.String(),
+        offset: Type.Optional(Type.Number()),
+        limit: Type.Optional(Type.Number()),
+      }),
+      execute: vi.fn(),
+    });
+
+    expect((patched.parameters as { additionalProperties?: unknown }).additionalProperties).toBe(
+      false,
+    );
+  });
+
   it("includes received keys in error when some params are present but content is missing", () => {
     expect(() =>
       assertRequiredParams(

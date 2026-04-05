@@ -99,12 +99,14 @@ describe("createOpenClawCodingTools", () => {
 
       const patched = __testing.patchToolSchemaForClaudeCompatibility(base);
       const params = patched.parameters as {
+        additionalProperties?: unknown;
         properties?: Record<string, unknown>;
         required?: string[];
       };
       const props = params.properties ?? {};
 
       expect(props.file_path).toEqual(props.path);
+      expect(params.additionalProperties).toBe(false);
       expect(params.required ?? []).not.toContain("path");
       expect(params.required ?? []).not.toContain("file_path");
     });
