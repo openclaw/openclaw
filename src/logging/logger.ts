@@ -75,6 +75,7 @@ export type LogTransport = (logObj: LogTransportRecord) => void;
 type LogTransportGlobalState = {
   transports: Set<LogTransport>;
   activeLogger: unknown; // TsLogger<LogObj> — stored as unknown to avoid type import in global
+  _activeLoggerOwner: unknown; // identity marker: the loggingState object that owns activeLogger
 };
 
 function getLogTransportGlobalState(): LogTransportGlobalState {
@@ -85,6 +86,7 @@ function getLogTransportGlobalState(): LogTransportGlobalState {
     g.__openclawLogTransportState = {
       transports: new Set<LogTransport>(),
       activeLogger: null,
+      _activeLoggerOwner: null,
     };
   }
   return g.__openclawLogTransportState;
@@ -188,7 +190,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     for (const transport of externalTransports) {
       attachExternalTransport(logger, transport);
     }
-    getLogTransportGlobalState().activeLogger = logger;
+    publishActiveLogger(logger);
     return logger;
   }
 
@@ -234,11 +236,22 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     attachExternalTransport(logger, transport);
   }
 
-  // Publish the active logger to globalThis so plugins loaded via jiti can find it
-  // when calling registerLogTransport after the logger is already built.
-  getLogTransportGlobalState().activeLogger = logger;
+  publishActiveLogger(logger);
 
   return logger;
+}
+
+// Publish the active logger to globalThis so plugins loaded via jiti can find it
+// when calling registerLogTransport after the logger is already built.
+// Uses loggingState object identity as an ownership marker so only the first
+// module instance (host ESM) can set/update activeLogger — jiti-loaded plugin
+// instances get their own loggingState and are blocked from overwriting.
+function publishActiveLogger(logger: TsLogger<LogObj>): void {
+  const state = getLogTransportGlobalState();
+  if (!state.activeLogger || state._activeLoggerOwner === loggingState) {
+    state.activeLogger = logger;
+    state._activeLoggerOwner = loggingState;
+  }
 }
 
 function resolveMaxLogFileBytes(raw: unknown): number {
@@ -333,7 +346,9 @@ export function setLoggerOverride(settings: LoggerSettings | null) {
   loggingState.cachedLogger = null;
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
-  getLogTransportGlobalState().activeLogger = null;
+  const setOverrideState = getLogTransportGlobalState();
+  setOverrideState.activeLogger = null;
+  setOverrideState._activeLoggerOwner = null;
 }
 
 export function resetLogger() {
@@ -341,7 +356,9 @@ export function resetLogger() {
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
   loggingState.overrideSettings = null;
-  getLogTransportGlobalState().activeLogger = null;
+  const resetState = getLogTransportGlobalState();
+  resetState.activeLogger = null;
+  resetState._activeLoggerOwner = null;
 }
 
 export function registerLogTransport(transport: LogTransport): () => void {
