@@ -32,6 +32,16 @@ function getRuntimeState(): ClawRuntimeState {
   return created;
 }
 
+function stopClawRuntimeTimer(state: ClawRuntimeState): void {
+  if (state.timer) {
+    clearInterval(state.timer);
+    state.timer = null;
+  }
+  state.started = false;
+  state.inFlight = false;
+  state.wakeRequested = false;
+}
+
 function resolveClawRuntimeConfig(): {
   enabled: boolean;
   loopMs: number;
@@ -48,7 +58,12 @@ function resolveClawRuntimeConfig(): {
 }
 
 async function drainClawRuntimeQueue(): Promise<void> {
+  const runtimeConfig = resolveClawRuntimeConfig();
   const state = getRuntimeState();
+  if (!runtimeConfig.enabled) {
+    stopClawRuntimeTimer(state);
+    return;
+  }
   if (state.inFlight) {
     state.wakeRequested = true;
     return;
@@ -79,6 +94,7 @@ async function drainClawRuntimeQueue(): Promise<void> {
 export function wakeClawRuntime(): void {
   const { enabled } = resolveClawRuntimeConfig();
   if (!enabled) {
+    stopClawRuntimeTimer(getRuntimeState());
     return;
   }
   const state = getRuntimeState();
@@ -92,6 +108,7 @@ export function ensureClawRuntimeStarted(): void {
   const { enabled, loopMs } = resolveClawRuntimeConfig();
   const state = getRuntimeState();
   if (!enabled) {
+    stopClawRuntimeTimer(state);
     return;
   }
   if (state.started) {

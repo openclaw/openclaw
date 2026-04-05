@@ -1,16 +1,22 @@
 import type {
+  ClawArtifactEntry,
+  ClawAuditEntry,
   ClawControlState,
   ClawInboxItem,
+  ClawDecisionAction,
   ClawMissionDashboard,
   ClawMissionDetail,
   ClawMissionDetailSnapshot,
   ClawMissionSummary,
 } from "../../../../src/shared/claw-types.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import type { ConfigSnapshot } from "../types.ts";
 
 export type ClawState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  configSnapshot: ConfigSnapshot | null;
+  configForm: Record<string, unknown> | null;
   clawLoading: boolean;
   clawError: string | null;
   clawMissions: ClawMissionSummary[];
@@ -21,7 +27,30 @@ export type ClawState = {
   clawActionBusy: boolean;
   clawControl: ClawControlState | null;
   clawInbox: ClawInboxItem[];
+  clawAuditLoading: boolean;
+  clawAuditEntries: ClawAuditEntry[];
+  clawArtifactsLoading: boolean;
+  clawArtifacts: ClawArtifactEntry[];
 };
+
+function isClawEnabled(state: Pick<ClawState, "configForm" | "configSnapshot">): boolean {
+  const config =
+    state.configForm ??
+    ((state.configSnapshot?.config as Record<string, unknown> | null | undefined) ?? null);
+  const claw = config?.claw;
+  return Boolean(claw && typeof claw === "object" && (claw as { enabled?: unknown }).enabled === true);
+}
+
+function clearClawState(state: ClawState): void {
+  state.clawError = null;
+  state.clawMissions = [];
+  state.clawSelectedMissionId = null;
+  state.clawMission = null;
+  state.clawControl = null;
+  state.clawInbox = [];
+  state.clawAuditEntries = [];
+  state.clawArtifacts = [];
+}
 
 function applyDashboard(state: ClawState, dashboard: ClawMissionDashboard): void {
   state.clawMissions = dashboard.missions;
@@ -40,8 +69,41 @@ function applySnapshot(state: ClawState, snapshot: ClawMissionDetailSnapshot): v
   }
 }
 
+async function loadClawMissionOutputs(state: ClawState, missionId: string): Promise<void> {
+  if (!state.client || !state.connected || !missionId.trim()) {
+    state.clawAuditEntries = [];
+    state.clawArtifacts = [];
+    return;
+  }
+  state.clawAuditLoading = true;
+  state.clawArtifactsLoading = true;
+  try {
+    const [audit, artifacts] = await Promise.all([
+      state.client.request<{ missionId: string; entries: ClawAuditEntry[] }>("claw.audit.get", {
+        missionId,
+        limit: 50,
+      }),
+      state.client.request<{ missionId: string; artifacts: ClawArtifactEntry[] }>(
+        "claw.artifacts.list",
+        {
+          missionId,
+        },
+      ),
+    ]);
+    state.clawAuditEntries = audit.entries;
+    state.clawArtifacts = artifacts.artifacts;
+  } finally {
+    state.clawAuditLoading = false;
+    state.clawArtifactsLoading = false;
+  }
+}
+
 export async function loadClawDashboard(state: ClawState) {
   if (!state.client || !state.connected || state.clawLoading) {
+    return;
+  }
+  if (!isClawEnabled(state)) {
+    clearClawState(state);
     return;
   }
   state.clawLoading = true;
@@ -54,8 +116,11 @@ export async function loadClawDashboard(state: ClawState) {
         missionId: state.clawSelectedMissionId,
       });
       applySnapshot(state, snapshot);
+      await loadClawMissionOutputs(state, state.clawSelectedMissionId);
     } else {
       state.clawMission = null;
+      state.clawAuditEntries = [];
+      state.clawArtifacts = [];
     }
   } catch (error) {
     state.clawError = String(error);
@@ -65,7 +130,7 @@ export async function loadClawDashboard(state: ClawState) {
 }
 
 export async function selectClawMission(state: ClawState, missionId: string) {
-  if (!state.client || !state.connected || !missionId.trim()) {
+  if (!state.client || !state.connected || !missionId.trim() || !isClawEnabled(state)) {
     return;
   }
   state.clawLoading = true;
@@ -76,6 +141,7 @@ export async function selectClawMission(state: ClawState, missionId: string) {
       missionId,
     });
     applySnapshot(state, snapshot);
+    await loadClawMissionOutputs(state, missionId);
   } catch (error) {
     state.clawError = String(error);
   } finally {
@@ -84,7 +150,13 @@ export async function selectClawMission(state: ClawState, missionId: string) {
 }
 
 export async function createClawMission(state: ClawState) {
-  if (!state.client || !state.connected || !state.clawGoalDraft.trim() || state.clawCreateBusy) {
+  if (
+    !state.client ||
+    !state.connected ||
+    !state.clawGoalDraft.trim() ||
+    state.clawCreateBusy ||
+    !isClawEnabled(state)
+  ) {
     return;
   }
   state.clawCreateBusy = true;
@@ -94,6 +166,9 @@ export async function createClawMission(state: ClawState) {
       goal: state.clawGoalDraft.trim(),
     });
     applySnapshot(state, snapshot);
+    if (snapshot.mission?.id) {
+      await loadClawMissionOutputs(state, snapshot.mission.id);
+    }
     state.clawGoalDraft = "";
   } catch (error) {
     state.clawError = String(error);
@@ -110,11 +185,20 @@ async function mutateMission(
   if (!state.client || !state.connected || state.clawActionBusy) {
     return;
   }
+  if (!isClawEnabled(state)) {
+    return;
+  }
   state.clawActionBusy = true;
   state.clawError = null;
   try {
     const snapshot = await state.client.request<ClawMissionDetailSnapshot>(method, params);
     applySnapshot(state, snapshot);
+    if (snapshot.mission?.id) {
+      await loadClawMissionOutputs(state, snapshot.mission.id);
+    } else {
+      state.clawAuditEntries = [];
+      state.clawArtifacts = [];
+    }
   } catch (error) {
     state.clawError = String(error);
   } finally {
@@ -142,12 +226,28 @@ export async function rerunClawPreflight(state: ClawState, missionId: string) {
   await mutateMission(state, "claw.preflight.rerun", { missionId });
 }
 
+export async function replyClawDecision(
+  state: ClawState,
+  missionId: string,
+  decisionId: string,
+  action: ClawDecisionAction,
+) {
+  await mutateMission(state, "claw.decisions.reply", {
+    missionId,
+    decisionId,
+    action,
+  });
+}
+
 async function mutateControl(
   state: ClawState,
   method: string,
   params: Record<string, unknown>,
 ): Promise<void> {
   if (!state.client || !state.connected || state.clawActionBusy) {
+    return;
+  }
+  if (!isClawEnabled(state)) {
     return;
   }
   state.clawActionBusy = true;

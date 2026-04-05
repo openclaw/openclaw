@@ -5,6 +5,8 @@ import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
+  ClawArtifactEntry,
+  ClawAuditEntry,
   ClawControlState,
   ClawInboxItem,
   ClawMissionDetail,
@@ -120,6 +122,10 @@ export type AppViewState = {
   clawActionBusy: boolean;
   clawControl: ClawControlState | null;
   clawInbox: ClawInboxItem[];
+  clawAuditLoading: boolean;
+  clawAuditEntries: ClawAuditEntry[];
+  clawArtifactsLoading: boolean;
+  clawArtifacts: ClawArtifactEntry[];
   pendingGatewayUrl: string | null;
   configLoading: boolean;
   configRaw: string;

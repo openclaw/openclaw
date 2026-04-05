@@ -1,5 +1,8 @@
 import { html, nothing } from "lit";
 import type {
+  ClawArtifactEntry,
+  ClawAuditEntry,
+  ClawDecisionAction,
   ClawControlState,
   ClawInboxItem,
   ClawMissionDetail,
@@ -19,6 +22,10 @@ export type ClawViewProps = {
   selectedMissionId: string | null;
   control: ClawControlState | null;
   inbox: ClawInboxItem[];
+  auditLoading: boolean;
+  auditEntries: ClawAuditEntry[];
+  artifactsLoading: boolean;
+  artifacts: ClawArtifactEntry[];
   onGoalDraftChange: (value: string) => void;
   onCreateMission: () => void;
   onSelectMission: (missionId: string) => void;
@@ -27,6 +34,7 @@ export type ClawViewProps = {
   onResumeMission: (missionId: string) => void;
   onCancelMission: (missionId: string) => void;
   onRerunPreflight: (missionId: string) => void;
+  onReplyDecision: (missionId: string, decisionId: string, action: ClawDecisionAction) => void;
   onPauseAll: () => void;
   onStopAllNow: () => void;
   onSetAutonomy: (enabled: boolean) => void;
@@ -40,11 +48,63 @@ function formatDate(value?: string | null): string {
   return new Date(value).toLocaleString();
 }
 
-function renderDecision(decision: ClawPendingDecision) {
+function resolveDecisionActions(decision: ClawPendingDecision): ClawDecisionAction[] {
+  switch (decision.kind) {
+    case "start_approval":
+      return ["approve", "cancel"];
+    case "preflight_blocker":
+      return [];
+    case "recovery_uncertain":
+      return ["continue", "pause", "cancel"];
+    default:
+      return ["continue", "pause", "cancel"];
+  }
+}
+
+function formatDecisionAction(action: ClawDecisionAction): string {
+  switch (action) {
+    case "approve":
+      return "Approve";
+    case "reject":
+      return "Reject";
+    case "pause":
+      return "Pause";
+    case "cancel":
+      return "Cancel";
+    case "continue":
+      return "Continue";
+    default:
+      return action;
+  }
+}
+
+function renderDecision(
+  missionId: string,
+  decision: ClawPendingDecision,
+  actionBusy: boolean,
+  onReplyDecision: (missionId: string, decisionId: string, action: ClawDecisionAction) => void,
+) {
   return html`
     <li>
       <strong>${decision.title}</strong> (${decision.status})
       <div class="card-sub">${decision.summary}</div>
+      ${decision.status === "pending"
+        ? html`
+            <div class="row" style="gap: 8px; flex-wrap: wrap; margin-top: 8px;">
+              ${resolveDecisionActions(decision).map(
+                (action) => html`
+                  <button
+                    class="btn ${action === "cancel" ? "btn--danger" : "btn--subtle"}"
+                    ?disabled=${actionBusy}
+                    @click=${() => onReplyDecision(missionId, decision.id, action)}
+                  >
+                    ${formatDecisionAction(action)}
+                  </button>
+                `,
+              )}
+            </div>
+          `
+        : nothing}
     </li>
   `;
 }
@@ -54,6 +114,29 @@ function renderPreflight(check: ClawPreflightCheck) {
     <li>
       <strong>${check.title}</strong> (${check.status})
       <div class="card-sub">${check.summary}</div>
+    </li>
+  `;
+}
+
+function renderAuditEntry(entry: ClawAuditEntry) {
+  return html`
+    <li>
+      <strong>${entry.summary}</strong>
+      <div class="card-sub">${entry.type} • ${formatDate(entry.at)}</div>
+      ${entry.detail ? html`<div class="card-sub">${entry.detail}</div>` : nothing}
+    </li>
+  `;
+}
+
+function renderArtifact(entry: ClawArtifactEntry) {
+  return html`
+    <li>
+      <strong>${entry.name}</strong>
+      <div class="card-sub">
+        ${entry.kind}${entry.updatedAt ? html` • ${formatDate(entry.updatedAt)}` : nothing}
+        ${typeof entry.sizeBytes === "number" ? html` • ${entry.sizeBytes} bytes` : nothing}
+      </div>
+      <div class="card-sub">${entry.path}</div>
     </li>
   `;
 }
@@ -246,11 +329,49 @@ export function renderClaw(props: ClawViewProps) {
                         <div class="card-title">Decisions</div>
                         ${mission.decisions.length === 0
                           ? html`<div class="card-sub">No decisions recorded.</div>`
-                          : html`<ul style="padding-left: 18px;">${mission.decisions.map(renderDecision)}</ul>`}
+                          : html`
+                              <ul style="padding-left: 18px;">
+                                ${mission.decisions.map((decision) =>
+                                  renderDecision(
+                                    mission.id,
+                                    decision,
+                                    props.actionBusy,
+                                    props.onReplyDecision,
+                                  ),
+                                )}
+                              </ul>
+                            `}
                       </section>
                       <section class="panel">
                         <div class="card-title">Preflight</div>
                         <ul style="padding-left: 18px;">${mission.preflight.map(renderPreflight)}</ul>
+                      </section>
+                    </div>
+
+                    <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 16px;">
+                      <section class="panel">
+                        <div class="card-title">Audit</div>
+                        ${props.auditLoading
+                          ? html`<div class="card-sub">Loading audit…</div>`
+                          : props.auditEntries.length === 0
+                            ? html`<div class="card-sub">No audit entries yet.</div>`
+                            : html`
+                                <ul style="padding-left: 18px;">
+                                  ${props.auditEntries.map(renderAuditEntry)}
+                                </ul>
+                              `}
+                      </section>
+                      <section class="panel">
+                        <div class="card-title">Artifacts</div>
+                        ${props.artifactsLoading
+                          ? html`<div class="card-sub">Loading artifacts…</div>`
+                          : props.artifacts.length === 0
+                            ? html`<div class="card-sub">No artifacts recorded yet.</div>`
+                            : html`
+                                <ul style="padding-left: 18px;">
+                                  ${props.artifacts.map(renderArtifact)}
+                                </ul>
+                              `}
                       </section>
                     </div>
                   </div>

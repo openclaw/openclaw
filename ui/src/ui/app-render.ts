@@ -32,6 +32,7 @@ import {
   loadClawDashboard,
   pauseAllClaw,
   pauseClawMission,
+  replyClawDecision,
   rerunClawPreflight,
   resumeClawMission,
   selectClawMission,
@@ -251,6 +252,14 @@ function uniquePreserveOrder(values: string[]): string[] {
   return output;
 }
 
+function isClawEnabledInUi(state: Pick<AppViewState, "configForm" | "configSnapshot">): boolean {
+  const config =
+    state.configForm ??
+    ((state.configSnapshot?.config as Record<string, unknown> | null | undefined) ?? null);
+  const claw = config?.claw;
+  return Boolean(claw && typeof claw === "object" && (claw as { enabled?: unknown }).enabled === true);
+}
+
 type DismissedUpdateBanner = {
   latestVersion: string;
   channel: string | null;
@@ -390,6 +399,7 @@ export function renderApp(state: AppViewState) {
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+  const clawEnabled = isClawEnabledInUi(state);
   const configuredDreaming = resolveConfiguredDreaming(configValue);
   const dreamingOn = state.dreamingStatus?.enabled ?? configuredDreaming.enabled;
   const dreamingNextCycle = resolveDreamingNextCycle(state.dreamingStatus);
@@ -591,8 +601,12 @@ export function renderApp(state: AppViewState) {
             <div class="sidebar-shell__body">
               <nav class="sidebar-nav">
                 ${TAB_GROUPS.map((group) => {
+                  const tabs = group.tabs.filter((tab) => clawEnabled || tab !== "claw");
+                  if (tabs.length === 0) {
+                    return nothing;
+                  }
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-                  const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+                  const hasActiveTab = tabs.some((tab) => tab === state.tab);
                   const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
 
                   return html`
@@ -619,7 +633,7 @@ export function renderApp(state: AppViewState) {
                           `
                         : nothing}
                       <div class="nav-section__items">
-                        ${group.tabs.map((tab) =>
+                        ${tabs.map((tab) =>
                           renderTab(state, tab, { collapsed: navCollapsed }),
                         )}
                       </div>
@@ -787,56 +801,73 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
         ${state.tab === "claw"
-          ? lazyRender(lazyClaw, (m) =>
-              m.renderClaw({
-                loading: state.clawLoading,
-                error: state.clawError,
-                createBusy: state.clawCreateBusy,
-                actionBusy: state.clawActionBusy,
-                goalDraft: state.clawGoalDraft,
-                missions: state.clawMissions,
-                mission: state.clawMission,
-                selectedMissionId: state.clawSelectedMissionId,
-                control: state.clawControl,
-                inbox: state.clawInbox,
-                onGoalDraftChange: (value) => {
-                  state.clawGoalDraft = value;
-                },
-                onCreateMission: () => {
-                  void createClawMission(state);
-                },
-                onSelectMission: (missionId) => {
-                  void selectClawMission(state, missionId);
-                },
-                onApproveMission: (missionId) => {
-                  void approveClawMission(state, missionId);
-                },
-                onPauseMission: (missionId) => {
-                  void pauseClawMission(state, missionId);
-                },
-                onResumeMission: (missionId) => {
-                  void resumeClawMission(state, missionId);
-                },
-                onCancelMission: (missionId) => {
-                  void cancelClawMission(state, missionId);
-                },
-                onRerunPreflight: (missionId) => {
-                  void rerunClawPreflight(state, missionId);
-                },
-                onPauseAll: () => {
-                  void pauseAllClaw(state);
-                },
-                onStopAllNow: () => {
-                  void stopAllClawNow(state);
-                },
-                onSetAutonomy: (enabled) => {
-                  void setClawAutonomy(state, enabled);
-                },
-                onRefresh: () => {
-                  void loadClawDashboard(state);
-                },
-              }),
-            )
+          ? !clawEnabled
+            ? html`
+                <section class="card">
+                  <div class="card-title">Claw Missions</div>
+                  <div class="card-sub">
+                    Claw is disabled in config. Enable <code>claw.enabled</code> to use the
+                    mission console.
+                  </div>
+                </section>
+              `
+            : lazyRender(lazyClaw, (m) =>
+                m.renderClaw({
+                  loading: state.clawLoading,
+                  error: state.clawError,
+                  createBusy: state.clawCreateBusy,
+                  actionBusy: state.clawActionBusy,
+                  goalDraft: state.clawGoalDraft,
+                  missions: state.clawMissions,
+                  mission: state.clawMission,
+                  selectedMissionId: state.clawSelectedMissionId,
+                  control: state.clawControl,
+                  inbox: state.clawInbox,
+                  auditLoading: state.clawAuditLoading,
+                  auditEntries: state.clawAuditEntries,
+                  artifactsLoading: state.clawArtifactsLoading,
+                  artifacts: state.clawArtifacts,
+                  onGoalDraftChange: (value) => {
+                    state.clawGoalDraft = value;
+                  },
+                  onCreateMission: () => {
+                    void createClawMission(state);
+                  },
+                  onSelectMission: (missionId) => {
+                    void selectClawMission(state, missionId);
+                  },
+                  onApproveMission: (missionId) => {
+                    void approveClawMission(state, missionId);
+                  },
+                  onPauseMission: (missionId) => {
+                    void pauseClawMission(state, missionId);
+                  },
+                  onResumeMission: (missionId) => {
+                    void resumeClawMission(state, missionId);
+                  },
+                  onCancelMission: (missionId) => {
+                    void cancelClawMission(state, missionId);
+                  },
+                  onRerunPreflight: (missionId) => {
+                    void rerunClawPreflight(state, missionId);
+                  },
+                  onReplyDecision: (missionId, decisionId, action) => {
+                    void replyClawDecision(state, missionId, decisionId, action);
+                  },
+                  onPauseAll: () => {
+                    void pauseAllClaw(state);
+                  },
+                  onStopAllNow: () => {
+                    void stopAllClawNow(state);
+                  },
+                  onSetAutonomy: (enabled) => {
+                    void setClawAutonomy(state, enabled);
+                  },
+                  onRefresh: () => {
+                    void loadClawDashboard(state);
+                  },
+                }),
+              )
           : nothing}
         ${state.tab === "channels"
           ? lazyRender(lazyChannels, (m) =>
