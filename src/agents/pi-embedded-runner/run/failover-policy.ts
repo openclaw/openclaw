@@ -80,7 +80,7 @@ function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
 }
 
 function shouldRotatePrompt(params: PromptDecisionParams): boolean {
-  return params.failoverFailure && params.failoverReason !== "timeout";
+  return params.failoverFailure;
 }
 
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
