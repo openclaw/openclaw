@@ -1,21 +1,15 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
-import { callGateway } from "../../gateway/call.js";
 import { createRuntimeTaskFlow } from "../../plugins/runtime/runtime-taskflow.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { isSpawnAcpAcceptedResult, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
-import { registerSubagentRun } from "../subagent-registry.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
-import {
-  resolveDisplaySessionKey,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "./sessions-helpers.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -32,24 +26,14 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "reply_to",
 ] as const;
 
-function summarizeError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  return "error";
-}
-
-function resolveTrackedSpawnMode(params: {
-  requestedMode?: "run" | "session";
-  threadRequested: boolean;
-}): "run" | "session" {
-  if (params.requestedMode === "run" || params.requestedMode === "session") {
-    return params.requestedMode;
-  }
-  return params.threadRequested ? "session" : "run";
+function isTerminalTaskFlowStatus(status: unknown): boolean {
+  return (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "blocked" ||
+    status === "cancelled" ||
+    status === "lost"
+  );
 }
 
 function resolveRequesterContext(opts?: {
@@ -68,11 +52,6 @@ function resolveRequesterContext(opts?: {
         mainKey,
       })
     : alias;
-  const requesterDisplayKey = resolveDisplaySessionKey({
-    key: requesterInternalKey,
-    alias,
-    mainKey,
-  });
   const requesterOrigin = normalizeDeliveryContext({
     channel: opts?.agentChannel,
     accountId: opts?.agentAccountId,
@@ -80,31 +59,9 @@ function resolveRequesterContext(opts?: {
     threadId: opts?.agentThreadId,
   });
   return {
-    cfg,
     requesterInternalKey,
-    requesterDisplayKey,
     requesterOrigin,
   };
-}
-
-async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
-  const key = sessionKey.trim();
-  if (!key) {
-    return;
-  }
-  try {
-    await callGateway({
-      method: "sessions.delete",
-      params: {
-        key,
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-      },
-      timeoutMs: 10_000,
-    });
-  } catch {
-    // Best-effort cleanup only.
-  }
 }
 
 const SessionsSpawnToolSchema = Type.Object({
@@ -349,6 +306,7 @@ export function createSessionsSpawnTool(
             task,
             label: label || undefined,
             agentId: requestedAgentId,
+            parentFlowId: createdFlow?.flowId,
             resumeSessionId,
             cwd,
             mode: mode === "run" || mode === "session" ? mode : undefined,
@@ -368,92 +326,40 @@ export function createSessionsSpawnTool(
         );
         const childSessionKey = result.childSessionKey?.trim();
         const childRunId = isSpawnAcpAcceptedResult(result) ? result.runId?.trim() : undefined;
-        const shouldTrackViaRegistry =
-          result.status === "accepted" &&
-          Boolean(childSessionKey) &&
-          Boolean(childRunId) &&
-          streamTo !== "parent";
-        if (shouldTrackViaRegistry && childSessionKey && childRunId) {
-          const trackedSpawnMode = resolveTrackedSpawnMode({
-            requestedMode: result.mode,
-            threadRequested: thread,
-          });
-          const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
-          try {
-            registerSubagentRun({
-              runId: childRunId,
-              childSessionKey,
-              requesterSessionKey: requesterContext.requesterInternalKey,
-              requesterOrigin: requesterContext.requesterOrigin,
-              requesterDisplayKey: requesterContext.requesterDisplayKey,
-              task,
-              cleanup: trackedCleanup,
-              label: label || undefined,
-              runTimeoutSeconds,
-              expectsCompletionMessage: true,
-              spawnMode: trackedSpawnMode,
-              parentFlowId: createdFlow?.flowId,
-            });
-          } catch (err) {
-            // Best-effort only: the ACP turn was already started above, so deleting the
-            // child session record here does not guarantee the in-flight run was aborted.
-            await cleanupUntrackedAcpSession(childSessionKey);
-            if (createdFlow && taskFlow) {
-              const latest = taskFlow.get(createdFlow.flowId) ?? createdFlow;
-              taskFlow.fail({
-                flowId: createdFlow.flowId,
-                expectedRevision: latest.revision,
-                stateJson: {
-                  task,
-                  runtime,
-                  label: label || null,
-                  childSessionKey,
-                  runId: childRunId,
-                  error: `Failed to register ACP run: ${summarizeError(err)}`,
-                },
-                blockedSummary: `Failed to register ACP run: ${summarizeError(err)}`,
-              });
-            }
-            return jsonResult({
-              status: "error",
-              error: `Failed to register ACP run: ${summarizeError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
-              childSessionKey,
-              runId: childRunId,
-            });
-          }
-        }
         if (createdFlow && taskFlow) {
           const latest = taskFlow.get(createdFlow.flowId) ?? createdFlow;
-          taskFlow.setWaiting({
-            flowId: createdFlow.flowId,
-            expectedRevision: latest.revision,
-            currentStep: "wait_worker",
-            stateJson: {
-              task,
-              runtime,
-              label: label || null,
-              childSessionKey: childSessionKey ?? null,
-              runId: childRunId ?? null,
-              launch: {
-                kind: "sessions_spawn_child",
-                runtime,
+          if (!isTerminalTaskFlowStatus(latest.status)) {
+            taskFlow.setWaiting({
+              flowId: createdFlow.flowId,
+              expectedRevision: latest.revision,
+              currentStep: "wait_worker",
+              stateJson: {
                 task,
-                ...(label ? { label } : {}),
-                ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-                ...(cwd ? { cwd } : {}),
-                ...(typeof thread === "boolean" ? { thread } : {}),
-                ...(result.mode ? { mode: result.mode } : {}),
-                ...(sandbox ? { sandbox } : {}),
-                ...(resumeSessionId ? { resumeSessionId } : {}),
+                runtime,
+                label: label || null,
+                childSessionKey: childSessionKey ?? null,
+                runId: childRunId ?? null,
+                launch: {
+                  kind: "sessions_spawn_child",
+                  runtime,
+                  task,
+                  ...(label ? { label } : {}),
+                  ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+                  ...(cwd ? { cwd } : {}),
+                  ...(typeof thread === "boolean" ? { thread } : {}),
+                  ...(result.mode ? { mode: result.mode } : {}),
+                  ...(sandbox ? { sandbox } : {}),
+                  ...(resumeSessionId ? { resumeSessionId } : {}),
+                },
               },
-            },
-            waitJson: {
-              kind: "child_task",
-              runtime,
-              childSessionKey: childSessionKey ?? null,
-              runId: childRunId ?? null,
-            },
-          });
+              waitJson: {
+                kind: "child_task",
+                runtime,
+                childSessionKey: childSessionKey ?? null,
+                runId: childRunId ?? null,
+              },
+            });
+          }
         }
         return jsonResult({
           ...result,
@@ -499,38 +405,47 @@ export function createSessionsSpawnTool(
         const childSessionKey = result.childSessionKey?.trim() || undefined;
         const childRunId = result.runId?.trim() || undefined;
         const latest = taskFlow.get(createdFlow.flowId) ?? createdFlow;
-        taskFlow.setWaiting({
-          flowId: createdFlow.flowId,
-          expectedRevision: latest.revision,
-          currentStep: "wait_worker",
-          stateJson: {
-            task,
-            runtime,
-            label: label || null,
-            childSessionKey: childSessionKey ?? null,
-            runId: childRunId ?? null,
-            launch: {
-              kind: "sessions_spawn_child",
-              runtime,
+        if (!isTerminalTaskFlowStatus(latest.status)) {
+          taskFlow.setWaiting({
+            flowId: createdFlow.flowId,
+            expectedRevision: latest.revision,
+            currentStep: "wait_worker",
+            stateJson: {
               task,
-              ...(label ? { label } : {}),
-              ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-              ...(modelOverride ? { model: modelOverride } : {}),
-              ...(thinkingOverrideRaw ? { thinking: thinkingOverrideRaw } : {}),
-              ...(typeof runTimeoutSeconds === "number" ? { runTimeoutSeconds } : {}),
-              ...(typeof thread === "boolean" ? { thread } : {}),
-              ...(mode ? { mode } : {}),
-              ...(cleanup ? { cleanup } : {}),
-              ...(sandbox ? { sandbox } : {}),
+              runtime,
+              label: label || null,
+              childSessionKey: childSessionKey ?? null,
+              runId: childRunId ?? null,
+              launch: {
+                kind: "sessions_spawn_child",
+                runtime,
+                task,
+                ...(label ? { label } : {}),
+                ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+                ...(modelOverride ? { model: modelOverride } : {}),
+                ...(thinkingOverrideRaw ? { thinking: thinkingOverrideRaw } : {}),
+                ...(typeof runTimeoutSeconds === "number" ? { runTimeoutSeconds } : {}),
+                ...(typeof thread === "boolean" ? { thread } : {}),
+                ...(mode ? { mode } : {}),
+                ...(cleanup ? { cleanup } : {}),
+                ...(sandbox ? { sandbox } : {}),
+                ...(Array.isArray(result.attachments) && result.attachments.length > 0
+                  ? {
+                      retryable: false,
+                      retryReason:
+                        "Retry unavailable: the original child task used attachments that cannot be safely replayed.",
+                    }
+                  : {}),
+              },
             },
-          },
-          waitJson: {
-            kind: "child_task",
-            runtime,
-            childSessionKey: childSessionKey ?? null,
-            runId: childRunId ?? null,
-          },
-        });
+            waitJson: {
+              kind: "child_task",
+              runtime,
+              childSessionKey: childSessionKey ?? null,
+              runId: childRunId ?? null,
+            },
+          });
+        }
       }
 
       if (createdFlow && taskFlow && result.status !== "accepted") {

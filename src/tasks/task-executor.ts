@@ -362,6 +362,17 @@ function readManagedChildTaskRetryLaunch(params: {
   };
 }
 
+function readManagedChildTaskRetryRestrictionReason(flow: TaskFlowRecord): string | undefined {
+  const state = isJsonObject(flow.stateJson) ? flow.stateJson : undefined;
+  const launch = isJsonObject(state?.launch) ? state.launch : undefined;
+  if (launch?.retryable === false) {
+    return (
+      readTrimmedString(launch?.retryReason) ?? "Retry unavailable for this managed child task."
+    );
+  }
+  return undefined;
+}
+
 function buildManagedChildTaskRetryState(params: {
   flow: TaskFlowRecord;
   launch: ManagedChildTaskRetryLaunch;
@@ -458,6 +469,17 @@ function resolveRetryableManagedChildTaskFlow(flowId: string): {
     };
   }
   const latestTask = findLatestTaskForFlowId(flowId);
+  const retryRestrictionReason = readManagedChildTaskRetryRestrictionReason(flow);
+  if (retryRestrictionReason) {
+    return {
+      flowFound: true,
+      retryable: false,
+      needsUserAction: false,
+      flow,
+      latestTask,
+      reason: retryRestrictionReason,
+    };
+  }
   const launch = readManagedChildTaskRetryLaunch({ flow, latestTask: latestTask ?? undefined });
   if (!launch) {
     return {
@@ -594,6 +616,7 @@ async function retryManagedChildTaskFlowUnchecked(params: {
       task: launch.task,
       ...(launch.label ? { label: launch.label } : {}),
       ...(launch.agentId ? { agentId: launch.agentId } : {}),
+      parentFlowId: flow.flowId,
       ...(launch.resumeSessionId ? { resumeSessionId: launch.resumeSessionId } : {}),
       ...(launch.cwd ? { cwd: launch.cwd } : {}),
       ...(launch.mode ? { mode: launch.mode } : {}),

@@ -461,6 +461,7 @@ describe("task-executor", () => {
         expect.objectContaining({
           task: "Inspect PR 3",
           agentId: "codex",
+          parentFlowId: flow.flowId,
           cwd: "/workspace",
         }),
         expect.objectContaining({
@@ -473,6 +474,44 @@ describe("task-executor", () => {
         retryCount: 1,
         lastRetryAt: expect.any(Number),
       });
+    });
+  });
+
+  it("does not retry managed child-task flows whose stored launch used attachments", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow-retry-attachments",
+        goal: "Inspect attachment",
+        status: "failed",
+        currentStep: "failed",
+        stateJson: {
+          task: "Inspect attachment",
+          runtime: "subagent",
+          launch: {
+            kind: "sessions_spawn_child",
+            runtime: "subagent",
+            task: "Inspect attachment",
+            retryable: false,
+            retryReason:
+              "Retry unavailable: the original child task used attachments that cannot be safely replayed.",
+          },
+        },
+        createdAt: 10,
+        updatedAt: 20,
+        endedAt: 20,
+      });
+
+      const retried = await retryManagedChildTaskFlow({
+        flowId: flow.flowId,
+      });
+
+      expect(retried).toMatchObject({
+        found: true,
+        retried: false,
+        reason: expect.stringContaining("used attachments"),
+      });
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     });
   });
 

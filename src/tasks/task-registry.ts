@@ -825,6 +825,20 @@ function matchesManagedChildWaitState(
   return true;
 }
 
+function canFinalizeManagedFlowFromTask(
+  flow: Pick<TaskFlowRecord, "flowId" | "waitJson">,
+  task: Pick<TaskRecord, "taskId" | "runId" | "childSessionKey">,
+): boolean {
+  if (matchesManagedChildWaitState(flow, task)) {
+    return true;
+  }
+  if (flow.waitJson !== undefined && flow.waitJson !== null) {
+    return false;
+  }
+  const latestTask = findLatestTaskForFlowId(flow.flowId);
+  return latestTask?.taskId === task.taskId;
+}
+
 function resolveManagedFlowTerminalPatch(
   task: TaskRecord,
   flow: TaskFlowRecord,
@@ -934,7 +948,7 @@ function syncManagedFlowCompletionFromTask(task: TaskRecord): void {
   if (!flow || flow.syncMode !== "managed" || isTerminalFlowStatus(flow.status)) {
     return;
   }
-  if (!matchesManagedChildWaitState(flow, task)) {
+  if (!canFinalizeManagedFlowFromTask(flow, task)) {
     return;
   }
   if (
@@ -968,7 +982,7 @@ function syncManagedFlowCompletionFromTask(task: TaskRecord): void {
     if (!flow || flow.syncMode !== "managed" || isTerminalFlowStatus(flow.status)) {
       return;
     }
-    if (!matchesManagedChildWaitState(flow, task)) {
+    if (!canFinalizeManagedFlowFromTask(flow, task)) {
       return;
     }
     if (

@@ -12,7 +12,11 @@ import {
 } from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
+import {
+  createManagedTaskFlow,
+  getTaskFlowById,
+  resetTaskFlowRegistryForTests,
+} from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import {
   createTaskRecord,
@@ -478,6 +482,47 @@ describe("task-registry", () => {
           task: "Should be denied",
         }),
       ).toThrow("Parent flow is already cancelled.");
+    });
+  });
+
+  it("finalizes a managed flow when the linked child finishes before waitJson is written", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-registry-race",
+        goal: "Race test",
+        status: "running",
+        currentStep: "spawn_worker",
+        waitJson: null,
+      });
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:race-child",
+        runId: "race-run",
+        task: "Do the thing",
+        status: "succeeded",
+        terminalSummary: "All done.",
+        startedAt: 100,
+        lastEventAt: 150,
+        deliveryStatus: "pending",
+      });
+
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        flowId: flow.flowId,
+        status: "succeeded",
+        currentStep: "completed",
+        waitJson: null,
+        endedAt: 150,
+      });
     });
   });
 

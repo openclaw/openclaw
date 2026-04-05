@@ -75,6 +75,7 @@ export type SpawnAcpParams = {
   task: string;
   label?: string;
   agentId?: string;
+  parentFlowId?: string;
   resumeSessionId?: string;
   cwd?: string;
   mode?: SpawnAcpMode;
@@ -1170,6 +1171,7 @@ export async function spawnAcpDirect(
         ownerKey: requesterInternalKey,
         scopeKind: "session",
         requesterOrigin: requesterState.origin,
+        parentFlowId: params.parentFlowId,
         childSessionKey: sessionKey,
         runId: childRunId,
         label: params.label,
@@ -1202,6 +1204,7 @@ export async function spawnAcpDirect(
       ownerKey: requesterInternalKey,
       scopeKind: "session",
       requesterOrigin: requesterState.origin,
+      parentFlowId: params.parentFlowId,
       childSessionKey: sessionKey,
       runId: childRunId,
       label: params.label,

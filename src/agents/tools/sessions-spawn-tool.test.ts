@@ -3,7 +3,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
   const spawnAcpDirectMock = vi.fn();
-  const registerSubagentRunMock = vi.fn();
   const createManagedMock = vi.fn();
   const getFlowMock = vi.fn();
   const setWaitingMock = vi.fn();
@@ -11,7 +10,6 @@ const hoisted = vi.hoisted(() => {
   return {
     spawnSubagentDirectMock,
     spawnAcpDirectMock,
-    registerSubagentRunMock,
     createManagedMock,
     getFlowMock,
     setWaitingMock,
@@ -40,10 +38,6 @@ vi.mock("../../plugins/runtime/runtime-taskflow.js", () => ({
       fail: (...args: unknown[]) => hoisted.failFlowMock(...args),
     }),
   }),
-}));
-
-vi.mock("../subagent-registry.js", () => ({
-  registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
 }));
 
 vi.mock("../subagent-capabilities.js", async () => {
@@ -79,7 +73,6 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
     });
-    hoisted.registerSubagentRunMock.mockReset().mockReturnValue(undefined);
     hoisted.createManagedMock.mockReset().mockReturnValue({
       flowId: "flow-1",
       revision: 1,
@@ -209,10 +202,40 @@ describe("sessions_spawn tool", () => {
     });
   });
 
-  it("marks taskFlow failed when ACP registration aborts after spawn", async () => {
-    hoisted.registerSubagentRunMock.mockImplementation(() => {
-      throw new Error("registry unavailable");
+  it("marks attachment-backed managed subagent flows as non-retryable", async () => {
+    hoisted.spawnSubagentDirectMock.mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:1",
+      runId: "run-subagent",
+      attachments: [{ name: "a.txt", mimeType: "text/plain", sizeBytes: 5 }],
     });
+
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-subagent-attachments", {
+      task: "review attachment",
+      attachments: [{ name: "a.txt", content: "hello", encoding: "utf8" }],
+      taskFlow: {
+        controllerId: "tests/attachment-managed-flow",
+        goal: "Review attachment",
+      },
+    });
+
+    expect(hoisted.setWaitingMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stateJson: expect.objectContaining({
+          launch: expect.objectContaining({
+            retryable: false,
+            retryReason: expect.stringContaining("used attachments"),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("passes parentFlowId to managed ACP spawns without shadow task registration", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       agentChannel: "discord",
@@ -221,29 +244,52 @@ describe("sessions_spawn tool", () => {
       agentThreadId: "456",
     });
 
-    const result = await tool.execute("call-acp-flow-error", {
+    const result = await tool.execute("call-acp-flow", {
       runtime: "acp",
       task: "investigate the failing CI run",
       agentId: "codex",
       cwd: "/workspace",
       taskFlow: {
-        controllerId: "tests/acp-registry-error",
+        controllerId: "tests/acp-managed-flow",
         goal: "Investigate CI",
       },
     });
 
-    expect(hoisted.failFlowMock).toHaveBeenCalledWith(
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        flowId: "flow-1",
-        blockedSummary: expect.stringContaining("Failed to register ACP run: registry unavailable"),
+        task: "investigate the failing CI run",
+        parentFlowId: "flow-1",
       }),
+      expect.any(Object),
     );
+    expect(hoisted.failFlowMock).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({
-      status: "error",
+      status: "accepted",
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
-      error: expect.stringContaining("Failed to register ACP run: registry unavailable"),
+      flowId: "flow-1",
     });
+  });
+
+  it("does not overwrite a managed flow that already reached terminal state before wait registration", async () => {
+    hoisted.getFlowMock.mockReturnValue({
+      flowId: "flow-1",
+      revision: 2,
+      status: "succeeded",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-terminal-race", {
+      task: "review repo",
+      taskFlow: {
+        controllerId: "tests/terminal-race",
+        goal: "Review repository",
+      },
+    });
+
+    expect(hoisted.setWaitingMock).not.toHaveBeenCalled();
   });
 
   it("routes to ACP runtime when runtime=acp", async () => {
