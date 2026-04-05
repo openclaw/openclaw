@@ -513,6 +513,7 @@ async function resolvePiCommand(): Promise<PiCommand> {
 
 type RunProcessOptions = {
   cwd?: string;
+  input?: string;
   rejectOnFailure?: boolean;
 };
 
@@ -525,7 +526,7 @@ async function runProcess(
     const child = spawn(executable, args, {
       cwd: options.cwd ?? ROOT,
       env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
 
     let stdout = "";
@@ -537,6 +538,11 @@ async function runProcess(
       stderr += String(chunk);
     });
     child.once("error", reject);
+    if (options.input !== undefined) {
+      child.stdin.end(options.input);
+    } else {
+      child.stdin.end();
+    }
     child.once("close", (code) => {
       if ((code ?? 1) !== 0 && options.rejectOnFailure) {
         reject(
@@ -547,6 +553,18 @@ async function runProcess(
       resolve({ code: code ?? 1, stderr, stdout });
     });
   });
+}
+
+async function formatGeneratedTypeScript(filePath: string, source: string): Promise<string> {
+  const result = await runProcess(
+    "pnpm",
+    ["exec", "oxfmt", "--stdin-filepath", path.relative(ROOT, filePath)],
+    {
+      input: source,
+      rejectOnFailure: true,
+    },
+  );
+  return result.stdout;
 }
 
 type PendingPrompt = {
@@ -956,7 +974,10 @@ async function syncLocale(
     workflow: CONTROL_UI_I18N_WORKFLOW,
   };
 
-  const expectedLocale = renderLocaleModule(entry, nextMap);
+  const expectedLocale = await formatGeneratedTypeScript(
+    existingPath,
+    renderLocaleModule(entry, nextMap),
+  );
   const expectedMeta = renderMeta(nextMeta);
   const expectedGlossary = renderGlossary(glossary.length === 0 ? DEFAULT_GLOSSARY : glossary);
   const expectedTm = renderTranslationMemory(tm);
