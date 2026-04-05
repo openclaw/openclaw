@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Gateway/WS handshake: raise the default pre-auth handshake timeout to 15 seconds so Raspberry Pi and other slower local hosts stop dropping healthy CLI connections during startup, while keeping `OPENCLAW_HANDSHAKE_TIMEOUT_MS` as a runtime override for unusually slow environments. Fixes #46097.
+
 ### Breaking
 
 - Config: remove legacy public config aliases such as `talk.voiceId` / `talk.apiKey`, `agents.*.sandbox.perSession`, `browser.ssrfPolicy.allowPrivateNetwork`, `hooks.internal.handlers`, and channel/group/room `allow` toggles in favor of the canonical public paths and `enabled`, while keeping load-time compatibility and `openclaw doctor --fix` migration support for existing configs. (#60726) Thanks @vincentkoc.
@@ -46,6 +50,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/reply dispatch: add a generic `reply_dispatch` hook so bundled plugins like ACPX can own reply interception without hardcoded ACP paths in core auto-reply routing.
 - Memory/dreaming: refactor dreaming from competing modes (`off|core|rem|deep`) to three cooperative phases (light, deep, REM) with independent schedules, per-phase enable/disable, deep-only `MEMORY.md` writes, light/REM daily-note staging, deep recovery, and per-phase execution overrides.
 - Matrix/exec approvals: clarify unavailable-approval replies so Matrix no longer claims chat approvals are unsupported when native exec approvals are merely unconfigured. (#61424) Thanks @gumadeiras.
+- Gateway/WS handshake: raise the default pre-auth handshake timeout to 15 seconds so Raspberry Pi and other slower local hosts stop dropping healthy CLI connections during startup, while keeping `OPENCLAW_HANDSHAKE_TIMEOUT_MS` as a runtime override for unusually slow environments. Fixes #46097.
 
 ### Fixes
 
