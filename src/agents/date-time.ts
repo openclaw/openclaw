@@ -191,3 +191,50 @@ export function formatUserTime(
     return undefined;
   }
 }
+
+export function formatUserLocalIsoTimestamp(date: Date, timeZone: string): string | undefined {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+      timeZoneName: "longOffset",
+    }).formatToParts(date);
+    const map: Record<string, string> = {};
+    for (const part of parts) {
+      if (part.type !== "literal") {
+        map[part.type] = part.value;
+      }
+    }
+
+    const offsetRaw = map.timeZoneName?.trim();
+    const offset =
+      offsetRaw === "GMT" || offsetRaw === "UTC"
+        ? "+00:00"
+        : offsetRaw?.startsWith("GMT")
+          ? offsetRaw.slice(3)
+          : offsetRaw?.startsWith("UTC")
+            ? offsetRaw.slice(3)
+            : offsetRaw;
+    if (
+      !map.year ||
+      !map.month ||
+      !map.day ||
+      !map.hour ||
+      !map.minute ||
+      !map.second ||
+      !offset ||
+      !/^[+-]\d{2}:\d{2}$/.test(offset)
+    ) {
+      return undefined;
+    }
+    return `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}:${map.second}${offset}`;
+  } catch {
+    return undefined;
+  }
+}

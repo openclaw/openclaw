@@ -15,6 +15,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
+import { formatUtcTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -24,6 +25,12 @@ import {
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
+import {
+  formatUserLocalIsoTimestamp,
+  formatUserTime,
+  resolveUserTimeFormat,
+  resolveUserTimezone,
+} from "../date-time.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
@@ -474,6 +481,21 @@ export function createSessionStatusTool(opts?: {
         relatedSessionKey: resolved.key,
         callerOwnerKey: visibilityRequesterKey,
       });
+      const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+      const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
+      const now = new Date();
+      const userTime = formatUserTime(now, userTimezone, userTimeFormat);
+      const localIsoTime = formatUserLocalIsoTimestamp(now, userTimezone);
+      const utcIsoTime = formatUtcTimestamp(now, { displaySeconds: true });
+      const machineTimeSegments = [
+        localIsoTime ? `local ISO ${localIsoTime}` : null,
+        `UTC ${utcIsoTime}`,
+      ]
+        .filter(Boolean)
+        .join(" / ");
+      const timeLine = userTime
+        ? `🕒 Time: ${userTime} (${userTimezone}) / ${machineTimeSegments}`
+        : `🕒 Time zone: ${userTimezone} / ${machineTimeSegments}`;
       const statusText = await buildStatusText({
         cfg,
         sessionEntry: statusSessionEntry,
@@ -504,14 +526,18 @@ export function createSessionStatusTool(opts?: {
       });
       const fullStatusText =
         taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
+      const statusWithTime =
+        fullStatusText.includes("🕒 Time:") || fullStatusText.includes("🕒 Time zone:")
+          ? fullStatusText
+          : `${fullStatusText}\n${timeLine}`;
 
       return {
-        content: [{ type: "text", text: fullStatusText }],
+        content: [{ type: "text", text: statusWithTime }],
         details: {
           ok: true,
           sessionKey: resolved.key,
           changedModel,
-          statusText: fullStatusText,
+          statusText: statusWithTime,
         },
       };
     },
