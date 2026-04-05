@@ -19,6 +19,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -28,6 +29,7 @@ import {
 } from "../fallback-state.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
@@ -58,6 +60,7 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-operation.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -96,6 +99,7 @@ export async function runReplyAgent(params: {
   sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
+  replyOperation?: ReplyOperation;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -123,6 +127,7 @@ export async function runReplyAgent(params: {
     sessionCtx,
     shouldInjectGroupIntro,
     typingMode,
+    replyOperation: providedReplyOperation,
   } = params;
 
   let activeSessionEntry = sessionEntry;
@@ -253,158 +258,173 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
-  await typingSignals.signalRunStart();
-
-  activeSessionEntry = await runPreflightCompactionIfNeeded({
-    cfg,
-    followupRun,
-    promptForEstimate: followupRun.prompt,
-    defaultModel,
-    agentCfgContextTokens,
-    sessionEntry: activeSessionEntry,
-    sessionStore: activeSessionStore,
-    sessionKey,
-    storePath,
-    isHeartbeat,
-  });
-
-  activeSessionEntry = await runMemoryFlushIfNeeded({
-    cfg,
-    followupRun,
-    promptForEstimate: followupRun.prompt,
-    sessionCtx,
-    opts,
-    defaultModel,
-    agentCfgContextTokens,
-    resolvedVerboseLevel,
-    sessionEntry: activeSessionEntry,
-    sessionStore: activeSessionStore,
-    sessionKey,
-    storePath,
-    isHeartbeat,
-  });
-
-  const runFollowupTurn = createFollowupRunner({
-    opts,
-    typing,
-    typingMode,
-    sessionEntry: activeSessionEntry,
-    sessionStore: activeSessionStore,
-    sessionKey,
-    storePath,
-    defaultModel,
-    agentCfgContextTokens,
-  });
-
-  let responseUsageLine: string | undefined;
-  type SessionResetOptions = {
-    failureLabel: string;
-    buildLogMessage: (nextSessionId: string) => string;
-    cleanupTranscripts?: boolean;
-  };
-  const resetSession = async ({
-    failureLabel,
-    buildLogMessage,
-    cleanupTranscripts,
-  }: SessionResetOptions): Promise<boolean> => {
-    if (!sessionKey || !activeSessionStore || !storePath) {
-      return false;
-    }
-    const prevEntry = activeSessionStore[sessionKey] ?? activeSessionEntry;
-    if (!prevEntry) {
-      return false;
-    }
-    const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
-    const nextSessionId = generateSecureUuid();
-    const nextEntry: SessionEntry = {
-      ...prevEntry,
-      sessionId: nextSessionId,
-      updatedAt: Date.now(),
-      systemSent: false,
-      abortedLastRun: false,
-      modelProvider: undefined,
-      model: undefined,
-      inputTokens: undefined,
-      outputTokens: undefined,
-      totalTokens: undefined,
-      totalTokensFresh: false,
-      estimatedCostUsd: undefined,
-      cacheRead: undefined,
-      cacheWrite: undefined,
-      contextTokens: undefined,
-      systemPromptReport: undefined,
-      fallbackNoticeSelectedModel: undefined,
-      fallbackNoticeActiveModel: undefined,
-      fallbackNoticeReason: undefined,
-    };
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const nextSessionFile = resolveSessionTranscriptPath(
-      nextSessionId,
-      agentId,
-      sessionCtx.MessageThreadId,
-    );
-    nextEntry.sessionFile = nextSessionFile;
-    activeSessionStore[sessionKey] = nextEntry;
-    try {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = nextEntry;
-      });
-    } catch (err) {
-      defaultRuntime.error(
-        `Failed to persist session reset after ${failureLabel} (${sessionKey}): ${String(err)}`,
-      );
-    }
-    followupRun.run.sessionId = nextSessionId;
-    followupRun.run.sessionFile = nextSessionFile;
-    refreshQueuedFollowupSession({
-      key: queueKey,
-      previousSessionId: prevEntry.sessionId,
-      nextSessionId,
-      nextSessionFile,
+  const replyOperation =
+    providedReplyOperation ??
+    createReplyOperation({
+      sessionId: followupRun.run.sessionId,
+      sessionKey,
+      resetTriggered: false,
+      upstreamAbortSignal: opts?.abortSignal,
     });
-    activeSessionEntry = nextEntry;
-    activeIsNewSession = true;
-    defaultRuntime.error(buildLogMessage(nextSessionId));
-    if (cleanupTranscripts && prevSessionId) {
-      const transcriptCandidates = new Set<string>();
-      const resolved = resolveSessionFilePath(
-        prevSessionId,
-        prevEntry,
-        resolveSessionFilePathOptions({ agentId, storePath }),
-      );
-      if (resolved) {
-        transcriptCandidates.add(resolved);
+  let runFollowupTurn = queuedRunFollowupTurn;
+
+  try {
+    await typingSignals.signalRunStart();
+
+    activeSessionEntry = await runPreflightCompactionIfNeeded({
+      cfg,
+      followupRun,
+      promptForEstimate: followupRun.prompt,
+      defaultModel,
+      agentCfgContextTokens,
+      sessionEntry: activeSessionEntry,
+      sessionStore: activeSessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat,
+      replyOperation,
+    });
+
+    activeSessionEntry = await runMemoryFlushIfNeeded({
+      cfg,
+      followupRun,
+      promptForEstimate: followupRun.prompt,
+      sessionCtx,
+      opts,
+      defaultModel,
+      agentCfgContextTokens,
+      resolvedVerboseLevel,
+      sessionEntry: activeSessionEntry,
+      sessionStore: activeSessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat,
+      replyOperation,
+    });
+
+    runFollowupTurn = createFollowupRunner({
+      opts,
+      typing,
+      typingMode,
+      sessionEntry: activeSessionEntry,
+      sessionStore: activeSessionStore,
+      sessionKey,
+      storePath,
+      defaultModel,
+      agentCfgContextTokens,
+    });
+
+    let responseUsageLine: string | undefined;
+    type SessionResetOptions = {
+      failureLabel: string;
+      buildLogMessage: (nextSessionId: string) => string;
+      cleanupTranscripts?: boolean;
+    };
+    const resetSession = async ({
+      failureLabel,
+      buildLogMessage,
+      cleanupTranscripts,
+    }: SessionResetOptions): Promise<boolean> => {
+      if (!sessionKey || !activeSessionStore || !storePath) {
+        return false;
       }
-      transcriptCandidates.add(resolveSessionTranscriptPath(prevSessionId, agentId));
-      for (const candidate of transcriptCandidates) {
-        try {
-          fs.unlinkSync(candidate);
-        } catch {
-          // Best-effort cleanup.
+      const prevEntry = activeSessionStore[sessionKey] ?? activeSessionEntry;
+      if (!prevEntry) {
+        return false;
+      }
+      const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
+      const nextSessionId = generateSecureUuid();
+      const nextEntry: SessionEntry = {
+        ...prevEntry,
+        sessionId: nextSessionId,
+        updatedAt: Date.now(),
+        systemSent: false,
+        abortedLastRun: false,
+        modelProvider: undefined,
+        model: undefined,
+        inputTokens: undefined,
+        outputTokens: undefined,
+        totalTokens: undefined,
+        totalTokensFresh: false,
+        estimatedCostUsd: undefined,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        contextTokens: undefined,
+        systemPromptReport: undefined,
+        fallbackNoticeSelectedModel: undefined,
+        fallbackNoticeActiveModel: undefined,
+        fallbackNoticeReason: undefined,
+      };
+      const agentId = resolveAgentIdFromSessionKey(sessionKey);
+      const nextSessionFile = resolveSessionTranscriptPath(
+        nextSessionId,
+        agentId,
+        sessionCtx.MessageThreadId,
+      );
+      nextEntry.sessionFile = nextSessionFile;
+      activeSessionStore[sessionKey] = nextEntry;
+      try {
+        await updateSessionStore(storePath, (store) => {
+          store[sessionKey] = nextEntry;
+        });
+      } catch (err) {
+        defaultRuntime.error(
+          `Failed to persist session reset after ${failureLabel} (${sessionKey}): ${String(err)}`,
+        );
+      }
+      followupRun.run.sessionId = nextSessionId;
+      followupRun.run.sessionFile = nextSessionFile;
+      refreshQueuedFollowupSession({
+        key: queueKey,
+        previousSessionId: prevEntry.sessionId,
+        nextSessionId,
+        nextSessionFile,
+      });
+      activeSessionEntry = nextEntry;
+      activeIsNewSession = true;
+      defaultRuntime.error(buildLogMessage(nextSessionId));
+      if (cleanupTranscripts && prevSessionId) {
+        const transcriptCandidates = new Set<string>();
+        const resolved = resolveSessionFilePath(
+          prevSessionId,
+          prevEntry,
+          resolveSessionFilePathOptions({ agentId, storePath }),
+        );
+        if (resolved) {
+          transcriptCandidates.add(resolved);
+        }
+        transcriptCandidates.add(resolveSessionTranscriptPath(prevSessionId, agentId));
+        for (const candidate of transcriptCandidates) {
+          try {
+            fs.unlinkSync(candidate);
+          } catch {
+            // Best-effort cleanup.
+          }
         }
       }
-    }
-    return true;
-  };
-  const resetSessionAfterCompactionFailure = async (reason: string): Promise<boolean> =>
-    resetSession({
-      failureLabel: "compaction failure",
-      buildLogMessage: (nextSessionId) =>
-        `Auto-compaction failed (${reason}). Restarting session ${sessionKey} -> ${nextSessionId} and retrying.`,
-    });
-  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
-    resetSession({
-      failureLabel: "role ordering conflict",
-      buildLogMessage: (nextSessionId) =>
-        `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
-      cleanupTranscripts: true,
-    });
-  try {
+      return true;
+    };
+    const resetSessionAfterCompactionFailure = async (reason: string): Promise<boolean> =>
+      resetSession({
+        failureLabel: "compaction failure",
+        buildLogMessage: (nextSessionId) =>
+          `Auto-compaction failed (${reason}). Restarting session ${sessionKey} -> ${nextSessionId} and retrying.`,
+      });
+    const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
+      resetSession({
+        failureLabel: "role ordering conflict",
+        buildLogMessage: (nextSessionId) =>
+          `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
+        cleanupTranscripts: true,
+      });
+
+    replyOperation.setPhase("running");
     const runStartedAt = Date.now();
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
       sessionCtx,
+      replyOperation,
       opts,
       typingSignals,
       blockReplyPipeline,
@@ -426,6 +446,9 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
+      if (!replyOperation.result) {
+        replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
+      }
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
@@ -785,11 +808,34 @@ export async function runReplyAgent(params: {
       runFollowupTurn,
     );
   } catch (error) {
+    if (replyOperation.result?.kind === "aborted") {
+      return finalizeWithFollowup({ text: SILENT_REPLY_TOKEN }, queueKey, runFollowupTurn);
+    }
+    if (error instanceof GatewayDrainingError) {
+      replyOperation.fail("gateway_draining", error);
+      return finalizeWithFollowup(
+        { text: "⚠️ Gateway is restarting. Please wait a few seconds and try again." },
+        queueKey,
+        runFollowupTurn,
+      );
+    }
+    if (error instanceof CommandLaneClearedError) {
+      replyOperation.fail("command_lane_cleared", error);
+      return finalizeWithFollowup(
+        { text: "⚠️ Gateway is restarting. Please wait a few seconds and try again." },
+        queueKey,
+        runFollowupTurn,
+      );
+    }
+    replyOperation.fail("run_failed", error);
     // Keep the followup queue moving even when an unexpected exception escapes
     // the run path; the caller still receives the original error.
     finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     throw error;
   } finally {
+    if (!replyOperation.result) {
+      replyOperation.complete();
+    }
     blockReplyPipeline?.stop();
     typing.markRunComplete();
     // Safety net: the dispatcher's onIdle callback normally fires

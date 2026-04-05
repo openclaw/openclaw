@@ -28,6 +28,7 @@ import {
   resolveOriginMessageTo,
 } from "./origin-routing.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import { createReplyOperation } from "./reply-operation.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
@@ -135,6 +136,12 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    const replyOperation = createReplyOperation({
+      sessionId: queued.run.sessionId,
+      sessionKey: queued.run.sessionKey,
+      resetTriggered: false,
+      upstreamAbortSignal: opts?.abortSignal,
+    });
     try {
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
@@ -167,10 +174,12 @@ export function createFollowupRunner(params: {
         sessionKey,
         storePath,
         isHeartbeat: opts?.isHeartbeat === true,
+        replyOperation,
       });
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+      replyOperation.setPhase("running");
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -189,6 +198,7 @@ export function createFollowupRunner(params: {
             try {
               const result = await runEmbeddedPiAgent({
                 allowGatewaySubagentBinding: true,
+                replyOperation,
                 sessionId: queued.run.sessionId,
                 sessionKey: queued.run.sessionKey,
                 agentId: queued.run.agentId,
@@ -268,6 +278,7 @@ export function createFollowupRunner(params: {
         fallbackModel = fallbackResult.model;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        replyOperation.fail("run_failed", err);
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
         return;
       }
@@ -399,6 +410,9 @@ export function createFollowupRunner(params: {
 
       await sendFollowupPayloads(finalPayloads, queued);
     } finally {
+      if (!replyOperation.result) {
+        replyOperation.complete();
+      }
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the
       // buffered dispatcher's finally block, but followup turns bypass the

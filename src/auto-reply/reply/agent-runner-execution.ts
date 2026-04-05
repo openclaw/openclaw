@@ -31,6 +31,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
@@ -57,6 +58,7 @@ import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
+import type { ReplyOperation } from "./reply-operation.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 // Maximum number of LiveSessionModelSwitchError retries before surfacing a
@@ -408,10 +410,19 @@ function applyOpenAIGptChatReplyGuard(params: {
   }
 }
 
+function buildRestartLifecycleReplyText(): string {
+  return "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
+}
+
+function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
+  return replyOperation?.result?.kind === "aborted";
+}
+
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
+  replyOperation?: ReplyOperation;
   opts?: GetReplyOptions;
   typingSignals: TypingSignaler;
   blockReplyPipeline: BlockReplyPipeline | null;
@@ -805,7 +816,8 @@ export async function runAgentTurnWithFallback(params: {
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
                 images: params.opts?.images,
                 imageOrder: params.opts?.imageOrder,
-                abortSignal: params.opts?.abortSignal,
+                abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+                replyOperation: params.replyOperation,
                 blockReplyBreak: params.resolvedBlockStreamingBreak,
                 blockReplyChunking: params.blockReplyChunking,
                 onPartialReply: async (payload) => {
@@ -1094,6 +1106,7 @@ export async function runAgentTurnWithFallback(params: {
         (await params.resetSessionAfterCompactionFailure(embeddedError.message))
       ) {
         didResetAfterCompactionFailure = true;
+        params.replyOperation?.fail("run_failed", embeddedError);
         return {
           kind: "final",
           payload: {
@@ -1104,6 +1117,7 @@ export async function runAgentTurnWithFallback(params: {
       if (embeddedError?.kind === "role_ordering") {
         const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
         if (didReset) {
+          params.replyOperation?.fail("run_failed", embeddedError);
           return {
             kind: "final",
             payload: {
@@ -1133,6 +1147,7 @@ export async function runAgentTurnWithFallback(params: {
               "Logs: openclaw logs --follow"
             : "⚠️ Agent failed before reply: model switch could not be completed. " +
               "The requested model may be temporarily unavailable. Please try again shortly.";
+          params.replyOperation?.fail("run_failed", err);
           return {
             kind: "final",
             payload: {
@@ -1158,12 +1173,42 @@ export async function runAgentTurnWithFallback(params: {
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
 
+      if (isReplyOperationUserAbort(params.replyOperation)) {
+        return {
+          kind: "final",
+          payload: {
+            text: SILENT_REPLY_TOKEN,
+          },
+        };
+      }
+
+      if (err instanceof GatewayDrainingError) {
+        params.replyOperation?.fail("gateway_draining", err);
+        return {
+          kind: "final",
+          payload: {
+            text: buildRestartLifecycleReplyText(),
+          },
+        };
+      }
+
+      if (err instanceof CommandLaneClearedError) {
+        params.replyOperation?.fail("command_lane_cleared", err);
+        return {
+          kind: "final",
+          payload: {
+            text: buildRestartLifecycleReplyText(),
+          },
+        };
+      }
+
       if (
         isCompactionFailure &&
         !didResetAfterCompactionFailure &&
         (await params.resetSessionAfterCompactionFailure(message))
       ) {
         didResetAfterCompactionFailure = true;
+        params.replyOperation?.fail("run_failed", err);
         return {
           kind: "final",
           payload: {
@@ -1174,6 +1219,7 @@ export async function runAgentTurnWithFallback(params: {
       if (isRoleOrderingError) {
         const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
         if (didReset) {
+          params.replyOperation?.fail("run_failed", err);
           return {
             kind: "final",
             payload: {
@@ -1220,6 +1266,7 @@ export async function runAgentTurnWithFallback(params: {
           );
         }
 
+        params.replyOperation?.fail("session_corruption_reset", err);
         return {
           kind: "final",
           payload: {
@@ -1267,6 +1314,7 @@ export async function runAgentTurnWithFallback(params: {
                 ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
                 : buildExternalRunFailureText(message);
 
+      params.replyOperation?.fail("run_failed", err);
       return {
         kind: "final",
         payload: {
@@ -1286,6 +1334,7 @@ export async function runAgentTurnWithFallback(params: {
   if (finalEmbeddedError && !hasPayloadText) {
     const errorMsg = finalEmbeddedError.message ?? "";
     if (isContextOverflowError(errorMsg)) {
+      params.replyOperation?.fail("run_failed", finalEmbeddedError);
       return {
         kind: "final",
         payload: {

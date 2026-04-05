@@ -35,8 +35,9 @@ import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings.js";
-import type { RouteReplyParams } from "./route-reply.js";
+import { createReplyOperation } from "./reply-operation.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -50,7 +51,6 @@ type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node"
 let piEmbeddedRuntimePromise: Promise<typeof import("../../agents/pi-embedded.runtime.js")> | null =
   null;
 let agentRunnerRuntimePromise: Promise<typeof import("./agent-runner.runtime.js")> | null = null;
-let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
 let sessionUpdatesRuntimePromise: Promise<typeof import("./session-updates.runtime.js")> | null =
   null;
 let sessionStoreRuntimePromise: Promise<
@@ -67,11 +67,6 @@ function loadAgentRunnerRuntime() {
   return agentRunnerRuntimePromise;
 }
 
-function loadRouteReplyRuntime() {
-  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
-  return routeReplyRuntimePromise;
-}
-
 function loadSessionUpdatesRuntime() {
   sessionUpdatesRuntimePromise ??= import("./session-updates.runtime.js");
   return sessionUpdatesRuntimePromise;
@@ -80,77 +75,6 @@ function loadSessionUpdatesRuntime() {
 function loadSessionStoreRuntime() {
   sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
   return sessionStoreRuntimePromise;
-}
-
-function buildResetSessionNoticeText(params: {
-  provider: string;
-  model: string;
-  defaultProvider: string;
-  defaultModel: string;
-}): string {
-  const modelLabel = `${params.provider}/${params.model}`;
-  const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
-  return modelLabel === defaultLabel
-    ? `✅ New session started · model: ${modelLabel}`
-    : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})`;
-}
-
-function resolveResetSessionNoticeRoute(params: {
-  ctx: MsgContext;
-  command: ReturnType<typeof buildCommandContext>;
-}): {
-  channel: RouteReplyParams["channel"];
-  to: string;
-} | null {
-  const commandChannel = params.command.channel?.trim().toLowerCase();
-  const fallbackChannel =
-    commandChannel && commandChannel !== "webchat"
-      ? (commandChannel as RouteReplyParams["channel"])
-      : undefined;
-  const channel = params.ctx.OriginatingChannel ?? fallbackChannel;
-  const to = params.ctx.OriginatingTo ?? params.command.from ?? params.command.to;
-  if (!channel || channel === "webchat" || !to) {
-    return null;
-  }
-  return { channel, to };
-}
-
-async function sendResetSessionNotice(params: {
-  ctx: MsgContext;
-  command: ReturnType<typeof buildCommandContext>;
-  sessionKey: string;
-  cfg: OpenClawConfig;
-  accountId: string | undefined;
-  threadId: string | number | undefined;
-  provider: string;
-  model: string;
-  defaultProvider: string;
-  defaultModel: string;
-}): Promise<void> {
-  const route = resolveResetSessionNoticeRoute({
-    ctx: params.ctx,
-    command: params.command,
-  });
-  if (!route) {
-    return;
-  }
-  const { routeReply } = await loadRouteReplyRuntime();
-  await routeReply({
-    payload: {
-      text: buildResetSessionNoticeText({
-        provider: params.provider,
-        model: params.model,
-        defaultProvider: params.defaultProvider,
-        defaultModel: params.defaultModel,
-      }),
-    },
-    channel: route.channel,
-    to: route.to,
-    sessionKey: params.sessionKey,
-    accountId: params.accountId,
-    threadId: params.threadId,
-    cfg: params.cfg,
-  });
 }
 
 type RunPreparedReplyParams = {
@@ -236,7 +160,6 @@ export async function runPreparedReply(
     perMessageQueueOptions,
     typing,
     opts,
-    defaultProvider,
     defaultModel,
     timeoutMs,
     isNewSession,
@@ -453,20 +376,6 @@ export async function runPreparedReply(
       }
     }
   }
-  if (resetTriggered && command.isAuthorizedSender) {
-    await sendResetSessionNotice({
-      ctx,
-      command,
-      sessionKey,
-      cfg,
-      accountId: sessionCtx.AccountId,
-      threadId: ctx.MessageThreadId,
-      provider,
-      model,
-      defaultProvider,
-      defaultModel,
-    });
-  }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(
     sessionIdFinal,
@@ -507,6 +416,16 @@ export async function runPreparedReply(
     resolvedQueue.mode === "followup" ||
     resolvedQueue.mode === "collect" ||
     resolvedQueue.mode === "steer-backlog";
+  const activeRunQueueAction = resolveActiveRunQueueAction({
+    isActive,
+    isHeartbeat: opts?.isHeartbeat === true,
+    shouldFollowup,
+    queueMode: resolvedQueue.mode,
+  });
+  const shouldCreateReplyOperation =
+    !(shouldSteer && isStreaming && !shouldFollowup) &&
+    activeRunQueueAction !== "drop" &&
+    activeRunQueueAction !== "enqueue-followup";
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg,
     provider,
@@ -591,6 +510,14 @@ export async function runPreparedReply(
   };
 
   const { runReplyAgent } = await loadAgentRunnerRuntime();
+  const replyOperation = shouldCreateReplyOperation
+    ? createReplyOperation({
+        sessionId: sessionIdFinal,
+        sessionKey,
+        resetTriggered,
+        upstreamAbortSignal: opts?.abortSignal,
+      })
+    : undefined;
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     followupRun,
@@ -617,5 +544,6 @@ export async function runPreparedReply(
     sessionCtx,
     shouldInjectGroupIntro,
     typingMode,
+    replyOperation,
   });
 }
