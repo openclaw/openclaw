@@ -955,7 +955,7 @@ describe("createTelegramBot", () => {
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
       expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
-        `${CHECK_MARK_EMOJI} Model reset to default`,
+        `${CHECK_MARK_EMOJI} Model changed to <b>anthropic/claude-opus-4-6</b>`,
       );
 
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
