@@ -222,6 +222,44 @@ describe("subagent registry lifecycle hardening", () => {
     );
   });
 
+  it("does not wait for a completion reply when the run does not expect one", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+    });
+    const captureSubagentCompletionReply = vi.fn(async () => undefined);
+
+    const controller = mod.createSubagentRegistryLifecycleController({
+      runs: new Map([[entry.runId, entry]]),
+      resumedRuns: new Set(),
+      subagentAnnounceTimeoutMs: 1_000,
+      persist: vi.fn(),
+      clearPendingLifecycleError: vi.fn(),
+      countPendingDescendantRuns: () => 0,
+      suppressAnnounceForSteerRestart: () => false,
+      shouldEmitEndedHookForRun: () => false,
+      emitSubagentEndedHookForRun: vi.fn(async () => {}),
+      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
+      resumeSubagentRun: vi.fn(),
+      captureSubagentCompletionReply,
+      runSubagentAnnounceFlow: vi.fn(async () => false),
+      warn: vi.fn(),
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(captureSubagentCompletionReply).toHaveBeenCalledWith(entry.childSessionKey, {
+      waitForReply: false,
+    });
+  });
+
   it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {
     const entry = createRunEntry({
       expectsCompletionMessage: false,
