@@ -20,6 +20,7 @@ import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
 import openaiPlugin from "./openai/index.js";
 import qwenPlugin from "./qwen/index.js";
+import runwayPlugin from "./runway/index.js";
 import togetherPlugin from "./together/index.js";
 import xaiPlugin from "./xai/index.js";
 
@@ -57,6 +58,7 @@ const CASES: LiveProviderCase[] = [
   },
   { plugin: openaiPlugin, pluginId: "openai", pluginName: "OpenAI Provider", providerId: "openai" },
   { plugin: qwenPlugin, pluginId: "qwen", pluginName: "Qwen Provider", providerId: "qwen" },
+  { plugin: runwayPlugin, pluginId: "runway", pluginName: "Runway Provider", providerId: "runway" },
   {
     plugin: togetherPlugin,
     pluginId: "together",
