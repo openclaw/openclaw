@@ -129,6 +129,8 @@ describe("chutes implicit provider auth mode", () => {
     const providers = await resolveImplicitProvidersForTest({
       agentDir,
       env: {
+        VITEST: "true",
+        NODE_ENV: "test",
         CHUTES_API_KEY: "env-chutes-api-key",
       } as NodeJS.ProcessEnv,
     });

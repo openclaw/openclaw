@@ -179,7 +179,7 @@ const TEST_PROVIDER_ENV_TO_PROVIDER_IDS: Record<string, string[]> = {
   HF_TOKEN: ["huggingface"],
   HUGGINGFACE_HUB_TOKEN: ["huggingface"],
   KILOCODE_API_KEY: ["kilocode"],
-  KIMI_API_KEY: ["moonshot"],
+  KIMI_API_KEY: ["moonshot", "kimi"],
   KIMICODE_API_KEY: ["kimi-coding"],
   MINIMAX_API_KEY: ["minimax"],
   MINIMAX_OAUTH_TOKEN: ["minimax"],
@@ -290,13 +290,6 @@ async function inferImplicitProviderTestPluginIds(params: {
       providerIds.add(pluginId);
     }
   }
-  const legacyGrokApiKey = (
-    params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined
-  )?.grok?.apiKey;
-  if (legacyGrokApiKey !== undefined && params.config?.plugins?.entries?.xai?.enabled !== false) {
-    providerIds.add("xai");
-  }
-
   if (providerIds.size === 0) {
     // No config/env/auth hints: keep ambient local auto-discovery focused on the
     // one provider that is expected to probe localhost in tests.

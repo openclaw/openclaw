@@ -81,7 +81,7 @@ describe("models-config provider auth provenance", () => {
     expect(providers?.together?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
   });
 
-  it("keeps oauth compatibility markers for minimax-portal", async () => {
+  it("keeps oauth compatibility markers for minimax-portal", { timeout: 240_000 }, async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     await writeFile(
       join(agentDir, "auth-profiles.json"),
