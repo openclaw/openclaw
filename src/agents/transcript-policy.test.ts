@@ -106,6 +106,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
               sanitizeMode: "images-only",
               sanitizeToolCallIds: context?.modelApi === "openai-completions",
               ...(context?.modelApi === "openai-completions" ? { toolCallIdMode: "strict" } : {}),
+              repairToolUseResultPairing: false,
               applyAssistantFirstOrderingFix: false,
               validateGeminiTurns: false,
               validateAnthropicTurns: false,
@@ -225,6 +226,24 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.applyGoogleTurnOrdering).toBe(false);
     expect(policy.validateGeminiTurns).toBe(false);
     expect(policy.validateAnthropicTurns).toBe(false);
+  });
+
+  it("disables tool-use/result pairing repair for OpenAI-compatible replay", () => {
+    const openAiResponsesPolicy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+    });
+    const codexResponsesPolicy = resolveTranscriptPolicy({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      modelApi: "openai-codex-responses",
+    });
+
+    expect(openAiResponsesPolicy.repairToolUseResultPairing).toBe(false);
+    expect(openAiResponsesPolicy.allowSyntheticToolResults).toBe(false);
+    expect(codexResponsesPolicy.repairToolUseResultPairing).toBe(false);
+    expect(codexResponsesPolicy.allowSyntheticToolResults).toBe(false);
   });
 
   it("enables strict tool call id sanitization for openai-completions APIs", () => {

@@ -267,6 +267,8 @@ importers:
         specifier: 3.1022.0
         version: 3.1022.0
 
+  extensions/amazon-bedrock-mantle: {}
+
   extensions/anthropic: {}
 
   extensions/anthropic-vertex: {}
@@ -391,6 +393,8 @@ importers:
         version: link:../..
 
   extensions/firecrawl: {}
+
+  extensions/fireworks: {}
 
   extensions/github-copilot: {}
 

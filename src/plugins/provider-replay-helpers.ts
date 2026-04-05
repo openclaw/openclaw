@@ -22,6 +22,7 @@ export function buildOpenAICompatibleReplayPolicy(
   return {
     sanitizeToolCallIds: true,
     toolCallIdMode: "strict",
+    repairToolUseResultPairing: false,
     ...(modelApi === "openai-completions"
       ? {
           applyAssistantFirstOrderingFix: true,
