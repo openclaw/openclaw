@@ -85,6 +85,38 @@ prepared canonical `systemRunPlan`. If a later caller mutates command/cwd or
 session metadata before the approved run is forwarded, the gateway rejects the
 run as an approval mismatch instead of trusting the edited payload.
 
+## Node paired but no agents / chat not working
+
+If your iOS or Android node is paired and shows as connected, but the app displays
+**no agents** or chat returns errors (e.g. "Gateway health not OK"):
+
+**Symptom:** QR pairing succeeded, `openclaw devices list` shows the device as paired,
+but the mobile app cannot discover agents or send messages.
+
+**Cause:** QR pairing handles *device identity* only. If the gateway uses token
+or password auth (`gateway.auth.mode=token`), the mobile app also needs the
+gateway auth credential to access agent discovery and chat endpoints. This
+applies even when `gateway.auth.allowTailscale` is enabled — the mobile app
+currently requires an explicit token.
+
+**Fix:**
+
+1. Get your gateway token:
+
+   ```bash
+   openclaw config get gateway.auth.token
+   ```
+
+2. In the mobile app, go to connection settings and enter the token in
+   **Gateway Auth Token**.
+
+3. Leave the password field empty (unless your gateway uses password auth).
+
+4. Agent discovery should begin immediately.
+
+**Note:** If you regenerate the gateway token, you will need to update it in
+the mobile app as well.
+
 ## Common node error codes
 
 - `NODE_BACKGROUND_UNAVAILABLE` → app is backgrounded; bring it foreground.
