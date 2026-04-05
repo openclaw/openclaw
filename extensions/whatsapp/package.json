@@ -31,7 +31,11 @@
       "docsPath": "/channels/whatsapp",
       "docsLabel": "whatsapp",
       "blurb": "works with your own number; recommend a separate phone + eSIM.",
-      "systemImage": "message"
+      "systemImage": "message",
+      "persistedAuthState": {
+        "specifier": "./auth-presence",
+        "exportName": "hasAnyWhatsAppAuth"
+      }
     },
     "install": {
       "npmSpec": "@openclaw/whatsapp",

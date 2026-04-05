@@ -15,6 +15,7 @@ export function loadPluginMetadataRegistrySnapshot(options?: {
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   onlyPluginIds?: string[];
+  loadModules?: boolean;
 }): PluginRegistry {
   const env = options?.env ?? process.env;
   const baseConfig = options?.config ?? loadConfig();
@@ -35,11 +36,13 @@ export function loadPluginMetadataRegistrySnapshot(options?: {
     activationSourceConfig: options?.activationSourceConfig ?? baseConfig,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
+    env,
     logger,
     throwOnLoadError: true,
     cache: false,
     activate: false,
     mode: "validate",
+    loadModules: options?.loadModules,
     ...(options?.onlyPluginIds?.length ? { onlyPluginIds: options.onlyPluginIds } : {}),
   });
 }
