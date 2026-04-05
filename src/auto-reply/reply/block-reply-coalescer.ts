@@ -92,6 +92,12 @@ export function createBlockReplyCoalescer(params: {
       return;
     }
     if (!hasText) {
+      // Sticker-only payloads have no text/media but must not be silently dropped.
+      // Flush any buffered text first, then pass the sticker payload through directly.
+      if (payload.sticker?.raw) {
+        void flush({ force: true });
+        void onFlush(payload);
+      }
       return;
     }
 

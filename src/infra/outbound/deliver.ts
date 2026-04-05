@@ -310,7 +310,8 @@ type MessageSentEvent = {
 function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
   const text = typeof payload.text === "string" ? payload.text : "";
   if (!text.trim()) {
-    if (!hasReplyPayloadContent({ ...payload, text })) {
+    // Sticker-only payloads have no text/media but must not be dropped.
+    if (!hasReplyPayloadContent({ ...payload, text }) && !payload.sticker) {
       return null;
     }
     if (text) {
@@ -691,10 +692,11 @@ async function deliverOutboundPayloadsCore(
       };
       if (
         handler.sendPayload &&
-        hasReplyPayloadContent({
+        (hasReplyPayloadContent({
           interactive: effectivePayload.interactive,
           channelData: effectivePayload.channelData,
-        })
+        }) ||
+          effectivePayload.sticker)
       ) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
