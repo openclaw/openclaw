@@ -906,8 +906,7 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.execution.agentPrompt).toContain(
       "[Queue overflow] Dropped 1 message due to cap.",
     );
-    expect(calls[0]?.execution.agentPrompt).toContain("- [Hidden message]");
-    expect(calls[0]?.execution.agentPrompt).not.toContain("first hidden item");
+    expect(calls[0]?.execution.agentPrompt).toContain("- first hidden item");
     expect(calls[1]?.execution.agentPrompt).toBe("second hidden item");
   });
 
@@ -1039,7 +1038,7 @@ describe("followup queue collect routing", () => {
     await done.promise;
 
     expect(calls[0]?.execution.agentPrompt).toContain("[Queue overflow]");
-    expect(calls[0]?.execution.agentPrompt).toContain("[Hidden message]");
+    expect(calls[0]?.execution.agentPrompt).toContain("first hidden item");
     expect(calls[0]?.originatingChannel).toBe("discord");
     expect(calls[0]?.originatingTo).toBe("channel:C1");
     expect(calls[0]?.originatingAccountId).toBe("work");
@@ -1375,8 +1374,7 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.execution.agentPrompt).toContain(
       "[Queue overflow] Dropped 1 message due to cap.",
     );
-    expect(calls[0]?.execution.agentPrompt).toContain("- [Hidden message]");
-    expect(calls[0]?.execution.agentPrompt).not.toContain("first");
+    expect(calls[0]?.execution.agentPrompt).toContain("- first");
   });
 
   it("preserves routing metadata on overflow summary followups", async () => {
@@ -1427,7 +1425,7 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.execution.agentPrompt).toContain(
       "[Queue overflow] Dropped 1 message due to cap.",
     );
-    expect(calls[0]?.execution.agentPrompt).toContain("- [Hidden message]");
+    expect(calls[0]?.execution.agentPrompt).toContain("- first");
   });
 });
 

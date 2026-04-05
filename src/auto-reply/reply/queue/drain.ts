@@ -89,7 +89,7 @@ export function scheduleFollowupDrain(
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
   void (async () => {
     try {
-      const collectState = { forceIndividualCollect: false };
+      const collectState = { forceIndividualCollect: queue.collectForceIndividual };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
@@ -107,6 +107,9 @@ export function scheduleFollowupDrain(
             items: queue.items,
             run: effectiveRunFollowup,
           });
+          if (collectState.forceIndividualCollect) {
+            queue.collectForceIndividual = true;
+          }
           if (collectDrainResult === "empty") {
             const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
             const run = queue.lastRun;
