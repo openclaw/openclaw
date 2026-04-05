@@ -186,7 +186,16 @@ def build_index(update_only=False):
     lcm_conn = sqlite3.connect(str(LCM_DB))
     lcm_conn.row_factory = sqlite3.Row
 
-    skip_ids = get_indexed_message_ids(vec_conn) if update_only else set()
+    if update_only:
+        skip_ids = get_indexed_message_ids(vec_conn)
+    else:
+        # Full rebuild: delete all existing chunks so INSERT OR IGNORE
+        # picks up fresh embeddings instead of keeping stale rows.
+        vec_conn.execute("DELETE FROM chunks")
+        # Note: no commit here — let the final commit at the end of
+        # build_index() cover DELETE + INSERT atomically, so a failed
+        # rebuild doesn't leave an empty index.
+        skip_ids = set()
     messages = load_messages(lcm_conn, skip_ids)
     lcm_conn.close()
 
