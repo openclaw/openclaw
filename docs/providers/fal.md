@@ -12,7 +12,7 @@ read_when:
 OpenClaw ships a bundled `fal` provider for hosted image and video generation.
 
 - Provider: `fal`
-- Auth: `FAL_KEY`
+- Auth: `FAL_KEY` (canonical; `FAL_API_KEY` also works as a fallback)
 - API: fal model endpoints
 
 ## Quick start
@@ -68,6 +68,7 @@ The bundled `fal` video-generation provider defaults to
 `fal/fal-ai/minimax/video-01-live`.
 
 - Modes: text-to-video and single-image reference flows
+- Runtime: queue-backed submit/status/result flow for long-running jobs
 
 To use fal as the default video provider:
 
