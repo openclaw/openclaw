@@ -133,7 +133,10 @@ export function applyActivityEvent(tree: ActivityTree, event: IncomingEvent): Ac
       children: [],
       isError: false,
       error: null,
-      metadata: data.metadata ?? {},
+      metadata: {
+        ...data.metadata,
+        ...(event.sessionKey ? { _sessionKey: event.sessionKey } : {}),
+      },
     };
 
     const nodeKind = resolveKind(kind);
@@ -143,15 +146,35 @@ export function applyActivityEvent(tree: ActivityTree, event: IncomingEvent): Ac
       tree.sessionKeyToSpawner.set(data.metadata.childSessionKey, nodeId);
     }
 
-    // Link tool, thinking, and subagent nodes to their parent run.
+    // Link tool and thinking nodes to their parent run.
     // For these kinds, event.runId is the parent run's ID.
-    if (nodeKind !== "run") {
+    if (nodeKind === "tool" || nodeKind === "thinking") {
       const parentRun = tree.nodeById.get(event.runId);
       if (parentRun) {
         node.parentId = event.runId;
         node.depth = parentRun.depth + 1;
         if (!parentRun.children.includes(nodeId)) {
           parentRun.children.push(nodeId);
+        }
+      }
+    }
+
+    // Link subagent nodes to their parent run by session key.
+    // The subagent event's sessionKey is the parent's session key.
+    if (nodeKind === "subagent" && event.sessionKey) {
+      for (const [candidateId, candidate] of tree.nodeById) {
+        if (candidate.kind === "run" && candidate.status === "running") {
+          // Match by session key: find a running run node whose events
+          // came from the same session as this subagent spawn.
+          const candidateSessionKey = candidate.metadata._sessionKey;
+          if (candidateSessionKey === event.sessionKey) {
+            node.parentId = candidateId;
+            node.depth = candidate.depth + 1;
+            if (!candidate.children.includes(nodeId)) {
+              candidate.children.push(nodeId);
+            }
+            break;
+          }
         }
       }
     }
