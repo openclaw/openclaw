@@ -103,6 +103,8 @@ Required scenarios:
 3. tab open and follow-up action
 4. multi-step browser flow without premature timeout
 5. gateway restart on Windows without SIGUSR1-style failure
+6. non-browser mission preflight still reports browser health truthfully without blocking execution
+7. browser-required mission blocks when browser readiness is missing or unhealthy
 
 Acceptance bar:
 

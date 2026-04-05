@@ -102,6 +102,7 @@ Claw full access for browser and web means:
 - The `browser` tool is exposed.
 - Host browser control is allowed.
 - DOM evaluation and interactive actions are allowed.
+- Browser health is tracked as a reusable readiness signal, not checked only for explicitly browser-heavy goals.
 - Browser runtime stability is a prerequisite for browser-dependent missions.
 - Web fetch and search tools remain available when configured.
 
@@ -112,6 +113,12 @@ Claw full access for browser and web means:
 - browser startup to succeed reliably
 - CDP attach to be stable enough for multi-step flows
 - gateway restart behavior not to break browser ownership on Windows
+
+Preflight behavior for browser capability is:
+
+- if browser capability exists and is healthy, browser readiness should be surfaced as `ready` by default
+- if a mission does not require interactive browser work, degraded browser health is informative rather than blocking
+- if a mission does require interactive browser work, missing or unhealthy browser readiness is a hard blocker before unattended continuation
 
 These behaviors are defined in [Browser and Runtime Hardening Spec](/claw/04-browser-and-runtime-hardening-spec).
 
