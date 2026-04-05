@@ -302,3 +302,64 @@ servers unexpectedly.
 - **No session continuity**: ensure `sessionArg` is set and `sessionMode` is not
   `none` (Codex CLI currently cannot resume with JSON output).
 - **Images ignored**: set `imageArg` (and verify CLI supports file paths).
+
+### Common pitfalls
+
+#### Agent-level model overrides `agents.defaults.model`
+
+**Symptom**: Gateway logs show `agent model: claude-cli/...` at startup, but
+`/new` or `/status` shows the API model (e.g. `anthropic/claude-sonnet-4-6`).
+All requests go through the HTTP API instead of the CLI backend.
+
+**Root cause**: Entries in `agents.list[]` have their own `model.primary` that
+takes precedence over `agents.defaults.model.primary`.
+
+**Fix**: Update ALL entries in `agents.list[].model.primary` (and fallbacks) to
+use the CLI backend prefix, not just `agents.defaults`:
+
+```json5
+// ❌ Only changing defaults is NOT enough
+{
+  agents: {
+    defaults: { model: { primary: "claude-cli/claude-sonnet-4-6" } },
+    list: [
+      // This overrides defaults!
+      { id: "main", model: { primary: "anthropic/claude-sonnet-4-6" } },
+    ],
+  },
+}
+
+// ✅ Must change both
+{
+  agents: {
+    defaults: { model: { primary: "claude-cli/claude-sonnet-4-6" } },
+    list: [
+      { id: "main", model: { primary: "claude-cli/claude-sonnet-4-6" } },
+    ],
+  },
+}
+```
+
+#### Missing `input: "stdin"` — prompt treated as argv
+
+**Symptom**: `ENAMETOOLONG` error. The full message content appears in a file
+path error.
+
+**Root cause**: The default `input: "arg"` appends the prompt as a CLI argument.
+For CLIs like `claude -p`, input must come from stdin.
+
+**Fix**: Add `"input": "stdin"` to the cliBackend config. Note that the bundled
+`claude-cli` default already sets `input: "stdin"`, so this only applies to
+custom configurations.
+
+#### JSON output mode without proper parsing
+
+**Symptom**: Bot replies with raw JSON objects instead of readable text.
+
+**Root cause**: Using `--output-format stream-json` or `--json` without setting
+the corresponding `output` mode in the backend config.
+
+**Fix**: Either:
+
+- Set `output: "jsonl"` (for stream-json) or `output: "json"` to enable parsing, or
+- Remove JSON output flags and rely on plain text output with `output: "text"`
