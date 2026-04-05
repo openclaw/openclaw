@@ -78,4 +78,23 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     expect(retryInstruction).toBeNull();
   });
+
+  it("does not retry planning-only detection after an item has started", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the code, make the change, and run the checks."],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 0,
+          activeCount: 1,
+        },
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
 });

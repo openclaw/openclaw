@@ -33,6 +33,11 @@ function makeAttemptResult(
         didSendViaMessagingTool,
         successfulCronAdds,
       }),
+    itemLifecycle: {
+      startedCount: 0,
+      completedCount: 0,
+      activeCount: 0,
+    },
     didSendViaMessagingTool,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],

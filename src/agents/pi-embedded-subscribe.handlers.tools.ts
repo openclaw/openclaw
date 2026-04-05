@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import type { AgentItemEventData } from "../infra/agent-events.js";
+import { emitAgentEvent, emitAgentItemEvent } from "../infra/agent-events.js";
 import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
@@ -56,6 +57,14 @@ function buildToolCallSummary(toolName: string, args: unknown, meta?: string): T
     mutatingAction: mutation.mutatingAction,
     actionFingerprint: mutation.actionFingerprint,
   };
+}
+
+function buildToolItemId(toolCallId: string): string {
+  return `tool:${toolCallId}`;
+}
+
+function buildToolItemTitle(toolName: string, meta?: string): string {
+  return meta ? `${toolName} ${meta}` : toolName;
 }
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
@@ -358,8 +367,9 @@ export function handleToolExecutionStart(
     const args = evt.args;
     const runId = ctx.params.runId;
 
-    // Track start time and args for after_tool_call hook
-    toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: Date.now(), args });
+    // Track start time and args for after_tool_call hook.
+    const startedAt = Date.now();
+    toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: startedAt, args });
 
     if (toolName === "read") {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -395,10 +405,32 @@ export function handleToolExecutionStart(
         args: args as Record<string, unknown>,
       },
     });
+    const itemData: AgentItemEventData = {
+      itemId: buildToolItemId(toolCallId),
+      phase: "start",
+      kind: "tool",
+      title: buildToolItemTitle(toolName, meta),
+      status: "running",
+      name: toolName,
+      meta,
+      toolCallId,
+      startedAt,
+    };
+    ctx.state.itemActiveIds.add(itemData.itemId);
+    ctx.state.itemStartedCount += 1;
+    emitAgentItemEvent({
+      runId: ctx.params.runId,
+      ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+      data: itemData,
+    });
     // Best-effort typing signal; do not block tool summaries on slow emitters.
     void ctx.params.onAgentEvent?.({
       stream: "tool",
       data: { phase: "start", name: toolName, toolCallId },
+    });
+    void ctx.params.onAgentEvent?.({
+      stream: "item",
+      data: itemData,
     });
 
     if (
@@ -464,6 +496,21 @@ export function handleToolExecutionUpdate(
       partialResult: sanitized,
     },
   });
+  const itemData: AgentItemEventData = {
+    itemId: buildToolItemId(toolCallId),
+    phase: "update",
+    kind: "tool",
+    title: buildToolItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
+    status: "running",
+    name: toolName,
+    meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
+    toolCallId,
+  };
+  emitAgentItemEvent({
+    runId: ctx.params.runId,
+    ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+    data: itemData,
+  });
   void ctx.params.onAgentEvent?.({
     stream: "tool",
     data: {
@@ -471,6 +518,10 @@ export function handleToolExecutionUpdate(
       name: toolName,
       toolCallId,
     },
+  });
+  void ctx.params.onAgentEvent?.({
+    stream: "item",
+    data: itemData,
   });
 }
 
@@ -586,6 +637,30 @@ export async function handleToolExecutionEnd(
       result: sanitizedResult,
     },
   });
+  const endedAt = Date.now();
+  const itemId = buildToolItemId(toolCallId);
+  ctx.state.itemActiveIds.delete(itemId);
+  ctx.state.itemCompletedCount += 1;
+  const itemData: AgentItemEventData = {
+    itemId,
+    phase: "end",
+    kind: "tool",
+    title: buildToolItemTitle(toolName, meta),
+    status: isToolError ? "failed" : "completed",
+    name: toolName,
+    meta,
+    toolCallId,
+    startedAt: startData?.startTime,
+    endedAt,
+    ...(isToolError && extractToolErrorMessage(sanitizedResult)
+      ? { error: extractToolErrorMessage(sanitizedResult) }
+      : {}),
+  };
+  emitAgentItemEvent({
+    runId: ctx.params.runId,
+    ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+    data: itemData,
+  });
   void ctx.params.onAgentEvent?.({
     stream: "tool",
     data: {
@@ -595,6 +670,10 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
     },
+  });
+  void ctx.params.onAgentEvent?.({
+    stream: "item",
+    data: itemData,
   });
 
   ctx.log.debug(

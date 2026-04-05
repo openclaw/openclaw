@@ -117,6 +117,14 @@ type FallbackRunnerParams = {
 
 type EmbeddedAgentParams = {
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onItemEvent?: (payload: {
+    itemId?: string;
+    kind?: string;
+    title?: string;
+    name?: string;
+    phase?: string;
+    status?: string;
+  }) => Promise<void> | void;
   onAgentEvent?: (payload: {
     stream: string;
     data: { phase?: string; completed?: boolean };
@@ -232,6 +240,65 @@ describe("runAgentTurnWithFallback", () => {
       mediaUrls: ["/tmp/generated.png"],
     });
     expect(onToolResult.mock.calls[0]?.[0]?.text).toBeUndefined();
+  });
+
+  it("forwards item lifecycle events to reply options", async () => {
+    const onItemEvent = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "tool:read-1",
+          kind: "tool",
+          title: "read",
+          name: "read",
+          phase: "start",
+          status: "running",
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const pendingToolTasks = new Set<Promise<void>>();
+    const typingSignals = createMockTypingSignaler();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {
+        onItemEvent,
+      } satisfies GetReplyOptions,
+      typingSignals,
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks,
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    await Promise.all(pendingToolTasks);
+
+    expect(result.kind).toBe("success");
+    expect(onItemEvent).toHaveBeenCalledWith({
+      itemId: "tool:read-1",
+      kind: "tool",
+      title: "read",
+      name: "read",
+      phase: "start",
+      status: "running",
+    });
   });
 
   it("keeps compaction start notices silent by default", async () => {

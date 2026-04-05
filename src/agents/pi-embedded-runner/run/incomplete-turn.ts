@@ -25,6 +25,7 @@ type PlanningOnlyAttempt = Pick<
   | "didSendViaMessagingTool"
   | "lastToolError"
   | "lastAssistant"
+  | "itemLifecycle"
   | "replayMetadata"
   | "toolMetas"
 >;
@@ -106,7 +107,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.didSendViaMessagingTool ||
     params.attempt.lastToolError ||
-    params.attempt.toolMetas.length > 0 ||
+    params.attempt.itemLifecycle.startedCount > 0 ||
     params.attempt.replayMetadata.hadPotentialSideEffects
   ) {
     return null;

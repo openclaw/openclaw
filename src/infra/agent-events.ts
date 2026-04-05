@@ -4,6 +4,30 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 export type AgentEventStream = "lifecycle" | "tool" | "assistant" | "error" | (string & {});
 
+export type AgentItemEventPhase = "start" | "update" | "end";
+export type AgentItemEventStatus = "running" | "completed" | "failed" | "blocked";
+export type AgentItemEventKind =
+  | "tool"
+  | "command"
+  | "patch"
+  | "search"
+  | "analysis"
+  | (string & {});
+
+export type AgentItemEventData = {
+  itemId: string;
+  phase: AgentItemEventPhase;
+  kind: AgentItemEventKind;
+  title: string;
+  status: AgentItemEventStatus;
+  name?: string;
+  meta?: string;
+  toolCallId?: string;
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
+};
+
 export type AgentEventPayload = {
   runId: string;
   seq: number;
@@ -89,6 +113,19 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
     ts: Date.now(),
   };
   notifyListeners(state.listeners, enriched);
+}
+
+export function emitAgentItemEvent(params: {
+  runId: string;
+  data: AgentItemEventData;
+  sessionKey?: string;
+}) {
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "item",
+    data: params.data as unknown as Record<string, unknown>,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+  });
 }
 
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
