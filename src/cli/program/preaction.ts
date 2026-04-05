@@ -8,10 +8,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { getCommandPathWithRootOptions, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
 import { emitCliBanner } from "../banner.js";
 import { resolveCliName } from "../cli-name.js";
-import {
-  resolvePluginInstallInvalidConfigPolicy,
-  resolvePluginInstallPreactionRequest,
-} from "../plugin-install-config-policy.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 
 function setProcessTitleForCommand(actionCommand: Command) {
@@ -41,6 +37,9 @@ const PLUGIN_REQUIRED_COMMANDS = new Set([
 const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["backup", "doctor", "completion", "secrets"]);
 let configGuardModulePromise: Promise<typeof import("./config-guard.js")> | undefined;
 let pluginRegistryModulePromise: Promise<typeof import("../plugin-registry.js")> | undefined;
+let pluginInstallConfigPolicyModulePromise:
+  | Promise<typeof import("../plugin-install-config-policy.js")>
+  | undefined;
 
 function shouldBypassConfigGuard(commandPath: string[]): boolean {
   const [primary, secondary] = commandPath;
@@ -66,6 +65,11 @@ function loadPluginRegistryModule() {
   return pluginRegistryModulePromise;
 }
 
+function loadPluginInstallConfigPolicyModule() {
+  pluginInstallConfigPolicyModulePromise ??= import("../plugin-install-config-policy.js");
+  return pluginInstallConfigPolicyModulePromise;
+}
+
 function resolvePluginRegistryScope(commandPath: string[]): "channels" | "all" {
   return commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all";
 }
@@ -84,7 +88,15 @@ function shouldLoadPluginsForCommand(commandPath: string[], jsonOutputMode: bool
   }
   return true;
 }
-function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
+async function shouldAllowInvalidConfigForAction(
+  actionCommand: Command,
+  commandPath: string[],
+): Promise<boolean> {
+  if (commandPath[0] !== "plugins" || commandPath[1] !== "install") {
+    return false;
+  }
+  const { resolvePluginInstallInvalidConfigPolicy, resolvePluginInstallPreactionRequest } =
+    await loadPluginInstallConfigPolicyModule();
   return (
     resolvePluginInstallInvalidConfigPolicy(
       resolvePluginInstallPreactionRequest({
@@ -148,7 +160,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (shouldBypassConfigGuard(commandPath)) {
       return;
     }
-    const allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
+    const allowInvalid = await shouldAllowInvalidConfigForAction(actionCommand, commandPath);
     const { ensureConfigReady } = await loadConfigGuardModule();
     await ensureConfigReady({
       runtime: defaultRuntime,

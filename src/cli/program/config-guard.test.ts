@@ -84,6 +84,16 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for gateway commands that need to bind quickly",
+      commandPath: ["gateway", "run"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for cron commands that should not stall scheduled work",
+      commandPath: ["cron", "run"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "skips doctor flow for update status",
       commandPath: ["update", "status"],
       expectedDoctorCalls: 0,

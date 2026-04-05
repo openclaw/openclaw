@@ -402,6 +402,8 @@ describe("argv helpers", () => {
     { argv: ["node", "openclaw", "status"], expected: false },
     { argv: ["node", "openclaw", "health"], expected: false },
     { argv: ["node", "openclaw", "sessions"], expected: false },
+    { argv: ["node", "openclaw", "gateway", "run"], expected: false },
+    { argv: ["node", "openclaw", "cron", "run", "job-123"], expected: false },
     { argv: ["node", "openclaw", "config", "get", "update"], expected: false },
     { argv: ["node", "openclaw", "config", "unset", "update"], expected: false },
     { argv: ["node", "openclaw", "models", "list"], expected: false },
@@ -416,6 +418,8 @@ describe("argv helpers", () => {
 
   it.each([
     { path: ["status"], expected: false },
+    { path: ["gateway", "run"], expected: false },
+    { path: ["cron", "run"], expected: false },
     { path: ["update", "status"], expected: false },
     { path: ["config", "get"], expected: false },
     { path: ["models", "status"], expected: false },
