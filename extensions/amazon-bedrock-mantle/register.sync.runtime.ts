@@ -11,7 +11,7 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
   api.registerProvider({
     id: providerId,
     label: "Amazon Bedrock Mantle (OpenAI-compatible)",
-    docsPath: "/providers/models",
+    docsPath: "/providers/bedrock-mantle",
     auth: [],
     catalog: {
       order: "simple",

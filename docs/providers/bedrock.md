@@ -22,8 +22,8 @@ not an API key.
 ## Automatic model discovery
 
 OpenClaw can automatically discover Bedrock models that support **streaming**
-and **text output**. Discovery uses `bedrock:ListFoundationModels` and is
-cached (default: 1 hour).
+and **text output**. Discovery uses `bedrock:ListFoundationModels` and
+`bedrock:ListInferenceProfiles`, and results are cached (default: 1 hour).
 
 How the implicit provider is enabled:
 
@@ -153,6 +153,7 @@ export AWS_REGION=us-east-1
 - `bedrock:InvokeModel`
 - `bedrock:InvokeModelWithResponseStream`
 - `bedrock:ListFoundationModels` (for automatic discovery)
+- `bedrock:ListInferenceProfiles` (for inference profile discovery)
 
 Or attach the managed policy `AmazonBedrockFullAccess`.
 
@@ -196,10 +197,29 @@ source ~/.bashrc
 openclaw models list
 ```
 
+## Inference profiles
+
+OpenClaw discovers **regional and global inference profiles** alongside
+foundation models. When a profile maps to a known foundation model, the
+profile inherits that model's capabilities (context window, max tokens,
+reasoning, vision) and the correct Bedrock request region is injected
+automatically. This means cross-region Claude profiles work without manual
+provider overrides.
+
+Inference profile IDs look like `us.anthropic.claude-opus-4-6-v1:0` (regional)
+or `anthropic.claude-opus-4-6-v1:0` (global). If the backing model is already
+in the discovery results, the profile inherits its full capability set;
+otherwise safe defaults apply.
+
+No extra configuration is needed. As long as discovery is enabled and the IAM
+principal has `bedrock:ListInferenceProfiles`, profiles appear alongside
+foundation models in `openclaw models list`.
+
 ## Notes
 
 - Bedrock requires **model access** enabled in your AWS account/region.
-- Automatic discovery needs the `bedrock:ListFoundationModels` permission.
+- Automatic discovery needs the `bedrock:ListFoundationModels` and
+  `bedrock:ListInferenceProfiles` permissions.
 - If you rely on auto mode, set one of the supported AWS auth env markers on the
   gateway host. If you prefer IMDS/shared-config auth without env markers, set
   `plugins.entries.amazon-bedrock.config.discovery.enabled: true`.
