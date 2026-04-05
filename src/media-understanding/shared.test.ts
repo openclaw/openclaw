@@ -15,8 +15,9 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
 });
 
 import {
-  postJsonRequest,
   fetchWithTimeoutGuarded,
+  postJsonRequest,
+  postTranscriptionRequest,
   readErrorResponse,
   resolveProviderHttpRequestConfig,
 } from "./shared.js";
@@ -220,6 +221,50 @@ describe("fetchWithTimeoutGuarded", () => {
           mode: "explicit-proxy",
           proxyUrl: "http://169.254.169.254:8080",
         },
+      }),
+    );
+  });
+
+  it("forwards explicit pinDns overrides to JSON requests", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await postJsonRequest({
+      url: "https://api.example.com/v1/test",
+      headers: new Headers(),
+      body: { ok: true },
+      fetchFn: fetch,
+      pinDns: false,
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pinDns: false,
+      }),
+    );
+  });
+
+  it("forwards explicit pinDns overrides to transcription requests", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await postTranscriptionRequest({
+      url: "https://api.example.com/v1/transcriptions",
+      headers: new Headers(),
+      body: "audio-bytes",
+      fetchFn: fetch,
+      pinDns: false,
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pinDns: false,
       }),
     );
   });

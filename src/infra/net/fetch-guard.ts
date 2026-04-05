@@ -15,6 +15,7 @@ import {
 import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
 
 export const GUARDED_FETCH_MODE = {
   STRICT: "strict",
@@ -91,6 +92,34 @@ function assertExplicitProxySupportsPinnedDns(
       "Explicit proxy SSRF pinning requires HTTPS targets; plain HTTP targets are not supported",
     );
   }
+}
+
+function createPolicyDispatcherWithoutPinnedDns(
+  dispatcherPolicy?: PinnedDispatcherPolicy,
+): Dispatcher | null {
+  if (!dispatcherPolicy) {
+    return null;
+  }
+  const { Agent, EnvHttpProxyAgent, ProxyAgent } = loadUndiciRuntimeDeps();
+
+  if (dispatcherPolicy.mode === "direct") {
+    return new Agent(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {});
+  }
+
+  if (dispatcherPolicy.mode === "env-proxy") {
+    return new EnvHttpProxyAgent({
+      ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
+      ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
+    });
+  }
+
+  const proxyUrl = dispatcherPolicy.proxyUrl.trim();
+  return dispatcherPolicy.proxyTls
+    ? new ProxyAgent({
+        uri: proxyUrl,
+        requestTls: { ...dispatcherPolicy.proxyTls },
+      })
+    : new ProxyAgent(proxyUrl);
 }
 
 async function assertExplicitProxyAllowed(
@@ -180,6 +209,17 @@ function rewriteRedirectInitForMethod(params: {
   };
 }
 
+async function fetchWithRuntimeDispatcher(
+  input: string,
+  init: DispatcherAwareRequestInit,
+): Promise<Response> {
+  const runtimeFetch = loadUndiciRuntimeDeps().fetch as unknown as (
+    input: string,
+    init?: DispatcherAwareRequestInit,
+  ) => Promise<unknown>;
+  return (await runtimeFetch(input, init)) as Response;
+}
+
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
   if (!defaultFetch) {
@@ -238,22 +278,26 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (canUseTrustedEnvProxy) {
         const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
         dispatcher = new EnvHttpProxyAgent();
-      } else if (params.pinDns !== false) {
+      } else if (params.pinDns === false) {
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
+      } else {
         dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
       }
 
-      const init: RequestInit & { dispatcher?: Dispatcher } = {
+      const init: DispatcherAwareRequestInit = {
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
         ...(signal ? { signal } : {}),
       };
 
-      // Keep the caller-provided/global fetch implementation on the hot path so
-      // tests can stub network behavior while still receiving the pinned
-      // dispatcher in RequestInit.
-      const fetcher = defaultFetch;
-      const response = await fetcher(parsedUrl.toString(), init);
+      // Use caller-provided fetch stubs when present; otherwise fall back to
+      // undici's fetch whenever we attach a dispatcher because the global fetch
+      // path will not honor per-request dispatchers.
+      const response =
+        dispatcher && !params.fetchImpl
+          ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+          : await defaultFetch(parsedUrl.toString(), init);
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");
