@@ -165,7 +165,8 @@ export function renderClaw(props: ClawViewProps) {
         <div>
           <div class="card-title">Claw Missions</div>
           <div class="card-sub">
-            Goal-oriented mission intake, approval, and continuous execution state.
+            Goal-oriented mission intake, preflight, unattended-continuation approval, and
+            continuous execution state.
           </div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
@@ -210,7 +211,11 @@ export function renderClaw(props: ClawViewProps) {
                 `
               : nothing}
             <div class="row" style="gap: 8px; flex-wrap: wrap; margin-top: 12px;">
-              <button class="btn btn--subtle" ?disabled=${props.actionBusy} @click=${props.onPauseAll}>
+              <button
+                class="btn btn--subtle"
+                ?disabled=${props.actionBusy}
+                @click=${props.onPauseAll}
+              >
                 ${props.control?.pauseAll ? "Resume All" : "Pause All"}
               </button>
               <button
@@ -278,12 +283,25 @@ export function renderClaw(props: ClawViewProps) {
         <div class="stack" style="gap: 16px;">
           <section class="panel">
             <div class="card-title">${mission?.title ?? "Mission Detail"}</div>
-            ${props.error ? html`<div class="card-sub" style="color: var(--danger, #d14);">${props.error}</div>` : nothing}
+            ${props.error
+              ? html`<div class="card-sub" style="color: var(--danger, #d14);">${props.error}</div>`
+              : nothing}
             ${!mission
-              ? html`<div class="card-sub">Select a mission to inspect its packet and controls.</div>`
+              ? html`<div class="card-sub">
+                  Select a mission to inspect its packet, readiness, and continuation controls.
+                </div>`
               : html`
                   <div class="stack" style="gap: 12px;">
                     <div class="card-sub">${mission.goal}</div>
+                    ${mission.status === "awaiting_approval"
+                      ? html`
+                          <div class="card-sub">
+                            Packet planning and preflight may already have inspected or changed
+                            state. Approval lets Claw continue autonomously without routine
+                            check-ins.
+                          </div>
+                        `
+                      : nothing}
                     <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 10px;">
                       <div><strong>Status:</strong> ${mission.status}</div>
                       <div><strong>Current Step:</strong> ${mission.currentStep ?? "n/a"}</div>
@@ -299,7 +317,7 @@ export function renderClaw(props: ClawViewProps) {
                         ?disabled=${props.actionBusy || !canApprove}
                         @click=${() => props.onApproveMission(mission.id)}
                       >
-                        Approve Start
+                        Approve Continuation
                       </button>
                       <button
                         class="btn btn--subtle"
@@ -351,7 +369,9 @@ export function renderClaw(props: ClawViewProps) {
                       </section>
                       <section class="panel">
                         <div class="card-title">Preflight</div>
-                        <ul style="padding-left: 18px;">${mission.preflight.map(renderPreflight)}</ul>
+                        <ul style="padding-left: 18px;">
+                          ${mission.preflight.map(renderPreflight)}
+                        </ul>
                       </section>
                     </div>
 

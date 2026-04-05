@@ -12,7 +12,7 @@ status: active
 
 ## Purpose
 
-Claw v1 has intentionally wide autonomy after mission start approval. That makes governance and audit a product requirement, not an optional safety add-on. This spec defines the kill switches, fanout limits, no-progress policy, and append-only audit contract that make Claw reviewable and controllable.
+Claw v1 has intentionally wide autonomy after unattended continuation is approved. That makes governance and audit a product requirement, not an optional safety add-on. This spec defines the kill switches, fanout limits, no-progress policy, and append-only audit contract that make Claw reviewable and controllable.
 
 ## Governance principles
 

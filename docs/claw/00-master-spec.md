@@ -12,7 +12,7 @@ status: active
 
 ## Purpose
 
-Claw v1 is a goal-oriented execution system built on top of the OpenClaw runtime. It is not a chat-first assistant with occasional automation. It is an owner-controlled mission runner that accepts a goal, produces an execution contract, waits for one explicit start approval, and then continues until the goal is complete or a true blocker prevents safe continuation.
+Claw v1 is a goal-oriented execution system built on top of the OpenClaw runtime. It is not a chat-first assistant with occasional automation. It is an owner-controlled mission runner that accepts a goal, produces an execution contract, performs bounded packet planning and preflight work, waits for one explicit approval for unattended continuation, and then continues until the goal is complete or a true blocker prevents safe continuation.
 
 This document is the canonical product spec for Claw v1. If a later document conflicts with this one, this document wins unless it explicitly narrows behavior for a subsystem.
 
@@ -22,8 +22,8 @@ Claw v1 must provide all of the following:
 
 1. A single local operator surface built from the existing OpenClaw Control UI.
 2. Durable mission state that survives UI closure and gateway restart.
-3. One-time mission start approval before execution begins.
-4. Continuous execution after approval without routine per-step confirmation.
+3. One-time approval for unattended continuation after the mission packet is ready.
+4. Continuous execution after unattended continuation approval without routine per-step confirmation.
 5. Full host and external autonomy for mission-implied work when access already exists.
 6. Clear blocker escalation only when Claw cannot reasonably continue on its own.
 7. Strong operator visibility through mission state, audit history, artifacts, and controls.
@@ -63,21 +63,21 @@ These areas are defined in detail in [UI and Gateway Spec](/claw/05-ui-and-gatew
 
 Every mission moves through the same canonical state machine.
 
-| State               | Meaning                                                                                                     |
-| ------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `draft`             | Goal has been captured but mission files are not finalized.                                                 |
-| `preflighting`      | Claw is evaluating capability, auth, root selection, and likely blockers before the mission can be started. |
-| `awaiting_setup`    | Claw found a missing prerequisite that must be satisfied before start approval makes sense.                 |
-| `awaiting_approval` | Mission packet is ready and waiting for the single start approval.                                          |
-| `queued`            | Mission is approved and waiting for an execution slot.                                                      |
-| `running`           | Mission team is actively executing.                                                                         |
-| `recovering`        | Gateway restarted or mission state became uncertain and Claw is reconciling state before resuming.          |
-| `blocked`           | Claw cannot safely continue without operator input or missing external capability.                          |
-| `verifying`         | Verifier is checking completion against explicit done criteria.                                             |
-| `done`              | Mission is complete and verifier accepted the result.                                                       |
-| `paused`            | Operator or global controls paused the mission.                                                             |
-| `cancelled`         | Operator cancelled the mission.                                                                             |
-| `failed`            | Mission hit a terminal engine-level failure that Claw cannot recover from automatically.                    |
+| State               | Meaning                                                                                                       |
+| ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `draft`             | Goal has been captured but mission files are not finalized.                                                   |
+| `preflighting`      | Claw is evaluating capability, auth, root selection, and likely blockers before the mission can be started.   |
+| `awaiting_setup`    | Claw found a missing prerequisite that must be satisfied before unattended continuation approval makes sense. |
+| `awaiting_approval` | Mission packet is ready and waiting for the single unattended continuation approval.                          |
+| `queued`            | Mission is approved and waiting for an execution slot.                                                        |
+| `running`           | Mission team is actively executing.                                                                           |
+| `recovering`        | Gateway restarted or mission state became uncertain and Claw is reconciling state before resuming.            |
+| `blocked`           | Claw cannot safely continue without operator input or missing external capability.                            |
+| `verifying`         | Verifier is checking completion against explicit done criteria.                                               |
+| `done`              | Mission is complete and verifier accepted the result.                                                         |
+| `paused`            | Operator or global controls paused the mission.                                                               |
+| `cancelled`         | Operator cancelled the mission.                                                                               |
+| `failed`            | Mission hit a terminal engine-level failure that Claw cannot recover from automatically.                      |
 
 ### Terminal states
 
@@ -112,8 +112,8 @@ Claw v1 uses a one-time execution approval model.
 
 - Exactly one explicit `start` approval is required per mission.
 - That approval authorizes mission execution, not a later privilege escalation step.
-- After start approval, Claw does not pause for routine local mutations, shell execution, browser actions, or mission-implied external writes.
-- If Claw encounters a true blocker after approval, it creates a decision or blocker request in the operator inbox instead of inventing a new approval model.
+- After unattended continuation is approved, Claw does not pause for routine local mutations, shell execution, browser actions, or mission-implied external writes.
+- If Claw encounters a true blocker after unattended continuation is approved, it creates a decision or blocker request in the operator inbox instead of inventing a new approval model.
 
 ## True blocker definition
 
@@ -141,7 +141,7 @@ The following are explicitly non-blockers:
 
 ## Autonomy model
 
-After mission start approval, Claw operates with unbounded practical autonomy.
+After unattended continuation is approved, Claw operates with unbounded practical autonomy.
 
 - Local file mutations are permitted anywhere on the host.
 - Shell execution is permitted on the host.
@@ -178,7 +178,7 @@ Claw v1 exposes three global autonomy controls:
 
 ### `autonomy off`
 
-- Disables automatic mission start and automatic resume.
+- Disables automatic unattended continuation start and automatic resume.
 - Leaves existing state intact for review.
 - Persists across UI refresh and gateway reconnect until explicitly turned back on.
 

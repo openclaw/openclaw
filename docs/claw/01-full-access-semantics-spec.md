@@ -42,7 +42,7 @@ In Claw v1, "full access" means:
 
 1. Claw sessions must expose every eligible capability family by default.
 2. Claw runs on host by default, not in the normal sandbox path.
-3. Routine execution does not wait for per-step approvals after mission start approval.
+3. Routine execution does not wait for per-step approvals after unattended continuation is approved.
 4. Missing auth or missing runtime capability becomes a preflight finding or runtime blocker, not a silent absence.
 
 ## Scope of full access
@@ -121,7 +121,7 @@ Claw full access for orchestration means:
 
 - Session listing, history, send, spawn, status, yield, and subagent management are exposed.
 - Claw may run coordinator, planner, executor, verifier, and research roles as distinct sessions.
-- Claw may delegate, reassign, and retry work without operator approval after mission start.
+- Claw may delegate, reassign, and retry work without operator approval after unattended continuation is approved.
 
 ### Required implementation consequences
 
@@ -180,7 +180,7 @@ Claw full access for plugins means:
 
 ## Capability preflight
 
-Before mission start approval, Claw must build a readiness packet that classifies required capabilities into the four-state model.
+Before unattended continuation is approved, Claw must build a readiness packet that classifies required capabilities into the four-state model.
 
 The readiness packet must include:
 
@@ -201,8 +201,8 @@ Preflight may end in one of three outcomes:
 
 | Outcome          | Meaning                                                                                                                     |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `ready`          | Mission packet is ready for start approval.                                                                                 |
-| `awaiting_setup` | Mission requires auth, config, or capability setup before start approval is sensible.                                       |
+| `ready`          | Mission packet is ready for unattended continuation approval.                                                               |
+| `awaiting_setup` | Mission requires auth, config, or capability setup before unattended continuation approval is sensible.                     |
 | `blocked`        | Mission cannot even produce a viable start packet because the runtime or product configuration is fundamentally incomplete. |
 
 ## Blocker conditions
@@ -219,7 +219,7 @@ Capability-related blockers fall into two buckets.
 
 ### Runtime blockers
 
-- Credentials expired after mission start
+- Credentials expired after unattended continuation was already approved
 - Interactive login or CAPTCHA encountered mid-mission
 - External system permission revoked mid-mission
 - Device or browser runtime becomes unavailable and cannot be recovered automatically

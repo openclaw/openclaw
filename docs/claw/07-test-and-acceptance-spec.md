@@ -36,24 +36,24 @@ Required scenarios:
 3. see preflight findings in `PRECHECKS.md`
 4. remain in `awaiting_setup` when required setup is missing
 5. move to `awaiting_approval` when ready
-6. approve start once and transition to `queued`
+6. approve unattended continuation once and transition to `queued`
 7. start automatically when a queue slot opens
 
 ## Full-access behavior
 
 Required scenarios:
 
-1. mutate files inside the primary root after approval
-2. mutate files outside the primary root after approval
-3. run host shell commands after approval
+1. mutate files inside the primary root after unattended continuation is approved
+2. mutate files outside the primary root after unattended continuation is approved
+3. run host shell commands after unattended continuation is approved
 4. launch and manage background processes
-5. use browser actions after approval
+5. use browser actions after unattended continuation is approved
 6. use subagents and session orchestration
 7. use gateway or cron capability when mission-implied
 
 Expected result:
 
-- no routine approval prompt after mission start approval
+- no routine approval prompt after unattended continuation is approved
 
 ## UI and gateway consistency
 
