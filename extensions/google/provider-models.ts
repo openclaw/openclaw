@@ -4,19 +4,23 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 
+const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GEMINI_2_5_PRO_PREFIX = "gemini-2.5-pro";
 const GEMINI_2_5_FLASH_LITE_PREFIX = "gemini-2.5-flash-lite";
 const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
-const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
+const GEMMA_PREFIX = "gemma-";
 const GEMINI_2_5_PRO_TEMPLATE_IDS = ["gemini-2.5-pro"] as const;
 const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
 const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
+// Gemma uses the Gemini flash template as a forward-compat approximation
+// until a dedicated Gemma template is registered in the catalog.
+const GEMMA_TEMPLATE_IDS = GEMINI_3_1_FLASH_TEMPLATE_IDS;
 
 type GoogleForwardCompatFamily = {
   googleTemplateIds: readonly string[];
@@ -141,6 +145,12 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       googleTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
     };
+  } else if (lower.startsWith(GEMMA_PREFIX)) {
+    family = {
+      googleTemplateIds: GEMMA_TEMPLATE_IDS,
+      cliTemplateIds: GEMMA_TEMPLATE_IDS,
+    };
+    patch = { reasoning: false };
   } else {
     return undefined;
   }
@@ -168,5 +178,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
 
 export function isModernGoogleModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
-  return lower.startsWith("gemini-2.5") || lower.startsWith("gemini-3");
+  return (
+    lower.startsWith("gemini-2.5") || lower.startsWith("gemini-3") || lower.startsWith(GEMMA_PREFIX)
+  );
 }
