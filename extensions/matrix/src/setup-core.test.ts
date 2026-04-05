@@ -206,6 +206,7 @@ describe("matrixSetupAdapter", () => {
 
   it("rejects unsupported avatar URL schemes during setup validation", () => {
     const validationError = matrixSetupAdapter.validateInput?.({
+      cfg: {} as CoreConfig,
       accountId: "ops",
       input: {
         homeserver: "https://matrix.example.org",

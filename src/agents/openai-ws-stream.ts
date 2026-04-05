@@ -35,6 +35,7 @@ import {
   resolveProviderWebSocketSessionPolicyWithPlugin,
 } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel, ProviderTransportTurnState } from "../plugins/types.js";
+import { resolveOpenAIStrictToolSetting } from "./openai-tool-schema.js";
 import {
   getOpenAIWebSocketErrorDetails,
   OpenAIWebSocketManager,
@@ -76,6 +77,18 @@ interface WsSession {
   /** Session-scoped cool-down after repeated websocket failures. */
   degradedUntil: number | null;
   degradeCooldownMs: number;
+}
+
+function resolveOpenAIWebSocketStrictToolSetting(
+  model: Parameters<StreamFn>[0],
+): boolean | undefined {
+  return resolveOpenAIStrictToolSetting(model, {
+    transport: "websocket",
+    supportsStrictMode:
+      model.compat && typeof model.compat === "object"
+        ? (model.compat as { supportsStrictMode?: boolean }).supportsStrictMode
+        : undefined,
+  });
 }
 
 /** Module-level registry: sessionId → WsSession */
@@ -747,7 +760,9 @@ export function createOpenAIWebSocketStreamFn(
             await runWarmUp({
               manager: session.manager,
               modelId: model.id,
-              tools: convertTools(context.tools),
+              tools: convertTools(context.tools, {
+                strict: resolveOpenAIWebSocketStrictToolSetting(model),
+              }),
               instructions: context.systemPrompt
                 ? stripSystemPromptCacheBoundary(context.systemPrompt)
                 : undefined,
@@ -842,7 +857,9 @@ export function createOpenAIWebSocketStreamFn(
           context,
           options: options as WsOptions | undefined,
           turnInput,
-          tools: convertTools(context.tools),
+          tools: convertTools(context.tools, {
+            strict: resolveOpenAIWebSocketStrictToolSetting(model),
+          }),
           metadata: turnState?.metadata,
         }) as Record<string, unknown>;
         const nextPayload = await options?.onPayload?.(payload, model);

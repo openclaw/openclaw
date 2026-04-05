@@ -16,6 +16,12 @@ export type MatrixDmConfig = {
   policy?: DmPolicy;
   /** Allowlist for DM senders (matrix user IDs or "*"). */
   allowFrom?: Array<string | number>;
+  /**
+   * How Matrix DMs map to sessions.
+   * - `per-user` (default): all DM rooms with the same routed peer share one DM session.
+   * - `per-room`: each Matrix DM room gets its own session key.
+   */
+  sessionScope?: "per-user" | "per-room";
   /** Per-DM thread reply behavior override (off|inbound|always). Overrides top-level threadReplies for direct messages. */
   threadReplies?: "off" | "inbound" | "always";
 };

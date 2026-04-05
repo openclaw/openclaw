@@ -503,6 +503,57 @@ describe("convertTools", () => {
       properties: { cmd: { type: "string" } },
     });
   });
+
+  it("adds strict:true and required:[] for native strict-compatible no-param tools", () => {
+    const tools = [
+      {
+        name: "ping",
+        description: "No params",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      },
+    ];
+    const result = convertTools(tools as Parameters<typeof convertTools>[0], { strict: true });
+
+    expect(result[0]).toEqual({
+      type: "function",
+      name: "ping",
+      description: "No params",
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+        required: [],
+      },
+      strict: true,
+    });
+  });
+
+  it("falls back to strict:false for native tools with non-strict-compatible schemas", () => {
+    const tools = [
+      {
+        name: "read",
+        description: "Read file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          additionalProperties: false,
+        },
+      },
+    ];
+    const result = convertTools(tools as Parameters<typeof convertTools>[0], { strict: true });
+
+    expect(result[0]).toEqual({
+      type: "function",
+      name: "read",
+      description: "Read file",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        additionalProperties: false,
+      },
+      strict: false,
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

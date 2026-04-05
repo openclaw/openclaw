@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import {
   BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
   BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
-} from "./bundled-capability-metadata.js";
-import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
+} from "./contracts/inventory/bundled-capability-metadata.js";
 
 function uniqueStrings(values: readonly string[] | undefined): string[] {
   const result: string[] = [];
