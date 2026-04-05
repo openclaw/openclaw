@@ -17,7 +17,6 @@ import {
   connectOk,
   installGatewayTestHooks,
   readConnectChallengeNonce,
-  resetTestPluginRegistry,
   rpcReq,
 } from "./test-helpers.js";
 import { withServer } from "./test-with-server.js";
@@ -414,7 +413,7 @@ describe("gateway talk.config", () => {
       },
     });
 
-    await withServer(async (ws) => {
+    await withServer(async () => {
       const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
       setActivePluginRegistry({
         ...createEmptyPluginRegistry(),
@@ -449,6 +448,7 @@ describe("gateway talk.config", () => {
         setActivePluginRegistry(previousRegistry);
       }
     });
+  });
 
   it("returns fallback-eligible details when talk provider is not configured", async () => {
     const { writeConfigFile } = await import("../config/config.js");
