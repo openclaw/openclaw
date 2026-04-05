@@ -4,13 +4,13 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   composeAccountWarningCollectors,
   composeWarningCollectors,
   createAllowlistProviderGroupPolicyWarningCollector,
   createAllowlistProviderOpenWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
   listResolvedDirectoryGroupEntriesFromMapKeys,
@@ -31,7 +31,6 @@ import {
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   fetchRemoteMedia,
-  getChatChannelMeta,
   GoogleChatConfigSchema,
   listGoogleChatAccountIds,
   loadOutboundMediaFromUrl,
@@ -57,7 +56,19 @@ import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./
 import { googlechatSetupAdapter } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
 
-const meta = getChatChannelMeta("googlechat");
+const meta = {
+  id: "googlechat",
+  label: "Google Chat",
+  selectionLabel: "Google Chat (Chat API)",
+  docsPath: "/channels/googlechat",
+  docsLabel: "googlechat",
+  blurb: "Google Workspace Chat app with HTTP webhook.",
+  aliases: ["gchat", "google-chat"],
+  order: 55,
+  detailLabel: "Google Chat",
+  systemImage: "message.badge",
+  markdownCapable: true,
+};
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),

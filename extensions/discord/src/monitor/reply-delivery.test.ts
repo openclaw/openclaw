@@ -259,6 +259,31 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("honors payload reply targets even when replyToMode is off", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "explicit reply",
+          replyToId: "reply-explicit-1",
+          replyToTag: true,
+          replyToCurrent: true,
+        },
+      ],
+      target: "channel:202",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:202",
+      "explicit reply",
+      expect.objectContaining({ replyTo: "reply-explicit-1" }),
+    );
+  });
+
   it("uses replyToId only for the first chunk when replyToMode is first", async () => {
     await deliverDiscordReply({
       replies: [

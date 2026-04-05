@@ -231,31 +231,39 @@ export const sendHandlers: GatewayRequestHandlers = {
           : undefined;
         const defaultAgentId = resolveSessionAgentId({ config: cfg });
         const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
-        // If callers omit sessionKey, derive a target session key from the outbound route.
-        const derivedRoute = !providedSessionKey
-          ? await resolveOutboundSessionRoute({
-              cfg,
-              channel,
-              agentId: effectiveAgentId,
-              accountId,
-              target: deliveryTarget,
-              resolvedTarget: idLikeTarget,
-              threadId,
-            })
+        const derivedRoute = await resolveOutboundSessionRoute({
+          cfg,
+          channel,
+          agentId: effectiveAgentId,
+          accountId,
+          target: deliveryTarget,
+          currentSessionKey: providedSessionKey,
+          resolvedTarget: idLikeTarget,
+          threadId,
+        });
+        const outboundRoute = derivedRoute
+          ? providedSessionKey
+            ? {
+                ...derivedRoute,
+                sessionKey: providedSessionKey,
+                baseSessionKey: providedSessionKey,
+              }
+            : derivedRoute
           : null;
-        if (derivedRoute) {
+        if (outboundRoute) {
           await ensureOutboundSessionEntry({
             cfg,
             agentId: effectiveAgentId,
             channel,
             accountId,
-            route: derivedRoute,
+            route: outboundRoute,
           });
         }
+        const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
         const outboundSession = buildOutboundSessionContext({
           cfg,
           agentId: effectiveAgentId,
-          sessionKey: providedSessionKey ?? derivedRoute?.sessionKey,
+          sessionKey: outboundSessionKey,
         });
         const results = await deliverOutboundPayloads({
           cfg,
@@ -268,23 +276,15 @@ export const sendHandlers: GatewayRequestHandlers = {
           threadId: threadId ?? null,
           deps: outboundDeps,
           gatewayClientScopes: client?.connect?.scopes ?? [],
-          mirror: providedSessionKey
+          mirror: outboundSessionKey
             ? {
-                sessionKey: providedSessionKey,
+                sessionKey: outboundSessionKey,
                 agentId: effectiveAgentId,
                 text: mirrorText || message,
                 mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
                 idempotencyKey: idem,
               }
-            : derivedRoute
-              ? {
-                  sessionKey: derivedRoute.sessionKey,
-                  agentId: effectiveAgentId,
-                  text: mirrorText || message,
-                  mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
-                  idempotencyKey: idem,
-                }
-              : undefined,
+            : undefined,
         });
 
         const result = results.at(-1);

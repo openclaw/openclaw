@@ -107,4 +107,21 @@ describe("qwen video generation provider", () => {
       }),
     );
   });
+
+  it("fails fast when reference inputs are local buffers instead of remote URLs", async () => {
+    const provider = buildQwenVideoGenerationProvider();
+
+    await expect(
+      provider.generateVideo({
+        provider: "qwen",
+        model: "wan2.6-i2v",
+        prompt: "animate this local frame",
+        cfg: {},
+        inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      }),
+    ).rejects.toThrow(
+      "Qwen video generation currently requires remote http(s) URLs for reference images/videos.",
+    );
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
 });

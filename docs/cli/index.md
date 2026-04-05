@@ -501,7 +501,7 @@ Options:
   `openrouter-api-key`, `kilocode-api-key`, `litellm-api-key`, `ai-gateway-api-key`,
   `cloudflare-ai-gateway-api-key`, `moonshot-api-key`, `moonshot-api-key-cn`,
   `kimi-code-api-key`, `synthetic-api-key`, `venice-api-key`, `together-api-key`,
-  `huggingface-api-key`, `apiKey`, `gemini-api-key`, `google-gemini-cli`, `zai-api-key`,
+  `huggingface-api-key`, `apiKey`, `gemini-api-key`, `zai-api-key`,
   `zai-coding-global`, `zai-coding-cn`, `zai-global`, `zai-cn`, `xiaomi-api-key`,
   `minimax-global-oauth`, `minimax-global-api`, `minimax-cn-oauth`, `minimax-cn-api`,
   `opencode-zen`, `opencode-go`, `github-copilot`, `copilot-proxy`, `xai-api-key`,
@@ -1353,8 +1353,6 @@ Options:
 - `--reset` (reset dev config + credentials + sessions + workspace)
 - `--force` (kill existing listener on port)
 - `--verbose`
-- `--cli-backend-logs`
-- `--claude-cli-logs` (deprecated alias)
 - `--ws-log <auto|full|compact>`
 - `--compact` (alias for `--ws-log compact`)
 - `--raw-stream`
@@ -1479,31 +1477,20 @@ Tip: the owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
-Billing note: We believe Claude Code CLI fallback is likely allowed for local,
-user-managed automation based on Anthropic's public CLI docs. That said,
-Anthropic's third-party harness policy creates enough ambiguity around
-subscription-backed use in external products that we do not recommend it for
-production. Anthropic also notified OpenClaw users on **April 4, 2026 at
-12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as
-third-party harness usage and requires **Extra Usage** billed separately from
-the subscription. For production, prefer an Anthropic API key or another supported
-subscription-style provider such as OpenAI Codex, Alibaba Cloud Model Studio
-Coding Plan, MiniMax Coding Plan, or Z.AI / GLM Coding Plan.
+Billing note: for Anthropic in OpenClaw, the practical split is **API key** or
+**Claude subscription with Extra Usage**. Anthropic notified OpenClaw users on
+**April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw**
+Claude-login path counts as third-party harness usage and requires
+**Extra Usage** billed separately from the subscription. Our local repros also
+show the OpenClaw-identifying prompt string does not reproduce on the
+Anthropic SDK + API-key path. For production, prefer an Anthropic API key or
+another supported subscription-style provider such as OpenAI Codex, Alibaba
+Cloud Model Studio Coding Plan, MiniMax Coding Plan, or Z.AI / GLM Coding
+Plan.
 
-Anthropic Claude CLI migration:
-
-```bash
-openclaw models auth login --provider anthropic --method cli --set-default
-```
-
-Onboarding shortcut: `openclaw onboard --auth-choice anthropic-cli`
-
-Anthropic setup-token is also available again as a legacy/manual auth path.
+Anthropic setup-token is available again as a legacy/manual auth path.
 Use it only with the expectation that Anthropic told OpenClaw users the
-OpenClaw Claude-login path requires **Extra Usage**.
-
-Legacy alias note: `claude-cli` is the deprecated onboarding auth-choice alias.
-Use `anthropic-cli` for onboarding, or use `models auth login` directly.
+OpenClaw-managed Anthropic subscription path requires **Extra Usage**.
 
 ### `models` (root)
 

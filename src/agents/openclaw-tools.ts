@@ -30,6 +30,8 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
+import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
+import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
@@ -43,6 +45,15 @@ const defaultOpenClawToolsDeps: OpenClawToolsDeps = {
 };
 
 let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
+
+function isOpenAIProvider(provider?: string): boolean {
+  const normalized = provider?.trim().toLowerCase();
+  return normalized === "openai" || normalized === "openai-codex";
+}
+
+function isExperimentalPlanToolEnabled(config?: OpenClawConfig): boolean {
+  return config?.tools?.experimental?.planTool === true;
+}
 
 export function createOpenClawTools(
   options?: {
@@ -74,6 +85,8 @@ export function createOpenClawTools(
     hasRepliedRef?: { value: boolean };
     /** If true, the model has native vision capability */
     modelHasVision?: boolean;
+    /** Active model provider for provider-specific tool gating. */
+    modelProvider?: string;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
@@ -147,6 +160,13 @@ export function createOpenClawTools(
     sandbox,
     fsPolicy: options?.fsPolicy,
   });
+  const videoGenerateTool = createVideoGenerateTool({
+    config: options?.config,
+    agentDir: options?.agentDir,
+    workspaceDir,
+    sandbox,
+    fsPolicy: options?.fsPolicy,
+  });
   const pdfTool = options?.agentDir?.trim()
     ? createPdfTool({
         config: options?.config,
@@ -204,6 +224,7 @@ export function createOpenClawTools(
       config: options?.config,
     }),
     ...(imageGenerateTool ? [imageGenerateTool] : []),
+    ...(videoGenerateTool ? [videoGenerateTool] : []),
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
@@ -212,6 +233,9 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
     }),
+    ...(isExperimentalPlanToolEnabled(resolvedConfig) || isOpenAIProvider(options?.modelProvider)
+      ? [createUpdatePlanTool()]
+      : []),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,

@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  buildTalkTestProviderConfig,
+  readTalkTestProviderApiKey as readTalkProviderApiKey,
+  TALK_TEST_PROVIDER_API_KEY_PATH,
+  TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
+} from "../test-utils/talk-test-provider.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 
 const mocks = vi.hoisted(() => ({
@@ -27,19 +33,7 @@ beforeEach(() => {
 
 describe("resolveCommandSecretRefsViaGateway", () => {
   function makeTalkProviderApiKeySecretRefConfig(envKey: string): OpenClawConfig {
-    return {
-      talk: {
-        providers: {
-          elevenlabs: {
-            apiKey: { source: "env", provider: "default", id: envKey },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-  }
-
-  function readTalkProviderApiKey(config: OpenClawConfig): unknown {
-    return config.talk?.providers?.elevenlabs?.apiKey;
+    return buildTalkTestProviderConfig({ source: "env", provider: "default", id: envKey });
   }
 
   async function withEnvValue(
@@ -101,13 +95,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
   it("returns config unchanged when no target SecretRefs are configured", async () => {
     const config = {
-      talk: {
-        providers: {
-          elevenlabs: {
-            apiKey: "plain", // pragma: allowlist secret
-          },
-        },
-      },
+      ...buildTalkTestProviderConfig("plain"), // pragma: allowlist secret
     } as unknown as OpenClawConfig;
     const result = await resolveCommandSecretRefsViaGateway({
       config,
@@ -152,22 +140,18 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     callGateway.mockResolvedValueOnce({
       assignments: [
         {
-          path: "talk.providers.elevenlabs.apiKey",
-          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
           value: "sk-live",
         },
       ],
       diagnostics: [],
     });
-    const config = {
-      talk: {
-        providers: {
-          elevenlabs: {
-            apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const config = buildTalkTestProviderConfig({
+      source: "env",
+      provider: "default",
+      id: "TALK_API_KEY",
+    });
     const result = await resolveCommandSecretRefsViaGateway({
       config,
       commandName: "memory status",
@@ -234,15 +218,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     try {
       await expect(
         resolveCommandSecretRefsViaGateway({
-          config: {
-            talk: {
-              providers: {
-                elevenlabs: {
-                  apiKey: { source: "env", provider: "default", id: envKey },
-                },
-              },
-            },
-          } as unknown as OpenClawConfig,
+          config: buildTalkTestProviderConfig({
+            source: "env",
+            provider: "default",
+            id: envKey,
+          }),
           commandName: "memory status",
           targetIds: new Set(["talk.providers.*.apiKey"]),
         }),
@@ -263,13 +243,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     try {
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
-          talk: {
-            providers: {
-              elevenlabs: {
-                apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
-              },
-            },
-          },
+          ...buildTalkTestProviderConfig({
+            source: "env",
+            provider: "default",
+            id: "TALK_API_KEY",
+          }),
           secrets: {
             providers: {
               default: { source: "env" },
@@ -452,15 +430,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
     await expect(
       resolveCommandSecretRefsViaGateway({
-        config: {
-          talk: {
-            providers: {
-              elevenlabs: {
-                apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
+        config: buildTalkTestProviderConfig({
+          source: "env",
+          provider: "default",
+          id: "TALK_API_KEY",
+        }),
         commandName: "memory status",
         targetIds: new Set(["talk.providers.*.apiKey"]),
       }),
@@ -471,8 +445,8 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     callGateway.mockResolvedValueOnce({
       assignments: [
         {
-          path: "talk.providers.elevenlabs.apiKey",
-          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
           value: "sk-live",
         },
       ],
@@ -480,15 +454,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
     await expect(
       resolveCommandSecretRefsViaGateway({
-        config: {
-          talk: {
-            providers: {
-              elevenlabs: {
-                apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
-              },
-            },
-          },
-        } as OpenClawConfig,
+        config: buildTalkTestProviderConfig({
+          source: "env",
+          provider: "default",
+          id: "TALK_API_KEY",
+        }),
         commandName: "memory status",
         targetIds: new Set(["talk.providers.*.apiKey"]),
       }),
@@ -504,7 +474,10 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
     await withEnvValue(envKey, undefined, async () => {
       await expect(resolveTalkProviderApiKey({ envKey })).rejects.toThrow(
-        /talk\.providers\.elevenlabs\.apiKey is unresolved in the active runtime snapshot/i,
+        new RegExp(
+          `${TALK_TEST_PROVIDER_API_KEY_PATH.replaceAll(".", "\\.")} is unresolved in the active runtime snapshot`,
+          "i",
+        ),
       );
     });
   });
@@ -513,7 +486,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     callGateway.mockResolvedValueOnce({
       assignments: [],
       diagnostics: [
-        "talk.providers.elevenlabs.apiKey: secret ref is configured on an inactive surface; skipping command-time assignment.",
+        `${TALK_TEST_PROVIDER_API_KEY_PATH}: secret ref is configured on an inactive surface; skipping command-time assignment.`,
       ],
     });
 
@@ -521,7 +494,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
     expectTalkProviderApiKeySecretRef(result, "TALK_API_KEY");
     expect(result.diagnostics).toEqual([
-      "talk.providers.elevenlabs.apiKey: secret ref is configured on an inactive surface; skipping command-time assignment.",
+      `${TALK_TEST_PROVIDER_API_KEY_PATH}: secret ref is configured on an inactive surface; skipping command-time assignment.`,
     ]);
   });
 
@@ -529,7 +502,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     callGateway.mockResolvedValueOnce({
       assignments: [],
       diagnostics: ["talk api key inactive"],
-      inactiveRefPaths: ["talk.providers.elevenlabs.apiKey"],
+      inactiveRefPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
 
     const result = await resolveTalkProviderApiKey({ envKey: "TALK_API_KEY" });
@@ -588,10 +561,10 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       });
       expect(readTalkProviderApiKey(result.resolvedConfig)).toBeUndefined();
       expect(result.hadUnresolvedTargets).toBe(true);
-      expect(result.targetStatesByPath["talk.providers.elevenlabs.apiKey"]).toBe("unresolved");
+      expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
       expect(
         result.diagnostics.some((entry) =>
-          entry.includes("talk.providers.elevenlabs.apiKey is unavailable in this command path"),
+          entry.includes(`${TALK_TEST_PROVIDER_API_KEY_PATH} is unavailable in this command path`),
         ),
       ).toBe(true);
     });
@@ -612,7 +585,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       });
       expect(readTalkProviderApiKey(result.resolvedConfig)).toBeUndefined();
       expect(result.hadUnresolvedTargets).toBe(true);
-      expect(result.targetStatesByPath["talk.providers.elevenlabs.apiKey"]).toBe("unresolved");
+      expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
     });
   });
 
@@ -630,7 +603,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       });
       expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("recovered-locally");
       expect(result.hadUnresolvedTargets).toBe(false);
-      expect(result.targetStatesByPath["talk.providers.elevenlabs.apiKey"]).toBe("resolved_local");
+      expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
       expect(
         result.diagnostics.some((entry) =>
           entry.includes(
@@ -648,8 +621,8 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     callGateway.mockResolvedValueOnce({
       assignments: [
         {
-          path: "talk.providers.elevenlabs.apiKey",
-          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
           value: "resolved-by-gateway",
         },
       ],
@@ -658,24 +631,18 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
     try {
       const result = await resolveCommandSecretRefsViaGateway({
-        config: {
-          talk: {
-            providers: {
-              elevenlabs: {
-                apiKey: { source: "env", provider: "default", id: locallyRecoveredKey },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
+        config: buildTalkTestProviderConfig({
+          source: "env",
+          provider: "default",
+          id: locallyRecoveredKey,
+        }),
         commandName: "message send",
         targetIds: new Set(["talk.providers.*.apiKey"]),
       });
 
       expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("resolved-by-gateway");
       expect(result.hadUnresolvedTargets).toBe(false);
-      expect(result.targetStatesByPath["talk.providers.elevenlabs.apiKey"]).toBe(
-        "resolved_gateway",
-      );
+      expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_gateway");
     } finally {
       if (priorLocallyRecoveredValue === undefined) {
         delete process.env[locallyRecoveredKey];
@@ -697,13 +664,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     try {
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
-          talk: {
-            providers: {
-              elevenlabs: {
-                apiKey: { source: "env", provider: "default", id: talkEnvKey },
-              },
-            },
-          },
+          ...buildTalkTestProviderConfig({
+            source: "env",
+            provider: "default",
+            id: talkEnvKey,
+          }),
           gateway: {
             auth: {
               password: { source: "env", provider: "default", id: gatewayEnvKey },
@@ -717,7 +682,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
       expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("target-only");
       expect(result.hadUnresolvedTargets).toBe(false);
-      expect(result.targetStatesByPath["talk.providers.elevenlabs.apiKey"]).toBe("resolved_local");
+      expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
     } finally {
       if (priorTalkValue === undefined) {
         delete process.env[talkEnvKey];
@@ -740,15 +705,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
     try {
       const result = await resolveCommandSecretRefsViaGateway({
-        config: {
-          talk: {
-            providers: {
-              elevenlabs: {
-                apiKey: { source: "env", provider: "default", id: envKey },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
+        config: buildTalkTestProviderConfig({
+          source: "env",
+          provider: "default",
+          id: envKey,
+        }),
         commandName: "channels resolve",
         targetIds: new Set(["talk.providers.*.apiKey"]),
         mode: "read_only_operational",
@@ -756,7 +717,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
       expect(readTalkProviderApiKey(result.resolvedConfig)).toBeUndefined();
       expect(result.hadUnresolvedTargets).toBe(true);
-      expect(result.targetStatesByPath["talk.providers.elevenlabs.apiKey"]).toBe("unresolved");
+      expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
       expect(
         result.diagnostics.some((entry) =>
           entry.includes("attempted local command-secret resolution"),

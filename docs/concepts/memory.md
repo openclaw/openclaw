@@ -98,7 +98,7 @@ It is designed to keep long-term memory high signal:
   diversity gates.
 
 For mode behavior (`off`, `core`, `rem`, `deep`), scoring signals, and tuning
-knobs, see [Dreaming (experimental)](/concepts/memory-dreaming).
+knobs, see [Dreaming (experimental)](/concepts/dreaming).
 
 ## CLI
 
@@ -115,7 +115,7 @@ openclaw memory index --force   # Rebuild the index
 - [Honcho Memory](/concepts/memory-honcho) -- AI-native cross-session memory
 - [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
   tuning
-- [Dreaming (experimental)](/concepts/memory-dreaming) -- background promotion
+- [Dreaming (experimental)](/concepts/dreaming) -- background promotion
   from short-term recall to long-term memory
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
 - [Compaction](/concepts/compaction) -- how compaction interacts with memory

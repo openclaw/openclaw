@@ -15,6 +15,7 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   parseGroupKey,
   pruneLegacyStoreKeys,
+  resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
@@ -876,5 +877,36 @@ describe("deriveSessionTitle", () => {
       subject: "Actual Subject",
     } as SessionEntry;
     expect(deriveSessionTitle(entry)).toBe("Actual Subject");
+  });
+});
+
+describe("resolveGatewayModelSupportsImages", () => {
+  test("keeps Foundry GPT deployments image-capable even when stale catalog metadata says text-only", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-5.4",
+        provider: "microsoft-foundry",
+        loadGatewayModelCatalog: async () => [
+          { id: "gpt-5.4", name: "GPT-5.4", provider: "microsoft-foundry", input: ["text"] },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("uses the preserved Foundry model name hint for alias deployments with stale text-only input metadata", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "deployment-gpt5",
+        provider: "microsoft-foundry",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "deployment-gpt5",
+            name: "gpt-5.4",
+            provider: "microsoft-foundry",
+            input: ["text"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
   });
 });

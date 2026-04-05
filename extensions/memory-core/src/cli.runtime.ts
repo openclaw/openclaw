@@ -121,7 +121,7 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
     return "off";
   }
   const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
-  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries}`;
+  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"}`;
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {
@@ -855,6 +855,10 @@ export async function runMemorySearch(
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory search");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
+  const dreaming = resolveShortTermPromotionDreamingConfig({
+    pluginConfig: resolveMemoryPluginConfig(cfg),
+    cfg,
+  });
   await withMemoryManagerForAgent({
     cfg,
     agentId,
@@ -881,6 +885,7 @@ export async function runMemorySearch(
         workspaceDir,
         query,
         results,
+        timezone: dreaming.timezone,
       }).catch(() => {
         // Recall tracking is best-effort and must not block normal search results.
       });
@@ -922,6 +927,10 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
+      const dreaming = resolveShortTermPromotionDreamingConfig({
+        pluginConfig: resolveMemoryPluginConfig(cfg),
+        cfg,
+      });
       if (!workspaceDir) {
         defaultRuntime.error("Memory promote requires a resolvable workspace directory.");
         process.exitCode = 1;
@@ -933,9 +942,11 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
         candidates = await rankShortTermPromotionCandidates({
           workspaceDir,
           limit: opts.limit,
-          minScore: opts.minScore,
-          minRecallCount: opts.minRecallCount,
-          minUniqueQueries: opts.minUniqueQueries,
+          minScore: opts.minScore ?? dreaming.minScore,
+          minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
+          minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
+          recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
+          maxAgeDays: dreaming.maxAgeDays,
           includePromoted: Boolean(opts.includePromoted),
         });
       } catch (err) {
@@ -951,9 +962,11 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
             workspaceDir,
             candidates,
             limit: opts.limit,
-            minScore: opts.minScore,
-            minRecallCount: opts.minRecallCount,
-            minUniqueQueries: opts.minUniqueQueries,
+            minScore: opts.minScore ?? dreaming.minScore,
+            minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
+            minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
+            maxAgeDays: dreaming.maxAgeDays,
+            timezone: dreaming.timezone,
           });
         } catch (err) {
           defaultRuntime.error(`Memory promote apply failed: ${formatErrorMessage(err)}`);

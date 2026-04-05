@@ -24,6 +24,7 @@ function buildCmdExeCommandLine(command, args) {
 
 export function resolvePnpmRunner(params = {}) {
   const pnpmArgs = params.pnpmArgs ?? [];
+  const nodeArgs = params.nodeArgs ?? [];
   const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
   const platform = params.platform ?? process.platform;
@@ -32,7 +33,7 @@ export function resolvePnpmRunner(params = {}) {
   if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isPnpmExecPath(npmExecPath)) {
     return {
       command: nodeExecPath,
-      args: [npmExecPath, ...pnpmArgs],
+      args: [...nodeArgs, npmExecPath, ...pnpmArgs],
       shell: false,
     };
   }

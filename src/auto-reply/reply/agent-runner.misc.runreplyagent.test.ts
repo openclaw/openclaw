@@ -1,37 +1,53 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  abortEmbeddedPiRun,
+  getActiveEmbeddedRunCount,
+  isEmbeddedPiRunActive,
+} from "../../agents/pi-embedded-runner/runs.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
-import { onAgentEvent } from "../../infra/agent-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   clearMemoryPluginState,
   registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
+import { __testing as abortTesting, tryFastAbortFromMessage } from "./abort.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import { buildTestCtx } from "./test-ctx.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
   return {
     agents: {
-      defaults: {
-        cliBackends: {
-          "claude-cli": {},
-          "google-gemini-cli": {},
-        },
-      },
+      defaults: {},
     },
   };
 }
 
 const runEmbeddedPiAgentMock = vi.fn();
-const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const compactState = vi.hoisted(() => ({
+  compactEmbeddedPiSessionMock: vi.fn(),
+  actualCompactEmbeddedPiSession: undefined as
+    | typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession
+    | undefined,
+}));
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -49,20 +65,13 @@ vi.mock("../../agents/pi-embedded.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/pi-embedded.js")>(
     "../../agents/pi-embedded.js",
   );
+  compactState.actualCompactEmbeddedPiSession = actual.compactEmbeddedPiSession;
   return {
     ...actual,
+    compactEmbeddedPiSession: (params: unknown) =>
+      compactState.compactEmbeddedPiSessionMock(params),
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
-  };
-});
-
-vi.mock("../../agents/cli-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/cli-runner.js")>(
-    "../../agents/cli-runner.js",
-  );
-  return {
-    ...actual,
-    runCliAgent: (params: unknown) => runCliAgentMock(params),
   };
 });
 
@@ -107,7 +116,6 @@ type RunWithModelFallbackParams = {
 
 beforeEach(() => {
   runEmbeddedPiAgentMock.mockClear();
-  runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
   loadCronStoreMock.mockClear();
@@ -160,10 +168,7 @@ describe("runReplyAgent onAgentRunStart", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config:
-          provider === "claude-cli"
-            ? { agents: { defaults: { cliBackends: { "claude-cli": {} } } } }
-            : createCliBackendTestConfig(),
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider,
         model,
@@ -218,21 +223,19 @@ describe("runReplyAgent onAgentRunStart", () => {
     });
   });
 
-  it("emits start callback when cli runner starts", async () => {
-    runCliAgentMock.mockResolvedValueOnce({
+  it("emits start callback when the embedded runner starts", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
-          provider: "claude-cli",
-          model: "opus-4.5",
+          provider: "codex-cli",
+          model: "gpt-5.4",
         },
       },
     });
     const onAgentRunStart = vi.fn();
 
     const result = await createRun({
-      provider: "claude-cli",
-      model: "opus-4.5",
       opts: { runId: "run-started", onAgentRunStart },
     });
 
@@ -454,6 +457,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   type EmbeddedRunParams = {
     prompt?: string;
     extraSystemPrompt?: string;
+    abortSignal?: AbortSignal;
     onAgentEvent?: (evt: {
       stream?: string;
       data?: { phase?: string; willRetry?: boolean; completed?: boolean };
@@ -519,6 +523,330 @@ describe("runReplyAgent auto-compaction token update", () => {
     } as unknown as FollowupRun;
     return { typing, sessionCtx, resolvedQueue, followupRun };
   }
+
+  it("lets /stop abort a run that is still in preflight compaction", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-stop-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionFile = "session-relative.jsonl";
+    const workspaceDir = tmp;
+    const transcriptPath = path.join(tmp, sessionFile);
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        message: {
+          role: "user",
+          content: "x".repeat(320_000),
+          timestamp: Date.now(),
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sessionFile,
+      totalTokens: 10,
+      totalTokensFresh: false,
+      compactionCount: 1,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    const compactionDeferred = createDeferred<{
+      ok: true;
+      compacted: true;
+      result: {
+        summary: string;
+        firstKeptEntryId: string;
+        tokensBefore: number;
+        tokensAfter: number;
+      };
+    }>();
+
+    compactState.compactEmbeddedPiSessionMock.mockImplementationOnce(
+      async () => await compactionDeferred.promise,
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+    });
+
+    abortTesting.setDepsForTests({
+      getAcpSessionManager: (() =>
+        ({
+          resolveSession: () => ({ kind: "none" }),
+          cancelSession: async () => {},
+        }) as never) as never,
+      getLatestSubagentRunByChildSessionKey: () => null,
+      listSubagentRunsForController: () => [],
+      markSubagentRunTerminated: () => 0,
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      config: cfg,
+      sessionFile,
+      workspaceDir,
+    });
+
+    const runPromise = runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(compactState.compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
+      });
+      expect(getActiveEmbeddedRunCount()).toBe(1);
+
+      const abortResult = await tryFastAbortFromMessage({
+        ctx: buildTestCtx({
+          Body: "/stop",
+          RawBody: "/stop",
+          CommandBody: "/stop",
+          CommandSource: "text",
+          CommandAuthorized: true,
+          ChatType: "direct",
+          Provider: "whatsapp",
+          Surface: "whatsapp",
+          From: "whatsapp:+15550001111",
+          To: "whatsapp:+15550002222",
+          SessionKey: sessionKey,
+        }),
+        cfg,
+      });
+
+      expect(abortResult).toMatchObject({
+        handled: true,
+        aborted: true,
+      });
+    } finally {
+      compactionDeferred.resolve({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "compacted",
+          firstKeptEntryId: "first-kept",
+          tokensBefore: 90_000,
+          tokensAfter: 8_000,
+        },
+      });
+      await runPromise;
+    }
+
+    expect(getActiveEmbeddedRunCount()).toBe(0);
+  });
+
+  it("surfaces the restart notice when gateway shutdown aborts preflight compaction", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-restart-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionFile = "session-relative.jsonl";
+    const workspaceDir = tmp;
+    const transcriptPath = path.join(tmp, sessionFile);
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        message: {
+          role: "user",
+          content: "x".repeat(320_000),
+          timestamp: Date.now(),
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sessionFile,
+      totalTokens: 10,
+      totalTokensFresh: false,
+      compactionCount: 1,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    compactState.compactEmbeddedPiSessionMock.mockImplementationOnce(
+      async (params: { abortSignal?: AbortSignal }) =>
+        await new Promise<never>((_, reject) => {
+          const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
+          const onAbort = () => reject(abortError);
+          if (params.abortSignal?.aborted) {
+            onAbort();
+            return;
+          }
+          params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+        }),
+    );
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      config: cfg,
+      sessionFile,
+      workspaceDir,
+    });
+
+    const runPromise = runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    await vi.waitFor(() => {
+      expect(compactState.compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
+    });
+    expect(getActiveEmbeddedRunCount()).toBe(1);
+
+    expect(abortEmbeddedPiRun(undefined, { mode: "compacting" })).toBe(true);
+
+    await expect(runPromise).resolves.toEqual({
+      text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+    });
+    expect(getActiveEmbeddedRunCount()).toBe(0);
+  });
+
+  it("rebinds the active run to the rotated session id after memory flush", async () => {
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 1_000,
+      forceFlushTranscriptBytes: Number.MAX_SAFE_INTEGER,
+      reserveTokensFloor: 20_000,
+      prompt: "Pre-compaction memory flush.",
+      systemPrompt: "Flush memory into the configured memory file.",
+      relativePath: "memory/active.md",
+    }));
+
+    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+      if (params.prompt?.includes("Pre-compaction memory flush.")) {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", completed: true },
+        });
+        return {
+          payloads: [],
+          meta: {
+            agentMeta: {
+              sessionId: "session-rotated",
+            },
+          },
+        };
+      }
+
+      await new Promise<never>((_, reject) => {
+        const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
+        const onAbort = () => reject(abortError);
+        if (params.abortSignal?.aborted) {
+          onAbort();
+          return;
+        }
+        params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+      });
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "/tmp/session-store.json",
+      sessionEntry: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 1_000_000,
+        compactionCount: 0,
+      },
+    });
+
+    const runPromise = runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 1_000_000,
+        compactionCount: 0,
+      },
+      sessionStore: {
+        main: {
+          sessionId: "session",
+          updatedAt: Date.now(),
+          totalTokens: 1_000_000,
+          compactionCount: 0,
+        },
+      },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    await vi.waitFor(() => {
+      expect(isEmbeddedPiRunActive("session-rotated")).toBe(true);
+    });
+    expect(isEmbeddedPiRunActive("session")).toBe(false);
+    expect(abortEmbeddedPiRun("session-rotated")).toBe(true);
+
+    await runPromise;
+
+    expect(isEmbeddedPiRunActive("session-rotated")).toBe(false);
+  });
 
   it("updates totalTokens after auto-compaction using lastCallUsage", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-tokens-"));
@@ -1169,101 +1497,6 @@ describe("runReplyAgent block streaming", () => {
   });
 });
 
-describe("runReplyAgent claude-cli routing", () => {
-  function createRun() {
-    const typing = createMockTypingController();
-    const sessionCtx = {
-      Provider: "webchat",
-      OriginatingTo: "session:1",
-      AccountId: "primary",
-      MessageSid: "msg",
-    } as unknown as TemplateContext;
-    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
-    const followupRun = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
-      run: {
-        sessionId: "session",
-        sessionKey: "main",
-        messageProvider: "webchat",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: { agents: { defaults: { cliBackends: { "claude-cli": {} } } } },
-        skillsSnapshot: {},
-        provider: "claude-cli",
-        model: "opus-4.5",
-        thinkLevel: "low",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
-      },
-    } as unknown as FollowupRun;
-
-    return runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: "main",
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      defaultModel: "claude-cli/opus-4.5",
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-  }
-
-  it("uses claude-cli runner for claude-cli provider", async () => {
-    const runId = "00000000-0000-0000-0000-000000000001";
-    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
-    const lifecyclePhases: string[] = [];
-    const unsubscribe = onAgentEvent((evt) => {
-      if (evt.runId !== runId) {
-        return;
-      }
-      if (evt.stream !== "lifecycle") {
-        return;
-      }
-      const phase = evt.data?.phase;
-      if (typeof phase === "string") {
-        lifecyclePhases.push(phase);
-      }
-    });
-    runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "ok" }],
-      meta: {
-        agentMeta: {
-          provider: "claude-cli",
-          model: "opus-4.5",
-        },
-      },
-    });
-
-    const result = await createRun();
-    unsubscribe();
-    randomSpy.mockRestore();
-
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    expect(lifecyclePhases).toEqual(["start", "end"]);
-    expect(result).toMatchObject({ text: "ok" });
-  });
-});
-
 describe("runReplyAgent messaging tool suppression", () => {
   function createRun(
     messageProvider = "slack",
@@ -1808,8 +2041,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
       return { payloads: [{ text: "ok" }], meta: {} };
     });
     runWithModelFallbackMock.mockImplementation(async ({ run }: RunWithModelFallbackParams) => ({
-      result: await run("google-gemini-cli", "gemini-3"),
-      provider: "google-gemini-cli",
+      result: await run("google", "gemini-3"),
+      provider: "google",
       model: "gemini-3",
     }));
 

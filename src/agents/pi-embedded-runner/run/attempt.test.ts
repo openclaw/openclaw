@@ -1,12 +1,12 @@
 import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
 import {
   isOllamaCompatProvider,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "../../../../extensions/ollama/runtime-api.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+} from "../../../plugin-sdk/ollama-runtime.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";

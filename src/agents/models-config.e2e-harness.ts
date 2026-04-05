@@ -12,7 +12,12 @@ import { resetModelsJsonReadyCacheForTest } from "./models-config.js";
 import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 
 export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-models-" });
+  // Models-config tests do not exercise session persistence; skip draining
+  // unrelated session lock state during temp-home teardown.
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-models-",
+    skipSessionCleanup: true,
+  });
 }
 
 export function installModelsConfigTestHooks(opts?: { restoreFetch?: boolean }) {
@@ -125,6 +130,8 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "TOGETHER_API_KEY",
   "VOLCANO_ENGINE_API_KEY",
   "BYTEPLUS_API_KEY",
+  "CHUTES_API_KEY",
+  "CHUTES_OAUTH_TOKEN",
   "KILOCODE_API_KEY",
   "KIMI_API_KEY",
   "KIMICODE_API_KEY",
@@ -166,6 +173,8 @@ const TEST_PROVIDER_ENV_TO_PROVIDER_IDS: Record<string, string[]> = {
   AWS_SESSION_TOKEN: ["amazon-bedrock"],
   AWS_SHARED_CREDENTIALS_FILE: ["amazon-bedrock"],
   BYTEPLUS_API_KEY: ["byteplus"],
+  CHUTES_API_KEY: ["chutes"],
+  CHUTES_OAUTH_TOKEN: ["chutes"],
   CLOUD_ML_REGION: ["anthropic-vertex"],
   CLOUDFLARE_AI_GATEWAY_API_KEY: ["cloudflare-ai-gateway"],
   COPILOT_GITHUB_TOKEN: ["github-copilot"],
@@ -179,7 +188,7 @@ const TEST_PROVIDER_ENV_TO_PROVIDER_IDS: Record<string, string[]> = {
   HF_TOKEN: ["huggingface"],
   HUGGINGFACE_HUB_TOKEN: ["huggingface"],
   KILOCODE_API_KEY: ["kilocode"],
-  KIMI_API_KEY: ["moonshot"],
+  KIMI_API_KEY: ["moonshot", "kimi"],
   KIMICODE_API_KEY: ["kimi-coding"],
   MINIMAX_API_KEY: ["minimax"],
   MINIMAX_OAUTH_TOKEN: ["minimax"],
@@ -267,6 +276,15 @@ async function inferImplicitProviderTestPluginIds(params: {
       providerIds.add(providerId.trim());
     }
   }
+  const legacyGrokApiKey =
+    params.config?.tools?.web?.search &&
+    typeof params.config.tools.web.search === "object" &&
+    "grok" in params.config.tools.web.search
+      ? (params.config.tools.web.search.grok as { apiKey?: unknown } | undefined)?.apiKey
+      : undefined;
+  if (legacyGrokApiKey !== undefined && params.config?.plugins?.entries?.xai?.enabled !== false) {
+    providerIds.add("xai");
+  }
   for (const [envVar, mappedProviderIds] of Object.entries(TEST_PROVIDER_ENV_TO_PROVIDER_IDS)) {
     if (!params.env[envVar]?.trim()) {
       continue;
@@ -290,13 +308,6 @@ async function inferImplicitProviderTestPluginIds(params: {
       providerIds.add(pluginId);
     }
   }
-  const legacyGrokApiKey = (
-    params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined
-  )?.grok?.apiKey;
-  if (legacyGrokApiKey !== undefined && params.config?.plugins?.entries?.xai?.enabled !== false) {
-    providerIds.add("xai");
-  }
-
   if (providerIds.size === 0) {
     // No config/env/auth hints: keep ambient local auto-discovery focused on the
     // one provider that is expected to probe localhost in tests.

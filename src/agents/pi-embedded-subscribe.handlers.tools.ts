@@ -17,6 +17,7 @@ import {
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -282,6 +283,18 @@ function queuePendingToolMedia(
   }
 }
 
+function collectEmittedToolOutputMediaUrls(
+  toolName: string,
+  outputText: string,
+  result: unknown,
+): string[] {
+  const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
+  if (mediaUrls.length === 0) {
+    return [];
+  }
+  return filterToolResultMediaUrls(toolName, mediaUrls, result);
+}
+
 function readExecApprovalPendingDetails(result: unknown): {
   approvalId: string;
   approvalSlug: string;
@@ -332,7 +345,9 @@ function readExecApprovalPendingDetails(result: unknown): {
 function readExecApprovalUnavailableDetails(result: unknown): {
   reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
   warningText?: string;
+  channel?: string;
   channelLabel?: string;
+  accountId?: string;
   sentApproverDms?: boolean;
 } | null {
   if (!result || typeof result !== "object") {
@@ -358,7 +373,9 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   return {
     reason,
     warningText: typeof details.warningText === "string" ? details.warningText : undefined,
+    channel: typeof details.channel === "string" ? details.channel : undefined,
     channelLabel: typeof details.channelLabel === "string" ? details.channelLabel : undefined,
+    accountId: typeof details.accountId === "string" ? details.accountId : undefined,
     sentApproverDms: details.sentApproverDms === true,
   };
 }
@@ -382,6 +399,7 @@ async function emitToolResultOutput(params: {
       "object" &&
     !Array.isArray((result as { details?: { media?: unknown } }).details?.media);
   const approvalPending = readExecApprovalPendingDetails(result);
+  let emittedToolOutputMediaUrls: string[] = [];
   if (!isToolError && approvalPending) {
     if (!ctx.params.onToolResult) {
       return;
@@ -417,7 +435,9 @@ async function emitToolResultOutput(params: {
         buildExecApprovalUnavailableReplyPayload({
           reason: approvalUnavailable.reason,
           warningText: approvalUnavailable.warningText,
+          channel: approvalUnavailable.channel,
           channelLabel: approvalUnavailable.channelLabel,
+          accountId: approvalUnavailable.accountId,
           sentApproverDms: approvalUnavailable.sentApproverDms,
         }),
       );
@@ -431,6 +451,13 @@ async function emitToolResultOutput(params: {
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
+      if (ctx.params.toolResultFormat === "plain") {
+        emittedToolOutputMediaUrls = collectEmittedToolOutputMediaUrls(
+          toolName,
+          outputText,
+          result,
+        );
+      }
       ctx.emitToolOutput(toolName, meta, outputText, result);
     }
     if (!hasStructuredMedia) {
@@ -447,11 +474,15 @@ async function emitToolResultOutput(params: {
     return;
   }
   const mediaUrls = filterToolResultMediaUrls(toolName, mediaReply.mediaUrls, result);
-  if (mediaUrls.length === 0) {
+  const pendingMediaUrls =
+    mediaReply.audioAsVoice || emittedToolOutputMediaUrls.length === 0
+      ? mediaUrls
+      : mediaUrls.filter((url) => !emittedToolOutputMediaUrls.includes(url));
+  if (pendingMediaUrls.length === 0) {
     return;
   }
   queuePendingToolMedia(ctx, {
-    mediaUrls,
+    mediaUrls: pendingMediaUrls,
     ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
   });
 }

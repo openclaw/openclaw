@@ -8,6 +8,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
+import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
@@ -424,7 +425,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     label: "Cron",
     name: "cron",
     ownerOnly: true,
-    displaySummary: "Schedule and manage cron jobs and wake events.",
+    displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
 
 Main-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in \`openclaw tasks\`.

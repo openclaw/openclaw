@@ -17,8 +17,10 @@ import type { PluginActivationSource } from "./config-state.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive-registry.js";
+import type { PluginManifestContracts } from "./manifest.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderAdapter,
   registerMemoryEmbeddingProvider,
 } from "./memory-embedding-providers.js";
 import {
@@ -37,7 +39,6 @@ import {
   stripPromptMutationFieldsFromLegacyHookResult,
 } from "./types.js";
 import type {
-  CliBackendPlugin,
   ImageGenerationProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   OpenClawPluginApi,
@@ -128,14 +129,6 @@ export type PluginProviderRegistration = {
   rootDir?: string;
 };
 
-export type PluginCliBackendRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  backend: CliBackendPlugin;
-  source: string;
-  rootDir?: string;
-};
-
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
   pluginName?: string;
@@ -160,6 +153,8 @@ export type PluginWebFetchProviderRegistration =
   PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
 export type PluginWebSearchProviderRegistration =
   PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
+export type PluginMemoryEmbeddingProviderRegistration =
+  PluginOwnedProviderRegistration<MemoryEmbeddingProviderAdapter>;
 
 export type PluginHookRegistration = {
   pluginId: string;
@@ -220,7 +215,6 @@ export type PluginRecord = {
   toolNames: string[];
   hookNames: string[];
   channelIds: string[];
-  cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
@@ -230,6 +224,7 @@ export type PluginRecord = {
   videoGenerationProviderIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
+  memoryEmbeddingProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
@@ -239,6 +234,7 @@ export type PluginRecord = {
   configSchema: boolean;
   configUiHints?: Record<string, PluginConfigUiHint>;
   configJsonSchema?: Record<string, unknown>;
+  contracts?: PluginManifestContracts;
   memorySlotSelected?: boolean;
 };
 
@@ -250,7 +246,6 @@ export type PluginRegistry = {
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
-  cliBackends?: PluginCliBackendRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
   realtimeTranscriptionProviders: PluginRealtimeTranscriptionProviderRegistration[];
   realtimeVoiceProviders: PluginRealtimeVoiceProviderRegistration[];
@@ -259,6 +254,7 @@ export type PluginRegistry = {
   videoGenerationProviders: PluginVideoGenerationProviderRegistration[];
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
+  memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];
@@ -636,40 +632,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       rootDir: record.rootDir,
     });
-  };
-
-  const registerCliBackend = (record: PluginRecord, backend: CliBackendPlugin) => {
-    const id = backend.id.trim();
-    if (!id) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "cli backend registration missing id",
-      });
-      return;
-    }
-    const existing = (registry.cliBackends ?? []).find((entry) => entry.backend.id === id);
-    if (existing) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `cli backend already registered: ${id} (${existing.pluginId})`,
-      });
-      return;
-    }
-    (registry.cliBackends ??= []).push({
-      pluginId: record.id,
-      pluginName: record.name,
-      backend: {
-        ...backend,
-        id,
-      },
-      source: record.source,
-      rootDir: record.rootDir,
-    });
-    record.cliBackendIds.push(id);
   };
 
   const registerUniqueProviderLike = <
@@ -1089,7 +1051,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerGatewayMethod: (method, handler, opts) =>
                 registerGatewayMethod(record, method, handler, opts),
               registerService: (service) => registerService(record, service),
-              registerCliBackend: (backend) => registerCliBackend(record, backend),
               registerInteractiveHandler: (registration) => {
                 const result = registerPluginInteractiveHandler(record.id, registration, {
                   pluginName: record.name,
@@ -1208,26 +1169,29 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerMemoryRuntime(runtime);
               },
               registerMemoryEmbeddingProvider: (adapter) => {
-                if (!hasKind(record.kind, "memory")) {
+                if (hasKind(record.kind, "memory")) {
+                  if (
+                    Array.isArray(record.kind) &&
+                    record.kind.length > 1 &&
+                    !record.memorySlotSelected
+                  ) {
+                    pushDiagnostic({
+                      level: "warn",
+                      pluginId: record.id,
+                      source: record.source,
+                      message:
+                        "dual-kind plugin not selected for memory slot; skipping memory embedding provider registration",
+                    });
+                    return;
+                  }
+                } else if (
+                  !(record.contracts?.memoryEmbeddingProviders ?? []).includes(adapter.id)
+                ) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
                     source: record.source,
-                    message: "only memory plugins can register memory embedding providers",
-                  });
-                  return;
-                }
-                if (
-                  Array.isArray(record.kind) &&
-                  record.kind.length > 1 &&
-                  !record.memorySlotSelected
-                ) {
-                  pushDiagnostic({
-                    level: "warn",
-                    pluginId: record.id,
-                    source: record.source,
-                    message:
-                      "dual-kind plugin not selected for memory slot; skipping memory embedding provider registration",
+                    message: `plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: ${adapter.id}`,
                   });
                   return;
                 }
@@ -1246,6 +1210,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 }
                 registerMemoryEmbeddingProvider(adapter, {
                   ownerPluginId: record.id,
+                });
+                registry.memoryEmbeddingProviders.push({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  provider: adapter,
+                  source: record.source,
+                  rootDir: record.rootDir,
                 });
               },
               on: (hookName, handler, opts) =>
@@ -1267,7 +1238,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool,
     registerChannel,
     registerProvider,
-    registerCliBackend,
     registerSpeechProvider,
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,

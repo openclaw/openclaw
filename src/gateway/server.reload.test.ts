@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
+import {
+  TALK_TEST_PROVIDER_API_KEY_PATH,
+  TALK_TEST_PROVIDER_ID,
+} from "../test-utils/talk-test-provider.js";
 import { openTrackedWs } from "./device-authz.test-helpers.js";
 import {
   connectReq,
@@ -237,7 +241,7 @@ describe("gateway hot reload", () => {
     await writeConfigFile({
       talk: {
         providers: {
-          elevenlabs: {
+          [TALK_TEST_PROVIDER_ID]: {
             apiKey: { source: "env", provider: "default", id: refId },
           },
         },
@@ -769,7 +773,7 @@ describe("gateway hot reload", () => {
         targetIds: ["talk.providers.*.apiKey"],
       });
       expect(preResolve.ok).toBe(true);
-      expect(preResolve.payload?.assignments?.[0]?.path).toBe("talk.providers.elevenlabs.apiKey");
+      expect(preResolve.payload?.assignments?.[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
       expect(preResolve.payload?.assignments?.[0]?.value).toBe("talk-key-before-reload-failure");
 
       delete process.env[refId];
@@ -785,7 +789,7 @@ describe("gateway hot reload", () => {
         targetIds: ["talk.providers.*.apiKey"],
       });
       expect(postResolve.ok).toBe(true);
-      expect(postResolve.payload?.assignments?.[0]?.path).toBe("talk.providers.elevenlabs.apiKey");
+      expect(postResolve.payload?.assignments?.[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
       expect(postResolve.payload?.assignments?.[0]?.value).toBe("talk-key-before-reload-failure");
     } finally {
       if (previousRefValue === undefined) {

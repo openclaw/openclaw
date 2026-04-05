@@ -31,6 +31,7 @@ type MatrixHandlerTestHarnessOptions = {
   replyToMode?: ReplyToMode;
   threadReplies?: "off" | "inbound" | "always";
   dmThreadReplies?: "off" | "inbound" | "always";
+  dmSessionScope?: "per-user" | "per-room";
   streaming?: "partial" | "off";
   blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
@@ -214,6 +215,7 @@ export function createMatrixHandlerTestHarness(
     replyToMode: options.replyToMode ?? "off",
     threadReplies: options.threadReplies ?? "inbound",
     dmThreadReplies: options.dmThreadReplies,
+    dmSessionScope: options.dmSessionScope,
     streaming: options.streaming ?? "off",
     blockStreamingEnabled: options.blockStreamingEnabled ?? false,
     dmEnabled: options.dmEnabled ?? true,

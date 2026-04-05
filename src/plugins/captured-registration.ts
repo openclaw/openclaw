@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { buildPluginApi } from "./api-builder.js";
+import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   AnyAgentTool,
-  CliBackendPlugin,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
@@ -28,7 +28,6 @@ export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
   cliRegistrars: CapturedPluginCliRegistration[];
-  cliBackends: CliBackendPlugin[];
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
@@ -37,6 +36,7 @@ export type CapturedPluginRegistration = {
   videoGenerationProviders: VideoGenerationProviderPlugin[];
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
+  memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
   tools: AnyAgentTool[];
 };
 
@@ -46,7 +46,6 @@ export function createCapturedPluginRegistration(params?: {
 }): CapturedPluginRegistration {
   const providers: ProviderPlugin[] = [];
   const cliRegistrars: CapturedPluginCliRegistration[] = [];
-  const cliBackends: CliBackendPlugin[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
@@ -55,6 +54,7 @@ export function createCapturedPluginRegistration(params?: {
   const videoGenerationProviders: VideoGenerationProviderPlugin[] = [];
   const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
+  const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
   const tools: AnyAgentTool[] = [];
   const noopLogger = {
     info() {},
@@ -66,7 +66,6 @@ export function createCapturedPluginRegistration(params?: {
   return {
     providers,
     cliRegistrars,
-    cliBackends,
     speechProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
@@ -75,6 +74,7 @@ export function createCapturedPluginRegistration(params?: {
     videoGenerationProviders,
     webFetchProviders,
     webSearchProviders,
+    memoryEmbeddingProviders,
     tools,
     api: buildPluginApi({
       id: "captured-plugin-registration",
@@ -112,9 +112,6 @@ export function createCapturedPluginRegistration(params?: {
         registerProvider(provider: ProviderPlugin) {
           providers.push(provider);
         },
-        registerCliBackend(backend: CliBackendPlugin) {
-          cliBackends.push(backend);
-        },
         registerSpeechProvider(provider: SpeechProviderPlugin) {
           speechProviders.push(provider);
         },
@@ -138,6 +135,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerWebSearchProvider(provider: WebSearchProviderPlugin) {
           webSearchProviders.push(provider);
+        },
+        registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter) {
+          memoryEmbeddingProviders.push(adapter);
         },
         registerTool(tool) {
           if (typeof tool !== "function") {

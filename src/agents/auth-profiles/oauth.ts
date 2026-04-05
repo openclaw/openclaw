@@ -13,14 +13,9 @@ import {
 } from "../../plugins/provider-runtime.runtime.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
-import { writeCodexCliCredentials } from "../cli-credentials.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
-import {
-  areOAuthCredentialsEquivalent,
-  readManagedExternalCliCredential,
-} from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -183,56 +178,6 @@ async function refreshOAuthTokenWithLock(params: {
         apiKey: await buildOAuthApiKey(cred.provider, cred),
         newCredentials: cred,
       };
-    }
-
-    const externallyManaged = readManagedExternalCliCredential({
-      profileId: params.profileId,
-      credential: cred,
-    });
-    if (externallyManaged) {
-      if (!areOAuthCredentialsEquivalent(cred, externallyManaged)) {
-        store.profiles[params.profileId] = externallyManaged;
-        saveAuthProfileStore(store, params.agentDir);
-      }
-      if (Date.now() < externallyManaged.expires) {
-        return {
-          apiKey: await buildOAuthApiKey(externallyManaged.provider, externallyManaged),
-          newCredentials: externallyManaged,
-        };
-      }
-      if (externallyManaged.managedBy === "codex-cli") {
-        const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
-          provider: externallyManaged.provider,
-          context: externallyManaged,
-        });
-        if (pluginRefreshed) {
-          const refreshedCredentials: OAuthCredential = {
-            ...externallyManaged,
-            ...pluginRefreshed,
-            type: "oauth",
-            managedBy: "codex-cli",
-          };
-          if (!writeCodexCliCredentials(refreshedCredentials)) {
-            log.warn("failed to persist refreshed codex credentials back to Codex storage", {
-              profileId: params.profileId,
-            });
-          }
-          store.profiles[params.profileId] = refreshedCredentials;
-          saveAuthProfileStore(store, params.agentDir);
-          return {
-            apiKey: await buildOAuthApiKey(refreshedCredentials.provider, refreshedCredentials),
-            newCredentials: refreshedCredentials,
-          };
-        }
-      }
-      throw new Error(
-        `${externallyManaged.managedBy} credential is expired; refresh it in the external CLI and retry.`,
-      );
-    }
-    if (cred.managedBy) {
-      throw new Error(
-        `${cred.managedBy} credential is unavailable; re-authenticate in the external CLI and retry.`,
-      );
     }
 
     const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({

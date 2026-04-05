@@ -23,11 +23,10 @@ instead of ACP.
 
 There are three nearby surfaces that are easy to confuse:
 
-| You want to...                                                                     | Use this                              | Notes                                                                                                       |
-| ---------------------------------------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Run Codex, Claude Code, Gemini CLI, or another external harness _through_ OpenClaw | This page: ACP agents                 | Chat-bound sessions, `/acp spawn`, `sessions_spawn({ runtime: "acp" })`, background tasks, runtime controls |
-| Expose an OpenClaw Gateway session _as_ an ACP server for an editor or client      | [`openclaw acp`](/cli/acp)            | Bridge mode. IDE/client talks ACP to OpenClaw over stdio/WebSocket                                          |
-| Reuse a local AI CLI as a text-only fallback model                                 | [CLI Backends](/gateway/cli-backends) | Not ACP. No OpenClaw tools, no ACP controls, no harness runtime                                             |
+| You want to...                                                                     | Use this                   | Notes                                                                                                       |
+| ---------------------------------------------------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Run Codex, Claude Code, Gemini CLI, or another external harness _through_ OpenClaw | This page: ACP agents      | Chat-bound sessions, `/acp spawn`, `sessions_spawn({ runtime: "acp" })`, background tasks, runtime controls |
+| Expose an OpenClaw Gateway session _as_ an ACP server for an editor or client      | [`openclaw acp`](/cli/acp) | Bridge mode. IDE/client talks ACP to OpenClaw over stdio/WebSocket                                          |
 
 ## Does this work out of the box?
 
@@ -111,14 +110,10 @@ For Claude Code through ACP, the stack is:
 
 Important distinction:
 
-- ACP Claude is not the same thing as the direct `claude-cli/...` fallback runtime.
 - ACP Claude is a harness session with ACP controls, session resume, background-task tracking, and optional conversation/thread binding.
-- `claude-cli/...` is a text-only local CLI backend. See [CLI Backends](/gateway/cli-backends).
-
-For operators, the practical rule is:
+  For operators, the practical rule is:
 
 - want `/acp spawn`, bindable sessions, runtime controls, or persistent harness work: use ACP
-- want simple local text fallback through the raw CLI: use CLI backends
 
 ## Bound sessions
 

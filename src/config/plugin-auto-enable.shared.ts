@@ -10,6 +10,7 @@ import {
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
+import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
 import { isRecord } from "../utils.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import type { OpenClawConfig } from "./config.js";
@@ -22,11 +23,6 @@ export type PluginAutoEnableCandidate =
       pluginId: string;
       kind: "channel-configured";
       channelId: string;
-    }
-  | {
-      pluginId: "browser";
-      kind: "browser-configured";
-      source: "browser-configured" | "browser-plugin-configured" | "browser-tool-referenced";
     }
   | {
       pluginId: string;
@@ -56,8 +52,9 @@ export type PluginAutoEnableCandidate =
       kind: "plugin-tool-configured";
     }
   | {
-      pluginId: "acpx";
-      kind: "acp-runtime-configured";
+      pluginId: string;
+      kind: "setup-auto-enable";
+      reason: string;
     };
 
 export type PluginAutoEnableResult = {
@@ -182,15 +179,15 @@ function hasPluginOwnedWebFetchConfig(cfg: OpenClawConfig, pluginId: string): bo
 }
 
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, pluginId: string): boolean {
-  if (pluginId !== "xai") {
-    return false;
-  }
   const pluginConfig = cfg.plugins?.entries?.xai?.config;
   const web = cfg.tools?.web as Record<string, unknown> | undefined;
-  return Boolean(
-    isRecord(web?.x_search) ||
-    (isRecord(pluginConfig) &&
-      (isRecord(pluginConfig.xSearch) || isRecord(pluginConfig.codeExecution))),
+  return (
+    pluginId === "xai" &&
+    Boolean(
+      isRecord(web?.x_search) ||
+      (isRecord(pluginConfig) &&
+        (isRecord(pluginConfig.xSearch) || isRecord(pluginConfig.codeExecution))),
+    )
   );
 }
 
@@ -278,53 +275,6 @@ function hasConfiguredWebFetchPluginEntry(cfg: OpenClawConfig): boolean {
   );
 }
 
-function listContainsBrowser(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.some((entry) => typeof entry === "string" && entry.trim().toLowerCase() === "browser")
-  );
-}
-
-function toolPolicyReferencesBrowser(value: unknown): boolean {
-  return (
-    isRecord(value) && (listContainsBrowser(value.allow) || listContainsBrowser(value.alsoAllow))
-  );
-}
-
-function hasBrowserToolReference(cfg: OpenClawConfig): boolean {
-  if (toolPolicyReferencesBrowser(cfg.tools)) {
-    return true;
-  }
-  const agentList = cfg.agents?.list;
-  return Array.isArray(agentList)
-    ? agentList.some((entry) => isRecord(entry) && toolPolicyReferencesBrowser(entry.tools))
-    : false;
-}
-
-function hasExplicitBrowserPluginEntry(cfg: OpenClawConfig): boolean {
-  return Boolean(
-    cfg.plugins?.entries && Object.prototype.hasOwnProperty.call(cfg.plugins.entries, "browser"),
-  );
-}
-
-function resolveBrowserAutoEnableSource(
-  cfg: OpenClawConfig,
-): Extract<PluginAutoEnableCandidate, { kind: "browser-configured" }>["source"] | null {
-  if (cfg.browser?.enabled === false || cfg.plugins?.entries?.browser?.enabled === false) {
-    return null;
-  }
-  if (Object.prototype.hasOwnProperty.call(cfg, "browser")) {
-    return "browser-configured";
-  }
-  if (hasExplicitBrowserPluginEntry(cfg)) {
-    return "browser-plugin-configured";
-  }
-  if (hasBrowserToolReference(cfg)) {
-    return "browser-tool-referenced";
-  }
-  return null;
-}
-
 function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
   const pluginEntries = cfg.plugins?.entries;
   if (
@@ -364,15 +314,6 @@ export function configMayNeedPluginAutoEnable(
   if (hasPotentialConfiguredChannels(cfg, env)) {
     return true;
   }
-  if (resolveBrowserAutoEnableSource(cfg)) {
-    return true;
-  }
-  if (cfg.acp?.enabled === true || cfg.acp?.dispatch?.enabled === true) {
-    return true;
-  }
-  if (typeof cfg.acp?.backend === "string" && cfg.acp.backend.trim().length > 0) {
-    return true;
-  }
   if (cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) {
     return true;
   }
@@ -383,11 +324,18 @@ export function configMayNeedPluginAutoEnable(
     return true;
   }
   const web = cfg.tools?.web as Record<string, unknown> | undefined;
-  return (
+  if (
     isRecord(web?.x_search) ||
-    isRecord(cfg.plugins?.entries?.xai?.config) ||
     hasConfiguredWebSearchPluginEntry(cfg) ||
     hasConfiguredWebFetchPluginEntry(cfg)
+  ) {
+    return true;
+  }
+  return (
+    resolvePluginSetupAutoEnableReasons({
+      config: cfg,
+      env,
+    }).length > 0
   );
 }
 
@@ -397,16 +345,6 @@ export function resolvePluginAutoEnableCandidateReason(
   switch (candidate.kind) {
     case "channel-configured":
       return `${candidate.channelId} configured`;
-    case "browser-configured":
-      switch (candidate.source) {
-        case "browser-configured":
-          return "browser configured";
-        case "browser-plugin-configured":
-          return "browser plugin configured";
-        case "browser-tool-referenced":
-          return "browser tool referenced";
-      }
-      break;
     case "provider-auth-configured":
       return `${candidate.providerId} auth configured`;
     case "provider-model-configured":
@@ -419,8 +357,8 @@ export function resolvePluginAutoEnableCandidateReason(
       return `${candidate.pluginId} web fetch configured`;
     case "plugin-tool-configured":
       return `${candidate.pluginId} tool configured`;
-    case "acp-runtime-configured":
-      return "ACP runtime configured";
+    case "setup-auto-enable":
+      return candidate.reason;
   }
 }
 
@@ -436,11 +374,6 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     if (isChannelConfigured(params.config, channelId, params.env)) {
       changes.push({ pluginId, kind: "channel-configured", channelId });
     }
-  }
-
-  const browserSource = resolveBrowserAutoEnableSource(params.config);
-  if (browserSource) {
-    changes.push({ pluginId: "browser", kind: "browser-configured", source: browserSource });
   }
 
   for (const [providerId, pluginId] of Object.entries(
@@ -498,16 +431,15 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
-  const backendRaw =
-    typeof params.config.acp?.backend === "string"
-      ? params.config.acp.backend.trim().toLowerCase()
-      : "";
-  const acpConfigured =
-    params.config.acp?.enabled === true ||
-    params.config.acp?.dispatch?.enabled === true ||
-    backendRaw === "acpx";
-  if (acpConfigured && (!backendRaw || backendRaw === "acpx")) {
-    changes.push({ pluginId: "acpx", kind: "acp-runtime-configured" });
+  for (const entry of resolvePluginSetupAutoEnableReasons({
+    config: params.config,
+    env: params.env,
+  })) {
+    changes.push({
+      pluginId: entry.pluginId,
+      kind: "setup-auto-enable",
+      reason: entry.reason,
+    });
   }
 
   return changes;

@@ -888,6 +888,45 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("passes persisted cwd runtime options into ensureSession after restart", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:cwd-restart";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: {
+          ...readySessionMeta(),
+          cwd: "/workspace/stale",
+          runtimeOptions: {
+            cwd: "/workspace/project",
+          },
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-binding-restart-cwd",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        cwd: "/workspace/project",
+      }),
+    );
+  });
+
   it("does not resume persisted ACP identity for oneshot sessions after restart", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -2071,6 +2110,79 @@ describe("AcpSessionManager", () => {
       expect.objectContaining({
         key: "timeout",
         value: "120",
+      }),
+    );
+  });
+
+  it("re-ensures runtime handles after cwd runtime option updates", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:session-cwd-update";
+    let currentEntry = {
+      sessionKey,
+      storeSessionKey: sessionKey,
+      acp: readySessionMeta(),
+    };
+    hoisted.readAcpSessionEntryMock.mockImplementation(() => currentEntry);
+    hoisted.upsertAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const nextMeta = params.mutate(currentEntry.acp, currentEntry);
+      if (nextMeta === null) {
+        return null;
+      }
+      currentEntry = {
+        ...currentEntry,
+        acp: nextMeta ?? currentEntry.acp,
+      };
+      return currentEntry;
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+
+    await expect(
+      manager.updateSessionRuntimeOptions({
+        cfg: baseCfg,
+        sessionKey,
+        patch: { cwd: "/workspace/next" },
+      }),
+    ).resolves.toEqual({
+      cwd: "/workspace/next",
+    });
+
+    expect(currentEntry.acp.runtimeOptions).toEqual({
+      cwd: "/workspace/next",
+    });
+    expect(currentEntry.acp.cwd).toBe("/workspace/next");
+
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "second",
+      mode: "prompt",
+      requestId: "r2",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.ensureSession).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        sessionKey,
+        cwd: "/workspace/next",
       }),
     );
   });

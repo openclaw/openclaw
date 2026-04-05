@@ -57,6 +57,7 @@ export {
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
 } from "openclaw/plugin-sdk/channel-policy";
+export { mattermostPlugin } from "./src/channel.js";
 export { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
@@ -86,3 +87,5 @@ export {
   resolveChannelMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-runtime";
 export { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+export { registerSlashCommandRoute } from "./src/mattermost/slash-state.js";
+export { setMattermostRuntime } from "./src/runtime.js";
