@@ -345,7 +345,7 @@ export async function resolveReplyDirectives(params: {
   sessionCtx.BodyStripped = cleanedBody;
 
   const messageProviderKey =
-    sessionCtx.Provider?.trim().toLowerCase() ?? ctx.Provider?.trim().toLowerCase() ?? "";
+    ctx.Provider?.trim().toLowerCase() ?? sessionCtx.Provider?.trim().toLowerCase() ?? "";
   const elevated = resolveElevatedPermissions({
     cfg,
     agentId,

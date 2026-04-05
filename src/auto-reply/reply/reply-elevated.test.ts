@@ -3,12 +3,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { resolveElevatedPermissions } from "./reply-elevated.js";
 
-function buildConfig(allowFrom: string[]): OpenClawConfig {
+function buildConfig(provider: string, allowFrom: string[]): OpenClawConfig {
   return {
     tools: {
       elevated: {
         allowFrom: {
-          whatsapp: allowFrom,
+          [provider]: allowFrom,
         },
       },
     },
@@ -28,14 +28,16 @@ function buildContext(overrides?: Partial<MsgContext>): MsgContext {
 }
 
 function expectAllowFromDecision(params: {
+  provider?: string;
   allowFrom: string[];
   ctx?: Partial<MsgContext>;
   allowed: boolean;
 }) {
+  const provider = params.provider ?? "whatsapp";
   const result = resolveElevatedPermissions({
-    cfg: buildConfig(params.allowFrom),
+    cfg: buildConfig(provider, params.allowFrom),
     agentId: "main",
-    provider: "whatsapp",
+    provider,
     ctx: buildContext(params.ctx),
   });
 
@@ -48,7 +50,7 @@ function expectAllowFromDecision(params: {
 
   expect(result.failures).toContainEqual({
     gate: "allowFrom",
-    key: "tools.elevated.allowFrom.whatsapp",
+    key: `tools.elevated.allowFrom.${provider}`,
   });
 }
 
@@ -85,6 +87,23 @@ describe("resolveElevatedPermissions", () => {
       allowed: true,
       ctx: {
         SenderUsername: "owner_username",
+      },
+    });
+  });
+
+  it("authorizes webchat sender ids via plain allowFrom entries", () => {
+    expectAllowFromDecision({
+      provider: "webchat",
+      allowFrom: ["openclaw-control-ui"],
+      allowed: true,
+      ctx: {
+        Provider: "webchat",
+        Surface: "webchat",
+        SenderId: "openclaw-control-ui",
+        SenderName: "OpenClaw Control UI",
+        SenderUsername: "OpenClaw Control UI",
+        From: "webchat:openclaw-control-ui",
+        SenderE164: undefined,
       },
     });
   });
