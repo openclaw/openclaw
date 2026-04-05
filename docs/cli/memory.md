@@ -93,13 +93,14 @@ Full options:
 ## Dreaming (experimental)
 
 Dreaming is the background memory consolidation system with three cooperative
-phases: **light** (organize into daily note), **deep** (promote into
-`MEMORY.md`), and **REM** (reflect and find patterns in the daily note).
+phases: **light** (organize into `dreams.md` in inline mode), **deep**
+(promote into `MEMORY.md`), and **REM** (reflect and find patterns in
+`dreams.md` in inline mode).
 
 - Enable with `plugins.entries.memory-core.config.dreaming.enabled: true`.
 - Toggle from chat with `/dreaming on|off` or `/dreaming enable|disable light|deep|rem`.
 - Each phase runs on its own cron schedule, managed automatically by `memory-core`.
-- Only the deep phase writes to `MEMORY.md`. Light and REM write to the daily note only.
+- Only the deep phase writes durable memory to `MEMORY.md`. With default inline storage, Light and REM write to `dreams.md`.
 - Ranking uses weighted signals: recall frequency, retrieval relevance, query diversity, temporal recency, cross-day consolidation, and derived concept richness.
 - Promotion re-reads the live daily note before writing to `MEMORY.md`, so edited or deleted short-term snippets do not get promoted from stale recall-store snapshots.
 - Scheduled and manual `memory promote` runs share the same deep phase defaults unless you pass CLI threshold overrides.

@@ -382,17 +382,18 @@ conceptual details and chat commands, see [Dreaming](/concepts/dreaming).
 
 ### Global settings
 
-| Key                       | Type      | Default    | Description                                      |
-| ------------------------- | --------- | ---------- | ------------------------------------------------ |
-| `enabled`                 | `boolean` | `true`     | Master switch for all phases                     |
-| `timezone`                | `string`  | unset      | Timezone for schedule evaluation and daily notes |
-| `verboseLogging`          | `boolean` | `false`    | Emit detailed per-run dreaming logs              |
-| `storage.mode`            | `string`  | `"inline"` | `inline`, `separate`, or `both`                  |
-| `storage.separateReports` | `boolean` | `false`    | Write separate report files per phase            |
+| Key                       | Type      | Default    | Description                                                  |
+| ------------------------- | --------- | ---------- | ------------------------------------------------------------ |
+| `enabled`                 | `boolean` | `true`     | Master switch for all phases                                 |
+| `timezone`                | `string`  | unset      | Timezone for schedule evaluation and dreaming date bucketing |
+| `verboseLogging`          | `boolean` | `false`    | Emit detailed per-run dreaming logs                          |
+| `storage.mode`            | `string`  | `"inline"` | Inline `dreams.md`, separate reports, or both                |
+| `storage.separateReports` | `boolean` | `false`    | Write separate report files per phase                        |
 
 ### Light phase (`phases.light`)
 
-Scans recent traces, dedupes, and stages candidates into the daily note.
+Scans recent traces, dedupes, and stages candidates into `dreams.md` when
+inline storage is enabled.
 Does **not** write to `MEMORY.md`.
 
 | Key                | Type       | Default                         | Description                 |
@@ -434,7 +435,8 @@ writes durable facts. Also owns recovery when memory is thin.
 
 ### REM phase (`phases.rem`)
 
-Writes themes, reflections, and pattern notes into the daily note.
+Writes themes, reflections, and pattern notes into `dreams.md` when inline
+storage is enabled.
 Does **not** write to `MEMORY.md`.
 
 | Key                  | Type       | Default                     | Description                        |
