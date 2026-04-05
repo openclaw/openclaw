@@ -1,4 +1,5 @@
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
 import { __testing as geminiWebSearchTesting } from "./src/gemini-web-search-provider.js";
@@ -253,6 +254,26 @@ describe("Google image-generation provider", () => {
             },
           },
         }),
+      }),
+    );
+  });
+
+  it("disables DNS pinning for Google image generation requests", async () => {
+    mockGoogleApiKeyAuth();
+    installGoogleFetchMock();
+    const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest");
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "draw a fox",
+      cfg: {},
+    });
+
+    expect(postJsonRequestSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pinDns: false,
       }),
     );
   });

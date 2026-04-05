@@ -37,6 +37,7 @@ describe("tlon urbit auth ssrf", () => {
     const cookie = await authenticate("http://127.0.0.1:8080", "code", {
       ssrfPolicy: { allowPrivateNetwork: true },
       lookupFn,
+      fetchImpl: mockFetch as typeof fetch,
     });
     expect(cookie).toContain("urbauth-~zod=123");
     expect(mockFetch).toHaveBeenCalled();

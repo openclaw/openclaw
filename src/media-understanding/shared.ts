@@ -117,6 +117,7 @@ export async function postTranscriptionRequest(params: {
   body: BodyInit;
   timeoutMs?: number;
   fetchFn: typeof fetch;
+  pinDns?: boolean;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
@@ -130,9 +131,13 @@ export async function postTranscriptionRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork || params.dispatcherPolicy
+    params.allowPrivateNetwork ||
+      params.dispatcherPolicy ||
+      params.pinDns !== undefined ||
+      params.auditContext
       ? {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.pinDns !== undefined ? { pinDns: params.pinDns } : {}),
           ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
           ...(params.auditContext ? { auditContext: params.auditContext } : {}),
         }
@@ -146,6 +151,7 @@ export async function postJsonRequest(params: {
   body: unknown;
   timeoutMs?: number;
   fetchFn: typeof fetch;
+  pinDns?: boolean;
   allowPrivateNetwork?: boolean;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
@@ -159,9 +165,13 @@ export async function postJsonRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    params.allowPrivateNetwork || params.dispatcherPolicy
+    params.allowPrivateNetwork ||
+      params.dispatcherPolicy ||
+      params.pinDns !== undefined ||
+      params.auditContext
       ? {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+          ...(params.pinDns !== undefined ? { pinDns: params.pinDns } : {}),
           ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
           ...(params.auditContext ? { auditContext: params.auditContext } : {}),
         }
