@@ -711,6 +711,56 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("# Dynamic Project Context");
   });
 
+  it("replaces provider-owned prompt sections without disturbing core ordering", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptContribution: {
+        sectionOverrides: {
+          interaction_style: "## Interaction Style\n\nCustom interaction guidance.",
+          execution_bias: "## Execution Bias\n\nCustom execution guidance.",
+        },
+      },
+    });
+
+    expect(prompt).toContain("## Interaction Style\n\nCustom interaction guidance.");
+    expect(prompt).toContain("## Execution Bias\n\nCustom execution guidance.");
+    expect(prompt).not.toContain("Bias toward action and momentum.");
+  });
+
+  it("places provider stable prefixes above the cache boundary", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptContribution: {
+        stablePrefix: "## Provider Stable Block\n\nStable provider guidance.",
+      },
+    });
+
+    const boundaryIndex = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const stableIndex = prompt.indexOf("## Provider Stable Block");
+    const safetyIndex = prompt.indexOf("## Safety");
+
+    expect(stableIndex).toBeGreaterThan(-1);
+    expect(boundaryIndex).toBeGreaterThan(stableIndex);
+    expect(safetyIndex).toBeGreaterThan(stableIndex);
+  });
+
+  it("places provider dynamic suffixes below the cache boundary", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptContribution: {
+        dynamicSuffix: "## Provider Dynamic Block\n\nPer-turn provider guidance.",
+      },
+    });
+
+    const boundaryIndex = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const dynamicIndex = prompt.indexOf("## Provider Dynamic Block");
+    const heartbeatIndex = prompt.indexOf("## Heartbeats");
+
+    expect(boundaryIndex).toBeGreaterThan(-1);
+    expect(dynamicIndex).toBeGreaterThan(boundaryIndex);
+    expect(heartbeatIndex).toBeGreaterThan(dynamicIndex);
+  });
+
   it("summarizes the message tool when available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

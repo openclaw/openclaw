@@ -1,5 +1,6 @@
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
+import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import { resolveCatalogHookProviderPluginIds } from "./providers.js";
@@ -41,6 +42,7 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderResolveTransportTurnStateContext,
   ProviderResolveWebSocketSessionPolicyContext,
+  ProviderSystemPromptContributionContext,
   ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
   ProviderTransportTurnState,
@@ -206,6 +208,19 @@ export function runProviderDynamicModel(params: {
   context: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
   return resolveProviderRuntimePlugin(params)?.resolveDynamicModel?.(params.context) ?? undefined;
+}
+
+export function resolveProviderSystemPromptContribution(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderSystemPromptContributionContext;
+}): ProviderSystemPromptContribution | undefined {
+  return (
+    resolveProviderRuntimePlugin(params)?.resolveSystemPromptContribution?.(params.context) ??
+    undefined
+  );
 }
 
 export async function prepareProviderDynamicModel(params: {

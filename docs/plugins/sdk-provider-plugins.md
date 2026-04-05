@@ -513,6 +513,13 @@ API key auth, and dynamic model resolution.
       | 42 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
       | 43 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
+      Prompt tuning note:
+
+      - `resolveSystemPromptContribution` lets a provider inject cache-aware
+        system-prompt guidance for a model family. Prefer it over
+        `before_prompt_build` when the behavior belongs to one provider/model
+        family and should preserve the stable/dynamic cache split.
+
       For detailed descriptions and real-world examples, see
       [Internals: Provider Runtime Hooks](/plugins/architecture#provider-runtime-hooks).
     </Accordion>

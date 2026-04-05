@@ -12,6 +12,18 @@ OpenClaw builds a custom system prompt for every agent run. The prompt is **Open
 
 The prompt is assembled by OpenClaw and injected into each agent run.
 
+Provider plugins can contribute cache-aware prompt guidance without replacing
+the full OpenClaw-owned prompt. The provider runtime can:
+
+- replace a small set of named core sections (`interaction_style`,
+  `tool_call_style`, `execution_bias`)
+- inject a **stable prefix** above the prompt cache boundary
+- inject a **dynamic suffix** below the prompt cache boundary
+
+Use provider-owned contributions for model-family-specific tuning. Keep legacy
+`before_prompt_build` prompt mutation for compatibility or truly global prompt
+changes, not normal provider behavior.
+
 ## Structure
 
 The prompt is intentionally compact and uses fixed sections:
