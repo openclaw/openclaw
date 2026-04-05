@@ -39,6 +39,13 @@ import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
+import {
+  estimateMessagesTokens,
+  planCompactionStage,
+  planCompactionStages,
+  pruneHistoryForContextShare,
+  type CompactionStageTelemetry,
+} from "../compaction.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
@@ -57,6 +64,7 @@ import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
 import { ensureSessionHeader } from "../pi-embedded-helpers.js";
 import {
   consumeCompactionSafeguardCancelReason,
+  getCompactionSafeguardRuntime,
   setCompactionSafeguardCancelReason,
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
@@ -177,6 +185,8 @@ export type CompactEmbeddedPiSessionParams = {
   abortSignal?: AbortSignal;
   /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
+  /** Read-only inspection path: compute likely compaction stages without transcript mutation. */
+  dryRun?: boolean;
 };
 
 type CompactionMessageMetrics = {
@@ -185,6 +195,19 @@ type CompactionMessageMetrics = {
   toolResultChars: number;
   estTokens?: number;
   contributors: Array<{ role: string; chars: number; tool?: string }>;
+};
+
+type CompactionDryRunDetails = {
+  dryRun: true;
+  currentMessages: number;
+  currentEstimatedTokens?: number;
+  contextWindowTokens: number;
+  maxHistoryShare: number;
+  recentTurnsPreserve: number;
+  qualityGuardEnabled: boolean;
+  qualityRetriesPlanned: number;
+  topContributors: Array<{ role: string; chars: number; tool?: string }>;
+  stageTelemetry: CompactionStageTelemetry;
 };
 
 function hasRealConversationContent(
@@ -197,6 +220,126 @@ function hasRealConversationContent(
 
 function createCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
+}
+
+function resolveCompactionRecentTurnsPreserve(value: unknown): number {
+  const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 3;
+  return Math.min(12, Math.max(0, parsed));
+}
+
+function resolveCompactionQualityGuardMaxRetries(value: unknown): number {
+  const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 1;
+  return Math.min(3, Math.max(0, parsed));
+}
+
+function buildCompactionStageTelemetry(params: {
+  boundaryOnly?: boolean;
+  historyPruned?: boolean;
+  historySummaryRequested?: boolean;
+  splitTurnSummaryRequested?: boolean;
+  qualityGuardEnabled?: boolean;
+  qualityRetriesPlanned?: number;
+  qualityRetriesUsed?: number;
+  recentTurnsPreserve: number;
+  droppedChunks?: number;
+  droppedMessages?: number;
+  droppedSummaryUsed?: boolean;
+}): CompactionStageTelemetry {
+  const qualityRetriesUsed = Math.max(0, params.qualityRetriesUsed ?? 0);
+  const entryDecision = planCompactionStage({
+    boundaryOnly: params.boundaryOnly,
+    historyPruned: params.historyPruned,
+    historySummaryRequested: params.historySummaryRequested,
+    splitTurnSummaryRequested: params.splitTurnSummaryRequested,
+    qualityRetryRequested: false,
+  });
+  const outcomeDecision = planCompactionStage({
+    boundaryOnly: params.boundaryOnly,
+    historyPruned: params.historyPruned,
+    historySummaryRequested: params.historySummaryRequested,
+    splitTurnSummaryRequested: params.splitTurnSummaryRequested,
+    qualityRetryRequested: qualityRetriesUsed > 0,
+  });
+
+  return {
+    entryStage: entryDecision.stage,
+    entryReason: entryDecision.reason,
+    outcomeStage: outcomeDecision.stage,
+    outcomeReason: outcomeDecision.reason,
+    plan: planCompactionStages({
+      boundaryOnly: params.boundaryOnly,
+      historyPruned: params.historyPruned,
+      historySummaryRequested: params.historySummaryRequested,
+      splitTurnSummaryRequested: params.splitTurnSummaryRequested,
+      qualityGuardEnabled: params.qualityGuardEnabled,
+    }),
+    historyPruned: params.historyPruned === true,
+    splitTurn: params.splitTurnSummaryRequested === true,
+    recentTurnsPreserve: resolveCompactionRecentTurnsPreserve(params.recentTurnsPreserve),
+    qualityGuardEnabled: params.qualityGuardEnabled === true,
+    qualityRetriesPlanned: Math.max(0, params.qualityRetriesPlanned ?? 0),
+    qualityRetriesUsed,
+    droppedChunks: Math.max(0, params.droppedChunks ?? 0),
+    droppedMessages: Math.max(0, params.droppedMessages ?? 0),
+    droppedSummaryUsed: params.droppedSummaryUsed === true,
+  };
+}
+
+function buildCompactionDryRunDetails(params: {
+  messages: AgentMessage[];
+  contextWindowTokens: number;
+  maxHistoryShare?: number;
+  recentTurnsPreserve?: number;
+  qualityGuardEnabled?: boolean;
+  qualityGuardMaxRetries?: number;
+}): CompactionDryRunDetails {
+  const metrics = summarizeCompactionMessages(params.messages);
+  const maxHistoryShare =
+    typeof params.maxHistoryShare === "number" && Number.isFinite(params.maxHistoryShare)
+      ? params.maxHistoryShare
+      : 0.5;
+  const recentTurnsPreserve = resolveCompactionRecentTurnsPreserve(params.recentTurnsPreserve);
+  const qualityGuardEnabled = params.qualityGuardEnabled === true;
+  const qualityRetriesPlanned = resolveCompactionQualityGuardMaxRetries(
+    params.qualityGuardMaxRetries,
+  );
+  const boundaryOnly = !containsRealConversationMessages(params.messages);
+  const pruned = boundaryOnly
+    ? null
+    : pruneHistoryForContextShare({
+        messages: params.messages,
+        maxContextTokens: params.contextWindowTokens,
+        maxHistoryShare,
+        parts: 2,
+      });
+  const historyPruned = (pruned?.droppedChunks ?? 0) > 0;
+  const historySummaryRequested = boundaryOnly
+    ? false
+    : (pruned?.messages ?? params.messages).length > 0;
+
+  return {
+    dryRun: true,
+    currentMessages: metrics.messages,
+    currentEstimatedTokens: metrics.estTokens,
+    contextWindowTokens: params.contextWindowTokens,
+    maxHistoryShare,
+    recentTurnsPreserve,
+    qualityGuardEnabled,
+    qualityRetriesPlanned,
+    topContributors: metrics.contributors,
+    stageTelemetry: buildCompactionStageTelemetry({
+      boundaryOnly,
+      historyPruned,
+      historySummaryRequested,
+      splitTurnSummaryRequested: false,
+      qualityGuardEnabled,
+      qualityRetriesPlanned,
+      recentTurnsPreserve,
+      droppedChunks: pruned?.droppedChunks,
+      droppedMessages: pruned?.droppedMessages,
+      droppedSummaryUsed: false,
+    }),
+  };
 }
 
 function normalizeObservedTokenCount(value: unknown): number | undefined {
@@ -847,6 +990,37 @@ export async function compactEmbeddedPiSessionDirect(
           );
         }
 
+        const safeguardRuntime = getCompactionSafeguardRuntime(sessionManager);
+        const dryRunDetails = buildCompactionDryRunDetails({
+          messages: session.messages,
+          contextWindowTokens: ctxInfo.tokens,
+          maxHistoryShare: safeguardRuntime?.maxHistoryShare,
+          recentTurnsPreserve: safeguardRuntime?.recentTurnsPreserve,
+          qualityGuardEnabled: safeguardRuntime?.qualityGuardEnabled,
+          qualityGuardMaxRetries: safeguardRuntime?.qualityGuardMaxRetries,
+        });
+
+        if (params.dryRun) {
+          const stageSummary = dryRunDetails.stageTelemetry.plan
+            .map((entry) => entry.stage)
+            .join(" → ");
+          log.info(
+            `[compaction] dry-run inspect — ${stageSummary || "no stages"} (sessionKey=${params.sessionKey ?? params.sessionId})`,
+          );
+          return {
+            ok: true,
+            compacted: false,
+            reason: "dry run",
+            result: {
+              summary: stageSummary,
+              firstKeptEntryId: "",
+              tokensBefore: dryRunDetails.currentEstimatedTokens ?? 0,
+              tokensAfter: dryRunDetails.currentEstimatedTokens,
+              details: dryRunDetails,
+            },
+          };
+        }
+
         if (!containsRealConversationMessages(session.messages)) {
           log.info(
             `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
@@ -1000,6 +1174,9 @@ export async function compactEmbeddedPiSession(
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => {
+      if (params.dryRun) {
+        return await compactEmbeddedPiSessionDirect(params);
+      }
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: params.workspaceDir,
@@ -1176,6 +1353,7 @@ export const __testing = {
   containsRealConversationMessages,
   estimateTokensAfterCompaction,
   buildBeforeCompactionHookMetrics,
+  buildCompactionDryRunDetails,
   runBeforeCompactionHooks,
   runAfterCompactionHooks,
   runPostCompactionSideEffects,

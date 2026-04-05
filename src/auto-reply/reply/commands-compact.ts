@@ -1,3 +1,4 @@
+import { extractCompactionStageTelemetry } from "../../agents/compaction.js";
 import {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
@@ -17,13 +18,13 @@ import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
-function extractCompactInstructions(params: {
+function parseCompactCommand(params: {
   rawBody?: string;
   ctx: import("../templating.js").MsgContext;
   cfg: OpenClawConfig;
   agentId?: string;
   isGroup: boolean;
-}): string | undefined {
+}): { instructions?: string; dryRun: boolean } {
   const raw = stripStructuralPrefixes(params.rawBody ?? "");
   const stripped = params.isGroup
     ? stripMentions(raw, params.ctx, params.cfg, params.agentId)
@@ -35,13 +36,26 @@ function extractCompactInstructions(params: {
   const lowered = trimmed.toLowerCase();
   const prefix = lowered.startsWith("/compact") ? "/compact" : null;
   if (!prefix) {
-    return undefined;
+    return { dryRun: false };
   }
   let rest = trimmed.slice(prefix.length).trimStart();
   if (rest.startsWith(":")) {
     rest = rest.slice(1).trimStart();
   }
-  return rest.length ? rest : undefined;
+
+  let dryRun = false;
+  for (const flag of ["--dry-run", "--inspect"]) {
+    if (rest === flag || rest.startsWith(`${flag} `) || rest.startsWith(`${flag}:`)) {
+      dryRun = true;
+      rest = rest.slice(flag.length).trimStart();
+      if (rest.startsWith(":")) {
+        rest = rest.slice(1).trimStart();
+      }
+      break;
+    }
+  }
+
+  return { instructions: rest.length ? rest : undefined, dryRun };
 }
 
 function isCompactionSkipReason(reason?: string): boolean {
@@ -76,6 +90,28 @@ function formatCompactionReason(reason?: string): string | undefined {
   return text;
 }
 
+function formatCompactionDryRunLine(params: {
+  result: Awaited<ReturnType<typeof compactEmbeddedPiSession>>;
+  contextSummary: string;
+}): string {
+  const telemetry = extractCompactionStageTelemetry(params.result.result?.details);
+  const details =
+    params.result.result?.details && typeof params.result.result.details === "object"
+      ? (params.result.result.details as {
+          topContributors?: Array<{ role?: string; chars?: number; tool?: string }>;
+        })
+      : undefined;
+  const stagePlan = telemetry?.plan?.map((entry) => entry.stage).join(" → ") || "finalize";
+  const entryReason = telemetry?.entryReason?.replaceAll("_", " ") ?? "summary ready";
+  const topContributor = details?.topContributors?.[0];
+  const topLabel = topContributor?.tool
+    ? `${topContributor.role}:${topContributor.tool}`
+    : topContributor?.role;
+  return topLabel
+    ? `Dry-run: would run ${stagePlan} (${entryReason}) • top=${topLabel} • ${params.contextSummary}`
+    : `Dry-run: would run ${stagePlan} (${entryReason}) • ${params.contextSummary}`;
+}
+
 export const handleCompactCommand: CommandHandler = async (params) => {
   const compactRequested =
     params.command.commandBodyNormalized === "/compact" ||
@@ -96,17 +132,24 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     };
   }
   const sessionId = params.sessionEntry.sessionId;
-  if (isEmbeddedPiRunActive(sessionId)) {
-    abortEmbeddedPiRun(sessionId);
-    await waitForEmbeddedPiRunEnd(sessionId, 15_000);
-  }
-  const customInstructions = extractCompactInstructions({
+  const compactCommand = parseCompactCommand({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
     ctx: params.ctx,
     cfg: params.cfg,
     agentId: params.agentId,
     isGroup: params.isGroup,
   });
+  if (compactCommand.dryRun && isEmbeddedPiRunActive(sessionId)) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Dry-run unavailable while the session is actively running." },
+    };
+  }
+  if (isEmbeddedPiRunActive(sessionId)) {
+    abortEmbeddedPiRun(sessionId);
+    await waitForEmbeddedPiRunEnd(sessionId, 15_000);
+  }
+  const customInstructions = compactCommand.instructions;
   const result = await compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
@@ -137,13 +180,15 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       defaultLevel: "off",
     },
     customInstructions,
+    dryRun: compactCommand.dryRun,
     trigger: "manual",
     senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
 
-  const compactLabel =
-    result.ok || isCompactionSkipReason(result.reason)
+  const compactLabel = compactCommand.dryRun
+    ? "Compaction dry-run"
+    : result.ok || isCompactionSkipReason(result.reason)
       ? result.compacted
         ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
           ? `Compacted (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
@@ -152,7 +197,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
             : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
-  if (result.ok && result.compacted) {
+  if (!compactCommand.dryRun && result.ok && result.compacted) {
     await incrementCompactionCount({
       sessionEntry: params.sessionEntry,
       sessionStore: params.sessionStore,
@@ -170,9 +215,13 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
   );
   const reason = formatCompactionReason(result.reason);
-  const line = reason
-    ? `${compactLabel}: ${reason} • ${contextSummary}`
-    : `${compactLabel} • ${contextSummary}`;
-  enqueueSystemEvent(line, { sessionKey: params.sessionKey });
+  const line = compactCommand.dryRun
+    ? formatCompactionDryRunLine({ result, contextSummary })
+    : reason
+      ? `${compactLabel}: ${reason} • ${contextSummary}`
+      : `${compactLabel} • ${contextSummary}`;
+  if (!compactCommand.dryRun) {
+    enqueueSystemEvent(line, { sessionKey: params.sessionKey });
+  }
   return { shouldContinue: false, reply: { text: `⚙️ ${line}` } };
 };

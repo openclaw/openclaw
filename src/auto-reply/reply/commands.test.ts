@@ -1439,6 +1439,76 @@ describe("/compact command", () => {
       }),
     );
   });
+
+  it("routes /compact --dry-run as a read-only compaction inspect", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: "/tmp/openclaw-session-store.json" },
+    } as OpenClawConfig;
+    const params = buildParams("/compact --dry-run focus on decisions", cfg);
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      reason: "dry run",
+      result: {
+        summary: "prune_history → summarize_history → quality_retry → finalize",
+        firstKeptEntryId: "",
+        tokensBefore: 1234,
+        tokensAfter: 1234,
+        details: {
+          dryRun: true,
+          topContributors: [{ role: "assistant", chars: 500 }],
+          stageTelemetry: {
+            entryStage: "prune_history",
+            entryReason: "new_content_exceeds_history_budget",
+            outcomeStage: "prune_history",
+            outcomeReason: "new_content_exceeds_history_budget",
+            plan: [
+              { stage: "prune_history", reason: "new_content_exceeds_history_budget" },
+              { stage: "summarize_history", reason: "messages_to_summarize_present" },
+              { stage: "quality_retry", reason: "quality_guard_enabled" },
+              { stage: "finalize", reason: "summary_ready" },
+            ],
+            historyPruned: true,
+            splitTurn: false,
+            recentTurnsPreserve: 3,
+            qualityGuardEnabled: true,
+            qualityRetriesPlanned: 1,
+            qualityRetriesUsed: 0,
+            droppedChunks: 1,
+            droppedMessages: 2,
+            droppedSummaryUsed: false,
+          },
+        },
+      },
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...params,
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          totalTokens: 12345,
+        },
+      },
+      true,
+    );
+
+    expect(result?.reply?.text).toContain(
+      "Dry-run: would run prune_history → summarize_history → quality_retry → finalize",
+    );
+    expect(result?.reply?.text).toContain("top=assistant");
+    expect(vi.mocked(compactEmbeddedPiSession)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        trigger: "manual",
+        dryRun: true,
+        customInstructions: "focus on decisions",
+      }),
+    );
+  });
 });
 
 describe("abort trigger command", () => {
