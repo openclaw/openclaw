@@ -89,6 +89,33 @@ private func readLineFromHandle(_ handle: FileHandle, maxBytes: Int) throws -> S
     return String(data: lineData, encoding: .utf8)
 }
 
+enum ExecApprovalsSocketDescriptorGuardError: LocalizedError {
+    case setNoSigPipeFailed(code: Int32)
+
+    var errorDescription: String? {
+        switch self {
+        case let .setNoSigPipeFailed(code):
+            "setsockopt SO_NOSIGPIPE failed (errno \(code))"
+        }
+    }
+}
+
+enum ExecApprovalsSocketDescriptorGuard {
+    static func suppressSigPipe(for fd: Int32) throws {
+        guard fd >= 0 else { return }
+        var enabled: Int32 = 1
+        if setsockopt(
+            fd,
+            SOL_SOCKET,
+            SO_NOSIGPIPE,
+            &enabled,
+            socklen_t(MemoryLayout.size(ofValue: enabled))) != 0
+        {
+            throw ExecApprovalsSocketDescriptorGuardError.setNoSigPipeFailed(code: errno)
+        }
+    }
+}
+
 enum ExecApprovalsSocketClient {
     private struct TimeoutError: LocalizedError {
         var message: String
@@ -136,6 +163,13 @@ enum ExecApprovalsSocketClient {
                 NSLocalizedDescriptionKey: "socket create failed",
             ])
         }
+        var shouldCloseFD = true
+        defer {
+            if shouldCloseFD {
+                close(fd)
+            }
+        }
+        try ExecApprovalsSocketDescriptorGuard.suppressSigPipe(for: fd)
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -164,6 +198,7 @@ enum ExecApprovalsSocketClient {
         }
 
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        shouldCloseFD = false
 
         let message = ExecApprovalSocketRequest(
             type: "request",
@@ -711,6 +746,14 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                 if errno == EINTR { continue }
                 break
             }
+            do {
+                try ExecApprovalsSocketDescriptorGuard.suppressSigPipe(for: client)
+            } catch {
+                self.logger
+                    .warning("exec approvals client fd hardening failed: \(error.localizedDescription, privacy: .public)")
+                close(client)
+                continue
+            }
             Task.detached { [weak self] in
                 await self?.handleClient(fd: client)
             }
@@ -721,6 +764,13 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
             self.logger.error("exec approvals socket create failed")
+            return -1
+        }
+        do {
+            try ExecApprovalsSocketDescriptorGuard.suppressSigPipe(for: fd)
+        } catch {
+            self.logger.error("exec approvals socket fd hardening failed: \(error.localizedDescription, privacy: .public)")
+            close(fd)
             return -1
         }
         do {
