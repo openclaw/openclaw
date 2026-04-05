@@ -7,7 +7,12 @@ import {
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
+import {
+  hasCompletedBootstrapTurn,
+  resolveBootstrapContextForRun,
+  resolveBootstrapFilesForRun,
+  resolveContextInjectionMode,
+} from "./bootstrap-files.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 function registerExtraBootstrapFileHook() {
@@ -125,5 +130,131 @@ describe("resolveBootstrapContextForRun", () => {
     });
 
     expect(files).toEqual([]);
+  });
+});
+
+describe("hasCompletedBootstrapTurn", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "openclaw-bootstrap-turn-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns false when session file does not exist", async () => {
+    expect(await hasCompletedBootstrapTurn(path.join(tmpDir, "missing.jsonl"))).toBe(false);
+  });
+
+  it("returns false for empty session files", async () => {
+    const sessionFile = path.join(tmpDir, "empty.jsonl");
+    await fs.writeFile(sessionFile, "", "utf8");
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  });
+
+  it("returns false for header-only session files", async () => {
+    const sessionFile = path.join(tmpDir, "header-only.jsonl");
+    await fs.writeFile(sessionFile, `${JSON.stringify({ type: "session", id: "s1" })}\n`, "utf8");
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  });
+
+  it("returns false when no assistant turn has been flushed yet", async () => {
+    const sessionFile = path.join(tmpDir, "user-only.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session", id: "s1" }),
+        JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  });
+
+  it("returns true after a completed assistant turn", async () => {
+    const sessionFile = path.join(tmpDir, "assistant.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session", id: "s1" }),
+        JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
+  });
+
+  it("returns false when compaction happened after the last assistant turn", async () => {
+    const sessionFile = path.join(tmpDir, "post-compaction.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+        JSON.stringify({ type: "compaction", summary: "trimmed" }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  });
+
+  it("returns true when a later assistant turn happens after compaction", async () => {
+    const sessionFile = path.join(tmpDir, "assistant-after-compaction.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "older" } }),
+        JSON.stringify({ type: "compaction", summary: "trimmed" }),
+        JSON.stringify({ type: "message", message: { role: "user", content: "new ask" } }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "new reply" } }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
+  });
+
+  it("ignores malformed JSON lines", async () => {
+    const sessionFile = path.join(tmpDir, "malformed.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        "{broken",
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
+  });
+
+  it("returns false for symbolic links", async () => {
+    const realFile = path.join(tmpDir, "real.jsonl");
+    const linkFile = path.join(tmpDir, "link.jsonl");
+    await fs.writeFile(
+      realFile,
+      `${JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } })}\n`,
+      "utf8",
+    );
+    await fs.symlink(realFile, linkFile);
+    expect(await hasCompletedBootstrapTurn(linkFile)).toBe(false);
+  });
+});
+
+describe("resolveContextInjectionMode", () => {
+  it("defaults to always when config is missing", () => {
+    expect(resolveContextInjectionMode(undefined)).toBe("always");
+  });
+
+  it("defaults to always when the setting is omitted", () => {
+    expect(resolveContextInjectionMode({ agents: { defaults: {} } } as never)).toBe("always");
+  });
+
+  it("returns the configured continuation-skip mode", () => {
+    expect(
+      resolveContextInjectionMode({
+        agents: { defaults: { contextInjection: "continuation-skip" } },
+      } as never),
+    ).toBe("continuation-skip");
   });
 });
