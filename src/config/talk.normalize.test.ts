@@ -20,7 +20,7 @@ async function withTempConfig(
 }
 
 describe("talk normalization", () => {
-  it("maps legacy ElevenLabs fields into provider/providers", () => {
+  it("keeps core Talk normalization generic and ignores legacy provider-flat fields", () => {
     const normalized = normalizeTalkSection({
       voiceId: "voice-123",
       voiceAliases: { Clawd: "EXAVITQu4vr4xnSDxMaL" }, // pragma: allowlist secret
@@ -32,15 +32,6 @@ describe("talk normalization", () => {
     } as unknown as never);
 
     expect(normalized).toEqual({
-      providers: {
-        elevenlabs: {
-          voiceId: "voice-123",
-          voiceAliases: { Clawd: "EXAVITQu4vr4xnSDxMaL" },
-          modelId: "eleven_v3",
-          outputFormat: "pcm_44100",
-          apiKey: "secret-key", // pragma: allowlist secret
-        },
-      },
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });

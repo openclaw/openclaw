@@ -1,3 +1,4 @@
+import type { ChannelDoctorLegacyConfigRule } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { ELEVENLABS_TALK_PROVIDER_ID, migrateElevenLabsLegacyTalkConfig } from "./config-compat.js";
 
@@ -5,7 +6,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasLegacyTalkFields(value: unknown): boolean {
+export function hasLegacyTalkFields(value: unknown): boolean {
   const talk = isRecord(value) ? value : null;
   if (!talk) {
     return false;
@@ -15,14 +16,16 @@ function hasLegacyTalkFields(value: unknown): boolean {
   );
 }
 
-export const legacyConfigRules = [
+export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["talk"],
     message:
       "talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey are legacy; use talk.providers.<provider> (auto-migrated on load).",
     match: hasLegacyTalkFields,
   },
-] as const;
+];
+
+export const ELEVENLABS_TALK_LEGACY_CONFIG_RULES = legacyConfigRules;
 
 export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;

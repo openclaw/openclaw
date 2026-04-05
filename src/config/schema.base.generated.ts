@@ -17086,6 +17086,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             },
             additionalProperties: false,
           },
+          experimental: {
+            type: "object",
+            properties: {
+              planTool: {
+                type: "boolean",
+                title: "Enable Structured Plan Tool",
+                description:
+                  "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
+              },
+            },
+            additionalProperties: false,
+            title: "Experimental Tools",
+            description:
+              "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
+          },
         },
         additionalProperties: false,
         title: "Tools",
@@ -20166,32 +20181,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             additionalProperties: {
               type: "object",
               properties: {
-                voiceId: {
-                  type: "string",
-                  title: "Talk Provider Voice ID",
-                  description: "Provider default voice ID for Talk mode.",
-                },
-                voiceAliases: {
-                  type: "object",
-                  propertyNames: {
-                    type: "string",
-                  },
-                  additionalProperties: {
-                    type: "string",
-                  },
-                  title: "Talk Provider Voice Aliases",
-                  description: "Optional provider voice alias map for Talk directives.",
-                },
-                modelId: {
-                  type: "string",
-                  title: "Talk Provider Model ID",
-                  description: "Provider default model ID for Talk mode.",
-                },
-                outputFormat: {
-                  type: "string",
-                  title: "Talk Provider Output Format",
-                  description: "Provider default output format for Talk mode.",
-                },
                 apiKey: {
                   anyOf: [
                     {
@@ -20262,6 +20251,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
               },
               additionalProperties: {},
+              title: "Talk Provider Config",
+              description: "Provider-owned Talk config fields for the matching provider id.",
             },
             title: "Talk Provider Settings",
             description:
@@ -23466,6 +23457,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
       tags: ["access", "tools"],
     },
+    "tools.experimental": {
+      label: "Experimental Tools",
+      help: "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
+      tags: ["security", "tools", "advanced"],
+    },
+    "tools.experimental.planTool": {
+      label: "Enable Structured Plan Tool",
+      help: "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
+      tags: ["security", "tools", "advanced"],
+    },
     "tools.elevated": {
       label: "Elevated Tool Access",
       help: "Elevated tool access controls for privileged command surfaces that should only be reachable from trusted senders. Keep disabled unless operator workflows explicitly require elevated actions.",
@@ -26118,24 +26119,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
       tags: ["media"],
     },
-    "talk.providers.*.voiceId": {
-      label: "Talk Provider Voice ID",
-      help: "Provider default voice ID for Talk mode.",
-      tags: ["media"],
-    },
-    "talk.providers.*.voiceAliases": {
-      label: "Talk Provider Voice Aliases",
-      help: "Optional provider voice alias map for Talk directives.",
-      tags: ["media"],
-    },
-    "talk.providers.*.modelId": {
-      label: "Talk Provider Model ID",
-      help: "Provider default model ID for Talk mode.",
-      tags: ["models", "media"],
-    },
-    "talk.providers.*.outputFormat": {
-      label: "Talk Provider Output Format",
-      help: "Provider default output format for Talk mode.",
+    "talk.providers.*": {
+      label: "Talk Provider Config",
+      help: "Provider-owned Talk config fields for the matching provider id.",
       tags: ["media"],
     },
     "talk.providers.*.apiKey": {

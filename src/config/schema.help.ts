@@ -146,10 +146,7 @@ export const FIELD_HELP: Record<string, string> = {
   "talk.provider": 'Active Talk provider id (for example "elevenlabs").',
   "talk.providers":
     "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
-  "talk.providers.*.voiceId": "Provider default voice ID for Talk mode.",
-  "talk.providers.*.voiceAliases": "Optional provider voice alias map for Talk directives.",
-  "talk.providers.*.modelId": "Provider default model ID for Talk mode.",
-  "talk.providers.*.outputFormat": "Provider default output format for Talk mode.",
+  "talk.providers.*": "Provider-owned Talk config fields for the matching provider id.",
   "talk.providers.*.apiKey": "Provider API key for Talk mode.", // pragma: allowlist secret
   "talk.interruptOnSpeech":
     "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",

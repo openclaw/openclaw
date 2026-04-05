@@ -1,4 +1,7 @@
-import { migrateElevenLabsLegacyTalkConfig } from "../../extensions/elevenlabs/contract-api.js";
+import {
+  ELEVENLABS_TALK_LEGACY_CONFIG_RULES,
+  migrateElevenLabsLegacyTalkConfig,
+} from "../plugin-sdk/elevenlabs.js";
 import {
   buildDefaultControlUiAllowedOrigins,
   hasConfiguredControlUiAllowedOrigins,
@@ -140,16 +143,6 @@ function hasLegacyTtsProviderKeys(value: unknown): boolean {
   return LEGACY_TTS_PROVIDER_KEYS.some((key) => Object.prototype.hasOwnProperty.call(tts, key));
 }
 
-function hasLegacyTalkFields(value: unknown): boolean {
-  const talk = getRecord(value);
-  if (!talk) {
-    return false;
-  }
-  return ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"].some((key) =>
-    Object.prototype.hasOwnProperty.call(talk, key),
-  );
-}
-
 function hasLegacySandboxPerSession(value: unknown): boolean {
   const sandbox = getRecord(value);
   return Boolean(sandbox && Object.prototype.hasOwnProperty.call(sandbox, "perSession"));
@@ -163,9 +156,6 @@ function hasLegacyAgentListSandboxPerSession(value: unknown): boolean {
 }
 
 function migrateLegacyTalkFields(raw: Record<string, unknown>, changes: string[]): void {
-  if (!hasLegacyTalkFields(raw.talk)) {
-    return;
-  }
   const migrated = migrateElevenLabsLegacyTalkConfig(raw);
   if (migrated.changes.length === 0) {
     return;
@@ -284,13 +274,6 @@ const LEGACY_TTS_RULES: LegacyConfigRule[] = [
   },
 ];
 
-const TALK_RULE: LegacyConfigRule = {
-  path: ["talk"],
-  message:
-    "talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey are legacy; use talk.providers.<provider> instead (auto-migrated on load).",
-  match: (value) => hasLegacyTalkFields(value),
-};
-
 const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
   {
     path: ["agents", "defaults", "sandbox"],
@@ -361,7 +344,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "talk.legacy-fields->talk.providers",
     describe: "Move legacy Talk flat fields into talk.providers.<provider>",
-    legacyRules: [TALK_RULE],
+    legacyRules: ELEVENLABS_TALK_LEGACY_CONFIG_RULES,
     apply: (raw, changes) => {
       migrateLegacyTalkFields(raw, changes);
     },

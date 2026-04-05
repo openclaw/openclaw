@@ -743,10 +743,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.tts.providers.*.apiKey": "TTS Provider API Key", // pragma: allowlist secret
   "talk.provider": "Talk Active Provider",
   "talk.providers": "Talk Provider Settings",
-  "talk.providers.*.voiceId": "Talk Provider Voice ID",
-  "talk.providers.*.voiceAliases": "Talk Provider Voice Aliases",
-  "talk.providers.*.modelId": "Talk Provider Model ID",
-  "talk.providers.*.outputFormat": "Talk Provider Output Format",
+  "talk.providers.*": "Talk Provider Config",
   "talk.providers.*.apiKey": "Talk Provider API Key", // pragma: allowlist secret
   channels: "Channels",
   "channels.defaults": "Channel Defaults",

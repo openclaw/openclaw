@@ -1,9 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { migrateAmazonBedrockLegacyConfig } from "../../extensions/amazon-bedrock/config-api.js";
-import {
-  ELEVENLABS_TALK_PROVIDER_ID,
-  normalizeCompatibilityConfig as normalizeElevenLabsCompatibilityConfig,
-} from "../../extensions/elevenlabs/contract-api.js";
 import { migrateVoiceCallLegacyConfigInput } from "../../extensions/voice-call/config-api.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
@@ -14,6 +10,7 @@ import { migrateLegacyWebSearchConfig } from "../config/legacy-web-search.js";
 import { migrateLegacyXSearchConfig } from "../config/legacy-x-search.js";
 import { normalizeTalkSection } from "../config/talk.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../infra/google-api-base-url.js";
+import { normalizeCompatibilityConfig as normalizeElevenLabsCompatibilityConfig } from "../plugin-sdk/elevenlabs.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
@@ -409,20 +406,14 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       return;
     }
 
-    const hasProviderShape = typeof rawTalk.provider === "string" || isRecord(rawTalk.providers);
     next = {
       ...next,
       talk: normalizedTalk,
     };
 
-    if (hasProviderShape) {
-      changes.push(
-        "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
-      );
-      return;
-    }
-
-    changes.push(`Moved legacy talk flat fields → talk.providers.${ELEVENLABS_TALK_PROVIDER_ID}.`);
+    changes.push(
+      "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
+    );
   };
 
   const normalizeLegacyCrossContextMessageConfig = () => {

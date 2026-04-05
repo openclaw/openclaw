@@ -7,8 +7,6 @@ import type {
 import type { OpenClawConfig } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 
-export const LEGACY_TALK_PROVIDER_ID = "elevenlabs";
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -19,20 +17,6 @@ function normalizeString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function normalizeVoiceAliases(value: unknown): Record<string, string> | undefined {
-  if (!isPlainObject(value)) {
-    return undefined;
-  }
-  const aliases: Record<string, string> = {};
-  for (const [alias, rawId] of Object.entries(value)) {
-    if (typeof rawId !== "string") {
-      continue;
-    }
-    aliases[alias] = rawId;
-  }
-  return Object.keys(aliases).length > 0 ? aliases : undefined;
 }
 
 function normalizeTalkSecretInput(value: unknown): TalkProviderConfig["apiKey"] | undefined {
@@ -60,24 +44,10 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
     if (raw === undefined) {
       continue;
     }
-    if (key === "voiceAliases") {
-      const aliases = normalizeVoiceAliases(raw);
-      if (aliases) {
-        provider.voiceAliases = aliases;
-      }
-      continue;
-    }
     if (key === "apiKey") {
       const normalized = normalizeTalkSecretInput(raw);
       if (normalized !== undefined) {
         provider.apiKey = normalized;
-      }
-      continue;
-    }
-    if (key === "voiceId" || key === "modelId" || key === "outputFormat") {
-      const normalized = normalizeString(raw);
-      if (normalized) {
-        provider[key] = normalized;
       }
       continue;
     }
@@ -106,18 +76,6 @@ function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConf
   return Object.keys(providers).length > 0 ? providers : undefined;
 }
 
-function legacyProviderConfigFromTalk(
-  source: Record<string, unknown>,
-): TalkProviderConfig | undefined {
-  return normalizeTalkProviderConfig({
-    voiceId: source.voiceId,
-    voiceAliases: source.voiceAliases,
-    modelId: source.modelId,
-    outputFormat: source.outputFormat,
-    apiKey: source.apiKey,
-  });
-}
-
 function activeProviderFromTalk(talk: TalkConfig): string | undefined {
   const provider = normalizeString(talk.provider);
   const providers = talk.providers;
@@ -137,7 +95,6 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   }
 
   const source = value as Record<string, unknown>;
-  const hasNormalizedShape = typeof source.provider === "string" || isPlainObject(source.providers);
   const normalized: TalkConfig = {};
   if (typeof source.interruptOnSpeech === "boolean") {
     normalized.interruptOnSpeech = source.interruptOnSpeech;
@@ -147,21 +104,13 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
     normalized.silenceTimeoutMs = silenceTimeoutMs;
   }
 
-  if (hasNormalizedShape) {
-    const providers = normalizeTalkProviders(source.providers);
-    const provider = normalizeString(source.provider);
-    if (providers) {
-      normalized.providers = providers;
-    }
-    if (provider) {
-      normalized.provider = provider;
-    }
-    return Object.keys(normalized).length > 0 ? normalized : undefined;
+  const providers = normalizeTalkProviders(source.providers);
+  const provider = normalizeString(source.provider);
+  if (providers) {
+    normalized.providers = providers;
   }
-
-  const legacyProviderConfig = legacyProviderConfigFromTalk(source);
-  if (legacyProviderConfig) {
-    normalized.providers = { [LEGACY_TALK_PROVIDER_ID]: legacyProviderConfig };
+  if (provider) {
+    normalized.provider = provider;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }

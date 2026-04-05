@@ -335,6 +335,10 @@
       "types": "./dist/plugin-sdk/bluebubbles-policy.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles-policy.js"
     },
+    "./plugin-sdk/elevenlabs": {
+      "types": "./dist/plugin-sdk/elevenlabs.d.ts",
+      "default": "./dist/plugin-sdk/elevenlabs.js"
+    },
     "./plugin-sdk/browser-config-support": {
       "types": "./dist/plugin-sdk/browser-config-support.d.ts",
       "default": "./dist/plugin-sdk/browser-config-support.js"

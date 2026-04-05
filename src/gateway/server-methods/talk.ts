@@ -52,6 +52,20 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function asStringRecord(value: unknown): Record<string, string> | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [key, entryValue] of Object.entries(record)) {
+    if (typeof entryValue === "string") {
+      next[key] = entryValue;
+    }
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -63,7 +77,7 @@ function resolveTalkVoiceId(
   if (!requested) {
     return undefined;
   }
-  const aliases = providerConfig.voiceAliases;
+  const aliases = asStringRecord(providerConfig.voiceAliases);
   if (!aliases) {
     return requested;
   }
