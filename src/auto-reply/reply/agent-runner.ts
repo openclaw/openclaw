@@ -830,6 +830,16 @@ export async function runReplyAgent(params: {
       runFollowupTurn,
     );
   } catch (error) {
+    if (
+      replyOperation.result?.kind === "aborted" &&
+      replyOperation.result.code === "aborted_for_restart"
+    ) {
+      return finalizeWithFollowup(
+        { text: "⚠️ Gateway is restarting. Please wait a few seconds and try again." },
+        queueKey,
+        runFollowupTurn,
+      );
+    }
     if (replyOperation.result?.kind === "aborted") {
       return finalizeWithFollowup({ text: SILENT_REPLY_TOKEN }, queueKey, runFollowupTurn);
     }

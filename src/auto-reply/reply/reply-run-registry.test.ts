@@ -104,7 +104,7 @@ describe("reply run registry", () => {
     runningOperation.setPhase("running");
 
     expect(abortActiveReplyRuns({ mode: "compacting" })).toBe(true);
-    expect(compactingOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+    expect(compactingOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
     expect(runningOperation.result).toBeNull();
   });
 });

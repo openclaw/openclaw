@@ -684,6 +684,97 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(getActiveEmbeddedRunCount()).toBe(0);
   });
 
+  it("surfaces the restart notice when gateway shutdown aborts preflight compaction", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-restart-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionFile = "session-relative.jsonl";
+    const workspaceDir = tmp;
+    const transcriptPath = path.join(tmp, sessionFile);
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        message: {
+          role: "user",
+          content: "x".repeat(320_000),
+          timestamp: Date.now(),
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sessionFile,
+      totalTokens: 10,
+      totalTokensFresh: false,
+      compactionCount: 1,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    compactState.compactEmbeddedPiSessionMock.mockImplementationOnce(
+      async (params: { abortSignal?: AbortSignal }) =>
+        await new Promise<never>((_, reject) => {
+          const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
+          const onAbort = () => reject(abortError);
+          if (params.abortSignal?.aborted) {
+            onAbort();
+            return;
+          }
+          params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+        }),
+    );
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      config: cfg,
+      sessionFile,
+      workspaceDir,
+    });
+
+    const runPromise = runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    await vi.waitFor(() => {
+      expect(compactState.compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
+    });
+    expect(getActiveEmbeddedRunCount()).toBe(1);
+
+    expect(abortEmbeddedPiRun(undefined, { mode: "compacting" })).toBe(true);
+
+    await expect(runPromise).resolves.toEqual({
+      text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+    });
+    expect(getActiveEmbeddedRunCount()).toBe(0);
+  });
+
   it("rebinds the active run to the rotated session id after memory flush", async () => {
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1_000,

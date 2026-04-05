@@ -34,10 +34,12 @@ export type ReplyOperationFailureCode =
   | "session_corruption_reset"
   | "run_failed";
 
+export type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
+
 export type ReplyOperationResult =
   | { kind: "completed" }
   | { kind: "failed"; code: ReplyOperationFailureCode; cause?: unknown }
-  | { kind: "aborted"; code: "aborted_by_user" };
+  | { kind: "aborted"; code: ReplyOperationAbortCode };
 
 export type ReplyOperation = {
   readonly key: ReplyRunKey;
@@ -53,6 +55,7 @@ export type ReplyOperation = {
   complete(): void;
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): void;
+  abortForRestart(): void;
 };
 
 export type ReplyRunRegistry = {
@@ -238,10 +241,10 @@ export function createReplyOperation(params: {
   const abortWithReason = (
     reason: ReplyBackendCancelReason,
     abortReason: unknown,
-    opts?: { markAbortedResult?: boolean },
+    opts?: { abortedCode?: ReplyOperationAbortCode },
   ) => {
-    if (opts?.markAbortedResult && !result) {
-      result = { kind: "aborted", code: "aborted_by_user" };
+    if (opts?.abortedCode && !result) {
+      result = { kind: "aborted", code: opts.abortedCode };
     }
     phase = "aborted";
     abortInternally(abortReason);
@@ -312,7 +315,13 @@ export function createReplyOperation(params: {
     },
     attachBackend(handle) {
       if (result) {
-        handle.cancel(result.kind === "aborted" ? "user_abort" : "superseded");
+        handle.cancel(
+          result.kind === "aborted"
+            ? result.code === "aborted_for_restart"
+              ? "restart"
+              : "user_abort"
+            : "superseded",
+        );
         return;
       }
       attachedBackendByOperation.set(operation, handle);
@@ -342,7 +351,16 @@ export function createReplyOperation(params: {
     abortByUser() {
       const phaseBeforeAbort = phase;
       abortWithReason("user_abort", createUserAbortError(), {
-        markAbortedResult: true,
+        abortedCode: "aborted_by_user",
+      });
+      if (phaseBeforeAbort === "queued") {
+        clearState();
+      }
+    },
+    abortForRestart() {
+      const phaseBeforeAbort = phase;
+      abortWithReason("restart", new Error("Reply operation aborted for restart"), {
+        abortedCode: "aborted_for_restart",
       });
       if (phaseBeforeAbort === "queued") {
         clearState();
@@ -487,7 +505,7 @@ export function abortActiveReplyRuns(opts: { mode: "all" | "compacting" }): bool
     if (opts.mode === "compacting" && !isReplyRunCompacting(operation)) {
       continue;
     }
-    operation.abortByUser();
+    operation.abortForRestart();
     aborted = true;
   }
   return aborted;

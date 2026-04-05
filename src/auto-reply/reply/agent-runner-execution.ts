@@ -446,7 +446,16 @@ function resolveRestartLifecycleError(
 }
 
 function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
-  return replyOperation?.result?.kind === "aborted";
+  return (
+    replyOperation?.result?.kind === "aborted" && replyOperation.result.code === "aborted_by_user"
+  );
+}
+
+function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
+  return (
+    replyOperation?.result?.kind === "aborted" &&
+    replyOperation.result.code === "aborted_for_restart"
+  );
 }
 
 export async function runAgentTurnWithFallback(params: {
@@ -1205,6 +1214,15 @@ export async function runAgentTurnWithFallback(params: {
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
+
+      if (isReplyOperationRestartAbort(params.replyOperation)) {
+        return {
+          kind: "final",
+          payload: {
+            text: buildRestartLifecycleReplyText(),
+          },
+        };
+      }
 
       if (isReplyOperationUserAbort(params.replyOperation)) {
         return {
