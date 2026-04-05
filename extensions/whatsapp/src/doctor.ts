@@ -47,6 +47,14 @@ function normalizeWhatsAppAckReactionConfig(cfg: OpenClawConfig): ChannelDoctorC
   };
 }
 
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  return normalizeWhatsAppAckReactionConfig(cfg);
+}
+
 export const whatsappDoctor: ChannelDoctorAdapter = {
-  normalizeCompatibilityConfig: ({ cfg }) => normalizeWhatsAppAckReactionConfig(cfg),
+  normalizeCompatibilityConfig,
 };
