@@ -71,6 +71,7 @@ export type EmbeddingProviderOptions = {
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
+    gpu?: "auto" | "vulkan" | "cuda" | "metal" | false;
   };
   /** Gemini embedding-2: output vector dimensions (768, 1536, or 3072). */
   outputDimensionality?: number;
@@ -126,7 +127,11 @@ export async function createLocalEmbeddingProvider(
     initPromise = (async () => {
       try {
         if (!llama) {
-          llama = await getLlama({ logLevel: LlamaLogLevel.error });
+          const gpuOption = options.local?.gpu;
+          llama = await getLlama({
+            logLevel: LlamaLogLevel.error,
+            ...(gpuOption !== undefined ? { gpu: gpuOption } : {}),
+          });
         }
         if (!embeddingModel) {
           const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);

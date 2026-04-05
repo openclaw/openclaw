@@ -383,6 +383,8 @@ export type MemorySearchConfig = {
     modelPath?: string;
     /** Optional cache directory for local models. */
     modelCacheDir?: string;
+    /** GPU backend for inference ("auto" | "vulkan" | "cuda" | "metal" | false). Default: auto. */
+    gpu?: "auto" | "vulkan" | "cuda" | "metal" | false;
   };
   /** Index storage configuration. */
   store?: {

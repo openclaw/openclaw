@@ -13,10 +13,25 @@ declare module "node-llama-cpp" {
     createEmbeddingContext: () => Promise<LlamaEmbeddingContext>;
   };
 
-  export type Llama = {
-    loadModel: (params: { modelPath: string }) => Promise<LlamaModel>;
+  export type LlamaVramState = {
+    total: number;
+    used: number;
+    free: number;
+    unifiedSize: number;
   };
 
-  export function getLlama(params: { logLevel: LlamaLogLevel }): Promise<Llama>;
+  export type Llama = {
+    gpu: string | false;
+    buildType: string;
+    loadModel: (params: { modelPath: string }) => Promise<LlamaModel>;
+    getVramState: () => Promise<LlamaVramState>;
+    dispose: () => Promise<void>;
+  };
+
+  export function getLlama(params: {
+    logLevel: LlamaLogLevel;
+    gpu?: "auto" | "vulkan" | "cuda" | "metal" | false;
+    progressLogs?: boolean;
+  }): Promise<Llama>;
   export function resolveModelFile(modelPath: string, cacheDir?: string): Promise<string>;
 }
