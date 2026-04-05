@@ -24,6 +24,8 @@ export type QueueSettings = {
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
 export type FollowupRun = {
+  /** @deprecated Prefer execution.agentPrompt. Kept as a compatibility alias during the deferred-visibility rollout. */
+  prompt?: string;
   execution: DeferredExecutionPayload;
   display?: DeferredDisplayPayload;
   /** Provider message ID, when available (for deduplication). */

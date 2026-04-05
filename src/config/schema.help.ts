@@ -143,13 +143,10 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
-  "talk.provider": 'Active Talk provider id (for example "elevenlabs").',
+  "talk.provider": 'Active Talk provider id (for example "acme-speech").',
   "talk.providers":
     "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
-  "talk.providers.*.voiceId": "Provider default voice ID for Talk mode.",
-  "talk.providers.*.voiceAliases": "Optional provider voice alias map for Talk directives.",
-  "talk.providers.*.modelId": "Provider default model ID for Talk mode.",
-  "talk.providers.*.outputFormat": "Provider default output format for Talk mode.",
+  "talk.providers.*": "Provider-owned Talk config fields for the matching provider id.",
   "talk.providers.*.apiKey": "Provider API key for Talk mode.", // pragma: allowlist secret
   "talk.interruptOnSpeech":
     "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
@@ -315,6 +312,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Enables the agent_to_agent tool surface so one agent can invoke another agent at runtime. Keep off in simple deployments and enable only when orchestration value outweighs complexity.",
   "tools.agentToAgent.allow":
     "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
+  "tools.experimental":
+    "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
+  "tools.experimental.planTool":
+    "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
   "tools.elevated":
     "Elevated tool access controls for privileged command surfaces that should only be reachable from trusted senders. Keep disabled unless operator workflows explicitly require elevated actions.",
   "tools.elevated.enabled":
@@ -789,20 +790,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Skips upstream TLS certificate verification. Use only for controlled development environments.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
-  "models.bedrockDiscovery":
-    "Automatic AWS Bedrock model discovery settings used to synthesize provider model entries from account visibility. Keep discovery scoped and refresh intervals conservative to reduce API churn.",
-  "models.bedrockDiscovery.enabled":
-    "Enables periodic Bedrock model discovery and catalog refresh for Bedrock-backed providers. Keep disabled unless Bedrock is actively used and IAM permissions are correctly configured.",
-  "models.bedrockDiscovery.region":
-    "AWS region used for Bedrock discovery calls when discovery is enabled for your deployment. Use the region where your Bedrock models are provisioned to avoid empty discovery results.",
-  "models.bedrockDiscovery.providerFilter":
-    "Optional provider allowlist filter for Bedrock discovery so only selected providers are refreshed. Use this to limit discovery scope in multi-provider environments.",
-  "models.bedrockDiscovery.refreshInterval":
-    "Refresh cadence for Bedrock discovery polling in seconds to detect newly available models over time. Use longer intervals in production to reduce API cost and control-plane noise.",
-  "models.bedrockDiscovery.defaultContextWindow":
-    "Fallback context-window value applied to discovered models when provider metadata lacks explicit limits. Use realistic defaults to avoid oversized prompts that exceed true provider constraints.",
-  "models.bedrockDiscovery.defaultMaxTokens":
-    "Fallback max-token value applied to discovered models without explicit output token limits. Use conservative defaults to reduce truncation surprises and unexpected token spend.",
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
   "channels.matrix.allowBots":
     'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to only accept bot messages that visibly mention this bot.',
@@ -1111,7 +1098,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
-  "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.mode":

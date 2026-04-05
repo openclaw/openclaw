@@ -1,5 +1,4 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -17,7 +16,6 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
-import { toUserFacingContent } from "../utils/user-facing-content.js";
 import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import {
@@ -96,27 +94,20 @@ function summarizeDeliveryError(error: unknown): string {
   }
 }
 
-function parseTelegramAnnounceTarget(to: string): {
-  chatId: string;
-  chatType: "direct" | "group" | "unknown";
-} {
-  const trimmed = to.trim();
-  const parsed = parseExplicitTargetForChannel("telegram", trimmed);
-  const rawChatId = parsed?.to?.trim() || trimmed;
-  const chatId = rawChatId
-    .replace(/^telegram:(?:group:)?/i, "")
-    .replace(/^tg:/i, "")
-    .replace(/^group:/i, "")
-    .replace(/:topic:\d+$/i, "")
-    .trim();
-  const inferredGroup = /^-\d+$/.test(chatId);
-  const chatType =
-    parsed?.chatType === "direct" || parsed?.chatType === "group"
-      ? parsed.chatType
-      : inferredGroup
-        ? "group"
-        : "unknown";
-  return { chatId, chatType };
+function normalizeTelegramAnnounceTarget(target: string | undefined): string | undefined {
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith("group:")) {
+    return `telegram:${trimmed.slice("group:".length)}`;
+  }
+  if (!trimmed.startsWith("telegram:")) {
+    return undefined;
+  }
+  const raw = trimmed.slice("telegram:".length);
+  const topicMatch = /^(.*):topic:[^:]+$/u.exec(raw);
+  return `telegram:${topicMatch?.[1] ?? raw}`;
 }
 
 function shouldStripThreadFromAnnounceEntry(
@@ -131,42 +122,20 @@ function shouldStripThreadFromAnnounceEntry(
     return false;
   }
   const requesterChannel = normalizedRequester.channel?.trim().toLowerCase();
+  if (requesterChannel === "telegram") {
+    const requesterTarget = normalizeTelegramAnnounceTarget(normalizedRequester.to);
+    const entryTarget = normalizeTelegramAnnounceTarget(normalizedEntry?.to);
+    if (requesterTarget && entryTarget) {
+      return requesterTarget !== entryTarget;
+    }
+  }
   const plugin = requesterChannel ? getChannelPlugin(requesterChannel) : undefined;
-  const pluginDecision = plugin?.conversationBindings?.shouldStripThreadFromAnnounceOrigin?.({
-    requester: normalizedRequester,
-    entry: normalizedEntry,
-  });
-  if (pluginDecision != null) {
-    return pluginDecision;
-  }
-  if (requesterChannel && requesterChannel !== "telegram") {
-    return true;
-  }
-  if (!requesterChannel) {
-    try {
-      const requesterTarget = parseTelegramAnnounceTarget(normalizedRequester.to);
-      if (!requesterTarget.chatId) {
-        return true;
-      }
-    } catch {
-      return true;
-    }
-  }
-  try {
-    const requesterTarget = parseTelegramAnnounceTarget(normalizedRequester.to);
-    if (requesterTarget.chatType !== "group") {
-      return true;
-    }
-    const entryTarget = normalizedEntry.to
-      ? parseTelegramAnnounceTarget(normalizedEntry.to)
-      : undefined;
-    if (entryTarget && entryTarget.chatId !== requesterTarget.chatId) {
-      return true;
-    }
-    return false;
-  } catch {
-    return false;
-  }
+  return Boolean(
+    plugin?.conversationBindings?.shouldStripThreadFromAnnounceOrigin?.({
+      requester: normalizedRequester,
+      entry: normalizedEntry,
+    }),
+  );
 }
 
 const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
@@ -298,14 +267,12 @@ export async function resolveSubagentCompletionOrigin(params: {
     requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
       ? String(requesterOrigin.threadId).trim()
       : undefined;
-  const baseConversationId =
+  const conversationId =
+    threadId ||
     resolveConversationIdFromTargets({
       targets: [to],
-    }) || "";
-  const conversationId =
-    threadId && baseConversationId
-      ? `${baseConversationId}::thread:${threadId}`
-      : threadId || baseConversationId;
+    }) ||
+    "";
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
 
@@ -373,12 +340,6 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const cfg = subagentAnnounceDeliveryDeps.loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
-  const userFacing = !requesterIsSubagent
-    ? toUserFacingContent({
-        payload: item.display,
-        source: "queued-announce-display",
-      })
-    : undefined;
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
@@ -393,7 +354,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     method: "agent",
     params: {
       sessionKey: item.sessionKey,
-      message: requesterIsSubagent ? item.execution.agentPrompt : (userFacing?.text ?? ""),
+      message: item.prompt,
       channel: requesterIsSubagent ? undefined : origin?.channel,
       accountId: requesterIsSubagent ? undefined : origin?.accountId,
       to: requesterIsSubagent ? undefined : origin?.to,
@@ -460,59 +421,6 @@ function buildAnnounceQueueKey(sessionKey: string, origin?: DeliveryContext): st
   return `${sessionKey}:acct:${accountId}`;
 }
 
-function resolveDeliveryConversationIdentity(origin?: DeliveryContext): {
-  channel: string;
-  accountId: string;
-  conversationId: string;
-} | null {
-  const channel = origin?.channel?.trim().toLowerCase() ?? "";
-  const accountId = normalizeAccountId(origin?.accountId);
-  const to = origin?.to?.trim() ?? "";
-  const threadId =
-    origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId).trim() : "";
-  const baseConversationId =
-    resolveConversationIdFromTargets({
-      targets: [to],
-    }) || "";
-  const conversationId =
-    threadId && baseConversationId
-      ? `${baseConversationId}::thread:${threadId}`
-      : threadId || baseConversationId;
-  if (!channel || !conversationId) {
-    return null;
-  }
-  return {
-    channel,
-    accountId,
-    conversationId,
-  };
-}
-
-function shouldForwardRequesterMessageId(params: {
-  requesterMessageId?: string;
-  expectsCompletionMessage: boolean;
-  completionDirectOrigin?: DeliveryContext;
-  directOrigin?: DeliveryContext;
-}): boolean {
-  const requesterMessageId = params.requesterMessageId?.trim();
-  if (!requesterMessageId) {
-    return false;
-  }
-  if (!params.expectsCompletionMessage) {
-    return true;
-  }
-  const source = resolveDeliveryConversationIdentity(params.directOrigin);
-  const destination = resolveDeliveryConversationIdentity(params.completionDirectOrigin);
-  if (!source || !destination) {
-    return false;
-  }
-  return (
-    source.channel === destination.channel &&
-    source.accountId === destination.accountId &&
-    source.conversationId === destination.conversationId
-  );
-}
-
 async function maybeQueueSubagentAnnounce(params: {
   requesterSessionKey: string;
   announceId?: string;
@@ -558,24 +466,12 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
-    const isExternalQueuedDelivery = !isInternalAnnounceRequesterSession(canonicalKey);
-    if (isExternalQueuedDelivery && !params.summaryLine?.trim()) {
-      return "dropped";
-    }
     const didQueue = enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),
       item: {
         announceId: params.announceId,
-        execution: { visibility: "internal", agentPrompt: params.triggerMessage },
-        display: params.summaryLine?.trim()
-          ? {
-              visibility: "user-visible",
-              text: params.summaryLine,
-              summaryLine: params.summaryLine,
-            }
-          : {
-              visibility: "summary-only",
-            },
+        prompt: params.triggerMessage,
+        summaryLine: params.summaryLine,
         internalEvents: params.internalEvents,
         enqueuedAt: Date.now(),
         sessionKey: canonicalKey,
@@ -596,9 +492,7 @@ async function maybeQueueSubagentAnnounce(params: {
 async function sendSubagentAnnounceDirectly(params: {
   targetRequesterSessionKey: string;
   triggerMessage: string;
-  summaryLine?: string;
   internalEvents?: AgentInternalEvent[];
-  requesterMessageId?: string;
   expectsCompletionMessage: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
@@ -654,33 +548,12 @@ async function sendSubagentAnnounceDirectly(params: {
       isGatewayMessageChannel(normalizedSessionOnlyOriginChannel)
         ? normalizedSessionOnlyOriginChannel
         : undefined;
-    const currentMessageId = shouldForwardRequesterMessageId({
-      requesterMessageId: params.requesterMessageId,
-      expectsCompletionMessage: params.expectsCompletionMessage,
-      completionDirectOrigin,
-      directOrigin,
-    })
-      ? params.requesterMessageId
-      : undefined;
     if (params.signal?.aborted) {
       return {
         delivered: false,
         path: "none",
       };
     }
-    const directUserFacingContent = deliveryTarget.deliver
-      ? toUserFacingContent({
-          payload: params.summaryLine?.trim()
-            ? {
-                visibility: "user-visible",
-                text: params.summaryLine,
-                summaryLine: params.summaryLine,
-              }
-            : undefined,
-          source: "queued-announce-display",
-        })
-      : undefined;
-
     await runAnnounceDeliveryWithRetry({
       operation: params.expectsCompletionMessage
         ? "completion direct announce agent call"
@@ -691,7 +564,7 @@ async function sendSubagentAnnounceDirectly(params: {
           method: "agent",
           params: {
             sessionKey: canonicalRequesterSessionKey,
-            message: directUserFacingContent?.text ?? params.triggerMessage,
+            message: params.triggerMessage,
             deliver: deliveryTarget.deliver,
             bestEffortDeliver: params.bestEffortDeliver,
             internalEvents: params.internalEvents,
@@ -718,7 +591,6 @@ async function sendSubagentAnnounceDirectly(params: {
               sourceTool: params.sourceTool ?? "subagent_announce",
             },
             idempotencyKey: params.directIdempotencyKey,
-            currentMessageId,
           },
           expectFinal: true,
           timeoutMs: announceTimeoutMs,
@@ -780,7 +652,6 @@ export async function deliverSubagentAnnouncement(params: {
       await sendSubagentAnnounceDirectly({
         targetRequesterSessionKey: params.targetRequesterSessionKey,
         triggerMessage: params.triggerMessage,
-        summaryLine: params.summaryLine,
         internalEvents: params.internalEvents,
         directIdempotencyKey: params.directIdempotencyKey,
         completionDirectOrigin: params.completionDirectOrigin,
@@ -798,18 +669,6 @@ export async function deliverSubagentAnnouncement(params: {
 }
 
 export const __testing = {
-  async sendAnnounceForTest(item: AnnounceQueueItem) {
-    await sendAnnounce(item);
-  },
-  buildQueuedAnnounceDisplayForTest(params: { triggerMessage: string; summaryLine?: string }) {
-    return params.summaryLine?.trim()
-      ? {
-          visibility: "user-visible" as const,
-          text: params.summaryLine,
-          summaryLine: params.summaryLine,
-        }
-      : ({ visibility: "summary-only" } as const);
-  },
   setDepsForTest(overrides?: Partial<SubagentAnnounceDeliveryDeps>) {
     subagentAnnounceDeliveryDeps = overrides
       ? {

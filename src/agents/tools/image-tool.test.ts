@@ -11,14 +11,14 @@ import type {
 } from "../../plugin-sdk/media-understanding.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
+import { createOpenClawCodingTools } from "../pi-tools.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 
-type PiToolsModule = typeof import("../pi-tools.js");
-type CreateOpenClawCodingToolsArgs = Parameters<PiToolsModule["createOpenClawCodingTools"]>[0];
+type CreateOpenClawCodingToolsArgs = Parameters<typeof createOpenClawCodingTools>[0];
 type MockOpenClawToolsOptions = {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -65,10 +65,14 @@ const imageProviderHarness = vi.hoisted(() => {
   };
 });
 
-vi.mock("../bash-tools.js", () => ({
-  createExecTool: vi.fn(() => piToolsHarness.createStubTool("exec")),
-  createProcessTool: vi.fn(() => piToolsHarness.createStubTool("process")),
-}));
+vi.mock("../bash-tools.js", async () => {
+  const actual = await vi.importActual<typeof import("../bash-tools.js")>("../bash-tools.js");
+  return {
+    ...actual,
+    createExecTool: vi.fn(() => piToolsHarness.createStubTool("exec")),
+    createProcessTool: vi.fn(() => piToolsHarness.createStubTool("process")),
+  };
+});
 
 vi.mock("../channel-tools.js", () => ({
   copyChannelAgentToolMeta: vi.fn((_from, to) => to),
@@ -120,8 +124,6 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
 }
 
 async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenClawCodingToolsArgs) {
-  vi.resetModules();
-  const freshImageTool = await import("./image-tool.js");
   const defaultImageModels = new Map<string, string>([
     ["anthropic", "claude-opus-4-6"],
     ["minimax", "MiniMax-VL-01"],
@@ -129,7 +131,7 @@ async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenCla
     ["openai", "gpt-5.4-mini"],
     ["zai", "glm-4.6v"],
   ]);
-  freshImageTool.__testing.setProviderDepsForTest({
+  __testing.setProviderDepsForTest({
     buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
       imageProviderHarness.buildProviderRegistry(overrides),
     getMediaUnderstandingProvider: (
@@ -143,7 +145,6 @@ async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenCla
     resolveDefaultMediaModel: ({ providerId, capability }) =>
       capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
   });
-  const { createOpenClawCodingTools } = await import("../pi-tools.js");
   return createOpenClawCodingTools(options);
 }
 
@@ -572,6 +573,7 @@ describe("image tool implicit imageModel config", () => {
   it("pairs minimax primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+      vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-test");
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       const cfg: OpenClawConfig = {
@@ -579,11 +581,7 @@ describe("image tool implicit imageModel config", () => {
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         ...createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
-        fallbacks: [
-          "openai/gpt-5.4-mini",
-          "anthropic/claude-opus-4-6",
-          "minimax-portal/MiniMax-VL-01",
-        ],
+        fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
       });
       expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
     });

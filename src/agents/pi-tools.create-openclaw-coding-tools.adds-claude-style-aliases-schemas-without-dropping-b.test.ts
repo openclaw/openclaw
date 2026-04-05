@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import "./test-helpers/fast-coding-tools.js";
+import "./test-helpers/fast-openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
 const defaultTools = createOpenClawCodingTools({ senderIsOwner: true });

@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { parseTelegramTopicConversation } from "../../extensions/telegram/api.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { ChannelConfiguredBindingProvider, ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { parseTelegramTopicConversation } from "../plugin-sdk/telegram.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { buildConfiguredAcpSessionKey } from "./persistent-bindings.types.js";

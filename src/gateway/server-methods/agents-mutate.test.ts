@@ -38,10 +38,15 @@ const mocks = vi.hoisted(() => ({
   writeFileWithinRoot: vi.fn(async () => {}),
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: () => mocks.loadConfigReturn,
-  writeConfigFile: mocks.writeConfigFile,
-}));
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  return {
+    ...actual,
+    loadConfig: () => mocks.loadConfigReturn,
+    writeConfigFile: mocks.writeConfigFile,
+  };
+});
 
 vi.mock("../../commands/agents.config.js", () => ({
   applyAgentConfig: mocks.applyAgentConfig,

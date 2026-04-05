@@ -115,7 +115,7 @@ export function formatVoiceCallLegacyConfigWarnings(params: {
   }
 
   return [
-    `[voice-call] legacy config keys detected under ${params.configPathPrefix}; runtime fallback remains for now but will be removed in ${VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION}. Run "${params.doctorFixCommand}".`,
+    `[voice-call] legacy config keys detected under ${params.configPathPrefix}; runtime loading will not rewrite them, and support for the legacy shape will be removed in ${VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION}. Run "${params.doctorFixCommand}".`,
     ...issues.map(
       (issue) => `[voice-call] ${params.configPathPrefix}.${issue.path}: ${issue.message}`,
     ),

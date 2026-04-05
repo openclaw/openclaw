@@ -26,6 +26,7 @@ export type ResolveOutboundSessionRouteParams = {
   agentId: string;
   accountId?: string | null;
   target: string;
+  currentSessionKey?: string;
   resolvedTarget?: ResolvedMessagingTarget;
   replyToId?: string | null;
   threadId?: string | number | null;

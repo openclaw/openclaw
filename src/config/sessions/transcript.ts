@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { parseSessionThreadInfo } from "./delivery-info.js";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
@@ -11,6 +10,7 @@ import {
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
+import { parseSessionThreadInfo } from "./thread-info.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import type { SessionEntry } from "./types.js";
 

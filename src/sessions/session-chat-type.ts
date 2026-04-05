@@ -1,15 +1,7 @@
-import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
+import { listBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 
 export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
-
-type LegacySessionChatTypeSurface = {
-  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
-};
-
-function listLegacySessionChatTypeSurfaces(): LegacySessionChatTypeSurface[] {
-  return getBundledChannelContractSurfaces() as LegacySessionChatTypeSurface[];
-}
 
 function deriveBuiltInLegacySessionChatType(
   scopedSessionKey: string,
@@ -52,8 +44,8 @@ export function deriveSessionChatType(sessionKey: string | undefined | null): Se
   if (builtInLegacy) {
     return builtInLegacy;
   }
-  for (const surface of listLegacySessionChatTypeSurfaces()) {
-    const derived = surface.deriveLegacySessionChatType?.(scoped);
+  for (const plugin of listBootstrapChannelPlugins()) {
+    const derived = plugin.messaging?.deriveLegacySessionChatType?.(scoped);
     if (derived) {
       return derived;
     }

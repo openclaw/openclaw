@@ -32,13 +32,13 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayServerOptions } from "./server.js";
+import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommand,
   cronIsolatedRun,
   embeddedRunMock,
   getReplyFromConfig,
   piSdkMock,
-  resetTestPluginRegistry,
   sendWhatsAppMock,
   sessionStoreSaveDelayMs,
   setTestConfigRoot,
@@ -46,7 +46,7 @@ import {
   testTailscaleWhois,
   testState,
   testTailnetIPv4,
-} from "./test-helpers.mocks.js";
+} from "./test-helpers.runtime-state.js";
 
 // Import lazily after test env/home setup so config/session paths resolve to test dirs.
 // Keep one cached module per worker for speed.

@@ -31,6 +31,18 @@ describe("MatrixConfigSchema SecretInput", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts dm sessionScope overrides", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      dm: {
+        policy: "pairing",
+        sessionScope: "per-room",
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts room-level account assignments", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",

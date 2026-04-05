@@ -27,30 +27,6 @@ import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalizat
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
 
-type CliBackendRuntimeModule = typeof import("../plugins/cli-backends.runtime.js");
-
-const CLI_BACKEND_RUNTIME_CANDIDATES = [
-  "../plugins/cli-backends.runtime.js",
-  "../plugins/cli-backends.runtime.ts",
-] as const;
-
-let cliBackendRuntimeModule: CliBackendRuntimeModule | undefined;
-
-function loadCliBackendRuntime(): CliBackendRuntimeModule | null {
-  if (cliBackendRuntimeModule) {
-    return cliBackendRuntimeModule;
-  }
-  for (const candidate of CLI_BACKEND_RUNTIME_CANDIDATES) {
-    try {
-      cliBackendRuntimeModule = require(candidate) as CliBackendRuntimeModule;
-      return cliBackendRuntimeModule;
-    } catch {
-      // Try source/runtime candidates in order.
-    }
-  }
-  return null;
-}
-
 function getLog(): ReturnType<typeof createSubsystemLogger> {
   log ??= createSubsystemLogger("model-selection");
   return log;
@@ -109,16 +85,6 @@ export {
   normalizeProviderId,
   normalizeProviderIdForAuth,
 };
-
-export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
-  const normalized = normalizeProviderId(provider);
-  const cliBackends = loadCliBackendRuntime()?.resolveRuntimeCliBackends() ?? [];
-  if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
-    return true;
-  }
-  const backends = cfg?.agents?.defaults?.cliBackends ?? {};
-  return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
-}
 
 function normalizeProviderModelId(provider: string, model: string): string {
   const staticModelId = normalizeStaticProviderModelId(provider, model);
@@ -575,7 +541,7 @@ export function buildAllowedModelSet(params: {
     // data is stale and does not include the configured model yet.
     allowedKeys.add(key);
 
-    if (!syntheticCatalogEntries.has(key)) {
+    if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
       const configuredSynthetic = resolveConfiguredSyntheticEntry(parsed.provider, parsed.model);
       syntheticCatalogEntries.set(key, {
         ...configuredSynthetic,

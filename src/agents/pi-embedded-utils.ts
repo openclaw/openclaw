@@ -233,13 +233,116 @@ export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
+type AssistantPhase = "commentary" | "final_answer";
+
+function normalizeAssistantPhase(value: unknown): AssistantPhase | undefined {
+  return value === "commentary" || value === "final_answer" ? value : undefined;
+}
+
+function parseAssistantTextSignature(
+  value: unknown,
+): { id?: string; phase?: AssistantPhase } | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  if (!value.startsWith("{")) {
+    return { id: value };
+  }
+  try {
+    const parsed = JSON.parse(value) as { id?: unknown; phase?: unknown; v?: unknown };
+    if (parsed.v !== 1) {
+      return null;
+    }
+    return {
+      ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+      ...(normalizeAssistantPhase(parsed.phase)
+        ? { phase: normalizeAssistantPhase(parsed.phase) }
+        : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeAssistantText(text: string): string {
+  return stripThinkingTagsFromText(
+    stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+  ).trim();
+}
+
+function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): string {
+  const errorContext = msg.stopReason === "error";
+  return sanitizeUserFacingText(extracted, { errorContext });
+}
+
+function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPhase): string {
+  const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
+  const shouldIncludeContent = (resolvedPhase?: AssistantPhase) => {
+    if (phase) {
+      return resolvedPhase === phase;
+    }
+    return resolvedPhase === undefined;
+  };
+
+  if (typeof msg.content === "string") {
+    return shouldIncludeContent(messagePhase)
+      ? finalizeAssistantExtraction(msg, sanitizeAssistantText(msg.content))
+      : "";
+  }
+
+  if (!Array.isArray(msg.content)) {
+    return "";
+  }
+
+  const hasExplicitPhasedTextBlocks = msg.content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const record = block as { type?: unknown; textSignature?: unknown };
+    if (record.type !== "text") {
+      return false;
+    }
+    return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
+  });
+
+  const extracted =
+    extractTextFromChatContent(
+      msg.content.filter((block) => {
+        if (!block || typeof block !== "object") {
+          return false;
+        }
+        const record = block as { type?: unknown; textSignature?: unknown };
+        if (record.type !== "text") {
+          return false;
+        }
+        const signature = parseAssistantTextSignature(record.textSignature);
+        const resolvedPhase =
+          signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
+        return shouldIncludeContent(resolvedPhase);
+      }),
+      {
+        sanitizeText: (text) => sanitizeAssistantText(text),
+        joinWith: "\n",
+        normalizeText: (text) => text.trim(),
+      },
+    ) ?? "";
+
+  return finalizeAssistantExtraction(msg, extracted);
+}
+
+export function extractAssistantVisibleText(msg: AssistantMessage): string {
+  const finalAnswerText = extractAssistantTextForPhase(msg, "final_answer");
+  if (finalAnswerText.trim()) {
+    return finalAnswerText;
+  }
+
+  return extractAssistantTextForPhase(msg);
+}
+
 export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
-      sanitizeText: (text) =>
-        stripThinkingTagsFromText(
-          stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
-        ).trim(),
+      sanitizeText: (text) => sanitizeAssistantText(text),
       joinWith: "\n",
       normalizeText: (text) => text.trim(),
     }) ?? "";
@@ -247,8 +350,7 @@ export function extractAssistantText(msg: AssistantMessage): string {
   // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
   // Gate on stopReason only — a non-error response with an errorMessage set (e.g. from a
   // background tool failure) should not have its content rewritten (#13935).
-  const errorContext = msg.stopReason === "error";
-  return sanitizeUserFacingText(extracted, { errorContext });
+  return finalizeAssistantExtraction(msg, extracted);
 }
 
 export function extractAssistantThinking(msg: AssistantMessage): string {

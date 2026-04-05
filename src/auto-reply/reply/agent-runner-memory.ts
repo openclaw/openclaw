@@ -4,7 +4,6 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { isCliProvider } from "../../agents/model-selection.js";
 import { compactEmbeddedPiSession, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
@@ -41,6 +40,7 @@ import {
 } from "./memory-flush.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
@@ -310,6 +310,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   sessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
+  replyOperation: ReplyOperation;
 }): Promise<SessionEntry | undefined> {
   if (!params.sessionKey) {
     return params.sessionEntry;
@@ -322,8 +323,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
-  const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
-  if (params.isHeartbeat || isCli) {
+  if (params.isHeartbeat) {
     return entry ?? params.sessionEntry;
   }
 
@@ -374,7 +374,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${threshold} ` +
-      `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
+      `isHeartbeat=${params.isHeartbeat} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
       `promptTokensEst=${promptTokenEstimate ?? "undefined"}`,
@@ -397,6 +397,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       `threshold=${threshold}`,
   );
 
+  params.replyOperation.setPhase("preflight_compacting");
   const sessionFile = resolveSessionLogPath(
     entry.sessionId,
     entry.sessionFile ? entry : { ...entry, sessionFile: params.followupRun.run.sessionFile },
@@ -424,6 +425,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     currentTokenCount: tokenCountForCompaction,
     senderIsOwner: params.followupRun.run.senderIsOwner,
     ownerNumbers: params.followupRun.run.ownerNumbers,
+    abortSignal: params.replyOperation.abortSignal,
   });
 
   if (!result?.ok || !result.compacted) {
@@ -463,6 +465,7 @@ export async function runMemoryFlushIfNeeded(params: {
   sessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
+  replyOperation: ReplyOperation;
 }): Promise<SessionEntry | undefined> {
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
   if (!memoryFlushPlan) {
@@ -484,8 +487,7 @@ export async function runMemoryFlushIfNeeded(params: {
     return sandboxCfg.workspaceAccess === "rw";
   })();
 
-  const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
-  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
+  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat;
   let entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
@@ -619,7 +621,7 @@ export async function runMemoryFlushIfNeeded(params: {
     `memoryFlush check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForFlush ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${flushThreshold} ` +
-      `isHeartbeat=${params.isHeartbeat} isCli=${isCli} memoryFlushWritable=${memoryFlushWritable} ` +
+      `isHeartbeat=${params.isHeartbeat} memoryFlushWritable=${memoryFlushWritable} ` +
       `compactionCount=${entry?.compactionCount ?? 0} memoryFlushCompactionCount=${entry?.memoryFlushCompactionCount ?? "undefined"} ` +
       `persistedPromptTokens=${persistedPromptTokens ?? "undefined"} persistedFresh=${entry?.totalTokensFresh === true} ` +
       `promptTokensEst=${promptTokenEstimate ?? "undefined"} transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} transcriptOutputTokens=${transcriptOutputTokens ?? "undefined"} ` +
@@ -630,7 +632,6 @@ export async function runMemoryFlushIfNeeded(params: {
   const shouldFlushMemory =
     (memoryFlushWritable &&
       !params.isHeartbeat &&
-      !isCli &&
       shouldRunMemoryFlush({
         entry,
         tokenCount: tokenCountForFlush,
@@ -650,6 +651,7 @@ export async function runMemoryFlushIfNeeded(params: {
     `memoryFlush triggered: sessionKey=${params.sessionKey} tokenCount=${tokenCountForFlush ?? "undefined"} threshold=${flushThreshold}`,
   );
 
+  params.replyOperation.setPhase("memory_flushing");
   let activeSessionEntry = entry ?? params.sessionEntry;
   const activeSessionStore = params.sessionStore;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
@@ -705,6 +707,8 @@ export async function runMemoryFlushIfNeeded(params: {
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature:
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+          abortSignal: params.replyOperation.abortSignal,
+          replyOperation: params.replyOperation,
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
@@ -741,6 +745,7 @@ export async function runMemoryFlushIfNeeded(params: {
       if (updatedEntry) {
         activeSessionEntry = updatedEntry;
         params.followupRun.run.sessionId = updatedEntry.sessionId;
+        params.replyOperation.updateSessionId(updatedEntry.sessionId);
         if (updatedEntry.sessionFile) {
           params.followupRun.run.sessionFile = updatedEntry.sessionFile;
         }
@@ -771,6 +776,7 @@ export async function runMemoryFlushIfNeeded(params: {
         if (updatedEntry) {
           activeSessionEntry = updatedEntry;
           params.followupRun.run.sessionId = updatedEntry.sessionId;
+          params.replyOperation.updateSessionId(updatedEntry.sessionId);
           if (updatedEntry.sessionFile) {
             params.followupRun.run.sessionFile = updatedEntry.sessionFile;
           }

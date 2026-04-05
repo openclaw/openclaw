@@ -6,12 +6,12 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
   projectConfigWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -45,6 +45,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
 import { msteamsSetupAdapter } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
@@ -396,6 +397,10 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
       },
       setup: msteamsSetupAdapter,
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
+      },
       messaging: {
         normalizeTarget: normalizeMSTeamsMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),

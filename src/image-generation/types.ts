@@ -18,6 +18,11 @@ export type ImageGenerationSourceImage = {
   metadata?: Record<string, unknown>;
 };
 
+export type ImageGenerationProviderConfiguredContext = {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+};
+
 export type ImageGenerationRequest = {
   provider: string;
   model: string;
@@ -70,5 +75,6 @@ export type ImageGenerationProvider = {
   defaultModel?: string;
   models?: string[];
   capabilities: ImageGenerationProviderCapabilities;
+  isConfigured?: (ctx: ImageGenerationProviderConfiguredContext) => boolean;
   generateImage: (req: ImageGenerationRequest) => Promise<ImageGenerationResult>;
 };

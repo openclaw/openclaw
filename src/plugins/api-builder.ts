@@ -25,7 +25,8 @@ export type BuildPluginApiParams = {
       | "registerGatewayMethod"
       | "registerCli"
       | "registerService"
-      | "registerCliBackend"
+      | "registerConfigMigration"
+      | "registerAutoEnableProbe"
       | "registerProvider"
       | "registerSpeechProvider"
       | "registerRealtimeTranscriptionProvider"
@@ -55,7 +56,8 @@ const noopRegisterChannel: OpenClawPluginApi["registerChannel"] = () => {};
 const noopRegisterGatewayMethod: OpenClawPluginApi["registerGatewayMethod"] = () => {};
 const noopRegisterCli: OpenClawPluginApi["registerCli"] = () => {};
 const noopRegisterService: OpenClawPluginApi["registerService"] = () => {};
-const noopRegisterCliBackend: OpenClawPluginApi["registerCliBackend"] = () => {};
+const noopRegisterConfigMigration: OpenClawPluginApi["registerConfigMigration"] = () => {};
+const noopRegisterAutoEnableProbe: OpenClawPluginApi["registerAutoEnableProbe"] = () => {};
 const noopRegisterProvider: OpenClawPluginApi["registerProvider"] = () => {};
 const noopRegisterSpeechProvider: OpenClawPluginApi["registerSpeechProvider"] = () => {};
 const noopRegisterRealtimeTranscriptionProvider: OpenClawPluginApi["registerRealtimeTranscriptionProvider"] =
@@ -103,7 +105,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerGatewayMethod: handlers.registerGatewayMethod ?? noopRegisterGatewayMethod,
     registerCli: handlers.registerCli ?? noopRegisterCli,
     registerService: handlers.registerService ?? noopRegisterService,
-    registerCliBackend: handlers.registerCliBackend ?? noopRegisterCliBackend,
+    registerConfigMigration: handlers.registerConfigMigration ?? noopRegisterConfigMigration,
+    registerAutoEnableProbe: handlers.registerAutoEnableProbe ?? noopRegisterAutoEnableProbe,
     registerProvider: handlers.registerProvider ?? noopRegisterProvider,
     registerSpeechProvider: handlers.registerSpeechProvider ?? noopRegisterSpeechProvider,
     registerRealtimeTranscriptionProvider:

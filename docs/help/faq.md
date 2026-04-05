@@ -565,7 +565,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title="What does onboarding actually do?">
     `openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
 
-    - **Model/auth setup** (provider OAuth, Claude CLI reuse, and API keys supported, plus local model options such as LM Studio)
+    - **Model/auth setup** (provider OAuth, API keys, Anthropic legacy setup-token, plus local model options such as LM Studio)
     - **Workspace** location + bootstrap files
     - **Gateway settings** (bind/port/auth/tailscale)
     - **Channels** (WhatsApp, Telegram, Discord, Mattermost, Signal, iMessage, plus bundled channel plugins like QQ Bot)
@@ -581,12 +581,18 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     **local-only models** so your data stays on your device. Subscriptions (Claude
     Pro/Max or OpenAI Codex) are optional ways to authenticate those providers.
 
-    Anthropic's public Claude Code docs still include direct Claude Code terminal
-    use in Claude plan limits. Separately, Anthropic notified OpenClaw users on
-    **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw**
-    Claude-login path counts as third-party harness usage and now requires
-    **Extra Usage** billed separately from the subscription. OpenAI Codex OAuth
-    is explicitly supported for external tools like OpenClaw.
+    For Anthropic in OpenClaw, the practical split is:
+
+    - **Anthropic API key**: normal Anthropic API billing
+    - **Claude subscription auth in OpenClaw**: Anthropic told OpenClaw users on
+      **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that this requires
+      **Extra Usage** billed separately from the subscription
+
+    Our local repros also show that `claude -p --append-system-prompt ...` can
+    hit the same Extra Usage guard when the appended prompt identifies
+    OpenClaw, while the same prompt string does **not** reproduce that block on
+    the Anthropic SDK + API-key path. OpenAI Codex OAuth is explicitly
+    supported for external tools like OpenClaw.
 
     OpenClaw also supports other hosted subscription-style options including
     **Qwen Cloud Coding Plan**, **MiniMax Coding Plan**, and
@@ -600,29 +606,27 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Can I use Claude Max subscription without an API key?">
-    Yes, via a local **Claude CLI** login on the gateway host.
+    Yes, but treat it as **Claude subscription auth with Extra Usage**.
 
-    Claude Pro/Max subscriptions **do not include an API key**, so Claude CLI
-    reuse is the supported subscription-style path in OpenClaw. Anthropic's
-    public Claude Code docs still cover direct Claude Code terminal use under
-    your plan. Separately, Anthropic told OpenClaw users on **April 4, 2026 at
-    12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path
-    requires **Extra Usage** billed separately from the subscription. If you
-    want the clearest and safest supported path for production, use an
-    Anthropic API key.
+    Claude Pro/Max subscriptions do not include an API key. In OpenClaw, that
+    means Anthropic's OpenClaw-specific billing notice applies: subscription
+    traffic requires **Extra Usage**. If you want Anthropic traffic without
+    that Extra Usage path, use an Anthropic API key instead.
 
   </Accordion>
 
   <Accordion title="Do you support Claude subscription auth (Claude Pro or Max)?">
-    Yes. Reuse a local **Claude CLI** login on the gateway host with `openclaw models auth login --provider anthropic --method cli --set-default`.
+    Yes, but the supported interpretation is now:
 
-    Anthropic setup-token is also available again as a legacy/manual OpenClaw path. Anthropic's OpenClaw-specific billing notice still applies there, so use it with the expectation that Anthropic requires **Extra Usage**. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
+    - Anthropic in OpenClaw with a subscription means **Extra Usage**
+    - Anthropic in OpenClaw without that path means **API key**
 
-    Important: Anthropic's public Claude Code docs still cover direct Claude
-    Code terminal use under Claude plans. Separately, Anthropic told OpenClaw
-    users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the
-    **OpenClaw** Claude-login path requires **Extra Usage** billed separately
-    from the subscription.
+    Anthropic setup-token is still available as a legacy/manual OpenClaw path,
+    and Anthropic's OpenClaw-specific billing notice still applies there. We
+    also reproduced the same billing guard locally with direct
+    `claude -p --append-system-prompt ...` usage when the appended prompt
+    identifies OpenClaw, while the same prompt string did **not** reproduce on
+    the Anthropic SDK + API-key path.
 
     For production or multi-user workloads, Anthropic API key auth is the
     safer, recommended choice. If you want other subscription-style hosted
@@ -652,7 +656,7 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Is AWS Bedrock supported?">
-    Yes. OpenClaw has a bundled **Amazon Bedrock (Converse)** provider. With AWS env markers present, OpenClaw can auto-discover the streaming/text Bedrock catalog and merge it as an implicit `amazon-bedrock` provider; otherwise you can explicitly enable `models.bedrockDiscovery.enabled` or add a manual provider entry. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
+    Yes. OpenClaw has a bundled **Amazon Bedrock (Converse)** provider. With AWS env markers present, OpenClaw can auto-discover the streaming/text Bedrock catalog and merge it as an implicit `amazon-bedrock` provider; otherwise you can explicitly enable `plugins.entries.amazon-bedrock.config.discovery.enabled` or add a manual provider entry. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
   </Accordion>
 
   <Accordion title="How does Codex auth work?">
@@ -671,17 +675,11 @@ for usage/billing and raise limits as needed.
   <Accordion title="How do I set up Gemini CLI OAuth?">
     Gemini CLI uses a **plugin auth flow**, not a client id or secret in `openclaw.json`.
 
-    Steps:
+    Use the Gemini API provider instead:
 
-    1. Install Gemini CLI locally so `gemini` is on `PATH`
-       - Homebrew: `brew install gemini-cli`
-       - npm: `npm install -g @google/gemini-cli`
-    2. Enable the plugin: `openclaw plugins enable google`
-    3. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-    4. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
-    5. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
-
-    This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
+    1. Enable the plugin: `openclaw plugins enable google`
+    2. Run `openclaw onboard --auth-choice gemini-api-key`
+    3. Set a Google model such as `google/gemini-3.1-pro-preview`
 
   </Accordion>
 

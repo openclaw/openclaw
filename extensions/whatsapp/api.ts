@@ -1,3 +1,5 @@
+export { whatsappPlugin } from "./src/channel.js";
+export { whatsappSetupPlugin } from "./src/channel.setup.js";
 export * from "./src/accounts.js";
 export * from "./src/auto-reply/constants.js";
 export { whatsappCommandPolicy } from "./src/command-policy.js";

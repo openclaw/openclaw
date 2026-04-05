@@ -25,7 +25,6 @@ export type PluginStatusReport = PluginRegistry & {
 };
 
 export type PluginCapabilityKind =
-  | "cli-backend"
   | "text-inference"
   | "speech"
   | "realtime-transcription"
@@ -232,7 +231,6 @@ export function buildPluginDiagnosticsReport(params?: PluginReportParams): Plugi
 
 function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
   return [
-    { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
     { kind: "text-inference" as const, ids: plugin.providerIds },
     { kind: "speech" as const, ids: plugin.speechProviderIds },
     { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },

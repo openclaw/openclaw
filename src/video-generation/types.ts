@@ -18,6 +18,11 @@ export type VideoGenerationSourceAsset = {
   metadata?: Record<string, unknown>;
 };
 
+export type VideoGenerationProviderConfiguredContext = {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+};
+
 export type VideoGenerationRequest = {
   provider: string;
   model: string;
@@ -61,5 +66,6 @@ export type VideoGenerationProvider = {
   defaultModel?: string;
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
+  isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
   generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
 };

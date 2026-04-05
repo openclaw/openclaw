@@ -1,4 +1,3 @@
-import { createJiti } from "jiti";
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -13,28 +12,27 @@ import {
 } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
 import { DiscordChannelConfigSchema } from "./config-schema.js";
+import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
+import {
+  collectRuntimeConfigAssignments,
+  secretTargetRegistryEntries,
+} from "./secret-config-contract.js";
+import {
+  collectUnsupportedSecretRefConfigCandidates,
+  unsupportedSecretRefSurfacePatterns,
+} from "./security-contract.js";
+import { deriveLegacySessionChatType } from "./session-contract.js";
 
 export const DISCORD_CHANNEL = "discord" as const;
 
 type DiscordDoctorModule = typeof import("./doctor.js");
 
 let discordDoctorModulePromise: Promise<DiscordDoctorModule> | undefined;
-let discordDoctorLoader: ReturnType<typeof createJiti> | undefined;
-let cachedDiscordDoctorModule: DiscordDoctorModule | undefined;
 
 async function loadDiscordDoctorModule(): Promise<DiscordDoctorModule> {
   discordDoctorModulePromise ??= import("./doctor.js");
   return await discordDoctorModulePromise;
-}
-
-function loadDiscordDoctorModuleSync(): DiscordDoctorModule {
-  if (cachedDiscordDoctorModule) {
-    return cachedDiscordDoctorModule;
-  }
-  discordDoctorLoader ??= createJiti(import.meta.url, { interopDefault: true });
-  cachedDiscordDoctorModule = discordDoctorLoader("./doctor.js") as DiscordDoctorModule;
-  return cachedDiscordDoctorModule;
 }
 
 const discordDoctor: ChannelDoctorAdapter = {
@@ -43,17 +41,13 @@ const discordDoctor: ChannelDoctorAdapter = {
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
   legacyConfigRules: DISCORD_LEGACY_CONFIG_RULES,
-  normalizeCompatibilityConfig: (params) =>
-    loadDiscordDoctorModuleSync().discordDoctor.normalizeCompatibilityConfig?.(params) ?? {
-      config: params.cfg,
-      changes: [],
-    },
+  normalizeCompatibilityConfig,
   collectPreviewWarnings: async (params) =>
     (await loadDiscordDoctorModule()).discordDoctor.collectPreviewWarnings?.(params) ?? [],
   collectMutableAllowlistWarnings: async (params) =>
     (await loadDiscordDoctorModule()).discordDoctor.collectMutableAllowlistWarnings?.(params) ?? [],
-  repairConfig: (params) =>
-    loadDiscordDoctorModuleSync().discordDoctor.repairConfig?.(params) ?? {
+  repairConfig: async (params) =>
+    (await loadDiscordDoctorModule()).discordDoctor.repairConfig?.(params) ?? {
       config: params.cfg,
       changes: [],
     },
@@ -87,6 +81,8 @@ export function createDiscordPluginBase(params: {
   | "configSchema"
   | "config"
   | "setup"
+  | "messaging"
+  | "secrets"
 > {
   return {
     id: DISCORD_CHANNEL,
@@ -114,6 +110,8 @@ export function createDiscordPluginBase(params: {
     configSchema: DiscordChannelConfigSchema,
     config: {
       ...discordConfigAdapter,
+      hasConfiguredState: ({ env }) =>
+        typeof env?.DISCORD_BOT_TOKEN === "string" && env.DISCORD_BOT_TOKEN.trim().length > 0,
       isConfigured: (account) => Boolean(account.token?.trim()),
       describeAccount: (account) =>
         describeAccountSnapshot({
@@ -123,6 +121,15 @@ export function createDiscordPluginBase(params: {
             tokenSource: account.tokenSource,
           },
         }),
+    },
+    messaging: {
+      deriveLegacySessionChatType,
+    },
+    secrets: {
+      secretTargetRegistryEntries,
+      unsupportedSecretRefSurfacePatterns,
+      collectUnsupportedSecretRefConfigCandidates,
+      collectRuntimeConfigAssignments,
     },
     setup: params.setup,
   } as Pick<
@@ -138,5 +145,7 @@ export function createDiscordPluginBase(params: {
     | "configSchema"
     | "config"
     | "setup"
+    | "messaging"
+    | "secrets"
   >;
 }

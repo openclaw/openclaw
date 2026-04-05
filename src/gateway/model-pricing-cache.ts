@@ -8,7 +8,7 @@ import {
   type ModelRef,
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolvePluginWebSearchConfig } from "../config/legacy-web-search.js";
+import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import {
@@ -37,7 +37,6 @@ const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const CACHE_TTL_MS = 24 * 60 * 60_000;
 const FETCH_TIMEOUT_MS = 15_000;
 const PROVIDER_ALIAS_TO_OPENROUTER: Record<string, string> = {
-  "google-gemini-cli": "google",
   kimi: "moonshotai",
   "kimi-coding": "moonshotai",
   moonshot: "moonshotai",

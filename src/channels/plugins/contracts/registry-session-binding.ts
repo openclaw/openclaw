@@ -13,6 +13,7 @@ import {
   sessionBindingContractChannelIds,
   type SessionBindingContractChannelId,
 } from "./manifest.js";
+import { importBundledChannelContractArtifact } from "./runtime-artifacts.js";
 import "./registry.js";
 
 type SessionBindingContractEntry = {
@@ -35,18 +36,14 @@ const matrixSessionBindingAuth = {
   accessToken: "token",
 } as const;
 
-function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
-  return ["..", "..", "..", "..", "extensions", pluginId, artifactBasename].join("/");
-}
-
 async function getContractApi<T extends Record<string, unknown>>(pluginId: string): Promise<T> {
   const existing = contractApiPromises.get(pluginId);
   if (existing) {
     return (await existing) as T;
   }
-  const next = import(buildBundledPluginModuleId(pluginId, "contract-api.js"));
+  const next = importBundledChannelContractArtifact<T>(pluginId, "contract-api");
   contractApiPromises.set(pluginId, next);
-  return (await next) as T;
+  return await next;
 }
 
 function expectResolvedSessionBinding(params: {

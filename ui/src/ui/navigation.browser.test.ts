@@ -88,7 +88,7 @@ describe("control UI routing", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    const dreamsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/dreams"]');
+    const dreamsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/dreaming"]');
     expect(dreamsLink).not.toBeNull();
   });
 

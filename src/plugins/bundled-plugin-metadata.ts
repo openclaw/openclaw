@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   getPackageManifestMetadata,
   loadPluginManifest,
@@ -519,60 +518,5 @@ export function resolveBundledPluginGeneratedPath(
       return candidate;
     }
   }
-  return null;
-}
-
-export function resolveBundledPluginPublicSurfacePath(params: {
-  rootDir: string;
-  dirName: string;
-  artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
-  bundledPluginsDir?: string;
-}): string | null {
-  const artifactBasename = params.artifactBasename.replace(/^\.\//u, "");
-  if (!artifactBasename) {
-    return null;
-  }
-
-  const explicitBundledPluginsDir =
-    params.bundledPluginsDir ?? resolveBundledPluginsDir(params.env ?? process.env);
-  if (explicitBundledPluginsDir) {
-    const explicitPluginDir = path.resolve(explicitBundledPluginsDir, params.dirName);
-    const explicitBuiltCandidate = path.join(explicitPluginDir, artifactBasename);
-    if (fs.existsSync(explicitBuiltCandidate)) {
-      return explicitBuiltCandidate;
-    }
-
-    const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
-    for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-      const sourceCandidate = path.join(explicitPluginDir, `${sourceBaseName}${ext}`);
-      if (fs.existsSync(sourceCandidate)) {
-        return sourceCandidate;
-      }
-    }
-  }
-
-  for (const candidate of [
-    path.resolve(params.rootDir, "dist", "extensions", params.dirName, artifactBasename),
-    path.resolve(params.rootDir, "dist-runtime", "extensions", params.dirName, artifactBasename),
-  ]) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
-  for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-    const sourceCandidate = path.resolve(
-      params.rootDir,
-      "extensions",
-      params.dirName,
-      `${sourceBaseName}${ext}`,
-    );
-    if (fs.existsSync(sourceCandidate)) {
-      return sourceCandidate;
-    }
-  }
-
   return null;
 }

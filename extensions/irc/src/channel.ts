@@ -5,12 +5,12 @@ import {
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   composeAccountWarningCollectors,
   composeWarningCollectors,
   createAllowlistProviderOpenWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
   createResolvedDirectoryEntriesLister,
@@ -32,7 +32,6 @@ import {
   createAccountStatusSink,
   chunkTextForOutbound,
   DEFAULT_ACCOUNT_ID,
-  getChatChannelMeta,
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
 } from "./channel-api.js";
@@ -48,12 +47,24 @@ import {
 import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
 import { probeIrc } from "./probe.js";
 import { getIrcRuntime } from "./runtime.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { sendMessageIrc } from "./send.js";
 import { ircSetupAdapter } from "./setup-core.js";
 import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig, IrcProbe } from "./types.js";
 
-const meta = getChatChannelMeta("irc");
+const meta = {
+  id: "irc",
+  label: "IRC",
+  selectionLabel: "IRC (Server + Nick)",
+  docsPath: "/channels/irc",
+  docsLabel: "irc",
+  blurb: "classic IRC networks; host, nick, channels.",
+  order: 80,
+  detailLabel: "IRC",
+  systemImage: "number",
+  markdownCapable: true,
+};
 
 function normalizePairingTarget(raw: string): string {
   const normalized = normalizeIrcAllowEntry(raw);
@@ -174,6 +185,11 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
     configSchema: IrcChannelConfigSchema,
     config: {
       ...ircConfigAdapter,
+      hasConfiguredState: ({ env }) =>
+        typeof env?.IRC_HOST === "string" &&
+        env.IRC_HOST.trim().length > 0 &&
+        typeof env?.IRC_NICK === "string" &&
+        env.IRC_NICK.trim().length > 0,
       isConfigured: (account) => account.configured,
       describeAccount: (account) =>
         describeAccountSnapshot({
@@ -187,6 +203,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
             passwordSource: account.passwordSource,
           },
         }),
+    },
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
     },
     doctor: {
       groupAllowFromFallbackToAllowFrom: false,

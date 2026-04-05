@@ -16,6 +16,12 @@ export type MatrixDmConfig = {
   policy?: DmPolicy;
   /** Allowlist for DM senders (matrix user IDs or "*"). */
   allowFrom?: Array<string | number>;
+  /**
+   * How Matrix DMs map to sessions.
+   * - `per-user` (default): all DM rooms with the same routed peer share one DM session.
+   * - `per-room`: each Matrix DM room gets its own session key.
+   */
+  sessionScope?: "per-user" | "per-room";
   /** Per-DM thread reply behavior override (off|inbound|always). Overrides top-level threadReplies for direct messages. */
   threadReplies?: "off" | "inbound" | "always";
 };
@@ -77,6 +83,11 @@ export type MatrixExecApprovalConfig = {
   target?: MatrixExecApprovalTarget;
 };
 
+export type MatrixNetworkConfig = {
+  /** Dangerous opt-in for trusted private/internal Matrix homeservers. */
+  dangerouslyAllowPrivateNetwork?: boolean;
+};
+
 /** Per-account Matrix config (excludes the accounts field to prevent recursion). */
 export type MatrixAccountConfig = Omit<MatrixConfig, "accounts">;
 
@@ -91,8 +102,8 @@ export type MatrixConfig = {
   defaultAccount?: string;
   /** Matrix homeserver URL (https://matrix.example.org). */
   homeserver?: string;
-  /** Allow Matrix homeserver traffic to private/internal hosts. */
-  allowPrivateNetwork?: boolean;
+  /** Network policy overrides for trusted private/internal Matrix homeservers. */
+  network?: MatrixNetworkConfig;
   /** Optional HTTP(S) proxy URL for Matrix connections (e.g. http://127.0.0.1:7890). */
   proxy?: string;
   /** Matrix user id (@user:server). */

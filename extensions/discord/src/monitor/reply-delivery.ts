@@ -113,6 +113,33 @@ function resolveBoundThreadBinding(params: {
   return bindings.find((entry) => entry.threadId === targetChannelId);
 }
 
+function createPayloadReplyToResolver(params: {
+  payload: ReplyPayload;
+  replyToMode: ReplyToMode;
+  resolveFallbackReplyTo: () => string | undefined;
+}): () => string | undefined {
+  const payloadReplyTo = params.payload.replyToId?.trim() || undefined;
+  const allowExplicitReplyWhenOff = Boolean(
+    payloadReplyTo && (params.payload.replyToTag || params.payload.replyToCurrent),
+  );
+
+  if (!payloadReplyTo || (params.replyToMode === "off" && !allowExplicitReplyWhenOff)) {
+    return params.resolveFallbackReplyTo;
+  }
+
+  let payloadReplyUsed = false;
+  return () => {
+    if (params.replyToMode === "all") {
+      return payloadReplyTo;
+    }
+    if (payloadReplyUsed) {
+      return undefined;
+    }
+    payloadReplyUsed = true;
+    return payloadReplyTo;
+  };
+}
+
 function resolveBindingPersona(
   cfg: OpenClawConfig,
   binding: DiscordThreadBindingLookupRecord | undefined,
@@ -269,6 +296,11 @@ export async function deliverDiscordReply(params: {
     : undefined;
   let deliveredAny = false;
   for (const payload of params.replies) {
+    const resolvePayloadReplyTo = createPayloadReplyToResolver({
+      payload,
+      replyToMode,
+      resolveFallbackReplyTo: resolveReplyTo,
+    });
     const tableMode = params.tableMode ?? "code";
     const reply = resolveSendableOutboundReplyParts(payload, {
       text: convertMarkdownTables(payload.text ?? "", tableMode),
@@ -290,7 +322,7 @@ export async function deliverDiscordReply(params: {
         if (!chunk.trim()) {
           continue;
         }
-        const replyTo = resolveReplyTo();
+        const replyTo = resolvePayloadReplyTo();
         await sendDiscordChunkWithFallback({
           cfg: params.cfg,
           target: params.target,
@@ -319,7 +351,7 @@ export async function deliverDiscordReply(params: {
     }
     // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord.
     if (payload.audioAsVoice) {
-      const replyTo = resolveReplyTo();
+      const replyTo = resolvePayloadReplyTo();
       await sendVoiceMessageDiscord(params.target, firstMedia, {
         cfg: params.cfg,
         token: params.token,
@@ -337,7 +369,7 @@ export async function deliverDiscordReply(params: {
         rest: params.rest,
         accountId: params.accountId,
         maxLinesPerMessage: params.maxLinesPerMessage,
-        replyTo: resolveReplyTo(),
+        replyTo: resolvePayloadReplyTo(),
         binding,
         chunkMode: params.chunkMode,
         username: persona.username,
@@ -351,7 +383,7 @@ export async function deliverDiscordReply(params: {
         mediaUrls: reply.mediaUrls.slice(1),
         caption: "",
         send: async ({ mediaUrl }) => {
-          const replyTo = resolveReplyTo();
+          const replyTo = resolvePayloadReplyTo();
           await sendWithRetry(
             () =>
               sendMessageDiscord(params.target, "", {
@@ -374,7 +406,7 @@ export async function deliverDiscordReply(params: {
       mediaUrls: reply.mediaUrls,
       caption: reply.text,
       send: async ({ mediaUrl, caption }) => {
-        const replyTo = resolveReplyTo();
+        const replyTo = resolvePayloadReplyTo();
         await sendWithRetry(
           () =>
             sendMessageDiscord(params.target, caption ?? "", {

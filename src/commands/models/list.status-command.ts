@@ -18,7 +18,6 @@ import {
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
-  isCliProvider,
   normalizeProviderId,
   parseModelRef,
   resolveConfiguredModelRef,
@@ -191,7 +190,6 @@ export async function modelsStatusCommand(
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
   const missingProvidersInUse = Array.from(providersInUse)
     .filter((provider) => !providerAuthMap.has(provider))
-    .filter((provider) => !isCliProvider(provider, cfg))
     .toSorted((a, b) => a.localeCompare(b));
 
   const probeProfileIds = (() => {

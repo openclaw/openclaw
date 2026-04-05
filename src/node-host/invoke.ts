@@ -1,7 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { runBrowserProxyCommand } from "../../extensions/browser/runtime-api.js";
 import { GatewayClient } from "../gateway/client.js";
 import {
   ensureExecApprovals,
@@ -20,6 +19,7 @@ import {
   type ExecHostResponse,
 } from "../infra/exec-host.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
+import { runBrowserProxyCommand } from "../plugin-sdk/browser-node-host.js";
 import { buildSystemRunApprovalPlan, handleSystemRunInvoke } from "./invoke-system-run.js";
 import type {
   ExecEventPayload,

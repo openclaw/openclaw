@@ -62,14 +62,6 @@ vi.mock("../infra/exec-inline-eval.js", () => ({
   detectInterpreterInlineEvalArgv: vi.fn(() => null),
 }));
 
-vi.mock("../infra/exec-obfuscation-detect.js", () => ({
-  detectCommandObfuscation: vi.fn(() => ({
-    detected: false,
-    reasons: [],
-    matchedPatterns: [],
-  })),
-}));
-
 vi.mock("../infra/node-shell.js", () => ({
   buildNodeShellCommand: vi.fn(() => ["bash", "-lc", "bun ./script.ts"]),
 }));
