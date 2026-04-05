@@ -1231,6 +1231,7 @@
       "yauzl": "3.2.1"
     },
     "onlyBuiltDependencies": [
+      "acpx",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",

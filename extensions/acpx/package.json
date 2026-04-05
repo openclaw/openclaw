@@ -4,7 +4,8 @@
   "description": "OpenClaw ACP runtime backend",
   "type": "module",
   "dependencies": {
-    "@agentclientprotocol/sdk": "0.18.0"
+    "@agentclientprotocol/sdk": "0.18.0",
+    "acpx": "github:openclaw/acpx#a5ed49269cd0b97e651a11fa0af0d95a9a4a3193"
   },
   "openclaw": {
     "extensions": [
