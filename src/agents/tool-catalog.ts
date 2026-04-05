@@ -7,6 +7,7 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+  UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
@@ -250,6 +251,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "List agents",
     sectionId: "agents",
     profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "update_plan",
+    label: "update_plan",
+    description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
+    sectionId: "agents",
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {

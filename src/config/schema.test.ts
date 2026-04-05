@@ -264,6 +264,16 @@ describe("config schema", () => {
     });
   });
 
+  it("accepts experimental tool flags in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      experimental: {
+        planTool: true,
+      },
+    });
+
+    expect(parsed.experimental?.planTool).toBe(true);
+  });
+
   it("accepts web fetch maxResponseBytes in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       web: {

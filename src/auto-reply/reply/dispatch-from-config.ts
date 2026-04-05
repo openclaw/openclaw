@@ -610,15 +610,19 @@ export async function dispatchReplyFromConfig(params: {
       }
       return `${collapsed.slice(0, 77).trimEnd()}...`;
     };
-    const summarizePlanLabel = (payload: { explanation?: string; steps?: string[] }) => {
-      const firstStep = payload.steps?.find((step) => typeof step === "string" && step.trim());
-      if (firstStep) {
-        return normalizeWorkingLabel(firstStep);
+    const formatPlanUpdateText = (payload: { explanation?: string; steps?: string[] }) => {
+      const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
+      const steps = (payload.steps ?? [])
+        .map((step) => step.replace(/\s+/g, " ").trim())
+        .filter(Boolean);
+      const parts: string[] = [];
+      if (explanation) {
+        parts.push(explanation);
       }
-      if (payload.explanation?.trim()) {
-        return normalizeWorkingLabel(payload.explanation);
+      if (steps.length > 0) {
+        parts.push(steps.map((step, index) => `${index + 1}. ${step}`).join("\n"));
       }
-      return "planning next steps";
+      return parts.join("\n\n").trim() || "Planning next steps.";
     };
     const maybeSendWorkingStatus = (label: string) => {
       const normalizedLabel = normalizeWorkingLabel(label);
@@ -639,6 +643,15 @@ export async function dispatchReplyFromConfig(params: {
         return sendPayloadAsync(payload, undefined, false);
       }
       dispatcher.sendToolResult(payload);
+    };
+    const sendPlanUpdate = (payload: { explanation?: string; steps?: string[] }) => {
+      const replyPayload: ReplyPayload = {
+        text: formatPlanUpdateText(payload),
+      };
+      if (shouldRouteToOriginating) {
+        return sendPayloadAsync(replyPayload, undefined, false);
+      }
+      dispatcher.sendToolResult(replyPayload);
     };
     const summarizeApprovalLabel = (payload: {
       status?: string;
@@ -790,7 +803,7 @@ export async function dispatchReplyFromConfig(params: {
           if (phase !== "update") {
             return;
           }
-          return maybeSendWorkingStatus(summarizePlanLabel({ explanation, steps }));
+          return sendPlanUpdate({ explanation, steps });
         },
         onApprovalEvent: ({ phase, status, command, message }) => {
           if (phase !== "requested") {

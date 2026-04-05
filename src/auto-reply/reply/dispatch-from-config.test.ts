@@ -984,7 +984,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("renders concise plan and approval progress updates for direct sessions", async () => {
+  it("renders plain-text plan updates and concise approval progress for direct sessions", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -1015,7 +1015,9 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ text: "Working: Inspect code" }),
+      expect.objectContaining({
+        text: "Inspect code, patch it, run tests.\n\n1. Inspect code\n2. Patch code\n3. Run tests",
+      }),
     );
     expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(
       2,

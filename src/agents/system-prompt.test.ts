@@ -405,8 +405,9 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).not.toContain('runtime="acp" requires `agentId`');
     expect(prompt).not.toContain("not ACP harness ids");
-    expect(prompt).toContain("- sessions_spawn: Spawn an isolated sub-agent session");
-    expect(prompt).toContain("- agents_list: List OpenClaw agent ids allowed for sessions_spawn");
+    expect(prompt).toContain(
+      "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+    );
   });
 
   it("omits ACP harness spawn guidance for sandboxed sessions and shows ACP block note", () => {
@@ -453,6 +454,25 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
     );
+  });
+
+  it("adds update_plan guidance only when the tool is available", () => {
+    const promptWithPlan = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "update_plan"],
+    });
+    const promptWithoutPlan = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec"],
+    });
+
+    expect(promptWithPlan).toContain(
+      "For non-trivial multi-step work, keep a short plan updated with `update_plan`.",
+    );
+    expect(promptWithPlan).toContain(
+      "When you use `update_plan`, keep exactly one step `in_progress` until the work is done.",
+    );
+    expect(promptWithoutPlan).not.toContain("keep a short plan updated with `update_plan`");
   });
 
   it("includes docs guidance when docsPath is provided", () => {

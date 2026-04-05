@@ -28,7 +28,7 @@ changes, not normal provider behavior.
 
 The prompt is intentionally compact and uses fixed sections:
 
-- **Tooling**: current tool list + short descriptions.
+- **Tooling**: structured-tool source-of-truth reminder plus runtime tool-use guidance.
 - **Safety**: short guardrail reminder to avoid power-seeking behavior or bypassing oversight.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
 - **OpenClaw Self-Update**: how to inspect config safely with
@@ -62,6 +62,10 @@ The Tooling section also includes runtime guidance for long-running work:
   push-based and auto-announces back to the requester
 - do not poll `subagents list` / `sessions_list` in a loop just to wait for
   completion
+
+When the experimental `update_plan` tool is enabled, Tooling also tells the
+model to use it only for non-trivial multi-step work, keep exactly one
+`in_progress` step, and avoid repeating the whole plan after each update.
 
 Safety guardrails in the system prompt are advisory. They guide model behavior but do not enforce policy. Use tool policy, exec approvals, sandboxing, and channel allowlists for hard enforcement; operators can disable these by design.
 

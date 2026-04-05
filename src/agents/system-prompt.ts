@@ -376,6 +376,7 @@ export function buildAgentSystemPrompt(params: {
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
   const availableTools = new Set(normalizedTools);
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
+  const hasUpdatePlanTool = availableTools.has("update_plan");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
   const hasGateway = availableTools.has("gateway");
   const hasCronTool = availableTools.has("cron") || canonicalToolNames.length === 0;
@@ -500,6 +501,14 @@ export function buildAgentSystemPrompt(params: {
           `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
           `For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use ${processToolName} to confirm completion, and use it for logs, status, input, or intervention.`,
         ]),
+    ...(hasUpdatePlanTool
+      ? [
+          "For non-trivial multi-step work, keep a short plan updated with `update_plan`.",
+          "Skip `update_plan` for simple tasks, obvious one-step fixes, or work you can finish in a few direct actions.",
+          "When you use `update_plan`, keep exactly one step `in_progress` until the work is done.",
+          "After calling `update_plan`, continue the work and do not repeat the full plan unless the user asks.",
+        ]
+      : []),
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     ...(acpHarnessSpawnAllowed
       ? [

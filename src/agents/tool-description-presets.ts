@@ -8,6 +8,7 @@ export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY =
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Send a message to another visible session.";
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent or ACP sessions.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status, usage, and model state.";
+export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track a short structured work plan.";
 
 export function describeSessionsListTool(): string {
   return [
@@ -44,5 +45,13 @@ export function describeSessionStatusTool(): string {
     "Show a /status-equivalent session status card for the current or another visible session, including usage, time, cost when available, and linked background task context.",
     "Optional `model` sets a per-session model override; `model=default` resets overrides.",
     "Use this for questions like what model is active or how a session is configured.",
+  ].join(" ");
+}
+
+export function describeUpdatePlanTool(): string {
+  return [
+    "Update the current structured work plan for this run.",
+    "Use this for non-trivial multi-step work so the plan stays current while execution continues.",
+    "Keep steps short, mark at most one step as `in_progress`, and skip this tool for simple one-step tasks.",
   ].join(" ");
 }
