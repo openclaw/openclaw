@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchWithSsrFGuard,
   GUARDED_FETCH_MODE,
@@ -230,12 +230,8 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
-  it("uses runtime undici fetch when attaching a dispatcher", async () => {
+  it("uses runtime undici fetch when attaching a dispatcher and the default global fetch is active", async () => {
     const runtimeFetch = vi.fn(async () => okResponse());
-    const originalGlobalFetch = globalThis.fetch;
-    const globalFetch = vi.fn(async () => {
-      throw new Error("global fetch should not be used when a dispatcher is attached");
-    });
 
     class MockAgent {
       constructor(readonly options: unknown) {}
@@ -247,7 +243,6 @@ describe("fetchWithSsrFGuard hardening", () => {
       constructor(readonly options: unknown) {}
     }
 
-    (globalThis as Record<string, unknown>).fetch = globalFetch as typeof fetch;
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
       Agent: MockAgent,
       EnvHttpProxyAgent: MockEnvHttpProxyAgent,
@@ -262,10 +257,9 @@ describe("fetchWithSsrFGuard hardening", () => {
       });
 
       expect(runtimeFetch).toHaveBeenCalledTimes(1);
-      expect(globalFetch).not.toHaveBeenCalled();
       await result.release();
     } finally {
-      (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
+      Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
     }
   });
 
@@ -692,5 +686,84 @@ describe("fetchWithSsrFGuard hardening", () => {
       mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       expectEnvProxy: true,
     });
+  });
+});
+
+describe("fetchWithSsrFGuard undici fetcher override", () => {
+  // Regression guard: Node v25.9.0 native fetch ignores the undici dispatcher option.
+  // When a dispatcher is active and no custom fetchImpl was provided, fetchWithSsrFGuard
+  // must use undici's own fetch so the dispatcher is honoured.
+
+  type LookupFn = NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
+  const createPublicLookup = (): LookupFn =>
+    vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn;
+
+  const undiciFetchSpy = vi.fn();
+
+  function MockAgent(this: object) {}
+  function MockEnvHttpProxyAgent(this: object) {}
+  function MockProxyAgent(this: object) {}
+
+  beforeEach(() => {
+    undiciFetchSpy.mockReset();
+    undiciFetchSpy.mockResolvedValue(new Response("ok", { status: 200 }));
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: MockAgent,
+      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+      ProxyAgent: MockProxyAgent,
+      fetch: undiciFetchSpy,
+    };
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("uses undici fetch when a dispatcher is active and no fetchImpl was provided", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const lookupFn = createPublicLookup();
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      lookupFn,
+    });
+
+    expect(undiciFetchSpy).toHaveBeenCalledTimes(1);
+    const [calledUrl, calledInit] = undiciFetchSpy.mock.calls[0] as [
+      string,
+      RequestInit & { dispatcher?: unknown },
+    ];
+    expect(calledUrl).toBe("https://public.example/resource");
+    expect(calledInit.dispatcher).toBeInstanceOf(MockEnvHttpProxyAgent);
+    await result.release();
+  });
+
+  it("preserves a dispatcher-compatible global fetch when a dispatcher is active", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const lookupFn = createPublicLookup();
+    const customFetch = Object.assign(
+      vi.fn().mockResolvedValue(new Response("ok", { status: 200 })),
+      { __openclawAcceptsDispatcher: true as const },
+    );
+    vi.stubGlobal("fetch", customFetch as typeof fetch);
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      lookupFn,
+    });
+
+    expect(customFetch).toHaveBeenCalledTimes(1);
+    const [calledUrl, calledInit] = customFetch.mock.calls[0] as [
+      string,
+      RequestInit & { dispatcher?: unknown },
+    ];
+    expect(calledUrl).toBe("https://public.example/resource");
+    expect(calledInit.dispatcher).toBeInstanceOf(MockEnvHttpProxyAgent);
+    expect(undiciFetchSpy).not.toHaveBeenCalled();
+    await result.release();
   });
 });

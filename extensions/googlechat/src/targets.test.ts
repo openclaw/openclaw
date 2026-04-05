@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import { isSenderAllowed } from "./monitor.js";
 import {
@@ -12,6 +11,7 @@ import {
 const mocks = vi.hoisted(() => ({
   verifyIdToken: vi.fn(),
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
+  fetchWithSsrFGuard: vi.fn(),
 }));
 
 vi.mock("google-auth-library", () => ({
@@ -29,6 +29,15 @@ vi.mock("./auth.js", async () => {
   };
 });
 
+vi.mock("../runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
+  return {
+    ...actual,
+    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+  };
+});
+
+const { downloadGoogleChatMedia, sendGoogleChatMessage } = await import("./api.js");
 const { verifyGoogleChatRequest } = await import("./auth.js");
 
 const account = {
@@ -38,16 +47,20 @@ const account = {
   config: {},
 } as ResolvedGoogleChatAccount;
 
+function stubGuardedFetch(response: Response) {
+  mocks.fetchWithSsrFGuard.mockResolvedValue({
+    response,
+    finalUrl: "https://chat.googleapis.com/final",
+    release: async () => {},
+  });
+}
+
 function stubSuccessfulSend(name: string) {
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValue(new Response(JSON.stringify({ name }), { status: 200 }));
-  vi.stubGlobal("fetch", fetchMock);
-  return fetchMock;
+  stubGuardedFetch(new Response(JSON.stringify({ name }), { status: 200 }));
 }
 
 async function expectDownloadToRejectForResponse(response: Response) {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+  stubGuardedFetch(response);
   await expect(
     downloadGoogleChatMedia({ account, resourceName: "media/123", maxBytes: 10 }),
   ).rejects.toThrow(/max bytes/i);
@@ -127,7 +140,7 @@ describe("isSenderAllowed", () => {
 
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
+    mocks.fetchWithSsrFGuard.mockReset();
   });
 
   it("rejects when content-length exceeds max bytes", async () => {
@@ -166,11 +179,11 @@ describe("downloadGoogleChatMedia", () => {
 
 describe("sendGoogleChatMessage", () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
+    mocks.fetchWithSsrFGuard.mockReset();
   });
 
   it("adds messageReplyOption when sending to an existing thread", async () => {
-    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123");
+    stubSuccessfulSend("spaces/AAA/messages/123");
 
     await sendGoogleChatMessage({
       account,
@@ -179,16 +192,18 @@ describe("sendGoogleChatMessage", () => {
       thread: "spaces/AAA/threads/xyz",
     });
 
-    const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
-    expect(JSON.parse(String(init?.body))).toMatchObject({
+    const [request] = mocks.fetchWithSsrFGuard.mock.calls[0] ?? [];
+    expect(String(request?.url)).toContain(
+      "messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
+    );
+    expect(JSON.parse(String(request?.init?.body))).toMatchObject({
       text: "hello",
       thread: { name: "spaces/AAA/threads/xyz" },
     });
   });
 
   it("does not set messageReplyOption for non-thread sends", async () => {
-    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/124");
+    stubSuccessfulSend("spaces/AAA/messages/124");
 
     await sendGoogleChatMessage({
       account,
@@ -196,8 +211,8 @@ describe("sendGoogleChatMessage", () => {
       text: "hello",
     });
 
-    const [url] = fetchMock.mock.calls[0] ?? [];
-    expect(String(url)).not.toContain("messageReplyOption=");
+    const [request] = mocks.fetchWithSsrFGuard.mock.calls[0] ?? [];
+    expect(String(request?.url)).not.toContain("messageReplyOption=");
   });
 });
 
