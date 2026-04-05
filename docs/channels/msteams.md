@@ -5,7 +5,7 @@ read_when:
 title: "Microsoft Teams"
 ---
 
-# Microsoft Teams (plugin)
+# Microsoft Teams
 
 > "Abandon all hope, ye who enter here."
 

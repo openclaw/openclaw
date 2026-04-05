@@ -37,10 +37,11 @@ the broader umbrella surface and shared helpers such as
 
 Do not add or depend on provider-named convenience seams such as
 `openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
-`openclaw/plugin-sdk/signal`, or `openclaw/plugin-sdk/whatsapp`. Bundled plugins should compose generic SDK
-subpaths inside their own `api.ts` or `runtime-api.ts` barrels, and core should
-either use those plugin-local barrels or add a narrow generic SDK contract when
-the need is truly cross-channel.
+`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`, or
+`openclaw/plugin-sdk/whatsapp-surface`. Bundled plugins should compose generic
+SDK subpaths inside their own `api.ts` or `runtime-api.ts` barrels, and core
+should either use those plugin-local barrels or add a narrow generic SDK
+contract when the need is truly cross-channel.
 
 The generated export map still contains a small set of bundled-plugin helper
 seams such as `plugin-sdk/feishu`, `plugin-sdk/feishu-setup`,
@@ -73,11 +74,11 @@ explicitly promotes one as public.
     | --- | --- |
     | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
     | `plugin-sdk/config-schema` | Root `openclaw.json` Zod schema export (`OpenClawSchema`) |
-    | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface` |
+    | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
     | `plugin-sdk/setup` | Shared setup wizard helpers, allowlist prompts, setup status builders |
-    | `plugin-sdk/setup-runtime` | Account-scoped setup runtime helpers, delegated setup proxies, setup status builders |
+    | `plugin-sdk/setup-runtime` | `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
     | `plugin-sdk/setup-adapter-runtime` | `createEnvPatchedAccountSetupAdapter` |
-    | `plugin-sdk/setup-tools` | Setup CLI/archive/docs helpers |
+    | `plugin-sdk/setup-tools` | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
     | `plugin-sdk/account-core` | Multi-account config/action-gate helpers, default-account fallback helpers |
     | `plugin-sdk/account-id` | `DEFAULT_ACCOUNT_ID`, account-id normalization helpers |
     | `plugin-sdk/account-resolution` | Account lookup + default-fallback helpers |
@@ -128,14 +129,14 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-auth-login` | Shared interactive login helpers for provider plugins |
     | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile` |
-    | `plugin-sdk/provider-model-shared` | `normalizeModelCompat`, `buildProviderReplayFamilyHooks`, `sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode` |
+    | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers such as `normalizeNativeXaiModelId` |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
     | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers |
     | `plugin-sdk/provider-web-fetch` | Web-fetch provider registration/cache helpers |
     | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/config helpers |
-    | `plugin-sdk/provider-tools` | `buildProviderToolCompatFamilyHooks`, Gemini schema helpers |
+    | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, Gemini schema cleanup + diagnostics, and xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
-    | `plugin-sdk/provider-stream` | `buildProviderStreamFamilyHooks`, stream wrapper types, provider stream wrappers, shared OpenAI/OpenRouter stream-family helpers |
+    | `plugin-sdk/provider-stream` | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
     | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
     | `plugin-sdk/global-singleton` | Process-local singleton/map/cache helpers |
   </Accordion>
@@ -169,6 +170,7 @@ explicitly promotes one as public.
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
     | `plugin-sdk/plugin-runtime` | Shared plugin command/hook/http/interactive helpers |
     | `plugin-sdk/hook-runtime` | Shared webhook/internal hook pipeline helpers |
+    | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
     | `plugin-sdk/process-runtime` | Process exec helpers |
     | `plugin-sdk/cli-runtime` | CLI formatting, wait, and version helpers |
     | `plugin-sdk/gateway-runtime` | Gateway client and channel-status patch helpers |
@@ -177,10 +179,13 @@ explicitly promotes one as public.
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize helpers |
+    | `plugin-sdk/reply-history` | Shared short-window reply-history helpers such as `buildHistoryContext`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
     | `plugin-sdk/session-store-runtime` | Session store path + updated-at helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
+    | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
+    | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
     | `plugin-sdk/string-normalization-runtime` | Slug/string normalization helpers |
     | `plugin-sdk/request-url` | Extract string URLs from fetch/request-like inputs |
@@ -206,7 +211,7 @@ explicitly promotes one as public.
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag and event helpers |
-    | `plugin-sdk/error-runtime` | Error graph and formatting helpers |
+    | `plugin-sdk/error-runtime` | Error graph, formatting, shared error classification helpers, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, and pinned lookup helpers |
     | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
     | `plugin-sdk/retry-runtime` | Retry config and retry runner helpers |
@@ -220,7 +225,7 @@ explicitly promotes one as public.
     | --- | --- |
     | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers plus media payload builders |
     | `plugin-sdk/media-understanding-runtime` | Media-understanding runner facade and typed result helpers |
-    | `plugin-sdk/text-runtime` | Shared text, markdown, logging, and formatting helpers |
+    | `plugin-sdk/text-runtime` | Shared text/markdown/logging helpers such as assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, and safe-text utilities |
     | `plugin-sdk/text-chunking` | Outbound text chunking helper |
     | `plugin-sdk/speech-runtime` | Speech-core runtime facade for TTS resolution and synthesis |
     | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, and normalization helpers |
@@ -228,6 +233,9 @@ explicitly promotes one as public.
     | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
     | `plugin-sdk/image-generation` | Image generation provider types |
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
+    | `plugin-sdk/video-generation` | Video generation provider types |
+    | `plugin-sdk/video-generation-core` | Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
+    | `plugin-sdk/video-generation-runtime` | Shared runtime `generateVideo` / `listRuntimeVideoGenerationProviders` facade |
     | `plugin-sdk/media-understanding` | Media understanding provider types |
     | `plugin-sdk/speech` | Speech provider types |
     | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
@@ -263,9 +271,9 @@ explicitly promotes one as public.
     | Matrix | `plugin-sdk/matrix`, `plugin-sdk/matrix-helper`, `plugin-sdk/matrix-runtime-heavy`, `plugin-sdk/matrix-runtime-shared`, `plugin-sdk/matrix-runtime-surface`, `plugin-sdk/matrix-surface`, `plugin-sdk/matrix-thread-bindings` | Bundled Matrix helper/runtime surface |
     | Line | `plugin-sdk/line`, `plugin-sdk/line-core`, `plugin-sdk/line-runtime`, `plugin-sdk/line-surface` | Bundled LINE helper/runtime surface |
     | IRC | `plugin-sdk/irc`, `plugin-sdk/irc-surface` | Bundled IRC helper surface |
-    | Channel-specific helpers | `plugin-sdk/googlechat`, `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles`, `plugin-sdk/bluebubbles-policy`, `plugin-sdk/mattermost`, `plugin-sdk/mattermost-policy`, `plugin-sdk/feishu-conversation`, `plugin-sdk/msteams`, `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`, `plugin-sdk/twitch` | Bundled channel compatibility/helper seams |
-    | Provider-specific helpers | `plugin-sdk/openai`, `plugin-sdk/moonshot`, `plugin-sdk/modelstudio`, `plugin-sdk/modelstudio-definitions`, `plugin-sdk/provider-moonshot`, `plugin-sdk/together`, `plugin-sdk/amazon-bedrock`, `plugin-sdk/anthropic-vertex`, `plugin-sdk/cloudflare-ai-gateway`, `plugin-sdk/byteplus`, `plugin-sdk/chutes`, `plugin-sdk/deepseek`, `plugin-sdk/google`, `plugin-sdk/huggingface`, `plugin-sdk/kimi-coding`, `plugin-sdk/kilocode`, `plugin-sdk/minimax`, `plugin-sdk/mistral`, `plugin-sdk/nvidia`, `plugin-sdk/ollama`, `plugin-sdk/ollama-surface`, `plugin-sdk/opencode`, `plugin-sdk/opencode-go`, `plugin-sdk/qianfan`, `plugin-sdk/sglang`, `plugin-sdk/synthetic`, `plugin-sdk/venice`, `plugin-sdk/vllm`, `plugin-sdk/xai`, `plugin-sdk/volcengine` | Bundled provider-specific helper seams |
-    | Auth/plugin-specific helpers | `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`, `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`, `plugin-sdk/thread-ownership`, `plugin-sdk/voice-call` | Bundled feature/plugin helper seams |
+    | Channel-specific helpers | `plugin-sdk/googlechat`, `plugin-sdk/whatsapp-surface`, `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles`, `plugin-sdk/bluebubbles-policy`, `plugin-sdk/mattermost`, `plugin-sdk/mattermost-policy`, `plugin-sdk/feishu-conversation`, `plugin-sdk/msteams`, `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`, `plugin-sdk/twitch` | Bundled channel compatibility/helper seams. `plugin-sdk/whatsapp-surface` currently exports `DEFAULT_WEB_MEDIA_BYTES`, WhatsApp auth/account helpers, directory-config helpers, group-policy helpers, outbound-target resolution, and the narrow `WebChannelStatus` / `WebInboundMessage` / `WebListenerCloseReason` / `WebMonitorTuning` types. |
+    | Provider-specific helpers | `plugin-sdk/openai`, `plugin-sdk/moonshot`, `plugin-sdk/qwen`, `plugin-sdk/qwen-definitions`, `plugin-sdk/modelstudio`, `plugin-sdk/modelstudio-definitions`, `plugin-sdk/provider-moonshot`, `plugin-sdk/together`, `plugin-sdk/amazon-bedrock`, `plugin-sdk/anthropic-vertex`, `plugin-sdk/cloudflare-ai-gateway`, `plugin-sdk/byteplus`, `plugin-sdk/chutes`, `plugin-sdk/deepseek`, `plugin-sdk/google`, `plugin-sdk/huggingface`, `plugin-sdk/kimi-coding`, `plugin-sdk/kilocode`, `plugin-sdk/minimax`, `plugin-sdk/mistral`, `plugin-sdk/nvidia`, `plugin-sdk/opencode`, `plugin-sdk/opencode-go`, `plugin-sdk/qianfan`, `plugin-sdk/sglang`, `plugin-sdk/synthetic`, `plugin-sdk/venice`, `plugin-sdk/vllm`, `plugin-sdk/xai`, `plugin-sdk/volcengine` | Bundled provider-specific helper seams; prefer canonical `qwen*`, keep `modelstudio*` as compatibility aliases |
+    | Auth/plugin-specific helpers | `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`, `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`, `plugin-sdk/thread-ownership`, `plugin-sdk/voice-call` | Bundled feature/plugin helper seams; `plugin-sdk/github-copilot-token` currently exports `DEFAULT_COPILOT_API_BASE_URL`, `deriveCopilotApiBaseUrlFromToken`, and `resolveCopilotApiToken` |
   </Accordion>
 </AccordionGroup>
 
@@ -286,6 +294,8 @@ methods:
 | `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions   |
 | `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis       |
 | `api.registerImageGenerationProvider(...)`       | Image generation                 |
+| `api.registerVideoGenerationProvider(...)`       | Video generation                 |
+| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider      |
 | `api.registerWebSearchProvider(...)`             | Web search                       |
 
 ### Tools and commands
@@ -399,20 +409,20 @@ AI CLI backend such as `claude-cli` or `codex-cli`.
 
 ### API object fields
 
-| Field                    | Type                      | Description                                                                |
-| ------------------------ | ------------------------- | -------------------------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                                  |
-| `api.name`               | `string`                  | Display name                                                               |
-| `api.version`            | `string?`                 | Plugin version (optional)                                                  |
-| `api.description`        | `string?`                 | Plugin description (optional)                                              |
-| `api.source`             | `string`                  | Plugin source path                                                         |
-| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                           |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available) |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                  |
-| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                    |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                           |
-| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, `"setup-runtime"`, or `"cli-metadata"`           |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                       |
+| Field                    | Type                      | Description                                                                                 |
+| ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                                                   |
+| `api.name`               | `string`                  | Display name                                                                                |
+| `api.version`            | `string?`                 | Plugin version (optional)                                                                   |
+| `api.description`        | `string?`                 | Plugin description (optional)                                                               |
+| `api.source`             | `string`                  | Plugin source path                                                                          |
+| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                                            |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                  |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                   |
+| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                                     |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                            |
+| `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight pre-full-entry startup/setup window |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                        |
 
 ## Internal module convention
 

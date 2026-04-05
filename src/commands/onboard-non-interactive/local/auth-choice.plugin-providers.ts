@@ -110,8 +110,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       config: resolutionConfig,
       workspaceDir,
       onlyPluginIds: owningPluginIds,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
+      mode: "setup",
     }),
     choice: params.authChoice,
   });

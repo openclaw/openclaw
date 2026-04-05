@@ -101,6 +101,44 @@ describe("registerTelegramNativeCommands", () => {
     );
   });
 
+  it("keeps sub-100 commands by shortening long descriptions to fit Telegram payload budget", async () => {
+    const cfg: OpenClawConfig = {
+      commands: { native: false },
+    };
+    const customCommands = Array.from({ length: 92 }, (_, index) => ({
+      command: `cmd_${index}`,
+      description: `Command ${index} ` + "x".repeat(120),
+    }));
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const runtimeLog = vi.fn();
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams(cfg),
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn(),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      runtime: { log: runtimeLog } as unknown as RuntimeEnv,
+      telegramCfg: { customCommands } as TelegramAccountConfig,
+      nativeEnabled: false,
+      nativeSkillsEnabled: false,
+    });
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    expect(registeredCommands).toHaveLength(92);
+    expect(
+      registeredCommands.some(
+        (entry) => entry.description.length < customCommands[0]!.description.length,
+      ),
+    ).toBe(true);
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "Telegram menu text exceeded the conservative 5700-character payload budget; shortening descriptions to keep 92 commands visible.",
+    );
+  });
+
   it("normalizes hyphenated native command names for Telegram registration", async () => {
     const setMyCommands = vi.fn().mockResolvedValue(undefined);
     const command = vi.fn();

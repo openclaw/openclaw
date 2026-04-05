@@ -20,7 +20,7 @@ title: "Features"
     Multi-agent routing with isolated sessions.
   </Card>
   <Card title="Media" icon="image">
-    Images, audio, and documents in and out.
+    Images, audio, video, documents, and image/video generation.
   </Card>
   <Card title="Apps and UI" icon="monitor">
     Web Control UI and macOS companion app.
@@ -34,8 +34,8 @@ title: "Features"
 
 **Channels:**
 
-- Built-in and bundled channels include BlueBubbles for iMessage, Discord, Feishu, Google Chat, IRC, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WebChat, and WhatsApp
-- Bundled plugin channels include LINE, Matrix, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, and Zalo Personal
+- Built-in channels include Discord, Google Chat, iMessage (legacy), IRC, Signal, Slack, Telegram, WebChat, and WhatsApp
+- Bundled plugin channels include BlueBubbles for iMessage, Feishu, LINE, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Nostr, QQ Bot, Synology Chat, Tlon, Twitch, Zalo, and Zalo Personal
 - Optional separately installed channel plugins include Voice Call and third-party packages such as WeChat
 - Third-party channel plugins can extend the Gateway further, such as WeChat
 - Group chat support with mention-based activation
@@ -57,6 +57,7 @@ title: "Features"
 **Media:**
 
 - Images, audio, video, and documents in and out
+- Shared image generation and video generation capability surfaces
 - Voice note transcription
 - Text-to-speech with multiple providers
 

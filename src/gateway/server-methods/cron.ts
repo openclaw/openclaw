@@ -245,7 +245,17 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+    let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
+    try {
+      result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "invalid cron sessionTarget session id") {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+        return;
+      }
+      throw error;
+    }
     respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {

@@ -304,8 +304,8 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `browser.remote_cdp_http`                                     | warn          | Remote CDP over plain HTTP lacks transport encryption                                | browser profile `cdpUrl`                                                                             | no       |
 | `browser.remote_cdp_private_host`                             | warn          | Remote CDP targets a private/internal host                                           | browser profile `cdpUrl`, `browser.ssrfPolicy.*`                                                     | no       |
 | `sandbox.docker_config_mode_off`                              | warn          | Sandbox Docker config present but inactive                                           | `agents.*.sandbox.mode`                                                                              | no       |
-| `sandbox.bind_mount_non_absolute`                             | critical      | Relative bind mounts can resolve unpredictably                                       | `agents.*.sandbox.binds[].source`                                                                    | no       |
-| `sandbox.dangerous_bind_mount`                                | critical      | Sandbox bind mount points outside safe trusted paths                                 | `agents.*.sandbox.binds`                                                                             | no       |
+| `sandbox.bind_mount_non_absolute`                             | warn          | Relative bind mounts can resolve unpredictably                                       | `agents.*.sandbox.docker.binds[]`                                                                    | no       |
+| `sandbox.dangerous_bind_mount`                                | critical      | Sandbox bind mount targets blocked system, credential, or Docker socket paths        | `agents.*.sandbox.docker.binds[]`                                                                    | no       |
 | `sandbox.dangerous_network_mode`                              | critical      | Sandbox Docker network uses `host` or `container:*` namespace-join mode              | `agents.*.sandbox.docker.network`                                                                    | no       |
 | `sandbox.dangerous_seccomp_profile`                           | critical      | Sandbox seccomp profile weakens container isolation                                  | `agents.*.sandbox.docker.securityOpt`                                                                | no       |
 | `sandbox.dangerous_apparmor_profile`                          | critical      | Sandbox AppArmor profile weakens container isolation                                 | `agents.*.sandbox.docker.securityOpt`                                                                | no       |
@@ -542,8 +542,12 @@ change other sessions.
 
 Two built-in tools can make persistent control-plane changes:
 
-- `gateway` can call `config.apply`, `config.patch`, and `update.run`.
+- `gateway` can inspect config with `config.schema.lookup` / `config.get`, and can make persistent changes with `config.apply`, `config.patch`, and `update.run`.
 - `cron` can create scheduled jobs that keep running after the original chat/task ends.
+
+The owner-only `gateway` runtime tool still refuses to rewrite
+`tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases are
+normalized to the same protected exec paths before the write.
 
 For any agent/surface that handles untrusted content, deny these by default:
 
@@ -694,6 +698,13 @@ tool calls. Reduce the blast radius by:
   `gateway.http.endpoints.responses.images.urlAllowlist`, and keep `maxUrlParts` low.
   Empty allowlists are treated as unset; use `files.allowUrl: false` / `images.allowUrl: false`
   if you want to disable URL fetching entirely.
+- For OpenResponses file inputs, decoded `input_file` text is still injected as
+  **untrusted external content**. Do not rely on file text being trusted just because
+  the Gateway decoded it locally. The injected block still carries explicit
+  `<<<EXTERNAL_UNTRUSTED_CONTENT ...>>>` boundary markers plus `Source: External`
+  metadata, even though this path omits the longer `SECURITY NOTICE:` banner.
+- The same marker-based wrapping is applied when media-understanding extracts text
+  from attached documents before appending that text to the media prompt.
 - Enabling sandboxing and strict tool allowlists for any agent that touches untrusted input.
 - Keeping secrets out of prompts; pass them via env/config on the gateway host instead.
 
@@ -893,10 +904,12 @@ paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break
 
 Local device pairing:
 
-- Device pairing is auto‑approved for **local** connects (loopback or the
-  gateway host’s own tailnet address) to keep same‑host clients smooth.
-- Other tailnet peers are **not** treated as local; they still need pairing
-  approval.
+- Device pairing is auto-approved for direct local loopback connects to keep
+  same-host clients smooth.
+- OpenClaw also has a narrow backend/container-local self-connect path for
+  trusted shared-secret helper flows.
+- Tailnet and LAN connects, including same-host tailnet binds, are treated as
+  remote for pairing and still need approval.
 
 Auth modes:
 
@@ -932,7 +945,7 @@ Important boundary note:
 
 - Gateway HTTP bearer auth is effectively all-or-nothing operator access.
 - Treat credentials that can call `/v1/chat/completions`, `/v1/responses`, or `/api/channels/*` as full-access operator secrets for that gateway.
-- On the OpenAI-compatible HTTP surface, shared-secret bearer auth restores the full default operator scopes and owner semantics for agent turns; narrower `x-openclaw-scopes` values do not reduce that shared-secret path.
+- On the OpenAI-compatible HTTP surface, shared-secret bearer auth restores the full default operator scopes (`operator.admin`, `operator.approvals`, `operator.pairing`, `operator.read`, `operator.talk.secrets`, `operator.write`) and owner semantics for agent turns; narrower `x-openclaw-scopes` values do not reduce that shared-secret path.
 - Per-request scope semantics on HTTP only apply when the request comes from an identity-bearing mode such as trusted proxy auth or `gateway.auth.mode="none"` on a private ingress.
 - In those identity-bearing modes, omitting `x-openclaw-scopes` falls back to the normal operator default scope set; send the header explicitly when you want a narrower scope set.
 - `/tools/invoke` follows the same shared-secret rule: token/password bearer auth is treated as full operator access there too, while identity-bearing modes still honor declared scopes.
@@ -1104,8 +1117,9 @@ Also consider agent workspace access inside the sandbox:
 - `agents.defaults.sandbox.workspaceAccess: "none"` (default) keeps the agent workspace off-limits; tools run against a sandbox workspace under `~/.openclaw/sandboxes`
 - `agents.defaults.sandbox.workspaceAccess: "ro"` mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`)
 - `agents.defaults.sandbox.workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
+- Extra `sandbox.docker.binds` are validated against normalized and canonicalized source paths. Parent-symlink tricks and canonical home aliases still fail closed if they resolve into blocked roots such as `/etc`, `/var/run`, or credential directories under the OS home.
 
-Important: `tools.elevated` is the global baseline escape hatch that runs exec on the host. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
+Important: `tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
 
 ### Sub-agent delegation guardrail
 

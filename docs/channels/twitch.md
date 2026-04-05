@@ -5,7 +5,7 @@ read_when:
 title: "Twitch"
 ---
 
-# Twitch (plugin)
+# Twitch
 
 Twitch chat support via IRC connection. OpenClaw connects as a Twitch user (bot account) to receive and send messages in channels.
 
