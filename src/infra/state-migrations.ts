@@ -93,6 +93,10 @@ function isLegacyGroupKey(key: string): boolean {
   if (!trimmed) {
     return false;
   }
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("group:") || lower.startsWith("channel:")) {
+    return true;
+  }
   for (const surface of getLegacySessionSurfaces()) {
     if (surface.isLegacyGroupSessionKey?.(trimmed)) {
       return true;
@@ -214,6 +218,10 @@ function canonicalizeSessionKeyForAgent(params: {
     if (typeof canonicalized === "string" && canonicalized.trim()) {
       return canonicalized.trim().toLowerCase();
     }
+  }
+  const lower = raw.toLowerCase();
+  if (lower.startsWith("group:") || lower.startsWith("channel:")) {
+    return `agent:${agentId}:unknown:${raw}`.toLowerCase();
   }
   if (isSurfaceGroupKey(raw)) {
     return `agent:${agentId}:${raw}`.toLowerCase();
