@@ -113,7 +113,7 @@ export default definePluginEntry({
           provider: PROVIDER_ID,
           contextWindow: model.contextWindow,
           reasoning: model.reasoning,
-          input: model.input,
+          input: [...model.input],
         }));
       },
       buildReplayPolicy: () => KIMI_REPLAY_POLICY,
