@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -70,7 +70,7 @@ function createChannelsListTestPlugin(): ChannelPlugin {
 describe("channelsListCommand usage snapshot failures", () => {
   const runtime = createTestRuntime();
 
-  beforeAll(() => {
+  beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -80,9 +80,6 @@ describe("channelsListCommand usage snapshot failures", () => {
         },
       ]),
     );
-  });
-
-  beforeEach(() => {
     runtime.log.mockReset();
     runtime.error.mockReset();
     runtime.exit.mockReset();
@@ -100,6 +97,10 @@ describe("channelsListCommand usage snapshot failures", () => {
       targetStatesByPath: {},
       hadUnresolvedTargets: false,
     });
+  });
+
+  afterAll(() => {
+    setActivePluginRegistry(createTestRegistry());
   });
 
   it("renders usage output when the usage snapshot loads successfully", async () => {
