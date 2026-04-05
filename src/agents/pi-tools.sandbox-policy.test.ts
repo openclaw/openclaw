@@ -71,14 +71,14 @@ describe("pi-tools sandbox policy", () => {
         tools: {
           sandbox: {
             tools: {
-              allow: ["browser"],
+              allow: ["gateway"],
             },
           },
         },
       } as OpenClawConfig,
     });
 
-    expect(names).toContain("browser");
+    expect(names).toContain("gateway");
   });
 
   it("prefers the resolved sandbox context policy for legacy main session aliases", () => {
@@ -94,7 +94,7 @@ describe("pi-tools sandbox policy", () => {
             tools: {
               sandbox: {
                 tools: {
-                  allow: ["browser"],
+                  allow: ["gateway"],
                   alsoAllow: ["message"],
                 },
               },
@@ -110,7 +110,7 @@ describe("pi-tools sandbox policy", () => {
       sandboxAgentId: "tavern",
     });
 
-    expect(names).toContain("browser");
+    expect(names).toContain("gateway");
     expect(names).toContain("message");
   });
 
@@ -127,14 +127,14 @@ describe("pi-tools sandbox policy", () => {
           sandbox: {
             tools: {
               allow: [],
-              alsoAllow: ["browser"],
+              alsoAllow: ["gateway"],
             },
           },
         },
       } as OpenClawConfig,
     });
 
-    expect(names).toContain("browser");
+    expect(names).toContain("gateway");
     expect(names).toContain("read");
   });
 
@@ -150,15 +150,15 @@ describe("pi-tools sandbox policy", () => {
         tools: {
           sandbox: {
             tools: {
-              allow: ["browser", "message"],
-              deny: ["browser"],
+              allow: ["gateway", "message"],
+              deny: ["gateway"],
             },
           },
         },
       } as OpenClawConfig,
     });
 
-    expect(names).not.toContain("browser");
+    expect(names).not.toContain("gateway");
     expect(names).toContain("message");
   });
 });
