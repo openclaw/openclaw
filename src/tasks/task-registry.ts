@@ -7,8 +7,14 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import {
+  resolveTaskTerminalAtFromBackingSession,
+  resolveTaskTerminalEvidenceText,
+  resolveTaskTerminalStatusFromBackingSession,
+} from "./task-backing-session-terminal.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -24,6 +30,7 @@ import {
   syncFlowFromTask,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
+import { resolveTaskBackingSessionSnapshot } from "./task-lifecycle-status.js";
 import {
   getTaskRegistryObservers,
   getTaskRegistryStore,
@@ -58,6 +65,7 @@ const taskIdsByRelatedSessionKey = new Map<string, Set<string>>();
 const tasksWithPendingDelivery = new Set<string>();
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
+let sessionLifecycleListenerStop: (() => void) | null = null;
 let restoreAttempted = false;
 let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runtime.js")> | null =
   null;
@@ -1270,6 +1278,66 @@ function updateTasksByRunId(params: {
   return updated;
 }
 
+function reconcileTaskTerminalStateFromBackingSession(current: TaskRecord) {
+  if (!isActiveTaskStatus(current.status)) {
+    return null;
+  }
+  const backingSession = resolveTaskBackingSessionSnapshot(current);
+  if (!backingSession) {
+    return null;
+  }
+  const status = resolveTaskTerminalStatusFromBackingSession(backingSession);
+  if (!status) {
+    return null;
+  }
+  const terminalAt = resolveTaskTerminalAtFromBackingSession(backingSession, Date.now());
+  const evidenceText = resolveTaskTerminalEvidenceText(backingSession);
+  const patch: Partial<TaskRecord> = {
+    status,
+    endedAt: terminalAt,
+    lastEventAt: terminalAt,
+    ...(current.error !== undefined || evidenceText.error === undefined
+      ? {}
+      : { error: evidenceText.error }),
+    ...(current.terminalSummary !== undefined || evidenceText.terminalSummary === undefined
+      ? {}
+      : { terminalSummary: evidenceText.terminalSummary }),
+  };
+  const stateChangeEvent =
+    status !== current.status
+      ? appendTaskEvent({
+          at: terminalAt,
+          kind: status,
+          summary:
+            status === "failed" || status === "timed_out" || status === "cancelled"
+              ? (patch.error ?? current.error)
+              : (patch.terminalSummary ?? current.terminalSummary),
+        })
+      : undefined;
+  const updated = updateTask(current.taskId, patch);
+  if (updated) {
+    void maybeDeliverTaskStateChangeUpdate(current.taskId, stateChangeEvent);
+    void maybeDeliverTaskTerminalUpdate(current.taskId);
+  }
+  return updated;
+}
+
+function reconcileTasksForSessionLifecycleEvent(sessionKey: string) {
+  const scopedTasks = listTasksForRelatedSessionKey(sessionKey).filter((task) =>
+    isActiveTaskStatus(task.status),
+  );
+  if (scopedTasks.length === 0) {
+    return;
+  }
+  for (const task of scopedTasks) {
+    const current = tasks.get(task.taskId);
+    if (!current) {
+      continue;
+    }
+    reconcileTaskTerminalStateFromBackingSession(current);
+  }
+}
+
 function ensureListener() {
   if (listenerStarted) {
     return;
@@ -1329,6 +1397,10 @@ function ensureListener() {
         void maybeDeliverTaskTerminalUpdate(current.taskId);
       }
     }
+  });
+  sessionLifecycleListenerStop = onSessionLifecycleEvent((event) => {
+    restoreTaskRegistryOnce();
+    reconcileTasksForSessionLifecycleEvent(event.sessionKey);
   });
 }
 
@@ -1923,6 +1995,10 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   if (listenerStop) {
     listenerStop();
     listenerStop = null;
+  }
+  if (sessionLifecycleListenerStop) {
+    sessionLifecycleListenerStop();
+    sessionLifecycleListenerStop = null;
   }
   listenerStarted = false;
   if (opts?.persist !== false) {

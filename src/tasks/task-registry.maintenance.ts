@@ -13,9 +13,11 @@ import {
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
 import {
-  resolveTaskBackingSessionSnapshot,
-  type BackingSessionSnapshot,
-} from "./task-lifecycle-status.js";
+  resolveTaskTerminalAtFromBackingSession,
+  resolveTaskTerminalEvidenceText,
+  resolveTaskTerminalStatusFromBackingSession,
+} from "./task-backing-session-terminal.js";
+import { resolveTaskBackingSessionSnapshot } from "./task-lifecycle-status.js";
 import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
 import type { TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
@@ -101,41 +103,6 @@ function shouldMarkLost(task: TaskRecord, now: number): boolean {
   return !hasBackingSession(task);
 }
 
-function resolveTaskTerminalStatusFromBackingSession(
-  backingSession: BackingSessionSnapshot,
-): Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled"> | undefined {
-  switch (backingSession.state) {
-    case "done":
-      return "succeeded";
-    case "failed":
-      return "failed";
-    case "timeout":
-      return "timed_out";
-    case "killed":
-      return "cancelled";
-    default:
-      return undefined;
-  }
-}
-
-function resolveTaskTerminalEvidenceText(backingSession: BackingSessionSnapshot): {
-  error?: string;
-  terminalSummary?: string;
-} {
-  switch (backingSession.state) {
-    case "done":
-      return { terminalSummary: "Backing session finished." };
-    case "failed":
-      return { error: "Backing session failed." };
-    case "timeout":
-      return { error: "Backing session timed out." };
-    case "killed":
-      return { error: "Backing session was killed." };
-    default:
-      return {};
-  }
-}
-
 function projectTaskTerminalFromBackingSession(task: TaskRecord):
   | {
       status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
@@ -154,7 +121,7 @@ function projectTaskTerminalFromBackingSession(task: TaskRecord):
     task.createdAt,
     task.startedAt ?? 0,
     task.lastEventAt ?? 0,
-    backingSession.recordedAt ?? 0,
+    resolveTaskTerminalAtFromBackingSession(backingSession, 0),
   );
   const evidenceText = resolveTaskTerminalEvidenceText(backingSession);
   const projected: TaskRecord = {

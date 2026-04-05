@@ -228,6 +228,7 @@ export type BackingSessionSnapshot = {
   source: "session_status" | "acp_state" | "missing";
   summary: string;
   recordedAt?: number;
+  endedAt?: number;
 };
 
 function findSessionEntryByKey(
@@ -269,6 +270,7 @@ function summarizeBackingSessionState(state: Exclude<BackingSessionState, "missi
 function mapPersistedSessionStatus(
   status: SessionEntry["status"],
   recordedAt?: number,
+  endedAt?: number,
 ): BackingSessionSnapshot | undefined {
   if (!status) {
     return undefined;
@@ -278,6 +280,7 @@ function mapPersistedSessionStatus(
     source: "session_status",
     summary: summarizeBackingSessionState(status),
     recordedAt,
+    endedAt,
   };
 }
 
@@ -295,7 +298,7 @@ function loadPersistedBackingSessionSnapshot(
       summary: "Backing session is missing; task may be orphaned.",
     };
   }
-  return mapPersistedSessionStatus(entry.status, entry.updatedAt);
+  return mapPersistedSessionStatus(entry.status, entry.updatedAt, entry.endedAt);
 }
 
 export function resolveTaskBackingSessionSnapshot(
@@ -329,7 +332,11 @@ export function resolveTaskBackingSessionSnapshot(
         recordedAt: acpEntry.acp?.lastActivityAt ?? acpEntry.entry.updatedAt,
       };
     }
-    return mapPersistedSessionStatus(acpEntry.entry.status, acpEntry.entry.updatedAt);
+    return mapPersistedSessionStatus(
+      acpEntry.entry.status,
+      acpEntry.entry.updatedAt,
+      acpEntry.entry.endedAt,
+    );
   }
 
   try {
