@@ -4,6 +4,7 @@ import {
   GUARDED_FETCH_MODE,
   retainSafeHeadersForCrossOriginRedirectHeaders,
 } from "./fetch-guard.js";
+import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
 
 function redirectResponse(location: string): Response {
   return new Response(null, {
@@ -107,6 +108,7 @@ describe("fetchWithSsrFGuard hardening", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   });
 
   it("blocks private and legacy loopback literals before fetch", async () => {
@@ -208,6 +210,45 @@ describe("fetchWithSsrFGuard hardening", () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     await result.release();
+  });
+
+  it("uses runtime undici fetch when attaching a dispatcher", async () => {
+    const runtimeFetch = vi.fn(async () => okResponse());
+    const originalGlobalFetch = globalThis.fetch;
+    const globalFetch = vi.fn(async () => {
+      throw new Error("global fetch should not be used when a dispatcher is attached");
+    });
+
+    class MockAgent {
+      constructor(readonly options: unknown) {}
+    }
+    class MockEnvHttpProxyAgent {
+      constructor(readonly options: unknown) {}
+    }
+    class MockProxyAgent {
+      constructor(readonly options: unknown) {}
+    }
+
+    (globalThis as Record<string, unknown>).fetch = globalFetch as typeof fetch;
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: MockAgent,
+      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
+      ProxyAgent: MockProxyAgent,
+      fetch: runtimeFetch,
+    };
+
+    try {
+      const result = await fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        lookupFn: createPublicLookup(),
+      });
+
+      expect(runtimeFetch).toHaveBeenCalledTimes(1);
+      expect(globalFetch).not.toHaveBeenCalled();
+      await result.release();
+    } finally {
+      (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
+    }
   });
 
   it("blocks redirect chains that hop to private hosts", async () => {

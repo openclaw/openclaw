@@ -6,6 +6,7 @@ export type UndiciRuntimeDeps = {
   Agent: typeof import("undici").Agent;
   EnvHttpProxyAgent: typeof import("undici").EnvHttpProxyAgent;
   ProxyAgent: typeof import("undici").ProxyAgent;
+  fetch: typeof import("undici").fetch;
 };
 
 function isUndiciRuntimeDeps(value: unknown): value is UndiciRuntimeDeps {
@@ -14,7 +15,8 @@ function isUndiciRuntimeDeps(value: unknown): value is UndiciRuntimeDeps {
     value !== null &&
     typeof (value as UndiciRuntimeDeps).Agent === "function" &&
     typeof (value as UndiciRuntimeDeps).EnvHttpProxyAgent === "function" &&
-    typeof (value as UndiciRuntimeDeps).ProxyAgent === "function"
+    typeof (value as UndiciRuntimeDeps).ProxyAgent === "function" &&
+    typeof (value as UndiciRuntimeDeps).fetch === "function"
   );
 }
 
@@ -30,5 +32,6 @@ export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
     Agent: undici.Agent,
     EnvHttpProxyAgent: undici.EnvHttpProxyAgent,
     ProxyAgent: undici.ProxyAgent,
+    fetch: undici.fetch,
   };
 }

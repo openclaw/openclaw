@@ -181,8 +181,8 @@ function rewriteRedirectInitForMethod(params: {
 }
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
-  const fetcher: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
-  if (!fetcher) {
+  const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
+  if (!defaultFetch) {
     throw new Error("fetch is not available");
   }
 
@@ -249,6 +249,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         ...(signal ? { signal } : {}),
       };
 
+      const fetcher =
+        dispatcher && !params.fetchImpl
+          ? (loadUndiciRuntimeDeps().fetch as unknown as FetchLike)
+          : defaultFetch;
       const response = await fetcher(parsedUrl.toString(), init);
 
       if (isRedirectStatus(response.status)) {

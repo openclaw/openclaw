@@ -32,6 +32,7 @@ beforeEach(() => {
     Agent: agentCtor,
     EnvHttpProxyAgent: envHttpProxyAgentCtor,
     ProxyAgent: proxyAgentCtor,
+    fetch: vi.fn(),
   };
 });
 
