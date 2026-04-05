@@ -440,8 +440,12 @@ describe("buildAgentSystemPrompt", () => {
       docsPath: "/tmp/openclaw/docs",
     });
 
-    expect(prompt).toContain("- Read: Read file contents");
-    expect(prompt).toContain("- Exec: Run shell commands");
+    expect(prompt).toContain(
+      "Tool names are case-sensitive. Call tools exactly as listed in the structured tool definitions.",
+    );
+    expect(prompt).toContain(
+      "For long waits, avoid rapid poll loops: use Exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+    );
     expect(prompt).toContain(
       "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it.",
     );

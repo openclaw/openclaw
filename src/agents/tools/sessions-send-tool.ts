@@ -13,6 +13,10 @@ import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "../run-wait.js";
+import {
+  describeSessionsSendTool,
+  SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
+} from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -78,8 +82,8 @@ export function createSessionsSendTool(opts?: {
   return {
     label: "Session Send",
     name: "sessions_send",
-    description:
-      "Send a message into another session. Use sessionKey or label to identify the target.",
+    displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionsSendTool(),
     parameters: SessionsSendToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

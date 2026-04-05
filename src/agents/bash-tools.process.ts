@@ -18,6 +18,7 @@ import {
 import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pty-keys.js";
+import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 
 export type ProcessToolDefaults = {
   cleanupMs?: number;
@@ -162,6 +163,7 @@ export function createProcessTool(
   return {
     name: "process",
     label: "process",
+    displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
     execute: async (_toolCallId, args, _signal, _onUpdate): Promise<AgentToolResult<unknown>> => {

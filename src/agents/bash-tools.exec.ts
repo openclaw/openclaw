@@ -52,6 +52,7 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { failedTextResult, textResult } from "./tools/common.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -1219,6 +1220,7 @@ export function createExecTool(
   return {
     name: "exec",
     label: "exec",
+    displaySummary: EXEC_TOOL_DISPLAY_SUMMARY,
     get description() {
       return describeExecTool({ agentId, hasCronTool: defaults?.hasCronTool === true });
     },

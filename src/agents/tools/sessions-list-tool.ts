@@ -8,6 +8,10 @@ import {
 } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  describeSessionsListTool,
+  SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
+} from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
 import {
@@ -41,7 +45,8 @@ export function createSessionsListTool(opts?: {
   return {
     label: "Sessions",
     name: "sessions_list",
-    description: "List sessions with optional filters and last messages.",
+    displaySummary: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionsListTool(),
     parameters: SessionsListToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
