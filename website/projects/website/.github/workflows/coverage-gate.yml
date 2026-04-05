@@ -1,0 +1,29 @@
+name: Coverage Gate
+
+on:
+  pull_request:
+    paths:
+      - 'website/**'
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install -g pnpm
+      - run: cd website/projects/website && pnpm install --no-frozen-lockfile
+      - run: cd website/projects/website && pnpm test:coverage
+      - name: Check coverage thresholds
+        run: |
+          cd website/projects/website
+          if [ -f coverage/coverage-summary.json ]; then
+            LINES=$(cat coverage/coverage-summary.json | python3 -c "import json,sys; print(json.load(sys.stdin)['total']['lines']['pct'])")
+            echo "Line coverage: ${LINES}%"
+            if (( $(echo "$LINES < 50" | bc -l) )); then
+              echo "::error::Coverage ${LINES}% is below 50% threshold"
+              exit 1
+            fi
+          fi
