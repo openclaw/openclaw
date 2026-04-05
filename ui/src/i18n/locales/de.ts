@@ -110,6 +110,10 @@ export const de: TranslationMap = {
       stayHttp: "Wenn Sie bei HTTP bleiben müssen, setzen Sie {config} (nur Token).",
     },
   },
+  connectCommand: {
+    copyTitle: "Befehl kopieren",
+    copyAriaLabel: "Befehl kopieren: {command}",
+  },
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",
     refreshTitle: "Chat-Daten aktualisieren",

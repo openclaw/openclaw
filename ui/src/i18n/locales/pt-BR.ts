@@ -158,6 +158,10 @@ export const pt_BR: TranslationMap = {
     subtitle: "Painel do Gateway",
     passwordPlaceholder: "opcional",
   },
+  connectCommand: {
+    copyTitle: "Copiar comando",
+    copyAriaLabel: "Copiar comando: {command}",
+  },
   chat: {
     disconnected: "Desconectado do gateway.",
     refreshTitle: "Atualizar dados do chat",
