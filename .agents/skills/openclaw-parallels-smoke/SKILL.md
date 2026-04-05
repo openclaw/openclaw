@@ -46,7 +46,10 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 - Preferred entrypoint: `pnpm test:parallels:macos`
 - Default upgrade coverage on macOS should now include: fresh snapshot -> site installer pinned to the latest stable tag -> `openclaw update --channel dev` on the guest. Treat this as part of the default Tahoe regression plan, not an optional side quest.
+- `parallels-macos-smoke.sh --mode upgrade` should run that release-to-dev lane by default. Keep the older host-tgz upgrade path only when the caller explicitly passes `--target-package-spec`.
+- Because the default upgrade lane no longer needs a host tgz, skip `npm pack` + host HTTP server startup for `--mode upgrade` unless `--target-package-spec` is set. Keep the pack/server path for `fresh` and `both`.
 - If that release-to-dev lane fails with `reason=preflight-no-good-commit` and repeated `sh: pnpm: command not found` tails from `preflight build`, treat it as an updater regression first. The fix belongs in the git/dev updater bootstrap path, not in Parallels retry logic.
+- Until the public stable train includes that updater bootstrap fix, the macOS release-to-dev lane may seed a temporary guest-local `pnpm` shim immediately before `openclaw update --channel dev`. Keep that workaround scoped to the smoke harness and remove it once the latest stable no longer needs it.
 - Default to the snapshot closest to `macOS 26.3.1 latest`.
 - On Peter's Tahoe VM, `fresh-latest-march-2026` can hang in `prlctl snapshot-switch`; if restore times out there, rerun with `--snapshot-hint 'macOS 26.3.1 latest'` before blaming auth or the harness.
 - `parallels-macos-smoke.sh` now retries `snapshot-switch` once after force-stopping a stuck running/suspended guest. If Tahoe still times out after that recovery path, then treat it as a real Parallels/host issue and rerun manually.
