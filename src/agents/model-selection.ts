@@ -1,3 +1,4 @@
+import { CLAUDE_CLI_BACKEND_ID } from "../../extensions/anthropic/cli-backend-api.js";
 import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -6,6 +7,7 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -27,29 +29,7 @@ import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalizat
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
 
-type CliBackendRuntimeModule = typeof import("../plugins/cli-backends.runtime.js");
-
-const CLI_BACKEND_RUNTIME_CANDIDATES = [
-  "../plugins/cli-backends.runtime.js",
-  "../plugins/cli-backends.runtime.ts",
-] as const;
-
-let cliBackendRuntimeModule: CliBackendRuntimeModule | undefined;
-
-function loadCliBackendRuntime(): CliBackendRuntimeModule | null {
-  if (cliBackendRuntimeModule) {
-    return cliBackendRuntimeModule;
-  }
-  for (const candidate of CLI_BACKEND_RUNTIME_CANDIDATES) {
-    try {
-      cliBackendRuntimeModule = require(candidate) as CliBackendRuntimeModule;
-      return cliBackendRuntimeModule;
-    } catch {
-      // Try source/runtime candidates in order.
-    }
-  }
-  return null;
-}
+const BUILTIN_CLI_PROVIDER_IDS = new Set([normalizeProviderId(CLAUDE_CLI_BACKEND_ID)]);
 
 function getLog(): ReturnType<typeof createSubsystemLogger> {
   log ??= createSubsystemLogger("model-selection");
@@ -112,7 +92,10 @@ export {
 
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   const normalized = normalizeProviderId(provider);
-  const cliBackends = loadCliBackendRuntime()?.resolveRuntimeCliBackends() ?? [];
+  if (BUILTIN_CLI_PROVIDER_IDS.has(normalized)) {
+    return true;
+  }
+  const cliBackends = resolveRuntimeCliBackends();
   if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
     return true;
   }
