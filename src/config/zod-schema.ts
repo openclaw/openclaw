@@ -46,7 +46,6 @@ const ClawConfigSchema = z
     enabled: z.boolean().optional(),
     maxActiveMissions: z.number().int().positive().optional(),
     loopMs: z.number().int().positive().optional(),
-    requiredVerifier: z.boolean().optional(),
     autonomyDefault: z.boolean().optional(),
   })
   .strict()

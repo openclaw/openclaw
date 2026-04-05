@@ -5,8 +5,6 @@ export type ClawConfig = {
   maxActiveMissions?: number;
   /** Runtime wake loop interval in milliseconds. Default: 5000. */
   loopMs?: number;
-  /** Require a fresh-context verifier pass before completion. Default: true. */
-  requiredVerifier?: boolean;
   /** Default global autonomy state for newly created control state. Default: true. */
   autonomyDefault?: boolean;
 };

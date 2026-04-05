@@ -2,6 +2,12 @@ import crypto from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  browserStatus,
+  getBrowserControlState,
+  resolveBrowserConfig,
+  startBrowserControlServiceFromConfig,
+} from "../../extensions/browser/runtime-api.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../agents/pi-embedded.js";
 import { ensureSessionHeader } from "../agents/pi-embedded-helpers.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -13,6 +19,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildClawHelperExtraSystemPrompt,
   buildClawHelperPrompt,
+  buildClawPlanningExtraSystemPrompt,
+  buildClawPlanningPrompt,
   buildClawRunnerExtraSystemPrompt,
   buildClawRunnerPrompt,
   buildClawVerifierExtraSystemPrompt,
@@ -52,6 +60,7 @@ const MISSION_AUDIT_FILENAME = "AUDIT_LOG.jsonl";
 
 type ClawMissionStateRecord = Omit<ClawMissionDetail, "requiresAttention"> & {
   version: 1;
+  missionPlan: ClawMissionPlan;
   runnerSessionId: string | null;
   runnerSessionFile: string | null;
   recoveryTargetStatus: Extract<ClawMissionStatus, "running" | "verifying"> | null;
@@ -70,6 +79,7 @@ type ClawServiceDeps = {
   resolveWorkspaceDir?: () => string;
   loadConfig?: () => OpenClawConfig;
   runEmbeddedPiAgent?: typeof runEmbeddedPiAgent;
+  inspectBrowserReadiness?: (cfg: OpenClawConfig) => Promise<ClawBrowserReadiness>;
 };
 
 const TERMINAL_MISSION_STATUSES = new Set<ClawMissionStatus>([
@@ -161,6 +171,33 @@ function normalizeEvidence(value: unknown): string[] {
     .slice(0, 8);
 }
 
+function normalizeTextList(value: unknown, maxItems: number, fallback: string[]): string[] {
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+  const normalized = value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean)
+    .slice(0, maxItems);
+  return normalized.length > 0 ? normalized : fallback;
+}
+
+function normalizeSummaryText(value: unknown, fallback: string): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim();
+  return normalized || fallback;
+}
+
+function compactGoal(goal: string, maxLength = 160): string {
+  const normalized = goal.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
 function extractJsonObject(text: string): Record<string, unknown> | null {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -219,6 +256,31 @@ type ClawHelperDecision = {
   nextStep?: string | null;
   blockerSummary?: string | null;
   evidence: string[];
+};
+
+type ClawMissionPlan = {
+  source: "fallback" | "planned";
+  summary: string;
+  scopeIn: string[];
+  scopeOut: string[];
+  phases: string[];
+  tasks: string[];
+  doneCriteria: string[];
+};
+
+type ClawPlanningDecision = {
+  summary: string;
+  scopeIn: string[];
+  scopeOut: string[];
+  phases: string[];
+  tasks: string[];
+  doneCriteria: string[];
+};
+
+type ClawBrowserReadiness = {
+  ready: boolean;
+  summary: string;
+  detail?: string | null;
 };
 
 function parseRunnerDecision(text: string): ClawRunnerDecision {
@@ -301,6 +363,62 @@ function parseHelperDecision(text: string): ClawHelperDecision {
   };
 }
 
+function buildFallbackMissionPlan(params: {
+  title: string;
+  goal: string;
+}): ClawMissionPlan {
+  const goalSummary = compactGoal(params.goal);
+  return {
+    source: "fallback",
+    summary: `Drive the current repository and runtime toward this goal: ${goalSummary}`,
+    scopeIn: [
+      `Deliver the approved outcome for "${params.title}".`,
+      "Work inside the current repository and runtime only where it directly moves the mission forward.",
+      "Keep mission files, evidence, and audit history aligned with durable progress.",
+    ],
+    scopeOut: [
+      "Unrelated cleanup or refactors that do not materially advance the approved goal.",
+      "New product directions or side quests that are not implied by the approved mission.",
+    ],
+    phases: [
+      `Inspect the current repository/runtime state for "${params.title}".`,
+      `Execute the concrete code, config, or runtime changes needed to satisfy: ${goalSummary}`,
+      "Verify the result against explicit done criteria before marking the mission done.",
+    ],
+    tasks: [
+      `Inspect the repo/runtime surfaces most relevant to: ${goalSummary}`,
+      `Implement the primary work required to satisfy "${params.title}".`,
+      "Record durable evidence and keep the mission packet current after meaningful progress.",
+      "Pass the required fresh-context verifier before completing the mission.",
+    ],
+    doneCriteria: [
+      `The approved goal is satisfied: ${goalSummary}`,
+      "The mission packet reflects the final repository/runtime state and captured evidence.",
+      "A fresh verifier confirms the explicit done criteria are satisfied.",
+    ],
+  };
+}
+
+function parsePlanningDecision(
+  text: string,
+  fallback: ClawMissionPlan,
+): ClawPlanningDecision {
+  const parsed = extractJsonObject(text);
+  if (!parsed) {
+    throw new Error("Planning pass did not return a valid JSON object.");
+  }
+
+  const summary = normalizeSummaryText(parsed.summary, fallback.summary);
+  return {
+    summary,
+    scopeIn: normalizeTextList(parsed.scopeIn, 6, fallback.scopeIn),
+    scopeOut: normalizeTextList(parsed.scopeOut, 6, fallback.scopeOut),
+    phases: normalizeTextList(parsed.phases, 8, fallback.phases),
+    tasks: normalizeTextList(parsed.tasks, 10, fallback.tasks),
+    doneCriteria: normalizeTextList(parsed.doneCriteria, 8, fallback.doneCriteria),
+  };
+}
+
 function isActionableDecisionForMission(
   mission: Pick<ClawMissionStateRecord, "status">,
   decision: ClawPendingDecision,
@@ -315,7 +433,7 @@ function isActionableDecisionForMission(
     return mission.status === "awaiting_setup";
   }
   if (decision.kind === "recovery_uncertain") {
-    return mission.status === "recovering";
+    return mission.status === "recovering" || mission.status === "blocked";
   }
   return true;
 }
@@ -467,6 +585,7 @@ function isBrowserPluginEnabled(cfg: OpenClawConfig): boolean {
 type ClawMissionCapabilityNeeds = {
   browserRequired: boolean;
   helperSessionsUseful: boolean;
+  gatewayRequired: boolean;
   manualAuthRequired: boolean;
   likelyAuthDomains: string[];
   likelyExternalSystems: string[];
@@ -520,6 +639,13 @@ function inferMissionCapabilityNeeds(goal: string): ClawMissionCapabilityNeeds {
     /\blater\b/,
     /\btomorrow\b/,
   ]);
+  const gatewayRequired = goalMentionsAny(normalizedGoal, [
+    /\bgateway\b/,
+    /\bdaemon\b/,
+    /\brestart\b/,
+    /\bnode\b/,
+    /\bcontrol plane\b/,
+  ]);
 
   const likelyAuthDomains = new Set<string>();
   const likelyExternalSystems = new Set<string>();
@@ -549,6 +675,7 @@ function inferMissionCapabilityNeeds(goal: string): ClawMissionCapabilityNeeds {
   return {
     browserRequired,
     helperSessionsUseful,
+    gatewayRequired,
     manualAuthRequired,
     likelyAuthDomains: [...likelyAuthDomains],
     likelyExternalSystems: [...likelyExternalSystems],
@@ -570,13 +697,104 @@ function isToolExposedForMission(cfg: OpenClawConfig, toolName: string): boolean
   ]);
 }
 
+async function defaultInspectBrowserReadiness(
+  cfg: OpenClawConfig,
+): Promise<ClawBrowserReadiness> {
+  if (!isBrowserPluginEnabled(cfg)) {
+    return {
+      ready: false,
+      summary: "The browser plugin is not enabled.",
+    };
+  }
+
+  let resolvedBrowser: ReturnType<typeof resolveBrowserConfig>;
+  try {
+    resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
+  } catch (error) {
+    return {
+      ready: false,
+      summary: "Browser configuration is invalid.",
+      detail: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  if (!resolvedBrowser.enabled) {
+    return {
+      ready: false,
+      summary: "Browser control is disabled in config.",
+    };
+  }
+
+  try {
+    const control = getBrowserControlState() ?? (await startBrowserControlServiceFromConfig());
+    if (!control) {
+      return {
+        ready: false,
+        summary: "Browser control service could not be started from config.",
+      };
+    }
+
+    const status = await browserStatus(`http://127.0.0.1:${control.port}`);
+    if (!status.enabled) {
+      return {
+        ready: false,
+        summary: "Browser control reported a disabled status.",
+      };
+    }
+    if (typeof status.detectError === "string" && status.detectError.trim()) {
+      return {
+        ready: false,
+        summary: "Browser control could not resolve a runnable browser.",
+        detail: status.detectError.trim(),
+      };
+    }
+    if (status.running && status.cdpReady !== false) {
+      return {
+        ready: true,
+        summary: "Browser control is ready and the configured profile is already running.",
+      };
+    }
+    if (status.attachOnly) {
+      return {
+        ready: true,
+        summary: "Browser control is ready in attach-only mode and can attach to an existing session.",
+      };
+    }
+    const chosenBrowser =
+      status.detectedExecutablePath ??
+      status.executablePath ??
+      status.chosenBrowser ??
+      status.detectedBrowser;
+    return {
+      ready: true,
+      summary: chosenBrowser
+        ? `Browser control is ready and can start ${chosenBrowser} on demand.`
+        : "Browser control is ready for browser-dependent mission work.",
+    };
+  } catch (error) {
+    return {
+      ready: false,
+      summary: "Browser control did not report a ready state.",
+      detail: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 async function buildPreflightChecks(params: {
   goal: string;
   workspaceDir: string;
   missionDir: string;
   cfg: OpenClawConfig;
+  inspectBrowserReadiness: (cfg: OpenClawConfig) => Promise<ClawBrowserReadiness>;
 }): Promise<ClawPreflightCheck[]> {
   const capabilityNeeds = inferMissionCapabilityNeeds(params.goal);
+  let browserConfigured = false;
+  let browserConfigDetail: string | null = null;
+  try {
+    browserConfigured = resolveBrowserConfig(params.cfg.browser, params.cfg).enabled;
+  } catch (error) {
+    browserConfigDetail = error instanceof Error ? error.message : String(error);
+  }
   const [workspaceReady, missionDirReady] = await Promise.all([
     canReadWritePath(params.workspaceDir),
     canReadWritePath(params.missionDir),
@@ -592,7 +810,35 @@ async function buildPreflightChecks(params: {
     isToolExposedForMission(params.cfg, "subagents");
   const browserPluginReady = isBrowserPluginEnabled(params.cfg);
   const gatewayRuntimeReady = getGatewayBroadcastRuntime() != null;
-  const browserReady = browserToolReady && browserPluginReady;
+  const browserReadiness =
+    capabilityNeeds.browserRequired && browserToolReady && browserPluginReady && browserConfigured
+      ? await params.inspectBrowserReadiness(params.cfg)
+      : null;
+  const browserReady =
+    browserToolReady &&
+    browserPluginReady &&
+    browserConfigured &&
+    (!capabilityNeeds.browserRequired || browserReadiness?.ready === true);
+  const browserSummary = capabilityNeeds.browserRequired
+    ? browserReady
+      ? browserReadiness?.summary ?? "Browser automation is available for this mission."
+      : !browserPluginReady
+        ? "This goal appears to require browser work, but the browser plugin is not enabled."
+        : !browserToolReady
+          ? "This goal appears to require browser work, but the browser tool is blocked by current tool policy."
+          : !browserConfigured
+            ? "This goal appears to require browser work, but browser control is disabled or invalid in config."
+            : browserReadiness?.summary ?? "This goal appears to require browser work, but the browser runtime is not ready."
+    : browserToolReady && browserPluginReady && browserConfigured
+      ? "Browser automation is configured and can be used later if the mission needs it."
+      : "Browser automation is optional for this mission.";
+  const browserDetail =
+    browserReadiness?.detail ??
+    (browserConfigDetail
+      ? `Browser configuration error: ${browserConfigDetail}`
+      : capabilityNeeds.browserRequired && !browserConfigured
+        ? "Enable a browser control profile in config before approving this mission."
+        : null);
 
   return [
     {
@@ -636,10 +882,17 @@ async function buildPreflightChecks(params: {
       id: "gateway-runtime",
       category: "runtime",
       title: "Gateway runtime ready",
-      status: gatewayRuntimeReady ? "ready" : "info",
+      status: gatewayRuntimeReady
+        ? "ready"
+        : capabilityNeeds.gatewayRequired
+          ? "needs_setup"
+          : "info",
       summary: gatewayRuntimeReady
         ? "The mission runner is attached to the live gateway runtime."
-        : "Gateway runtime signals are not yet attached; mission persistence still works, but live runtime broadcasts may not be available in this context.",
+        : capabilityNeeds.gatewayRequired
+          ? "This goal appears to depend on gateway/runtime control, but no live gateway runtime is attached."
+          : "Gateway runtime signals are not yet attached; mission persistence still works, but live runtime broadcasts may not be available in this context.",
+      blocker: capabilityNeeds.gatewayRequired && !gatewayRuntimeReady,
     },
     {
       id: "exec-tool",
@@ -694,18 +947,11 @@ async function buildPreflightChecks(params: {
         ? browserReady
           ? "ready"
           : "needs_setup"
-        : browserReady
+        : browserToolReady && browserPluginReady && browserConfigured
           ? "ready"
           : "info",
-      summary: capabilityNeeds.browserRequired
-        ? browserReady
-          ? "Browser automation is available for this mission."
-          : !browserPluginReady
-            ? "This goal appears to require browser work, but the browser plugin is not enabled."
-            : "This goal appears to require browser work, but the browser tool is blocked by current tool policy."
-        : browserReady
-          ? "Browser automation is available if the mission later needs it."
-          : "The browser runtime is not fully exposed; browser-dependent steps would require additional setup.",
+      summary: browserSummary,
+      detail: browserDetail,
       blocker: capabilityNeeds.browserRequired && !browserReady,
     },
     {
@@ -734,6 +980,9 @@ async function buildPreflightChecks(params: {
         : capabilityNeeds.likelyAuthDomains.length > 0
           ? `This mission may depend on existing authentication for: ${capabilityNeeds.likelyAuthDomains.join(", ")}.`
           : "No obvious authentication blocker was inferred from the goal text.",
+      detail: capabilityNeeds.manualAuthRequired
+        ? "Manual-auth requirements are inferred directly from the approved goal and are treated as true blockers for unattended execution."
+        : null,
       blocker: capabilityNeeds.manualAuthRequired,
     },
     {
@@ -771,6 +1020,17 @@ function buildPreflightDecision(nowIso: string, summary: string): ClawPendingDec
   };
 }
 
+function buildRecoveryUncertainDecision(nowIso: string, summary: string): ClawPendingDecision {
+  return {
+    id: crypto.randomUUID(),
+    kind: "recovery_uncertain",
+    title: "Confirm recovery continuation",
+    summary,
+    requestedAt: nowIso,
+    status: "pending",
+  };
+}
+
 function buildDefaultControlState(nowIso: string, autonomyEnabled: boolean): ClawControlState {
   return {
     autonomyEnabled,
@@ -778,6 +1038,36 @@ function buildDefaultControlState(nowIso: string, autonomyEnabled: boolean): Cla
     stopAllNowRequestedAt: null,
     updatedAt: nowIso,
   };
+}
+
+function isRecoverySafeToResumeAutomatically(state: ClawMissionStateRecord): boolean {
+  if (state.status === "verifying") {
+    return true;
+  }
+  if (state.status !== "running") {
+    return false;
+  }
+  return (
+    state.runCycleCount === 0 &&
+    state.verifyCycleCount === 0 &&
+    state.recentEvidence.length === 0 &&
+    state.lastFailureSummary == null
+  );
+}
+
+function buildRecoveryUncertainSummary(state: ClawMissionStateRecord): string {
+  const reasons: string[] = [];
+  if (state.runCycleCount > 0) {
+    reasons.push(`runner cycles completed: ${state.runCycleCount}`);
+  }
+  if (state.recentEvidence.length > 0) {
+    reasons.push(`durable evidence captured: ${state.recentEvidence.join("; ")}`);
+  }
+  if (state.lastFailureSummary) {
+    reasons.push(`last runner error: ${state.lastFailureSummary}`);
+  }
+  const suffix = reasons.length > 0 ? ` Last checkpoint details: ${reasons.join(" | ")}.` : "";
+  return `Mission recovery needs operator confirmation because active runner work may have left partially applied side effects before restart.${suffix}`;
 }
 
 function buildInboxItems(missions: readonly ClawMissionStateRecord[]): ClawInboxItem[] {
@@ -896,6 +1186,8 @@ function renderMissionMarkdown(state: ClawMissionStateRecord): string {
 }
 
 function renderScopeMarkdown(state: ClawMissionStateRecord): string {
+  const scopeIn = state.missionPlan.scopeIn.map((item) => `- ${item}`);
+  const scopeOut = state.missionPlan.scopeOut.map((item) => `- ${item}`);
   return [
     "# Project Scope",
     "",
@@ -905,13 +1197,11 @@ function renderScopeMarkdown(state: ClawMissionStateRecord): string {
     "",
     "## In Scope",
     "",
-    "- Build the approved mission against the current repository and runtime.",
-    "- Use the generated project files as the durable source of truth.",
+    ...scopeIn,
     "",
     "## Out of Scope",
     "",
-    "- Product changes outside the approved mission.",
-    "- Unrelated cleanup that does not directly move the mission forward.",
+    ...scopeOut,
   ].join("\n");
 }
 
@@ -934,6 +1224,7 @@ function renderPlanMarkdown(state: ClawMissionStateRecord): string {
     state.recentEvidence.length > 0
       ? state.recentEvidence.map((item) => `- ${item}`)
       : ["- No durable evidence recorded yet."];
+  const plannedPhases = state.missionPlan.phases.map((item, index) => `${index + 1}. ${item}`);
   return [
     "# Project Plan",
     "",
@@ -941,18 +1232,19 @@ function renderPlanMarkdown(state: ClawMissionStateRecord): string {
     "",
     state.goal,
     "",
-    "## Current Strategy",
+    "## Strategy Summary",
     "",
-    `- Drive the repository and runtime toward the approved goal for "${state.title}".`,
-    `- Keep the mission packet current so execution can resume from durable state after interruption.`,
-    `- Current checkpoint: ${nextCheckpoint}`,
+    state.missionPlan.summary,
     "",
-    "## Current Phase Plan",
+    "## Planned Phases",
     "",
-    `1. Maintain a clean preflight and approval state for the mission.`,
-    `2. Execute the next best repository/runtime step for the current objective: ${state.currentStep ?? "Pending mission execution."}`,
-    "3. Capture durable evidence and update PROJECT_STATUS.md after every meaningful change.",
-    "4. Pass the required verifier check before claiming completion.",
+    ...plannedPhases,
+    "",
+    "## Current Checkpoint",
+    "",
+    `- Status: ${state.status}`,
+    `- Current step: ${state.currentStep ?? "Pending mission execution."}`,
+    `- Next checkpoint: ${nextCheckpoint}`,
     "",
     "## Recent Evidence",
     "",
@@ -974,14 +1266,25 @@ function renderTasksMarkdown(state: ClawMissionStateRecord): string {
     state.status === "blocked"
       ? `${state.currentStep ?? "Mission blocked"}${state.blockedSummary ? ` (${state.blockedSummary})` : ""}`
       : state.currentStep ?? "Execute the current mission step.";
+  const plannedTasks = state.missionPlan.tasks.map((task) => `- ${task}`);
   return [
     "# Project Tasks",
+    "",
+    "## Execution Checklist",
     "",
     "- [x] Generate mission packet",
     `- [${preflightReady ? "x" : " "}] Clear required preflight blockers`,
     `- [${state.approvedAt ? "x" : " "}] Approve mission start`,
     `- [${executionStarted ? "x" : " "}] Execute the current mission objective: ${executionLine}`,
     `- [${verificationDone ? "x" : " "}] Pass the fresh verification check against PROJECT_DONE_CRITERIA.md`,
+    "",
+    "## Mission-Specific Tasks",
+    "",
+    ...plannedTasks,
+    "",
+    "## Current Focus",
+    "",
+    `- ${executionLine}`,
   ].join("\n");
 }
 
@@ -998,12 +1301,11 @@ function renderStatusMarkdown(state: ClawMissionStateRecord): string {
 }
 
 function renderDoneCriteriaMarkdown(state: ClawMissionStateRecord): string {
+  const criteria = state.missionPlan.doneCriteria.map((item) => `- ${item}`);
   return [
     "# Project Done Criteria",
     "",
-    "- The approved goal is satisfied in the current repository/runtime.",
-    "- Verification has been completed before the mission is marked done.",
-    "- The mission status is terminal and the audit trail explains the final outcome.",
+    ...criteria,
     "",
     `Mission: ${state.title}`,
   ].join("\n");
@@ -1069,6 +1371,10 @@ function assertMissionStateRecord(raw: unknown): ClawMissionStateRecord {
   ) {
     throw new Error("Mission state is missing required fields.");
   }
+  const fallbackMissionPlan = buildFallbackMissionPlan({
+    title: state.title,
+    goal: state.goal,
+  });
   return {
     ...state,
     approvedAt: state.approvedAt ?? null,
@@ -1109,6 +1415,22 @@ function assertMissionStateRecord(raw: unknown): ClawMissionStateRecord {
         : null,
     runCycleCount: typeof state.runCycleCount === "number" ? state.runCycleCount : 0,
     verifyCycleCount: typeof state.verifyCycleCount === "number" ? state.verifyCycleCount : 0,
+    missionPlan:
+      state.missionPlan && typeof state.missionPlan === "object"
+        ? {
+            source: state.missionPlan.source === "planned" ? "planned" : "fallback",
+            summary: normalizeSummaryText(state.missionPlan.summary, fallbackMissionPlan.summary),
+            scopeIn: normalizeTextList(state.missionPlan.scopeIn, 6, fallbackMissionPlan.scopeIn),
+            scopeOut: normalizeTextList(state.missionPlan.scopeOut, 6, fallbackMissionPlan.scopeOut),
+            phases: normalizeTextList(state.missionPlan.phases, 8, fallbackMissionPlan.phases),
+            tasks: normalizeTextList(state.missionPlan.tasks, 10, fallbackMissionPlan.tasks),
+            doneCriteria: normalizeTextList(
+              state.missionPlan.doneCriteria,
+              8,
+              fallbackMissionPlan.doneCriteria,
+            ),
+          }
+        : fallbackMissionPlan,
   } as ClawMissionStateRecord;
 }
 
@@ -1155,11 +1477,11 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
   const resolveWorkspaceDir = deps.resolveWorkspaceDir ?? defaultResolveWorkspaceDir;
   const loadClawConfig = deps.loadConfig ?? loadConfig;
   const runMissionAgent = deps.runEmbeddedPiAgent ?? runEmbeddedPiAgent;
+  const inspectBrowserReadiness = deps.inspectBrowserReadiness ?? defaultInspectBrowserReadiness;
 
   function resolveClawExecutionConfig(): {
     autonomyDefault: boolean;
     maxActiveMissions: number;
-    requiredVerifier: boolean;
   } {
     const cfg = loadClawConfig();
     return {
@@ -1170,7 +1492,6 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
         cfg.claw.maxActiveMissions > 0
           ? Math.floor(cfg.claw.maxActiveMissions)
           : CLAW_MAX_ACTIVE_MISSIONS,
-      requiredVerifier: cfg.claw?.requiredVerifier !== false,
     };
   }
 
@@ -1612,6 +1933,19 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     state.decisions.push(buildPreflightDecision(nowIso, summary));
   }
 
+  function ensurePendingRecoveryDecision(
+    state: ClawMissionStateRecord,
+    nowIso: string,
+    summary: string,
+  ): void {
+    const existing = resolvePendingDecisionByKind(state, "recovery_uncertain");
+    if (existing) {
+      existing.summary = summary;
+      return;
+    }
+    state.decisions.push(buildRecoveryUncertainDecision(nowIso, summary));
+  }
+
   function resolvePendingDecisionByKindWithContinue(
     state: ClawMissionStateRecord,
     kind: ClawPendingDecision["kind"],
@@ -1924,6 +2258,79 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     await writeDynamicMissionDocs(state);
   }
 
+  async function attemptMissionPlanning(params: {
+    state: ClawMissionStateRecord;
+    cfg: OpenClawConfig;
+  }): Promise<{
+    plan: ClawMissionPlan;
+    usedFallback: boolean;
+    detail?: string | null;
+  }> {
+    const fallbackPlan = params.state.missionPlan;
+    const sessionId = `claw-planner-${params.state.id}-${crypto.randomUUID().slice(0, 8)}`;
+    const sessionFile = path.join(
+      params.state.logsDir,
+      `planner-${crypto.randomUUID().slice(0, 8)}.jsonl`,
+    );
+    await ensureSessionHeader({
+      sessionFile,
+      sessionId,
+      cwd: params.state.workspaceDir,
+    });
+
+    try {
+      const result = await runMissionAgent({
+        sessionId,
+        sessionFile,
+        workspaceDir: params.state.workspaceDir,
+        config: params.cfg,
+        trigger: "manual",
+        senderIsOwner: true,
+        clawRole: "helper",
+        prompt: buildClawPlanningPrompt({
+          missionId: params.state.id,
+          title: params.state.title,
+          goal: params.state.goal,
+          workspaceDir: params.state.workspaceDir,
+        }),
+        extraSystemPrompt: buildClawPlanningExtraSystemPrompt(),
+        runId: buildCycleRunId("helper", params.state.id),
+        timeoutMs: 120_000,
+        execOverrides: {
+          host: "gateway",
+          security: "full",
+          ask: "off",
+        },
+        bashElevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+        },
+      });
+      const plannerText = joinPayloadText(result);
+      const planning = parsePlanningDecision(plannerText, fallbackPlan);
+      return {
+        usedFallback: false,
+        plan: {
+          source: "planned",
+          summary: planning.summary,
+          scopeIn: planning.scopeIn,
+          scopeOut: planning.scopeOut,
+          phases: planning.phases,
+          tasks: planning.tasks,
+          doneCriteria: planning.doneCriteria,
+        },
+        detail: plannerText || null,
+      };
+    } catch (error) {
+      return {
+        usedFallback: true,
+        plan: fallbackPlan,
+        detail: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   async function executeHelperCycle(params: {
     state: ClawMissionStateRecord;
     reason: "no_progress" | "verifier_rejection";
@@ -2016,7 +2423,6 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
   }
 
   async function executeRunnerCycle(state: ClawMissionStateRecord): Promise<void> {
-    const clawConfig = resolveClawExecutionConfig();
     const promptFiles = await readMissionPromptFiles(state);
     const session = ensureRunnerSession(state);
     await ensureSessionHeader({
@@ -2087,25 +2493,15 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     }
 
     if (decision.outcome === "verify") {
-      if (clawConfig.requiredVerifier) {
-        moveMissionToVerifying(
-          state,
-          decision.nextStep?.trim() || "Run the required fresh-context verification pass.",
-        );
-        await recordAudit(state, {
-          actor: "system",
-          type: "mission.verifying",
-          summary: "Mission requested a fresh verification pass.",
-        });
-      } else {
-        moveMissionToDone(state, decision.summary);
-        await recordAudit(state, {
-          actor: "system",
-          type: "mission.done",
-          summary: "Mission completed without a required verifier pass.",
-          detail: decision.summary,
-        });
-      }
+      moveMissionToVerifying(
+        state,
+        decision.nextStep?.trim() || "Run the required fresh-context verification pass.",
+      );
+      await recordAudit(state, {
+        actor: "system",
+        type: "mission.verifying",
+        summary: "Mission requested a fresh verification pass.",
+      });
       await persistRuntimeState(state);
       return;
     }
@@ -2293,27 +2689,84 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     }
   }
 
-  function selectActiveMission(
+  function selectActiveMissions(
     missions: readonly ClawMissionStateRecord[],
-  ): ClawMissionStateRecord | null {
-    const active = missions.filter((mission) =>
-      mission.status === "running" ||
-      mission.status === "recovering" ||
-      mission.status === "verifying",
-    );
-    if (active.length === 0) {
-      return null;
+  ): ClawMissionStateRecord[] {
+    return missions
+      .filter(
+        (mission) =>
+          mission.status === "running" ||
+          mission.status === "recovering" ||
+          mission.status === "verifying",
+      )
+      .toSorted((left, right) => left.updatedAt.localeCompare(right.updatedAt));
+  }
+
+  function selectQueuedMissions(
+    missions: readonly ClawMissionStateRecord[],
+  ): ClawMissionStateRecord[] {
+    return missions
+      .filter((mission) => mission.status === "queued")
+      .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
+  async function claimQueuedMission(queued: ClawMissionStateRecord): Promise<void> {
+    moveMissionToRunning(queued, "Mission execution cycle started.");
+    await recordAudit(queued, {
+      actor: "system",
+      type: "mission.started",
+      summary: "Mission execution runner started.",
+    });
+    await persistRuntimeState(queued);
+  }
+
+  async function prepareMissionForCycle(
+    mission: ClawMissionStateRecord,
+  ): Promise<ClawMissionStateRecord> {
+    if (mission.status === "recovering") {
+      if (mission.recoveryTargetStatus === "verifying") {
+        moveMissionToVerifying(mission, "Retrying verification after recovery.");
+      } else {
+        moveMissionToRunning(mission, "Mission execution resumed after recovery.");
+      }
+      await recordAudit(mission, {
+        actor: "system",
+        type: "mission.recovered",
+        summary: "Mission resumed after recovery.",
+      });
+      await persistRuntimeState(mission);
     }
-    return active.toSorted((left, right) => left.updatedAt.localeCompare(right.updatedAt))[0] ?? null;
+    return mission;
   }
 
   async function recoverInterruptedMissions(
     workspaceDir = resolveWorkspaceDir(),
   ): Promise<ClawMissionDetailSnapshot | null> {
     let changedMissionId: string | null = null;
+    const nowIso = isoNow(now);
     const missions = await loadAllMissionStates(workspaceDir);
     for (const mission of missions) {
       if (mission.status !== "running" && mission.status !== "verifying") {
+        continue;
+      }
+      if (!isRecoverySafeToResumeAutomatically(mission)) {
+        const summary = buildRecoveryUncertainSummary(mission);
+        moveMissionToWaiting({
+          state: mission,
+          status: "blocked",
+          currentStep: "Awaiting operator confirmation before resuming recovery.",
+          waitKind: "recovery_uncertain",
+          blockedSummary: summary,
+        });
+        ensurePendingRecoveryDecision(mission, nowIso, summary);
+        await recordAudit(mission, {
+          actor: "system",
+          type: "decision.requested",
+          summary: "Recovery continuation requires operator confirmation.",
+          detail: summary,
+        });
+        await persistRuntimeState(mission);
+        changedMissionId = mission.id;
         continue;
       }
       moveMissionToRecovering(
@@ -2335,62 +2788,48 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     return await getMissionSnapshot(changedMissionId, workspaceDir);
   }
 
-  async function runNextMissionCycle(
+  async function runMissionCycles(
     workspaceDir = resolveWorkspaceDir(),
-  ): Promise<ClawMissionDetailSnapshot | null> {
+  ): Promise<ClawMissionDetailSnapshot[]> {
     const clawConfig = resolveClawExecutionConfig();
     const control = await loadControlState(workspaceDir);
     await reconcileMissionStates(workspaceDir, control);
     if (!control.autonomyEnabled || control.pauseAll || control.stopAllNowRequestedAt) {
-      return null;
+      return [];
     }
 
     const missions = await loadAllMissionStates(workspaceDir);
-    let mission = selectActiveMission(missions);
+    const activeMissions = selectActiveMissions(missions);
+    const queuedMissions = selectQueuedMissions(missions);
+    const availableSlots = Math.max(0, clawConfig.maxActiveMissions - activeMissions.length);
+    const claimedQueued = queuedMissions.slice(0, availableSlots);
 
-    if (!mission) {
-      const queued = missions.find((candidate) => candidate.status === "queued");
-      if (!queued) {
-        return null;
-      }
-      const activeCount = missions.filter((candidate) =>
-        candidate.status === "running" ||
-        candidate.status === "recovering" ||
-        candidate.status === "verifying",
-      ).length;
-      if (activeCount >= clawConfig.maxActiveMissions) {
-        return null;
-      }
-      moveMissionToRunning(queued, "Mission execution cycle started.");
-      await recordAudit(queued, {
-        actor: "system",
-        type: "mission.started",
-        summary: "Mission execution runner started.",
-      });
-      await persistRuntimeState(queued);
-      mission = queued;
+    for (const queued of claimedQueued) {
+      await claimQueuedMission(queued);
     }
 
-    if (!mission) {
-      return null;
+    const cycleTargets = [...activeMissions, ...claimedQueued];
+    if (cycleTargets.length === 0) {
+      return [];
     }
 
-    if (mission.status === "recovering") {
-      if (mission.recoveryTargetStatus === "verifying" && clawConfig.requiredVerifier) {
-        moveMissionToVerifying(mission, "Retrying verification after recovery.");
-      } else {
-        moveMissionToRunning(mission, "Mission execution resumed after recovery.");
+    const snapshots: ClawMissionDetailSnapshot[] = [];
+    for (const mission of cycleTargets) {
+      await prepareMissionForCycle(mission);
+      await executeMissionCycle(mission);
+      const snapshot = await getMissionSnapshot(mission.id, workspaceDir);
+      if (snapshot) {
+        snapshots.push(snapshot);
       }
-      await recordAudit(mission, {
-        actor: "system",
-        type: "mission.recovered",
-        summary: "Mission resumed after recovery.",
-      });
-      await persistRuntimeState(mission);
     }
+    return snapshots;
+  }
 
-    await executeMissionCycle(mission);
-    return await getMissionSnapshot(mission.id, workspaceDir);
+  async function runNextMissionCycle(
+    workspaceDir = resolveWorkspaceDir(),
+  ): Promise<ClawMissionDetailSnapshot | null> {
+    const snapshots = await runMissionCycles(workspaceDir);
+    return snapshots[0] ?? null;
   }
 
   async function createMission(params: {
@@ -2405,6 +2844,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     const createdAt = now();
     const createdAtIso = createdAt.toISOString();
     const title = normalizeTitle(params.title?.trim() || deriveMissionTitle(goal));
+    const cfg = loadClawConfig();
     const missionId = buildMissionId(createdAt, title);
     const missionDir = resolveMissionDir(missionId, workspaceDir);
     const artifactsDir = path.join(missionDir, "artifacts");
@@ -2435,6 +2875,10 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       preflight: [] as ClawPreflightCheck[],
       decisions: [] as ClawPendingDecision[],
       files: [] as ClawMissionFileEntry[],
+      missionPlan: buildFallbackMissionPlan({
+        title,
+        goal,
+      }),
       artifactsDir,
       logsDir,
       auditLogPath,
@@ -2466,6 +2910,21 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       type: "mission.created",
       summary: "Mission packet created from the requested goal.",
     });
+    if (cfg.claw?.enabled === true) {
+      const planningAttempt = await attemptMissionPlanning({ state, cfg });
+      state.missionPlan = planningAttempt.plan;
+      await saveMissionState(state);
+      await writeStaticMissionDocs(state);
+      await writeDynamicMissionDocs(state);
+      await recordAudit(state, {
+        actor: "system",
+        type: planningAttempt.usedFallback ? "mission.packetFallback" : "mission.packetPlanned",
+        summary: planningAttempt.usedFallback
+          ? "Mission packet planning fell back to the deterministic goal-derived packet."
+          : "Mission packet planning completed successfully.",
+        detail: planningAttempt.detail ?? null,
+      });
+    }
     state.status = "preflighting";
     state.currentStep = "Running mission preflight checks.";
     await saveMissionState(state);
@@ -2480,7 +2939,8 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       goal,
       workspaceDir,
       missionDir,
-      cfg: loadClawConfig(),
+      cfg,
+      inspectBrowserReadiness,
     });
     const awaitingSetup = hasBlockingPreflight(preflight);
     const blockedSummary = summarizeBlockingPreflight(preflight);
@@ -2578,6 +3038,11 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
   async function resumeMission(missionId: string): Promise<ClawMissionDetailSnapshot> {
     return await updateMission(missionId, async (state) => {
       const control = await loadControlState(state.workspaceDir);
+      if (resolvePendingDecisionByKind(state, "recovery_uncertain")) {
+        throw new Error(
+          "Cannot resume mission while recovery uncertainty is awaiting operator confirmation.",
+        );
+      }
       requireMissionStatus(state, ["paused", "blocked"], "resume");
       moveMissionToQueued(state, resolveQueuedCurrentStep(control));
       await recordAudit(state, {
@@ -2665,6 +3130,29 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
         });
         return state;
       }
+      if (decision.kind === "recovery_uncertain" && params.action === "continue") {
+        const control = await loadControlState(state.workspaceDir);
+        requireMissionStatus(state, ["blocked", "recovering"], "continue");
+        decision.status = "resolved";
+        decision.response = {
+          action: "continue",
+          note: params.note ?? null,
+          respondedAt: isoNow(now),
+        };
+        moveMissionToQueued(
+          state,
+          shouldStartMissionImmediately(control)
+            ? "Queued after operator confirmed recovery continuation."
+            : resolveQueuedCurrentStep(control),
+        );
+        await recordAudit(state, {
+          actor: "operator",
+          type: "decision.resolved",
+          summary: "Recovery continuation approved.",
+          detail: params.note ?? null,
+        });
+        return state;
+      }
       if (params.action === "cancel" || params.action === "reject") {
         if (isTerminalMissionStatus(state.status)) {
           throw new Error(`Cannot cancel mission from status "${state.status}".`);
@@ -2746,11 +3234,13 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
 
   async function rerunPreflight(missionId: string): Promise<ClawMissionDetailSnapshot> {
     return await updateMission(missionId, async (state) => {
+      const cfg = loadClawConfig();
       state.preflight = await buildPreflightChecks({
         goal: state.goal,
         workspaceDir: state.workspaceDir,
         missionDir: state.missionDir,
-        cfg: loadClawConfig(),
+        cfg,
+        inspectBrowserReadiness,
       });
       const nowIso = isoNow(now);
       const blockingSummary = summarizeBlockingPreflight(state.preflight);
@@ -2869,6 +3359,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
     listArtifacts,
     getAudit,
     recoverInterruptedMissions,
+    runMissionCycles,
     runNextMissionCycle,
     loadControlState,
     pauseAll,

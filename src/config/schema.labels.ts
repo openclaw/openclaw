@@ -579,7 +579,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "claw.enabled": "Claw Enabled",
   "claw.maxActiveMissions": "Claw Max Active Missions",
   "claw.loopMs": "Claw Loop Interval (ms)",
-  "claw.requiredVerifier": "Claw Required Verifier",
   "claw.autonomyDefault": "Claw Autonomy Default",
   session: "Session",
   "session.scope": "Session Scope",

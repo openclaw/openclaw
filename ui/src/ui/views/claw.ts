@@ -143,11 +143,18 @@ function renderArtifact(entry: ClawArtifactEntry) {
 
 export function renderClaw(props: ClawViewProps) {
   const mission = props.mission;
+  const hasPendingRecoveryUncertain =
+    mission?.decisions.some(
+      (decision) => decision.kind === "recovery_uncertain" && decision.status === "pending",
+    ) ?? false;
   const canApprove = mission?.status === "awaiting_approval";
   const canPause =
     mission != null &&
     ["queued", "running", "recovering", "verifying", "blocked"].includes(mission.status);
-  const canResume = mission != null && ["paused", "blocked"].includes(mission.status);
+  const canResume =
+    mission != null &&
+    ["paused", "blocked"].includes(mission.status) &&
+    !hasPendingRecoveryUncertain;
   const canCancel = mission != null && !["done", "failed", "cancelled"].includes(mission.status);
   const canRerunPreflight =
     mission != null &&
