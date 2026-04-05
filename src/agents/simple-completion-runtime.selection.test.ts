@@ -118,7 +118,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     expect(selection).toEqual(
       expect.objectContaining({
         provider: "openai",
-        modelId: "gpt-5",
+        modelId: "gpt-5.4",
       }),
     );
   });
