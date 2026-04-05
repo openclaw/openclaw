@@ -249,6 +249,73 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("reconciles existing promotion markers instead of appending duplicates", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "line 1",
+        "line 2",
+        "The gateway should stay loopback-only on port 18789.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "gateway loopback",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 3,
+            endLine: 3,
+            score: 0.95,
+            snippet: "The gateway should stay loopback-only on port 18789.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const firstApply = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(firstApply.applied).toBe(1);
+      expect(firstApply.appended).toBe(1);
+      expect(firstApply.reconciledExisting).toBe(0);
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+        entries: Record<string, { promotedAt?: string }>;
+      };
+      for (const entry of Object.values(rawStore.entries)) {
+        delete entry.promotedAt;
+      }
+      await fs.writeFile(storePath, `${JSON.stringify(rawStore, null, 2)}\n`, "utf-8");
+
+      const secondApply = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(secondApply.applied).toBe(1);
+      expect(secondApply.appended).toBe(0);
+      expect(secondApply.reconciledExisting).toBe(1);
+
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText.match(/openclaw-memory-promotion:/g)?.length).toBe(1);
+      expect(
+        memoryText.match(/The gateway should stay loopback-only on port 18789\./g)?.length,
+      ).toBe(1);
+    });
+  });
+
   it("filters out candidates older than maxAgeDays during ranking", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({

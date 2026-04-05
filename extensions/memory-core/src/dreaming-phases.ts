@@ -380,7 +380,55 @@ function buildLightDreamingBody(entries: ShortTermRecallEntry[]): string[] {
   return lines;
 }
 
-function buildRemDreamingBody(
+type RemTruthCandidate = {
+  snippet: string;
+  confidence: number;
+  evidence: string;
+};
+
+export type RemDreamingPreview = {
+  sourceEntryCount: number;
+  reflections: string[];
+  candidateTruths: RemTruthCandidate[];
+  bodyLines: string[];
+};
+
+function calculateCandidateTruthConfidence(entry: ShortTermRecallEntry): number {
+  const recallStrength = Math.min(1, Math.log1p(entry.recallCount) / Math.log1p(6));
+  const averageScore = entryAverageScore(entry);
+  const consolidation = Math.min(1, (entry.recallDays?.length ?? 0) / 3);
+  const conceptual = Math.min(1, (entry.conceptTags?.length ?? 0) / 6);
+  return Math.max(
+    0,
+    Math.min(
+      1,
+      averageScore * 0.45 + recallStrength * 0.25 + consolidation * 0.2 + conceptual * 0.1,
+    ),
+  );
+}
+
+function selectRemCandidateTruths(
+  entries: ShortTermRecallEntry[],
+  limit: number,
+): RemTruthCandidate[] {
+  if (limit <= 0) {
+    return [];
+  }
+  return dedupeEntries(
+    entries.filter((entry) => !entry.promotedAt),
+    0.88,
+  )
+    .map((entry) => ({
+      snippet: entry.snippet || "(no snippet captured)",
+      confidence: calculateCandidateTruthConfidence(entry),
+      evidence: `${entry.path}:${entry.startLine}-${entry.endLine}`,
+    }))
+    .filter((entry) => entry.confidence >= 0.45)
+    .toSorted((a, b) => b.confidence - a.confidence || a.snippet.localeCompare(b.snippet))
+    .slice(0, limit);
+}
+
+function buildRemReflections(
   entries: ShortTermRecallEntry[],
   limit: number,
   minPatternStrength: number,
@@ -422,6 +470,36 @@ function buildRemDreamingBody(
     lines.push(`  - note: reflection`);
   }
   return lines;
+}
+
+export function previewRemDreaming(params: {
+  entries: ShortTermRecallEntry[];
+  limit: number;
+  minPatternStrength: number;
+}): RemDreamingPreview {
+  const reflections = buildRemReflections(params.entries, params.limit, params.minPatternStrength);
+  const candidateTruths = selectRemCandidateTruths(
+    params.entries,
+    Math.max(1, Math.min(3, params.limit)),
+  );
+  const bodyLines = [
+    "### Reflections",
+    ...reflections,
+    "",
+    "### Possible Lasting Truths",
+    ...(candidateTruths.length > 0
+      ? candidateTruths.map(
+          (entry) =>
+            `- ${entry.snippet} [confidence=${entry.confidence.toFixed(2)} evidence=${entry.evidence}]`,
+        )
+      : ["- No strong candidate truths surfaced."]),
+  ];
+  return {
+    sourceEntryCount: params.entries.length,
+    reflections,
+    candidateTruths,
+    bodyLines,
+  };
 }
 
 async function runLightDreaming(params: {
@@ -478,15 +556,15 @@ async function runRemDreaming(params: {
   const entries = (
     await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs })
   ).filter((entry) => Date.parse(entry.lastRecalledAt) >= cutoffMs);
-  const bodyLines = buildRemDreamingBody(
+  const preview = previewRemDreaming({
     entries,
-    params.config.limit,
-    params.config.minPatternStrength,
-  );
+    limit: params.config.limit,
+    minPatternStrength: params.config.minPatternStrength,
+  });
   await writeDailyDreamingPhaseBlock({
     workspaceDir: params.workspaceDir,
     phase: "rem",
-    bodyLines,
+    bodyLines: preview.bodyLines,
     nowMs,
     timezone: params.config.timezone,
     storage: params.config.storage,
