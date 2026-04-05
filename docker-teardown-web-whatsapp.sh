@@ -18,6 +18,14 @@ require_cmd() {
   fi
 }
 
+validate_no_whitespace() {
+  local label="$1"
+  local value="$2"
+  if [[ "$value" =~ [[:space:]] ]]; then
+    fail "$label cannot contain whitespace: $value"
+  fi
+}
+
 append_compose_file_if_present() {
   local file="$1"
   if [[ -f "$file" ]]; then
@@ -29,6 +37,10 @@ require_cmd docker
 if ! docker compose version >/dev/null 2>&1; then
   fail "Docker Compose v2 is required."
 fi
+
+validate_no_whitespace "OPENCLAW_HOST_ROOT" "$HOST_ROOT"
+validate_no_whitespace "CONFIG_DIR" "$CONFIG_DIR"
+validate_no_whitespace "HOME_BIND_DIR" "$HOME_BIND_DIR"
 
 export OPENCLAW_CONFIG_DIR="$CONFIG_DIR"
 export OPENCLAW_WORKSPACE_DIR="$WORKSPACE_DIR"
