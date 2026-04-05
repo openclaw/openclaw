@@ -349,6 +349,8 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** Explicitly signal sandbox mode to bypass host-root media restrictions. */
+  sandboxed?: boolean;
 };
 
 function collectPayloadMediaSources(plan: readonly OutboundPayloadPlan[]): string[] {
@@ -739,13 +741,14 @@ async function deliverOutboundPayloadsCore(
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const mediaSources = collectPayloadMediaSources(outboundPayloadPlan);
-  const sandboxSessionKey = params.session?.key ?? params.mirror?.sessionKey;
-  const ignoreConfiguredRoots = sandboxSessionKey
-    ? resolveSandboxRuntimeStatus({
-        cfg,
-        sessionKey: sandboxSessionKey,
-      }).sandboxed
-    : false;
+  const ignoreConfiguredRoots =
+    params.sandboxed ??
+    (() => {
+      const sandboxSessionKey = params.session?.key ?? params.mirror?.sessionKey;
+      return sandboxSessionKey
+        ? resolveSandboxRuntimeStatus({ cfg, sessionKey: sandboxSessionKey }).sandboxed
+        : false;
+    })();
   const mediaAccess =
     mediaSources.length > 0
       ? resolveAgentScopedOutboundMediaAccess({
