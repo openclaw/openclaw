@@ -42,20 +42,20 @@ L3 Raw Layer (.jsonl + daily memory)
 
 ### 1. Session Startup (AGENTS.md)
 
-Add to your AGENTS.md Session Startup section:
+Add to your AGENTS.md session startup section:
 
 ```bash
 # Read checkpoint
 cat ~/.openclaw/workspace/memory/session-checkpoint.md
 
-# Recover delta (if checkpoint has delta_since_last)
+# Recover delta (if checkpoint has delta since last checkpoint)
 SP_DIR=~/.openclaw/workspace/memory/projects/session-persistence
 python3 $SP_DIR/scripts/jsonl_recovery.py recover >> ~/.openclaw/workspace/memory/session-checkpoint.md
 ```
 
 ### 2. Heartbeat Maintenance (HEARTBEAT.md)
 
-Add to your HEARTBEAT.md:
+Add to your HEARTBEAT.md file:
 
 ```bash
 # Session persistence skill directory
@@ -71,11 +71,11 @@ python3 $SP_DIR/scripts/knowledge_sync.py push
 
 ## Core Scripts
 
-All scripts live under `scripts/` within this skill directory.
+All scripts are under the `scripts/` folder in this skill directory.
 
 ### checkpoint_manager.py
 
-Handles SPARSE/FULL checkpoint triggers with Circuit Breaker protection.
+Handles SPARSE/FULL checkpoint triggering with Circuit Breaker protection.
 
 ```bash
 # Increment message count (call after each message)
@@ -91,17 +91,17 @@ python3 {baseDir}/scripts/checkpoint_manager.py check-full --heartbeat
 python3 {baseDir}/scripts/checkpoint_manager.py status
 ```
 
-**Trigger Logic:**
-- SPARSE: Time gate (≥5 min) AND Round gate (≥5 messages)
-- FULL: Heartbeat OR tool chain end OR major decision
+Trigger logic:
+- Sparse: time gate (≥5 min) AND rounds gate (≥5 messages)
+- Full: heartbeat OR toolchain end OR major decision
 
 **Circuit Breaker:**
 - 3 consecutive failures → degraded mode
-- Stops all checkpoint writes until manual recovery
+- Stops all checkpoint writes until manual recovery.
 
 ### jsonl_recovery.py
 
-Recovers delta messages from .jsonl after checkpoint timestamp.
+Recovers delta messages from .jsonl files after the checkpoint timestamp.
 
 ```bash
 # Recover and append to checkpoint
@@ -114,20 +114,20 @@ python3 {baseDir}/scripts/jsonl_recovery.py find-sessions
 python3 {baseDir}/scripts/jsonl_recovery.py status
 ```
 
-**Limits:**
-- 2KB max delta size
-- 5 messages max
+Limits:
+- Max delta size: 2KB
+- Max 5 messages
 - Only assistant messages extracted
 
 ### knowledge_sync.py
 
-Syncs Key Decisions from checkpoint to knowledge-graph.
+Syncs key decisions from checkpoint to knowledge-graph.
 
 ```bash
 # Push decisions to knowledge-graph
 python3 {baseDir}/scripts/knowledge_sync.py push
 
-# Preview differences without writing
+# Preview diff without writing
 python3 {baseDir}/scripts/knowledge_sync.py diff
 
 # Pull pending updates from knowledge-graph
@@ -137,39 +137,39 @@ python3 {baseDir}/scripts/knowledge_sync.py pull
 python3 {baseDir}/scripts/knowledge_sync.py status
 ```
 
-**Sync Flow:**
-1. Parse checkpoint's Key Decisions section
+**Sync flow:**
+1. Parse Key Decisions section of checkpoint
 2. Compare with knowledge-graph entries
-3. Append new items to knowledge-graph (push)
-4. Human review required before archiving
+3. Add new entries to knowledge-graph (push)
+4. Human review before archiving
 
 ### workspace_watchdog.py
 
-Detects workspace file changes after compaction.
+Detects workspace file changes after compression.
 
 ```bash
-# Check watchdog status
+# Check monitoring status
 python3 {baseDir}/scripts/workspace_watchdog.py status
 
-# Start background monitoring
-python3 {baseDir}/scripts/workspace_watchdog.py start --watch {baseDir}
+# Verify workspace consistency
+python3 {baseDir}/scripts/workspace_watchdog.py verify
 
-# Stop background monitoring
-python3 {baseDir}/scripts/workspace_watchdog.py stop
+# Take a workspace snapshot
+python3 {baseDir}/scripts/workspace_watchdog.py snapshot
 ```
 
-**Change Classification:**
-- `modified`: File changed (hash changed) → potential break
-- `deleted`: File removed → break
-- `created`: New file appeared → normal operation
+**Change classification:**
+- `modified`: file changed (hash changed) → potential disruption
+- `deleted`: file removed → disruption
+- `created`: new file appeared → normal operation
 
 ## Checkpoint Template
 
-The `session-checkpoint.md` uses a 6-section standardized template:
+`session-checkpoint.md` uses a standardized template with 6 sections:
 
 ```markdown
 # Session Checkpoint
-_last_updated: 2026-04-03T23:00Z_
+_last_updated: 2026-04-03T23:00Z
 _session_id: uuid_
 
 ---
@@ -238,8 +238,8 @@ Check:
 ## Related
 
 - Issue: https://github.com/openclaw/openclaw/issues/59095
-- Community posts: https://scipepper.com/scichat/circles/ai
+- Community post: https://scipepper.com/scichat/circles/ai
 
 ## AI-Assisted Disclosure
 
-This skill was developed with AI assistance (OpenClaw + GLM-5.1) and has been lightly tested in a production environment for 2+ months. See Issue #59095 for architecture discussion.
+This skill was developed with AI assistance (OpenClaw + GLM-5.1) and lightly tested in production for over two months. For architecture discussion, see Issue #59095.
