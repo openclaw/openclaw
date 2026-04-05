@@ -747,6 +747,65 @@ describe("matrix monitor handler pairing account scope", () => {
     }
   });
 
+  it("checks flat DM collision notices against the current DM session key", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-flat-notice-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const sendNotice = vi.fn(async () => "$notice");
+
+    try {
+      await recordSessionMetaFromInbound({
+        storePath,
+        sessionKey: "agent:ops:matrix:direct:@user:example.org",
+        ctx: {
+          SessionKey: "agent:ops:matrix:direct:@user:example.org",
+          AccountId: "ops",
+          ChatType: "direct",
+          Provider: "matrix",
+          Surface: "matrix",
+          From: "matrix:@user:example.org",
+          To: "room:!other:example.org",
+          NativeChannelId: "!other:example.org",
+          OriginatingChannel: "matrix",
+          OriginatingTo: "room:!other:example.org",
+        },
+      });
+
+      const { handler } = createMatrixHandlerTestHarness({
+        isDirectMessage: true,
+        resolveStorePath: () => storePath,
+        resolveAgentRoute: () => ({
+          agentId: "ops",
+          channel: "matrix",
+          accountId: "ops",
+          sessionKey: "agent:ops:matrix:direct:@user:example.org",
+          mainSessionKey: "agent:ops:main",
+          matchedBy: "binding.account" as const,
+        }),
+        client: {
+          sendMessage: sendNotice,
+        },
+      });
+
+      await handler(
+        "!dm:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$dm-flat-1",
+          body: "follow up",
+        }),
+      );
+
+      expect(sendNotice).toHaveBeenCalledWith(
+        "!dm:example.org",
+        expect.objectContaining({
+          msgtype: "m.notice",
+          body: expect.stringContaining("channels.matrix.dm.sessionScope"),
+        }),
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("checks threaded DM collision notices against the parent DM session", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-thread-notice-"));
     const storePath = path.join(tempDir, "sessions.json");
