@@ -11,6 +11,7 @@ import {
 } from "./reply/reply-dispatcher.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { GetReplyOptions } from "./types.js";
+import { evaluateInboundGovernance, type GovernanceFilterResult } from "./governance-gate.js";
 
 export type DispatchInboundResult = DispatchFromConfigResult;
 
@@ -40,6 +41,17 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
+
+  // ── Φ Governance Gate ─────────────────────────────────────────────
+  // All inbound messages pass through Φ before agent dispatch.
+  // The gate is fail-closed: if evaluation errors, the message is rejected.
+  // Every decision (allow or deny) is hash-chain logged.
+  const governanceResult = evaluateInboundGovernance(finalized);
+  if (governanceResult.verdict === "deny") {
+    return { queuedFinal: false, counts: {} } as DispatchInboundResult;
+  }
+  // ── End Φ Gate ────────────────────────────────────────────────────
+
   return await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>
