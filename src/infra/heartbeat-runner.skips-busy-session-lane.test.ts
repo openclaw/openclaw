@@ -1,14 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as replyModule from "../auto-reply/reply.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { type HeartbeatDeps, runHeartbeatOnce } from "./heartbeat-runner.js";
+import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 import { resetSystemEventsForTest, enqueueSystemEvent } from "./system-events.js";
-import {
-  seedMainSessionStore,
-  withTempHeartbeatSandbox,
-} from "./heartbeat-runner.test-utils.js";
-import type { OpenClawConfig } from "../config/config.js";
 
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 
@@ -30,7 +26,9 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  if (previousRegistry) setActivePluginRegistry(previousRegistry);
+  if (previousRegistry) {
+    setActivePluginRegistry(previousRegistry);
+  }
 });
 
 beforeEach(() => {
@@ -68,14 +66,22 @@ describe("heartbeat runner skips when target session lane is busy", () => {
 
       // main lane idle (0), session lane busy (1)
       const getQueueSize = vi.fn((lane?: string) => {
-        if (!lane || lane === "main") return 0;
-        if (lane.startsWith("session:")) return 1;
+        if (!lane || lane === "main") {
+          return 0;
+        }
+        if (lane.startsWith("session:")) {
+          return 1;
+        }
         return 0;
       });
 
       const result = await runHeartbeatOnce({
         cfg,
-        deps: { getQueueSize, nowMs: () => Date.now() } as HeartbeatDeps,
+        deps: {
+          getQueueSize,
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
       });
 
       expect(result.status).toBe("skipped");
@@ -115,12 +121,15 @@ describe("heartbeat runner skips when target session lane is busy", () => {
 
       replySpy.mockResolvedValue({
         text: "HEARTBEAT_OK",
-        model: "test/model",
-      } as any);
+      });
 
       const result = await runHeartbeatOnce({
         cfg,
-        deps: { getQueueSize, nowMs: () => Date.now() } as HeartbeatDeps,
+        deps: {
+          getQueueSize,
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
       });
 
       expect(replySpy).toHaveBeenCalled();
