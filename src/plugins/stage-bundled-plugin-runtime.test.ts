@@ -55,6 +55,26 @@ function expectRuntimePluginWrapperContains(params: {
   expect(fs.readFileSync(runtimePath, "utf8")).toContain(params.expectedImport);
 }
 
+/**
+ * On Windows without Developer Mode, file symlinks fall back to copies, so
+ * we can only assert `isSymbolicLink()` on platforms that support them.
+ */
+const canCreateFileSymlinks = (() => {
+  if (process.platform !== "win32") return true;
+  const probe = path.join(os.tmpdir(), `.openclaw-symlink-probe-${process.pid}`);
+  const probeTarget = path.join(os.tmpdir(), `.openclaw-symlink-probe-target-${process.pid}`);
+  try {
+    fs.writeFileSync(probeTarget, "", "utf8");
+    fs.symlinkSync(probeTarget, probe);
+    fs.unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try { fs.unlinkSync(probeTarget); } catch {}
+  }
+})();
+
 function expectRuntimeArtifactText(params: {
   repoRoot: string;
   pluginId: string;
@@ -69,7 +89,14 @@ function expectRuntimeArtifactText(params: {
     params.pluginId,
     params.relativePath,
   );
-  expect(fs.lstatSync(runtimePath).isSymbolicLink()).toBe(params.symbolicLink);
+  if (canCreateFileSymlinks) {
+    expect(fs.lstatSync(runtimePath).isSymbolicLink()).toBe(params.symbolicLink);
+  } else if (params.symbolicLink) {
+    // Windows copy fallback: file exists with correct content but is not a symlink.
+    expect(fs.existsSync(runtimePath)).toBe(true);
+  } else {
+    expect(fs.lstatSync(runtimePath).isSymbolicLink()).toBe(false);
+  }
   expect(fs.readFileSync(runtimePath, "utf8")).toBe(params.expectedText);
 }
 
@@ -402,11 +429,18 @@ describe("stageBundledPluginRuntime", () => {
     });
 
     const realSymlinkSync = fs.symlinkSync.bind(fs);
+    let eexistThrown = false;
     const symlinkSpy = vi.spyOn(fs, "symlinkSync").mockImplementation(((target, link, type) => {
       const linkPath = String(link);
-      if (linkPath.endsWith(path.join("skills", "feishu-doc", "SKILL.md"))) {
+      if (!eexistThrown && linkPath.endsWith(path.join("skills", "feishu-doc", "SKILL.md"))) {
+        eexistThrown = true;
         const err = Object.assign(new Error("file already exists"), { code: "EEXIST" });
-        realSymlinkSync(String(target), linkPath, type);
+        try {
+          realSymlinkSync(String(target), linkPath, type);
+        } catch {
+          // On Windows without Developer Mode the real call may also fail;
+          // we still want the mock to surface the simulated EEXIST.
+        }
         throw err;
       }
       return realSymlinkSync(String(target), linkPath, type);
@@ -423,9 +457,78 @@ describe("stageBundledPluginRuntime", () => {
       "feishu-doc",
       "SKILL.md",
     );
-    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(true);
+    if (canCreateFileSymlinks) {
+      expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(true);
+    } else {
+      expect(fs.existsSync(runtimeSkillPath)).toBe(true);
+    }
     expect(fs.readFileSync(runtimeSkillPath, "utf8")).toBe("# Feishu Doc\n");
 
     symlinkSpy.mockRestore();
+  });
+
+  it("falls back to file copy on Windows when symlinkSync throws EPERM (first attempt)", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-win-eperm-");
+    createDistPluginDir(repoRoot, "feishu");
+    setupRepoFiles(repoRoot, {
+      [bundledDistPluginFile("feishu", "index.js")]: "export default {}\n",
+      [bundledDistPluginFile("feishu", "skills/feishu-doc/SKILL.md")]: "# Feishu Doc\n",
+    });
+
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32" as NodeJS.Platform);
+    const realSymlinkSync = fs.symlinkSync.bind(fs);
+    const symlinkSpy = vi.spyOn(fs, "symlinkSync").mockImplementation(((target, link, type) => {
+      if (type) return realSymlinkSync(String(target), String(link), type);
+      throw Object.assign(new Error("symlink not permitted"), { code: "EPERM" });
+    }) as typeof fs.symlinkSync);
+
+    expect(() => stageBundledPluginRuntime({ repoRoot })).not.toThrow();
+
+    expectRuntimeArtifactText({
+      repoRoot,
+      pluginId: "feishu",
+      relativePath: "skills/feishu-doc/SKILL.md",
+      expectedText: "# Feishu Doc\n",
+      symbolicLink: false,
+    });
+
+    symlinkSpy.mockRestore();
+    platformSpy.mockRestore();
+  });
+
+  it("falls back to file copy on Windows when symlinkSync throws ENOSYS (retry after remove)", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-win-enosys-");
+    createDistPluginDir(repoRoot, "feishu");
+    setupRepoFiles(repoRoot, {
+      [bundledDistPluginFile("feishu", "index.js")]: "export default {}\n",
+      [bundledDistPluginFile("feishu", "skills/feishu-doc/SKILL.md")]: "# Feishu Doc\n",
+    });
+
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32" as NodeJS.Platform);
+    const realSymlinkSync = fs.symlinkSync.bind(fs);
+    let callCount = 0;
+    const symlinkSpy = vi.spyOn(fs, "symlinkSync").mockImplementation(((target, link, type) => {
+      if (type) return realSymlinkSync(String(target), String(link), type);
+      callCount++;
+      if (callCount === 1) {
+        // First attempt: simulate EEXIST to reach the retry-after-remove path.
+        throw Object.assign(new Error("file already exists"), { code: "EEXIST" });
+      }
+      // Second attempt (after remove): simulate ENOSYS.
+      throw Object.assign(new Error("symlink not supported"), { code: "ENOSYS" });
+    }) as typeof fs.symlinkSync);
+
+    expect(() => stageBundledPluginRuntime({ repoRoot })).not.toThrow();
+
+    expectRuntimeArtifactText({
+      repoRoot,
+      pluginId: "feishu",
+      relativePath: "skills/feishu-doc/SKILL.md",
+      expectedText: "# Feishu Doc\n",
+      symbolicLink: false,
+    });
+
+    symlinkSpy.mockRestore();
+    platformSpy.mockRestore();
   });
 });
