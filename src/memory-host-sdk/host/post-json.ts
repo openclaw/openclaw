@@ -5,6 +5,7 @@ export async function postJson<T>(params: {
   url: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: typeof fetch;
   body: unknown;
   errorPrefix: string;
   attachStatus?: boolean;
@@ -13,6 +14,7 @@ export async function postJson<T>(params: {
   return await withRemoteHttpResponse({
     url: params.url,
     ssrfPolicy: params.ssrfPolicy,
+    fetchImpl: params.fetchImpl,
     init: {
       method: "POST",
       headers: params.headers,

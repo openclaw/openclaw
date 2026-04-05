@@ -4,6 +4,7 @@ export type BatchHttpClientConfig = {
   baseUrl?: string;
   headers?: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
+  fetchImpl?: typeof fetch;
 };
 
 export function normalizeBatchBaseUrl(client: BatchHttpClientConfig): string {
