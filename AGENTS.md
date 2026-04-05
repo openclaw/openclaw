@@ -247,6 +247,8 @@
 
 ## Git Notes
 
+- `origin/main` is the canonical upstream branch. Treat it as the security and maintenance baseline.
+- `sugar/main` is a downstream deployment branch. Keep it aligned to `origin/main` first, then layer Sugar-specific changes on top; do not treat `sugar/main` as the source of truth.
 - If `git branch -d/-D <branch>` is policy-blocked, delete the local ref directly: `git update-ref -d refs/heads/<branch>`.
 - Agents MUST NOT create or push merge commits on `main`. If `main` has advanced, rebase local commits onto the latest `origin/main` before pushing.
 - Bulk PR close/reopen safety: if a close action would affect more than 5 PRs, first ask for explicit user confirmation with the exact PR count and target scope/query.
