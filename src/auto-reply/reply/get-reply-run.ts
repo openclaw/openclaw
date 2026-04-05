@@ -421,7 +421,8 @@ export async function runPreparedReply(
   });
   const { runReplyAgent } = await loadAgentRunnerRuntime();
   const queueKey = sessionKey ?? sessionIdFinal;
-  // Keep the final ownership check synchronous with ReplyOperation registration.
+  // Do not yield after the final ownership check, or a competing same-session turn
+  // can steal the active handle before ReplyOperation registration.
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
