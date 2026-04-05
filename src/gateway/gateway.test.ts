@@ -103,6 +103,7 @@ describe("gateway e2e", () => {
         "OPENCLAW_SKIP_CRON",
         "OPENCLAW_SKIP_CANVAS_HOST",
         "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+        "OPENCLAW_TEST_MINIMAL_GATEWAY",
       ]);
 
       const { baseUrl: openaiBaseUrl, restore } = installOpenAiResponsesMock();
@@ -116,6 +117,7 @@ describe("gateway e2e", () => {
       process.env.OPENCLAW_SKIP_CRON = "1";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
 
       const token = nextGatewayId("test-token");
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
@@ -309,6 +311,7 @@ module.exports = {
         "OPENCLAW_SKIP_CRON",
         "OPENCLAW_SKIP_CANVAS_HOST",
         "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+        "OPENCLAW_TEST_MINIMAL_GATEWAY",
       ]);
 
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
@@ -316,6 +319,7 @@ module.exports = {
       process.env.OPENCLAW_SKIP_CRON = "1";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
 
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wizard-home-"));
@@ -362,22 +366,30 @@ module.exports = {
 
         let next = start;
         let didSendToken = false;
+        const seenSteps: string[] = [];
         while (!next.done) {
           const step = next.step;
           if (!step) {
             throw new Error("wizard missing step");
           }
+          seenSteps.push(`${step.type}:${step.id}`);
           const value = step.type === "text" ? wizardToken : null;
           if (step.type === "text") {
             didSendToken = true;
           }
-          next = await client.request("wizard.next", {
-            sessionId,
-            answer: { stepId: step.id, value },
-          });
+          next = await client.request(
+            "wizard.next",
+            {
+              sessionId,
+              answer: { stepId: step.id, value },
+            },
+            { timeoutMs: 60_000 },
+          );
         }
 
-        expect(didSendToken).toBe(true);
+        expect(didSendToken, `seenSteps=${seenSteps.join(",")} final=${JSON.stringify(next)}`).toBe(
+          true,
+        );
         expect(next.status).toBe("done");
 
         const parsed = JSON.parse(await fs.readFile(resolveConfigPath(), "utf8"));
