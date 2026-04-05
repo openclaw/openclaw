@@ -134,7 +134,9 @@ export async function resolveSessionAuthProfileOverride(params: {
       : current
         ? "user"
         : undefined);
-  if (source === "user" && current && !isNewSession) {
+  // Keep explicit user profile pins stable across /new and /reset.
+  // New-session rotation is only for auto-selected profiles.
+  if (source === "user" && current) {
     return current;
   }
 
