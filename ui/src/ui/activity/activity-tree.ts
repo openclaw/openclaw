@@ -397,3 +397,47 @@ export function flattenTimeline(tree: ActivityTree): TimelineEntry[] {
   entries.sort((a, b) => a.ts - b.ts);
   return entries;
 }
+
+type SerializedTree = {
+  rootNodes: string[];
+  nodes: Record<string, ActivityNode>;
+  sessionKeyToSpawner: Record<string, string>;
+};
+
+export function serializeTree(tree: ActivityTree): SerializedTree {
+  const nodes: Record<string, ActivityNode> = {};
+  for (const [id, node] of tree.nodeById) {
+    nodes[id] = node;
+  }
+  const spawner: Record<string, string> = {};
+  for (const [k, v] of tree.sessionKeyToSpawner) {
+    spawner[k] = v;
+  }
+  return { rootNodes: tree.rootNodes, nodes, sessionKeyToSpawner: spawner };
+}
+
+export function deserializeTree(data: unknown): ActivityTree | null {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+  const raw = data as SerializedTree;
+  if (!Array.isArray(raw.rootNodes) || typeof raw.nodes !== "object") {
+    return null;
+  }
+  const tree = createActivityTree();
+  tree.rootNodes = raw.rootNodes;
+  for (const [id, node] of Object.entries(raw.nodes)) {
+    if (node && typeof node === "object" && typeof node.id === "string") {
+      tree.nodeById.set(id, node);
+    }
+  }
+  if (raw.sessionKeyToSpawner && typeof raw.sessionKeyToSpawner === "object") {
+    for (const [k, v] of Object.entries(raw.sessionKeyToSpawner)) {
+      if (typeof v === "string") {
+        tree.sessionKeyToSpawner.set(k, v);
+      }
+    }
+  }
+  tree.totalNodes = tree.nodeById.size;
+  return tree;
+}

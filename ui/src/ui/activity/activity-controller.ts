@@ -1,4 +1,5 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AgentEventPayload } from "../app-tool-stream.ts";
 import {
   createMetricsHistory,
@@ -12,6 +13,8 @@ import {
   computeMetrics,
   pruneCompletedBranches,
   filterTree,
+  serializeTree,
+  deserializeTree,
   type ActivityFilterCriteria,
 } from "./activity-tree.ts";
 import type {
@@ -24,9 +27,70 @@ import type {
 const THROTTLE_MS = 100;
 const PRUNE_INTERVAL_MS = 30_000;
 const METRICS_SAMPLE_INTERVAL_MS = 2_000;
+const SAVE_DEBOUNCE_MS = 500;
+const STORAGE_KEY = "openclaw.activity.tree.v1";
+const MAX_STORAGE_BYTES = 500_000;
+
+function loadPersistedTree(): ActivityTree {
+  try {
+    const storage = getSafeLocalStorage();
+    if (!storage) {
+      return createActivityTree();
+    }
+    const raw = storage.getItem(STORAGE_KEY);
+    if (!raw) {
+      return createActivityTree();
+    }
+    const parsed = JSON.parse(raw);
+    const tree = deserializeTree(parsed);
+    if (!tree) {
+      return createActivityTree();
+    }
+    // Mark any previously-running nodes as stale (they didn't finish before refresh).
+    for (const node of tree.nodeById.values()) {
+      if (node.status === "running") {
+        node.status = "completed";
+        node.endedAt = node.endedAt ?? node.startedAt;
+        node.durationMs = node.durationMs ?? 0;
+      }
+    }
+    return tree;
+  } catch {
+    return createActivityTree();
+  }
+}
+
+function saveTree(tree: ActivityTree): void {
+  try {
+    const storage = getSafeLocalStorage();
+    if (!storage) {
+      return;
+    }
+    const serialized = JSON.stringify(serializeTree(tree));
+    if (serialized.length > MAX_STORAGE_BYTES) {
+      pruneCompletedBranches(tree, 0);
+      const pruned = JSON.stringify(serializeTree(tree));
+      if (pruned.length <= MAX_STORAGE_BYTES) {
+        storage.setItem(STORAGE_KEY, pruned);
+      }
+      return;
+    }
+    storage.setItem(STORAGE_KEY, serialized);
+  } catch {
+    // Quota exceeded or other storage error — skip silently.
+  }
+}
+
+function clearPersistedTree(): void {
+  try {
+    getSafeLocalStorage()?.removeItem(STORAGE_KEY);
+  } catch {
+    // Ignore.
+  }
+}
 
 export class ActivityController implements ReactiveController {
-  private _tree: ActivityTree = createActivityTree();
+  private _tree: ActivityTree;
   private _metrics: ActivityMetrics = {
     activeRuns: 0,
     activeTools: 0,
@@ -43,12 +107,15 @@ export class ActivityController implements ReactiveController {
   };
   private _host: ReactiveControllerHost;
   private _updateTimer: ReturnType<typeof setTimeout> | null = null;
+  private _saveTimer: ReturnType<typeof setTimeout> | null = null;
   private _pruneTimer: ReturnType<typeof setInterval> | null = null;
   private _sampleTimer: ReturnType<typeof setInterval> | null = null;
   private _dirty = false;
 
   constructor(host: ReactiveControllerHost) {
     this._host = host;
+    this._tree = loadPersistedTree();
+    this._metrics = computeMetrics(this._tree);
     host.addController(this);
   }
 
@@ -145,6 +212,12 @@ export class ActivityController implements ReactiveController {
       clearTimeout(this._updateTimer);
       this._updateTimer = null;
     }
+    if (this._saveTimer !== null) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+    }
+    // Final save on disconnect.
+    saveTree(this._tree);
   }
 
   handleEvent(payload: AgentEventPayload): void {
@@ -171,6 +244,7 @@ export class ActivityController implements ReactiveController {
 
     this._dirty = true;
     this._scheduleUpdate();
+    this._scheduleSave();
   }
 
   reset(): void {
@@ -184,6 +258,7 @@ export class ActivityController implements ReactiveController {
     };
     this._metricsHistory = createMetricsHistory();
     this._selectedNodeId = null;
+    clearPersistedTree();
     this._host.requestUpdate();
   }
 
@@ -199,5 +274,15 @@ export class ActivityController implements ReactiveController {
         this._host.requestUpdate();
       }
     }, THROTTLE_MS);
+  }
+
+  private _scheduleSave(): void {
+    if (this._saveTimer !== null) {
+      return;
+    }
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      saveTree(this._tree);
+    }, SAVE_DEBOUNCE_MS);
   }
 }

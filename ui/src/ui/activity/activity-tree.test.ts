@@ -6,6 +6,8 @@ import {
   flattenTimeline,
   pruneCompletedBranches,
   filterTree,
+  serializeTree,
+  deserializeTree,
 } from "./activity-tree.ts";
 
 function makeEvent(
@@ -282,5 +284,47 @@ describe("activity-tree", () => {
     const tool = tree.nodeById.get("r1:tool:t1")!;
     expect(tool.metadata.args).toBe('{"path":"foo.ts"}');
     expect(tool.metadata.result).toBe('"file contents"');
+  });
+
+  it("serialize/deserialize round-trips correctly", () => {
+    let tree = createActivityTree();
+    tree = applyActivityEvent(tree, makeEvent("r1", "run.start", { agentId: "main" }));
+    tree = applyActivityEvent(
+      tree,
+      makeEvent("r1", "tool.start", {
+        toolName: "exec",
+        toolCallId: "t1",
+        metadata: { args: '{"cmd":"ls"}' },
+      }),
+    );
+    tree = applyActivityEvent(
+      tree,
+      makeEvent("r1", "tool.end", { toolName: "exec", toolCallId: "t1", durationMs: 50 }),
+    );
+
+    const serialized = serializeTree(tree);
+    const json = JSON.stringify(serialized);
+    const restored = deserializeTree(JSON.parse(json))!;
+
+    expect(restored).not.toBeNull();
+    expect(restored.totalNodes).toBe(tree.totalNodes);
+    expect(restored.rootNodes).toEqual(tree.rootNodes);
+    expect(restored.nodeById.size).toBe(tree.nodeById.size);
+
+    const run = restored.nodeById.get("r1")!;
+    expect(run.kind).toBe("run");
+    expect(run.children).toContain("r1:tool:t1");
+
+    const tool = restored.nodeById.get("r1:tool:t1")!;
+    expect(tool.kind).toBe("tool");
+    expect(tool.status).toBe("completed");
+    expect(tool.durationMs).toBe(50);
+    expect(tool.metadata.args).toBe('{"cmd":"ls"}');
+  });
+
+  it("deserializeTree returns null for invalid data", () => {
+    expect(deserializeTree(null)).toBeNull();
+    expect(deserializeTree("bad")).toBeNull();
+    expect(deserializeTree({})).toBeNull();
   });
 });
