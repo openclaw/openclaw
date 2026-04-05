@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { withSessionStoreLockForTest } from "../config/sessions/store.js";
@@ -182,6 +181,16 @@ vi.mock("../acp/control-plane/manager.js", () => ({
     closeSession: acpManagerMocks.closeSession,
   }),
 }));
+
+vi.mock("../../extensions/browser/runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("../../extensions/browser/runtime-api.js")>(
+    "../../extensions/browser/runtime-api.js",
+  );
+  return {
+    ...actual,
+    closeTrackedBrowserTabsForSessions: browserSessionTabMocks.closeTrackedBrowserTabsForSessions,
+  };
+});
 
 vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions: browserSessionTabMocks.closeTrackedBrowserTabsForSessions,
@@ -971,7 +980,7 @@ describe("gateway server sessions", () => {
     expect(list1.ok).toBe(true);
     expect(list1.payload?.path).toBe(storePath);
     expect(list1.payload?.sessions.some((s) => s.key === "global")).toBe(false);
-    expect(list1.payload?.defaults?.modelProvider).toBe(DEFAULT_PROVIDER);
+    expect(list1.payload?.defaults?.modelProvider).toBe("anthropic");
     const main = list1.payload?.sessions.find((s) => s.key === "agent:main:main");
     expect(main?.totalTokens).toBeUndefined();
     expect(main?.totalTokensFresh).toBe(false);
