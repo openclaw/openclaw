@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
@@ -7,11 +6,6 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
-import {
-  completeTaskRunByRunId,
-  createRunningTaskRun,
-  failTaskRunByRunId,
-} from "../../tasks/task-executor.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { resolveVideoGenerationSupportedDurations } from "../../video-generation/duration-support.js";
@@ -52,6 +46,14 @@ import {
   type SandboxFsBridge,
   type ToolFsPolicy,
 } from "./tool-runtime.helpers.js";
+import {
+  completeVideoGenerationTaskRun,
+  createVideoGenerationTaskRun,
+  failVideoGenerationTaskRun,
+  recordVideoGenerationTaskProgress,
+  type VideoGenerationTaskHandle,
+  wakeVideoGenerationTaskCompletion,
+} from "./video-generate-background.js";
 
 const log = createSubsystemLogger("agents/tools/video-generate");
 const MAX_INPUT_IMAGES = 5;
@@ -407,91 +409,15 @@ type VideoGenerateSandboxConfig = {
   bridge: SandboxFsBridge;
 };
 
-type VideoGenerationTaskHandle = {
-  taskId: string;
-  runId: string;
-};
+type VideoGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
 
-function createVideoGenerationTaskRun(params: {
-  sessionKey?: string;
-  requesterOrigin?: DeliveryContext;
-  prompt: string;
-  providerId?: string;
-}): VideoGenerationTaskHandle | null {
-  const sessionKey = params.sessionKey?.trim();
-  if (!sessionKey) {
-    return null;
-  }
-  const runId = `tool:video_generate:${crypto.randomUUID()}`;
-  try {
-    const task = createRunningTaskRun({
-      runtime: "cli",
-      sourceId: params.providerId ? `video_generate:${params.providerId}` : "video_generate",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      requesterOrigin: params.requesterOrigin,
-      childSessionKey: sessionKey,
-      runId,
-      label: "Video generation",
-      task: params.prompt,
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: Date.now(),
-      lastEventAt: Date.now(),
-      progressSummary: "Generating video",
+function defaultScheduleVideoGenerateBackgroundWork(work: () => Promise<void>) {
+  queueMicrotask(() => {
+    void work().catch((error) => {
+      log.error("Detached video generation job crashed", {
+        error,
+      });
     });
-    return {
-      taskId: task.taskId,
-      runId,
-    };
-  } catch (error) {
-    log.warn("Failed to create video generation task ledger record", {
-      sessionKey,
-      providerId: params.providerId,
-      error,
-    });
-    return null;
-  }
-}
-
-function completeVideoGenerationTaskRun(params: {
-  handle: VideoGenerationTaskHandle | null;
-  provider: string;
-  model: string;
-  count: number;
-  paths: string[];
-}) {
-  if (!params.handle) {
-    return;
-  }
-  const endedAt = Date.now();
-  const target = params.count === 1 ? params.paths[0] : `${params.count} files`;
-  completeTaskRunByRunId({
-    runId: params.handle.runId,
-    runtime: "cli",
-    endedAt,
-    lastEventAt: endedAt,
-    terminalSummary: `Generated ${params.count} video${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
-  });
-}
-
-function failVideoGenerationTaskRun(params: {
-  handle: VideoGenerationTaskHandle | null;
-  error: unknown;
-}) {
-  if (!params.handle) {
-    return;
-  }
-  const endedAt = Date.now();
-  const errorText = params.error instanceof Error ? params.error.message : String(params.error);
-  failTaskRunByRunId({
-    runId: params.handle.runId,
-    runtime: "cli",
-    endedAt,
-    lastEventAt: endedAt,
-    error: errorText,
-    terminalSummary: errorText,
   });
 }
 
@@ -610,6 +536,170 @@ async function loadReferenceAssets(params: {
   return loaded;
 }
 
+type LoadedReferenceAsset = Awaited<ReturnType<typeof loadReferenceAssets>>[number];
+
+type ExecutedVideoGeneration = {
+  provider: string;
+  model: string;
+  savedPaths: string[];
+  contentText: string;
+  details: Record<string, unknown>;
+  wakeResult: string;
+};
+
+async function executeVideoGenerationJob(params: {
+  effectiveCfg: OpenClawConfig;
+  prompt: string;
+  agentDir?: string;
+  model?: string;
+  size?: string;
+  aspectRatio?: string;
+  resolution?: VideoGenerationResolution;
+  durationSeconds?: number;
+  audio?: boolean;
+  watermark?: boolean;
+  filename?: string;
+  loadedReferenceImages: LoadedReferenceAsset[];
+  loadedReferenceVideos: LoadedReferenceAsset[];
+  taskHandle?: VideoGenerationTaskHandle | null;
+}): Promise<ExecutedVideoGeneration> {
+  if (params.taskHandle) {
+    recordVideoGenerationTaskProgress({
+      handle: params.taskHandle,
+      progressSummary: "Generating video",
+    });
+  }
+  const result = await generateVideo({
+    cfg: params.effectiveCfg,
+    prompt: params.prompt,
+    agentDir: params.agentDir,
+    modelOverride: params.model,
+    size: params.size,
+    aspectRatio: params.aspectRatio,
+    resolution: params.resolution,
+    durationSeconds: params.durationSeconds,
+    audio: params.audio,
+    watermark: params.watermark,
+    inputImages: params.loadedReferenceImages.map((entry) => entry.sourceAsset),
+    inputVideos: params.loadedReferenceVideos.map((entry) => entry.sourceAsset),
+  });
+  if (params.taskHandle) {
+    recordVideoGenerationTaskProgress({
+      handle: params.taskHandle,
+      progressSummary: "Saving generated video",
+    });
+  }
+  const savedVideos = await Promise.all(
+    result.videos.map((video) =>
+      saveMediaBuffer(
+        video.buffer,
+        video.mimeType,
+        "tool-video-generation",
+        undefined,
+        params.filename || video.fileName,
+      ),
+    ),
+  );
+  const requestedDurationSeconds =
+    typeof result.metadata?.requestedDurationSeconds === "number" &&
+    Number.isFinite(result.metadata.requestedDurationSeconds)
+      ? result.metadata.requestedDurationSeconds
+      : params.durationSeconds;
+  const normalizedDurationSeconds =
+    typeof result.metadata?.normalizedDurationSeconds === "number" &&
+    Number.isFinite(result.metadata.normalizedDurationSeconds)
+      ? result.metadata.normalizedDurationSeconds
+      : requestedDurationSeconds;
+  const supportedDurationSeconds = Array.isArray(result.metadata?.supportedDurationSeconds)
+    ? result.metadata.supportedDurationSeconds.filter(
+        (entry): entry is number => typeof entry === "number" && Number.isFinite(entry),
+      )
+    : undefined;
+  const lines = [
+    `Generated ${savedVideos.length} video${savedVideos.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+    typeof requestedDurationSeconds === "number" &&
+    typeof normalizedDurationSeconds === "number" &&
+    requestedDurationSeconds !== normalizedDurationSeconds
+      ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${normalizedDurationSeconds}s.`
+      : null,
+    ...savedVideos.map((video) => `MEDIA:${video.path}`),
+  ].filter((entry): entry is string => Boolean(entry));
+
+  return {
+    provider: result.provider,
+    model: result.model,
+    savedPaths: savedVideos.map((video) => video.path),
+    contentText: lines.join("\n"),
+    wakeResult: lines.join("\n"),
+    details: {
+      provider: result.provider,
+      model: result.model,
+      count: savedVideos.length,
+      media: {
+        mediaUrls: savedVideos.map((video) => video.path),
+      },
+      paths: savedVideos.map((video) => video.path),
+      ...(params.taskHandle
+        ? {
+            task: {
+              taskId: params.taskHandle.taskId,
+              runId: params.taskHandle.runId,
+            },
+          }
+        : {}),
+      ...(params.loadedReferenceImages.length === 1
+        ? {
+            image: params.loadedReferenceImages[0]?.resolvedInput,
+            ...(params.loadedReferenceImages[0]?.rewrittenFrom
+              ? { rewrittenFrom: params.loadedReferenceImages[0].rewrittenFrom }
+              : {}),
+          }
+        : params.loadedReferenceImages.length > 1
+          ? {
+              images: params.loadedReferenceImages.map((entry) => ({
+                image: entry.resolvedInput,
+                ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
+              })),
+            }
+          : {}),
+      ...(params.loadedReferenceVideos.length === 1
+        ? {
+            video: params.loadedReferenceVideos[0]?.resolvedInput,
+            ...(params.loadedReferenceVideos[0]?.rewrittenFrom
+              ? { videoRewrittenFrom: params.loadedReferenceVideos[0].rewrittenFrom }
+              : {}),
+          }
+        : params.loadedReferenceVideos.length > 1
+          ? {
+              videos: params.loadedReferenceVideos.map((entry) => ({
+                video: entry.resolvedInput,
+                ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
+              })),
+            }
+          : {}),
+      ...(params.size ? { size: params.size } : {}),
+      ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
+      ...(params.resolution ? { resolution: params.resolution } : {}),
+      ...(typeof normalizedDurationSeconds === "number"
+        ? { durationSeconds: normalizedDurationSeconds }
+        : {}),
+      ...(typeof requestedDurationSeconds === "number" &&
+      typeof normalizedDurationSeconds === "number" &&
+      requestedDurationSeconds !== normalizedDurationSeconds
+        ? { requestedDurationSeconds }
+        : {}),
+      ...(supportedDurationSeconds && supportedDurationSeconds.length > 0
+        ? { supportedDurationSeconds }
+        : {}),
+      ...(typeof params.audio === "boolean" ? { audio: params.audio } : {}),
+      ...(typeof params.watermark === "boolean" ? { watermark: params.watermark } : {}),
+      ...(params.filename ? { filename: params.filename } : {}),
+      attempts: result.attempts,
+      metadata: result.metadata,
+    },
+  };
+}
+
 export function createVideoGenerateTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -618,6 +708,7 @@ export function createVideoGenerateTool(options?: {
   workspaceDir?: string;
   sandbox?: VideoGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
+  scheduleBackgroundWork?: VideoGenerateBackgroundScheduler;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? loadConfig();
   const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
@@ -635,6 +726,8 @@ export function createVideoGenerateTool(options?: {
         workspaceOnly: options.fsPolicy?.workspaceOnly === true,
       }
     : null;
+  const scheduleBackgroundWork =
+    options?.scheduleBackgroundWork ?? defaultScheduleVideoGenerateBackgroundWork;
 
   return {
     label: "Video Generation",
@@ -773,77 +866,75 @@ export function createVideoGenerateTool(options?: {
         prompt,
         providerId: selectedProvider?.id,
       });
+      const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
 
-      try {
-        const result = await generateVideo({
-          cfg: effectiveCfg,
-          prompt,
-          agentDir: options?.agentDir,
-          modelOverride: model,
-          size,
-          aspectRatio,
-          resolution,
-          durationSeconds,
-          audio,
-          watermark,
-          inputImages: loadedReferenceImages.map((entry) => entry.sourceAsset),
-          inputVideos: loadedReferenceVideos.map((entry) => entry.sourceAsset),
+      if (shouldDetach) {
+        scheduleBackgroundWork(async () => {
+          try {
+            const executed = await executeVideoGenerationJob({
+              effectiveCfg,
+              prompt,
+              agentDir: options?.agentDir,
+              model,
+              size,
+              aspectRatio,
+              resolution,
+              durationSeconds,
+              audio,
+              watermark,
+              filename,
+              loadedReferenceImages,
+              loadedReferenceVideos,
+              taskHandle,
+            });
+            completeVideoGenerationTaskRun({
+              handle: taskHandle,
+              provider: executed.provider,
+              model: executed.model,
+              count: executed.savedPaths.length,
+              paths: executed.savedPaths,
+            });
+            try {
+              await wakeVideoGenerationTaskCompletion({
+                handle: taskHandle,
+                status: "ok",
+                statusLabel: "completed successfully",
+                result: executed.wakeResult,
+              });
+            } catch (error) {
+              log.warn("Video generation completion wake failed after successful generation", {
+                taskId: taskHandle?.taskId,
+                runId: taskHandle?.runId,
+                error,
+              });
+            }
+          } catch (error) {
+            failVideoGenerationTaskRun({
+              handle: taskHandle,
+              error,
+            });
+            await wakeVideoGenerationTaskCompletion({
+              handle: taskHandle,
+              status: "error",
+              statusLabel: "failed",
+              result: error instanceof Error ? error.message : String(error),
+            });
+            return;
+          }
         });
-        const savedVideos = await Promise.all(
-          result.videos.map((video) =>
-            saveMediaBuffer(
-              video.buffer,
-              video.mimeType,
-              "tool-video-generation",
-              undefined,
-              filename || video.fileName,
-            ),
-          ),
-        );
-        completeVideoGenerationTaskRun({
-          handle: taskHandle,
-          provider: result.provider,
-          model: result.model,
-          count: savedVideos.length,
-          paths: savedVideos.map((video) => video.path),
-        });
-        const requestedDurationSeconds =
-          typeof result.metadata?.requestedDurationSeconds === "number" &&
-          Number.isFinite(result.metadata.requestedDurationSeconds)
-            ? result.metadata.requestedDurationSeconds
-            : durationSeconds;
-        const normalizedDurationSeconds =
-          typeof result.metadata?.normalizedDurationSeconds === "number" &&
-          Number.isFinite(result.metadata.normalizedDurationSeconds)
-            ? result.metadata.normalizedDurationSeconds
-            : requestedDurationSeconds;
-        const supportedDurationSeconds = Array.isArray(result.metadata?.supportedDurationSeconds)
-          ? result.metadata.supportedDurationSeconds.filter(
-              (entry): entry is number => typeof entry === "number" && Number.isFinite(entry),
-            )
-          : undefined;
-        const lines = [
-          `Generated ${savedVideos.length} video${savedVideos.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
-          typeof requestedDurationSeconds === "number" &&
-          typeof normalizedDurationSeconds === "number" &&
-          requestedDurationSeconds !== normalizedDurationSeconds
-            ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${normalizedDurationSeconds}s.`
-            : null,
-          ...savedVideos.map((video) => `MEDIA:${video.path}`),
-        ].filter((entry): entry is string => Boolean(entry));
 
         return {
-          content: [{ type: "text", text: lines.join("\n") }],
-          details: {
-            provider: result.provider,
-            model: result.model,
-            count: savedVideos.length,
-            media: {
-              mediaUrls: savedVideos.map((video) => video.path),
+          content: [
+            {
+              type: "text",
+              text: `Started video generation task ${taskHandle?.taskId ?? "unknown"} in the background. I'll post the finished video here when it's ready.`,
             },
-            paths: savedVideos.map((video) => video.path),
+          ],
+          details: {
+            async: true,
+            status: "started",
             ...(taskHandle
-                ? {
+              ? {
                   task: {
                     taskId: taskHandle.taskId,
                     runId: taskHandle.runId,
@@ -880,26 +971,46 @@ export function createVideoGenerateTool(options?: {
                     })),
                   }
                 : {}),
+            ...(model ? { model } : {}),
             ...(size ? { size } : {}),
             ...(aspectRatio ? { aspectRatio } : {}),
             ...(resolution ? { resolution } : {}),
-            ...(typeof normalizedDurationSeconds === "number"
-              ? { durationSeconds: normalizedDurationSeconds }
-              : {}),
-            ...(typeof requestedDurationSeconds === "number" &&
-            typeof normalizedDurationSeconds === "number" &&
-            requestedDurationSeconds !== normalizedDurationSeconds
-              ? { requestedDurationSeconds }
-              : {}),
-            ...(supportedDurationSeconds && supportedDurationSeconds.length > 0
-              ? { supportedDurationSeconds }
-              : {}),
+            ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
             ...(typeof audio === "boolean" ? { audio } : {}),
             ...(typeof watermark === "boolean" ? { watermark } : {}),
             ...(filename ? { filename } : {}),
-            attempts: result.attempts,
-            metadata: result.metadata,
           },
+        };
+      }
+
+      try {
+        const executed = await executeVideoGenerationJob({
+          effectiveCfg,
+          prompt,
+          agentDir: options?.agentDir,
+          model,
+          size,
+          aspectRatio,
+          resolution,
+          durationSeconds,
+          audio,
+          watermark,
+          filename,
+          loadedReferenceImages,
+          loadedReferenceVideos,
+          taskHandle,
+        });
+        completeVideoGenerationTaskRun({
+          handle: taskHandle,
+          provider: executed.provider,
+          model: executed.model,
+          count: executed.savedPaths.length,
+          paths: executed.savedPaths,
+        });
+
+        return {
+          content: [{ type: "text", text: executed.contentText }],
+          details: executed.details,
         };
       } catch (error) {
         failVideoGenerationTaskRun({

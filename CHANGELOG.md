@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - Agents/tool prompts: remove the duplicate in-band tool inventory from agent system prompts so tool-calling models rely on the structured tool definitions as the single source of truth, improving prompt stability and reducing stale tool guidance.
 - Tools/video generation: add bundled xAI (`grok-imagine-video`) and Alibaba Model Studio Wan video providers, plus live-test/default model wiring for both.
 - Agents/video generation: register `video_generate` runs in the task ledger with task/run ids and lifecycle updates so long-running generations can be tracked more reliably.
+- Agents/video generation: make session-backed `video_generate` runs detach into background tasks, wake the same agent session on completion, and have the agent post the finished video back into the original channel as a follow-up reply.
 - Providers/CLI: remove bundled CLI text-provider backends and the `agents.defaults.cliBackends` surface, while keeping ACP harness sessions and Gemini media understanding on the native bundled providers.
 - Matrix/exec approvals: clarify unavailable-approval replies so Matrix no longer claims chat approvals are unsupported when native exec approvals are merely unconfigured. (#61424) Thanks @gumadeiras.
 - Docs/IRC: replace public IRC hostname examples with `irc.example.com` and recommend private servers for bot coordination while listing common public networks for intentional use.

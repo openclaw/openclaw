@@ -9,14 +9,14 @@ title: "Video Generation"
 
 # Video Generation
 
-The `video_generate` tool lets the agent create videos using your configured providers. Generated videos are delivered automatically as media attachments in the agent's reply.
+The `video_generate` tool lets the agent create videos using your configured providers. In agent sessions, OpenClaw starts video generation as a background task, tracks it in the task ledger, then wakes the agent again when the clip is ready so the agent can post the finished video back into the original channel.
 
 <Note>
 The tool only appears when at least one video-generation provider is available. If you don't see `video_generate` in your agent's tools, configure `agents.defaults.videoGenerationModel` or set up a provider API key.
 </Note>
 
 <Note>
-OpenClaw now records `video_generate` runs in the task ledger when the agent has a session key, so long-running generations can be tracked with task/run ids even though the tool still waits for completion in the current turn.
+In agent sessions, `video_generate` returns immediately with a task id/run id. The actual provider job continues in the background. When it finishes, OpenClaw wakes the same session with an internal completion event so the agent can send a normal follow-up plus the generated video attachment.
 </Note>
 
 ## Quick start
@@ -39,6 +39,8 @@ OpenClaw now records `video_generate` runs in the task ledger when the agent has
 3. Ask the agent: _"Generate a 5-second cinematic video of a friendly lobster surfing at sunset."_
 
 The agent calls `video_generate` automatically. No tool allow-listing needed — it's enabled by default when a provider is available.
+
+For direct synchronous contexts without a session-backed agent run, the tool still falls back to inline generation and returns the final media path in the tool result.
 
 ## Supported providers
 
@@ -80,6 +82,13 @@ Use `action: "list"` to inspect available providers and models at runtime:
 | `filename`        | string   | Output filename hint                                                                   |
 
 Not all providers support all parameters. The tool validates provider capability limits before it submits the request. When a provider or model only supports a discrete set of video lengths, OpenClaw rounds `durationSeconds` to the nearest supported value and reports the normalized duration in the tool result.
+
+## Async behavior
+
+- Session-backed agent runs: `video_generate` creates a background task, returns a started/task response immediately, and posts the finished video later in a follow-up agent message.
+- Task tracking: use `openclaw tasks list` / `openclaw tasks show <taskId>` to inspect queued, running, and terminal status for the generation.
+- Completion wake: OpenClaw injects an internal completion event back into the same session so the model can write the user-facing follow-up itself.
+- No-session fallback: direct/local contexts without a real agent session still run inline and return the final video result in the same turn.
 
 ## Configuration
 
@@ -128,6 +137,7 @@ The bundled Qwen provider supports text-to-video plus image/video reference mode
 ## Related
 
 - [Tools Overview](/tools) — all available agent tools
+- [Background Tasks](/automation/tasks) — task tracking for detached `video_generate` runs
 - [Alibaba Model Studio](/providers/alibaba) — direct Wan provider setup
 - [Google (Gemini)](/providers/google) — Veo provider setup
 - [MiniMax](/providers/minimax) — Hailuo provider setup

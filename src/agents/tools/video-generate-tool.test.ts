@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as mediaStore from "../../media/store.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
+import * as videoGenerateBackground from "./video-generate-background.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
 
 const taskExecutorMocks = vi.hoisted(() => ({
   createRunningTaskRun: vi.fn(),
   completeTaskRunByRunId: vi.fn(),
   failTaskRunByRunId: vi.fn(),
+  recordTaskRunProgressByRunId: vi.fn(),
 }));
 
 vi.mock("../../tasks/task-executor.js", () => taskExecutorMocks);
@@ -23,6 +25,7 @@ describe("createVideoGenerateTool", () => {
     taskExecutorMocks.createRunningTaskRun.mockReset();
     taskExecutorMocks.completeTaskRunByRunId.mockReset();
     taskExecutorMocks.failTaskRunByRunId.mockReset();
+    taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
   });
 
   afterEach(() => {
@@ -49,7 +52,7 @@ describe("createVideoGenerateTool", () => {
     ).not.toBeNull();
   });
 
-  it("generates videos, saves them, and emits MEDIA paths", async () => {
+  it("generates videos, saves them, and emits MEDIA paths without a session-backed detach", async () => {
     taskExecutorMocks.createRunningTaskRun.mockReturnValue({
       taskId: "task-123",
       runtime: "cli",
@@ -91,11 +94,6 @@ describe("createVideoGenerateTool", () => {
           },
         },
       }),
-      agentSessionKey: "agent:main:discord:direct:123",
-      requesterOrigin: {
-        channel: "discord",
-        to: "channel:1",
-      },
     });
     expect(tool).not.toBeNull();
     if (!tool) {
@@ -111,22 +109,91 @@ describe("createVideoGenerateTool", () => {
       provider: "qwen",
       model: "wan2.6-t2v",
       count: 1,
-      task: {
-        taskId: "task-123",
-      },
       media: {
         mediaUrls: ["/tmp/generated-lobster.mp4"],
       },
       paths: ["/tmp/generated-lobster.mp4"],
       metadata: { taskId: "task-1" },
     });
-    expect(taskExecutorMocks.createRunningTaskRun).toHaveBeenCalledWith(
+    expect(taskExecutorMocks.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
+  it("starts background generation and wakes the session with MEDIA lines", async () => {
+    taskExecutorMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-123",
+      runtime: "cli",
+      requesterSessionKey: "agent:main:discord:direct:123",
+      ownerKey: "agent:main:discord:direct:123",
+      scopeKind: "session",
+      task: "friendly lobster surfing",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: Date.now(),
+    });
+    const wakeSpy = vi
+      .spyOn(videoGenerateBackground, "wakeVideoGenerationTaskCompletion")
+      .mockResolvedValue(undefined);
+    vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "qwen",
+      model: "wan2.6-t2v",
+      attempts: [],
+      videos: [
+        {
+          buffer: Buffer.from("video-bytes"),
+          mimeType: "video/mp4",
+          fileName: "lobster.mp4",
+        },
+      ],
+      metadata: { taskId: "task-1" },
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/tmp/generated-lobster.mp4",
+      id: "generated-lobster.mp4",
+      size: 11,
+      contentType: "video/mp4",
+    });
+
+    let scheduledWork: (() => Promise<void>) | undefined;
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+          },
+        },
+      }),
+      agentSessionKey: "agent:main:discord:direct:123",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:1",
+      },
+      scheduleBackgroundWork: (work) => {
+        scheduledWork = work;
+      },
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    const result = await tool.execute("call-1", { prompt: "friendly lobster surfing" });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("Started video generation task task-123 in the background.");
+    expect(result.details).toMatchObject({
+      async: true,
+      status: "started",
+      task: {
+        taskId: "task-123",
+      },
+    });
+    expect(typeof scheduledWork).toBe("function");
+    await scheduledWork?.();
+    expect(taskExecutorMocks.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
-        runtime: "cli",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        ownerKey: "agent:main:discord:direct:123",
-        label: "Video generation",
-        task: "friendly lobster surfing",
+        runId: expect.stringMatching(/^tool:video_generate:/),
+        progressSummary: "Generating video",
       }),
     );
     expect(taskExecutorMocks.completeTaskRunByRunId).toHaveBeenCalledWith(
@@ -134,22 +201,18 @@ describe("createVideoGenerateTool", () => {
         runId: expect.stringMatching(/^tool:video_generate:/),
       }),
     );
+    expect(wakeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        handle: expect.objectContaining({
+          taskId: "task-123",
+        }),
+        status: "ok",
+        result: expect.stringContaining("MEDIA:/tmp/generated-lobster.mp4"),
+      }),
+    );
   });
 
-  it("marks the task failed when provider generation throws", async () => {
-    taskExecutorMocks.createRunningTaskRun.mockReturnValue({
-      taskId: "task-fail",
-      runtime: "cli",
-      requesterSessionKey: "agent:main:discord:direct:123",
-      ownerKey: "agent:main:discord:direct:123",
-      scopeKind: "session",
-      task: "broken lobster",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      createdAt: Date.now(),
-    });
-    taskExecutorMocks.failTaskRunByRunId.mockReturnValue(undefined);
+  it("surfaces provider generation failures inline when there is no detached session", async () => {
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockRejectedValue(new Error("queue boom"));
 
     const tool = createVideoGenerateTool({
@@ -160,7 +223,6 @@ describe("createVideoGenerateTool", () => {
           },
         },
       }),
-      agentSessionKey: "agent:main:discord:direct:123",
     });
     expect(tool).not.toBeNull();
     if (!tool) {
@@ -170,12 +232,7 @@ describe("createVideoGenerateTool", () => {
     await expect(tool.execute("call-2", { prompt: "broken lobster" })).rejects.toThrow(
       "queue boom",
     );
-    expect(taskExecutorMocks.failTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: expect.stringMatching(/^tool:video_generate:/),
-        error: "queue boom",
-      }),
-    );
+    expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
   });
 
   it("shows duration normalization details from runtime metadata", async () => {

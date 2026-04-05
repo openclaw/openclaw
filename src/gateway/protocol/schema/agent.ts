@@ -4,7 +4,7 @@ import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./pri
 export const AgentInternalEventSchema = Type.Object(
   {
     type: Type.Literal("task_completion"),
-    source: Type.String({ enum: ["subagent", "cron"] }),
+    source: Type.String({ enum: ["subagent", "cron", "video_generation"] }),
     childSessionKey: Type.String(),
     childSessionId: Type.Optional(Type.String()),
     announceType: Type.String(),
