@@ -128,10 +128,10 @@ export const es: TranslationMap = {
     es: "Español",
   },
   markdownSidebar: {
-    title: "Tool Output",
-    closeTitle: "Close sidebar",
-    viewRawText: "View Raw Text",
-    empty: "No content available",
+    title: "Salida de la herramienta",
+    closeTitle: "Cerrar barra lateral",
+    viewRawText: "Ver texto sin formato",
+    empty: "No hay contenido disponible",
   },
   cron: {
     summary: {

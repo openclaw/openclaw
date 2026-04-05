@@ -156,10 +156,10 @@ export const zh_TW: TranslationMap = {
     passwordPlaceholder: "可選",
   },
   markdownSidebar: {
-    title: "Tool Output",
-    closeTitle: "Close sidebar",
-    viewRawText: "View Raw Text",
-    empty: "No content available",
+    title: "工具輸出",
+    closeTitle: "關閉側邊欄",
+    viewRawText: "檢視原始文字",
+    empty: "沒有可用內容",
   },
   chat: {
     disconnected: "已斷開與網關的連接。",

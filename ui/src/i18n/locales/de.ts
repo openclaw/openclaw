@@ -111,10 +111,10 @@ export const de: TranslationMap = {
     },
   },
   markdownSidebar: {
-    title: "Tool Output",
-    closeTitle: "Close sidebar",
-    viewRawText: "View Raw Text",
-    empty: "No content available",
+    title: "Tool-Ausgabe",
+    closeTitle: "Seitenleiste schließen",
+    viewRawText: "Rohtext anzeigen",
+    empty: "Kein Inhalt verfügbar",
   },
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",
