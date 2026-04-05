@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  applyCompactionLightTrim,
   estimateMessagesTokens,
   extractCompactionStageTelemetry,
   planCompactionStage,
@@ -99,6 +100,7 @@ describe("planCompactionStage", () => {
   it("builds a conservative stage plan in execution order", () => {
     expect(
       planCompactionStages({
+        lightTrimRequested: true,
         historyPruned: true,
         historySummaryRequested: true,
         splitTurnSummaryRequested: true,
@@ -106,11 +108,37 @@ describe("planCompactionStage", () => {
       }),
     ).toEqual([
       { stage: "prune_history", reason: "new_content_exceeds_history_budget" },
+      { stage: "light_trim", reason: "oversized_tool_results_present" },
       { stage: "summarize_history", reason: "messages_to_summarize_present" },
       { stage: "summarize_split_turn", reason: "split_turn_prefix_present" },
       { stage: "quality_retry", reason: "quality_guard_enabled" },
       { stage: "finalize", reason: "summary_ready" },
     ]);
+  });
+
+  it("keeps prune_history as the entry stage when both pruning and light trim are needed", () => {
+    expect(
+      planCompactionStage({
+        lightTrimRequested: true,
+        historyPruned: true,
+        historySummaryRequested: true,
+      }),
+    ).toEqual({
+      stage: "prune_history",
+      reason: "new_content_exceeds_history_budget",
+    });
+  });
+
+  it("plans light trim before heavier history summarization work when pruning is not needed", () => {
+    expect(
+      planCompactionStage({
+        lightTrimRequested: true,
+        historySummaryRequested: true,
+      }),
+    ).toEqual({
+      stage: "light_trim",
+      reason: "oversized_tool_results_present",
+    });
   });
 
   it("extracts stage telemetry from compaction result details", () => {
@@ -139,6 +167,35 @@ describe("planCompactionStage", () => {
       qualityRetriesUsed: 1,
       droppedChunks: 1,
     });
+  });
+});
+
+describe("applyCompactionLightTrim", () => {
+  it("soft-trims oversized tool results for compaction summaries", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Inspect the previous command output.", timestamp: 1 },
+      makeToolResult(2, "call_123", "A".repeat(8_000)),
+      { role: "assistant", content: "Done.", timestamp: 3 } as unknown as AgentMessage,
+    ];
+
+    const trimmed = applyCompactionLightTrim({
+      messages,
+      contextWindowTokens: 8_000,
+    });
+
+    expect(trimmed.applied).toBe(true);
+    expect(trimmed.trimmedMessages).toBe(1);
+    expect(trimmed.trimmedToolResults).toBe(1);
+    expect(trimmed.tokenDelta).toBeGreaterThan(0);
+    const toolResult = trimmed.messages[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    expect(toolResult.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("[Tool result trimmed:"),
+        }),
+      ]),
+    );
   });
 });
 

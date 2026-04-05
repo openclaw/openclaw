@@ -40,10 +40,11 @@ import {
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
 import {
-  estimateMessagesTokens,
+  applyCompactionLightTrim,
   planCompactionStage,
   planCompactionStages,
   pruneHistoryForContextShare,
+  type CompactionLightTrimResult,
   type CompactionStageTelemetry,
 } from "../compaction.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
@@ -207,6 +208,13 @@ type CompactionDryRunDetails = {
   qualityGuardEnabled: boolean;
   qualityRetriesPlanned: number;
   topContributors: Array<{ role: string; chars: number; tool?: string }>;
+  lightTrim?: {
+    trimmedMessages: number;
+    trimmedToolResults: number;
+    tokensBefore: number;
+    tokensAfter: number;
+    tokenDelta: number;
+  };
   stageTelemetry: CompactionStageTelemetry;
 };
 
@@ -234,6 +242,9 @@ function resolveCompactionQualityGuardMaxRetries(value: unknown): number {
 
 function buildCompactionStageTelemetry(params: {
   boundaryOnly?: boolean;
+  lightTrimRequested?: boolean;
+  lightTrimmedMessages?: number;
+  lightTrimmedToolResults?: number;
   historyPruned?: boolean;
   historySummaryRequested?: boolean;
   splitTurnSummaryRequested?: boolean;
@@ -248,6 +259,7 @@ function buildCompactionStageTelemetry(params: {
   const qualityRetriesUsed = Math.max(0, params.qualityRetriesUsed ?? 0);
   const entryDecision = planCompactionStage({
     boundaryOnly: params.boundaryOnly,
+    lightTrimRequested: params.lightTrimRequested,
     historyPruned: params.historyPruned,
     historySummaryRequested: params.historySummaryRequested,
     splitTurnSummaryRequested: params.splitTurnSummaryRequested,
@@ -255,6 +267,7 @@ function buildCompactionStageTelemetry(params: {
   });
   const outcomeDecision = planCompactionStage({
     boundaryOnly: params.boundaryOnly,
+    lightTrimRequested: params.lightTrimRequested,
     historyPruned: params.historyPruned,
     historySummaryRequested: params.historySummaryRequested,
     splitTurnSummaryRequested: params.splitTurnSummaryRequested,
@@ -268,11 +281,15 @@ function buildCompactionStageTelemetry(params: {
     outcomeReason: outcomeDecision.reason,
     plan: planCompactionStages({
       boundaryOnly: params.boundaryOnly,
+      lightTrimRequested: params.lightTrimRequested,
       historyPruned: params.historyPruned,
       historySummaryRequested: params.historySummaryRequested,
       splitTurnSummaryRequested: params.splitTurnSummaryRequested,
       qualityGuardEnabled: params.qualityGuardEnabled,
     }),
+    lightTrimApplied: params.lightTrimRequested === true,
+    lightTrimmedMessages: Math.max(0, params.lightTrimmedMessages ?? 0),
+    lightTrimmedToolResults: Math.max(0, params.lightTrimmedToolResults ?? 0),
     historyPruned: params.historyPruned === true,
     splitTurn: params.splitTurnSummaryRequested === true,
     recentTurnsPreserve: resolveCompactionRecentTurnsPreserve(params.recentTurnsPreserve),
@@ -312,10 +329,16 @@ function buildCompactionDryRunDetails(params: {
         maxHistoryShare,
         parts: 2,
       });
+  const lightTrim: CompactionLightTrimResult | null = boundaryOnly
+    ? null
+    : applyCompactionLightTrim({
+        messages: pruned?.messages ?? params.messages,
+        contextWindowTokens: params.contextWindowTokens,
+      });
   const historyPruned = (pruned?.droppedChunks ?? 0) > 0;
   const historySummaryRequested = boundaryOnly
     ? false
-    : (pruned?.messages ?? params.messages).length > 0;
+    : (lightTrim?.messages ?? pruned?.messages ?? params.messages).length > 0;
 
   return {
     dryRun: true,
@@ -327,8 +350,20 @@ function buildCompactionDryRunDetails(params: {
     qualityGuardEnabled,
     qualityRetriesPlanned,
     topContributors: metrics.contributors,
+    lightTrim: lightTrim?.applied
+      ? {
+          trimmedMessages: lightTrim.trimmedMessages,
+          trimmedToolResults: lightTrim.trimmedToolResults,
+          tokensBefore: lightTrim.tokensBefore,
+          tokensAfter: lightTrim.tokensAfter,
+          tokenDelta: lightTrim.tokenDelta,
+        }
+      : undefined,
     stageTelemetry: buildCompactionStageTelemetry({
       boundaryOnly,
+      lightTrimRequested: lightTrim?.applied,
+      lightTrimmedMessages: lightTrim?.trimmedMessages,
+      lightTrimmedToolResults: lightTrim?.trimmedToolResults,
       historyPruned,
       historySummaryRequested,
       splitTurnSummaryRequested: false,

@@ -14,6 +14,7 @@ import {
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
+  applyCompactionLightTrim,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
@@ -561,6 +562,9 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 
 function buildCompactionStageTelemetry(params: {
   boundaryOnly?: boolean;
+  lightTrimRequested?: boolean;
+  lightTrimmedMessages?: number;
+  lightTrimmedToolResults?: number;
   historyPruned?: boolean;
   historySummaryRequested?: boolean;
   splitTurnSummaryRequested?: boolean;
@@ -575,6 +579,7 @@ function buildCompactionStageTelemetry(params: {
   const qualityRetriesUsed = Math.max(0, params.qualityRetriesUsed ?? 0);
   const entryDecision = planCompactionStage({
     boundaryOnly: params.boundaryOnly,
+    lightTrimRequested: params.lightTrimRequested,
     historyPruned: params.historyPruned,
     historySummaryRequested: params.historySummaryRequested,
     splitTurnSummaryRequested: params.splitTurnSummaryRequested,
@@ -582,6 +587,7 @@ function buildCompactionStageTelemetry(params: {
   });
   const outcomeDecision = planCompactionStage({
     boundaryOnly: params.boundaryOnly,
+    lightTrimRequested: params.lightTrimRequested,
     historyPruned: params.historyPruned,
     historySummaryRequested: params.historySummaryRequested,
     splitTurnSummaryRequested: params.splitTurnSummaryRequested,
@@ -595,11 +601,15 @@ function buildCompactionStageTelemetry(params: {
     outcomeReason: outcomeDecision.reason,
     plan: planCompactionStages({
       boundaryOnly: params.boundaryOnly,
+      lightTrimRequested: params.lightTrimRequested,
       historyPruned: params.historyPruned,
       historySummaryRequested: params.historySummaryRequested,
       splitTurnSummaryRequested: params.splitTurnSummaryRequested,
       qualityGuardEnabled: params.qualityGuardEnabled,
     }),
+    lightTrimApplied: params.lightTrimRequested === true,
+    lightTrimmedMessages: Math.max(0, params.lightTrimmedMessages ?? 0),
+    lightTrimmedToolResults: Math.max(0, params.lightTrimmedToolResults ?? 0),
     historyPruned: params.historyPruned === true,
     splitTurn: params.splitTurnSummaryRequested === true,
     recentTurnsPreserve: resolveRecentTurnsPreserve(params.recentTurnsPreserve),
@@ -832,7 +842,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: messagesToSummarize,
         recentTurnsPreserve,
       });
-      messagesToSummarize = summaryTargetMessages;
+      const lightTrim = applyCompactionLightTrim({
+        messages: summaryTargetMessages,
+        contextWindowTokens,
+      });
+      messagesToSummarize = lightTrim.messages;
       const historySummaryRequested = messagesToSummarize.length > 0;
       const splitTurnSummaryRequested = preparation.isSplitTurn && turnPrefixMessages.length > 0;
       const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
@@ -994,6 +1008,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       const qualityRetriesUsed = Math.max(0, summarizationAttemptsUsed - 1);
       const stageTelemetry = buildCompactionStageTelemetry({
+        lightTrimRequested: lightTrim.applied,
+        lightTrimmedMessages: lightTrim.trimmedMessages,
+        lightTrimmedToolResults: lightTrim.trimmedToolResults,
         historyPruned: droppedChunks > 0,
         historySummaryRequested,
         splitTurnSummaryRequested,
@@ -1011,7 +1028,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           summary,
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
-          details: { readFiles, modifiedFiles, stageTelemetry },
+          details: {
+            readFiles,
+            modifiedFiles,
+            lightTrim: lightTrim.applied
+              ? {
+                  trimmedMessages: lightTrim.trimmedMessages,
+                  trimmedToolResults: lightTrim.trimmedToolResults,
+                  tokensBefore: lightTrim.tokensBefore,
+                  tokensAfter: lightTrim.tokensAfter,
+                  tokenDelta: lightTrim.tokenDelta,
+                }
+              : undefined,
+            stageTelemetry,
+          },
         },
       };
     } catch (error) {

@@ -38,4 +38,31 @@ describe("buildCompactionDryRunDetails", () => {
     expect(details.stageTelemetry.qualityGuardEnabled).toBe(true);
     expect(details.qualityRetriesPlanned).toBe(2);
   });
+
+  it("projects light trim when oversized tool results dominate the transcript", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "Summarize the command output." },
+      {
+        role: "toolResult",
+        toolCallId: "call_123",
+        toolName: "exec",
+        content: [{ type: "text", text: "A".repeat(8_000) }],
+      } as AgentMessage,
+      { role: "assistant", content: "Done." } as AgentMessage,
+    ];
+
+    const details = __testing.buildCompactionDryRunDetails({
+      messages,
+      contextWindowTokens: 8_000,
+    });
+
+    expect(details.lightTrim).toMatchObject({
+      trimmedMessages: 1,
+      trimmedToolResults: 1,
+    });
+    expect(details.stageTelemetry.entryStage).toBe("light_trim");
+    expect(details.stageTelemetry.plan).toEqual(
+      expect.arrayContaining([{ stage: "light_trim", reason: "oversized_tool_results_present" }]),
+    );
+  });
 });

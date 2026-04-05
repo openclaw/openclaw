@@ -1342,6 +1342,90 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
   });
 
+  it("records light trim telemetry when older oversized tool results are softened before summarization", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(
+      [
+        "## Decisions",
+        "Keep current flow.",
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "Follow rules.",
+        "## Pending user asks",
+        "Summarize the command output.",
+        "## Exact identifiers",
+        "call_123",
+      ].join("\n"),
+    );
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "Summarize the command output.", timestamp: 1 },
+          {
+            role: "toolResult",
+            toolCallId: "call_123",
+            toolName: "exec",
+            content: [{ type: "text", text: "A".repeat(8_000) }],
+            timestamp: 2,
+          } as unknown as AgentMessage,
+          { role: "assistant", content: "Done.", timestamp: 3 } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: {
+        summary?: string;
+        details?: {
+          lightTrim?: { trimmedToolResults?: number; tokenDelta?: number };
+          stageTelemetry?: { entryStage?: string; lightTrimApplied?: boolean; plan?: unknown[] };
+        };
+      };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction?.details?.lightTrim).toMatchObject({
+      trimmedToolResults: 1,
+    });
+    expect((result.compaction?.details?.lightTrim?.tokenDelta ?? 0) > 0).toBe(true);
+    expect(result.compaction?.details?.stageTelemetry).toMatchObject({
+      entryStage: "light_trim",
+      lightTrimApplied: true,
+    });
+    expect(result.compaction?.details?.stageTelemetry?.plan).toEqual(
+      expect.arrayContaining([{ stage: "light_trim", reason: "oversized_tool_results_present" }]),
+    );
+  });
+
   it("retries when generated summary misses headings even if preserved turns contain them", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages

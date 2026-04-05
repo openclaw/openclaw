@@ -8,6 +8,8 @@ import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defa
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
+import { pruneContextMessages } from "./pi-hooks/context-pruning/pruner.js";
+import { DEFAULT_CONTEXT_PRUNING_SETTINGS } from "./pi-hooks/context-pruning/settings.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 
 const log = createSubsystemLogger("compaction");
@@ -17,6 +19,16 @@ export const MIN_CHUNK_RATIO = 0.15;
 export const SAFETY_MARGIN = 1.2; // 20% buffer for estimateTokens() inaccuracy
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const DEFAULT_PARTS = 2;
+const DEFAULT_COMPACTION_LIGHT_TRIM_SETTINGS = {
+  ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+  keepLastAssistants: 0,
+  softTrimRatio: 0,
+  hardClearRatio: 1,
+  hardClear: {
+    ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+    enabled: false,
+  },
+} as const;
 const MERGE_SUMMARIES_INSTRUCTIONS = [
   "Merge these partial summaries into a single cohesive summary.",
   "",
@@ -42,6 +54,7 @@ export type CompactionSummarizationInstructions = {
 
 export type CompactionStage =
   | "boundary"
+  | "light_trim"
   | "prune_history"
   | "summarize_history"
   | "summarize_split_turn"
@@ -50,6 +63,7 @@ export type CompactionStage =
 
 export type CompactionStageReason =
   | "no_real_messages"
+  | "oversized_tool_results_present"
   | "new_content_exceeds_history_budget"
   | "messages_to_summarize_present"
   | "split_turn_prefix_present"
@@ -64,6 +78,7 @@ export type CompactionStageDecision = {
 
 export type CompactionStagePlanningParams = {
   boundaryOnly?: boolean;
+  lightTrimRequested?: boolean;
   historyPruned?: boolean;
   historySummaryRequested?: boolean;
   splitTurnSummaryRequested?: boolean;
@@ -77,6 +92,9 @@ export type CompactionStageTelemetry = {
   outcomeStage: CompactionStage;
   outcomeReason: CompactionStageReason;
   plan: CompactionStageDecision[];
+  lightTrimApplied: boolean;
+  lightTrimmedMessages: number;
+  lightTrimmedToolResults: number;
   historyPruned: boolean;
   splitTurn: boolean;
   recentTurnsPreserve: number;
@@ -507,6 +525,56 @@ export async function summarizeInStages(params: {
   });
 }
 
+export type CompactionLightTrimResult = {
+  messages: AgentMessage[];
+  applied: boolean;
+  trimmedMessages: number;
+  trimmedToolResults: number;
+  tokensBefore: number;
+  tokensAfter: number;
+  tokenDelta: number;
+};
+
+export function applyCompactionLightTrim(params: {
+  messages: AgentMessage[];
+  contextWindowTokens: number;
+}): CompactionLightTrimResult {
+  const tokensBefore = estimateMessagesTokens(params.messages);
+  const trimmedMessages = pruneContextMessages({
+    messages: params.messages,
+    settings: DEFAULT_COMPACTION_LIGHT_TRIM_SETTINGS,
+    ctx: {
+      model: { contextWindow: params.contextWindowTokens },
+    } as Pick<ExtensionContext, "model">,
+    contextWindowTokensOverride: params.contextWindowTokens,
+    isToolPrunable: () => true,
+    dropThinkingBlocksForEstimate: true,
+  });
+
+  let trimmedCount = 0;
+  let trimmedToolResults = 0;
+  for (let i = 0; i < params.messages.length; i += 1) {
+    if (trimmedMessages[i] === params.messages[i]) {
+      continue;
+    }
+    trimmedCount += 1;
+    if (params.messages[i]?.role === "toolResult") {
+      trimmedToolResults += 1;
+    }
+  }
+
+  const tokensAfter = estimateMessagesTokens(trimmedMessages);
+  return {
+    messages: trimmedMessages,
+    applied: trimmedCount > 0,
+    trimmedMessages: trimmedCount,
+    trimmedToolResults,
+    tokensBefore,
+    tokensAfter,
+    tokenDelta: Math.max(0, tokensBefore - tokensAfter),
+  };
+}
+
 export function pruneHistoryForContextShare(params: {
   messages: AgentMessage[];
   maxContextTokens: number;
@@ -583,6 +651,9 @@ export function planCompactionStage(
   if (params.historyPruned) {
     return { stage: "prune_history", reason: "new_content_exceeds_history_budget" };
   }
+  if (params.lightTrimRequested) {
+    return { stage: "light_trim", reason: "oversized_tool_results_present" };
+  }
   if (params.historySummaryRequested) {
     return { stage: "summarize_history", reason: "messages_to_summarize_present" };
   }
@@ -602,6 +673,9 @@ export function planCompactionStages(
   const plan: CompactionStageDecision[] = [];
   if (params.historyPruned) {
     plan.push({ stage: "prune_history", reason: "new_content_exceeds_history_budget" });
+  }
+  if (params.lightTrimRequested) {
+    plan.push({ stage: "light_trim", reason: "oversized_tool_results_present" });
   }
   if (params.historySummaryRequested) {
     plan.push({ stage: "summarize_history", reason: "messages_to_summarize_present" });
