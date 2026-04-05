@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  hasAgentModelFallbacksField,
   resolveAgentModelFallbackValues,
+  resolveAgentModelFallbacksFromModelsValue,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -356,16 +358,43 @@ function resolveFallbackCandidates(params: {
     defaultProvider,
   });
   const { candidates, addExplicitCandidate } = createModelCandidateCollector(allowlist);
+  const configuredModel = params.cfg?.agents?.defaults?.model;
 
   addExplicitCandidate(normalizedPrimary);
+
+  const resolveCatalogFallbacks = () => {
+    const configuredModels = params.cfg?.agents?.defaults?.models ?? {};
+    const derived: string[] = [];
+    const seen = new Set<string>();
+    const configuredPrimaryKey = modelKey(configuredPrimary.provider, configuredPrimary.model);
+    for (const raw of Object.keys(configuredModels)) {
+      const resolved = resolveModelRefFromString({
+        raw: String(raw ?? ""),
+        defaultProvider,
+        aliasIndex,
+      });
+      if (!resolved) {
+        continue;
+      }
+      const key = modelKey(resolved.ref.provider, resolved.ref.model);
+      if (key === configuredPrimaryKey || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      derived.push(key);
+    }
+    return derived;
+  };
 
   const modelFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) {
       return params.fallbacksOverride;
     }
-    const configuredFallbacks = resolveAgentModelFallbackValues(
-      params.cfg?.agents?.defaults?.model,
-    );
+    const configuredFallbacks = hasAgentModelFallbacksField(configuredModel)
+      ? resolveAgentModelFallbackValues(configuredModel)
+      : resolveAgentModelFallbacksFromModelsValue(configuredModel)
+        ? resolveCatalogFallbacks()
+        : [];
     // When user runs a different provider than config, only use configured fallbacks
     // if the current model is already in that chain (e.g. session on first fallback).
     if (normalizedPrimary.provider !== configuredPrimary.provider) {

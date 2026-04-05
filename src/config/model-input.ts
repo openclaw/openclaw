@@ -1,11 +1,9 @@
+import type { AgentDefaultModelConfig, AgentModelListConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
 
-type AgentModelListLike = {
-  primary?: string;
-  fallbacks?: string[];
-};
+type AgentModelInput = AgentModelConfig | AgentDefaultModelConfig;
 
-export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string | undefined {
+export function resolveAgentModelPrimaryValue(model?: AgentModelInput): string | undefined {
   if (typeof model === "string") {
     const trimmed = model.trim();
     return trimmed || undefined;
@@ -17,14 +15,27 @@ export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string 
   return primary || undefined;
 }
 
-export function resolveAgentModelFallbackValues(model?: AgentModelConfig): string[] {
+export function resolveAgentModelFallbackValues(model?: AgentModelInput): string[] {
   if (!model || typeof model !== "object") {
     return [];
   }
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
 }
 
-export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLike | undefined {
+export function hasAgentModelFallbacksField(model?: AgentModelInput): boolean {
+  return Boolean(model && typeof model === "object" && Object.hasOwn(model, "fallbacks"));
+}
+
+export function resolveAgentModelFallbacksFromModelsValue(
+  model?: AgentDefaultModelConfig,
+): boolean {
+  if (!model || typeof model !== "object") {
+    return false;
+  }
+  return model.fallbacksFromModels === true;
+}
+
+export function toAgentModelListLike(model?: AgentModelInput): AgentModelListConfig | undefined {
   if (typeof model === "string") {
     const primary = model.trim();
     return primary ? { primary } : undefined;

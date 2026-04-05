@@ -920,6 +920,109 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("derives fallbacks from configured models when enabled", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4",
+            fallbacksFromModels: true,
+          },
+          models: {
+            "anthropic/claude-sonnet-4": {},
+            "openai/gpt-4o": {},
+            "google/gemini-2.5-pro": {},
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([
+      ["anthropic", "claude-sonnet-4"],
+      ["openai", "gpt-4o"],
+    ]);
+  });
+
+  it("prefers explicit fallbacks over configured model derivation", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4",
+            fallbacks: ["openai/gpt-4o"],
+            fallbacksFromModels: true,
+          },
+          models: {
+            "anthropic/claude-sonnet-4": {},
+            "google/gemini-2.5-pro": {},
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([
+      ["anthropic", "claude-sonnet-4"],
+      ["openai", "gpt-4o"],
+    ]);
+  });
+
+  it("treats explicit empty fallbacks as disabling configured model derivation", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4",
+            fallbacks: [],
+            fallbacksFromModels: true,
+          },
+          models: {
+            "anthropic/claude-sonnet-4": {},
+            "openai/gpt-4o": {},
+          },
+        },
+      },
+    });
+    const calls: Array<[string, string]> = [];
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4",
+        run: async (provider, model) => {
+          calls.push([provider, model]);
+          throw new Error("primary failed");
+        },
+      }),
+    ).rejects.toThrow("primary failed");
+
+    expect(calls).toEqual([["anthropic", "claude-sonnet-4"]]);
+  });
+
   it("defaults provider/model when missing (regression #946)", async () => {
     const cfg = makeCfg({
       agents: {

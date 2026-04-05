@@ -25,6 +25,7 @@ OpenClaw selects models in this order:
 Related:
 
 - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases).
+- `agents.defaults.model.fallbacksFromModels: true` lets that catalog double as the fallback pool when explicit `fallbacks` are omitted.
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
 - `agents.defaults.pdfModel` is used by the `pdf` tool. If omitted, the tool
   falls back to `agents.defaults.imageModel`, then the resolved session/default
@@ -53,6 +54,7 @@ subscription** (OAuth) and **Anthropic** (API key or Claude CLI).
 ## Config keys (overview)
 
 - `agents.defaults.model.primary` and `agents.defaults.model.fallbacks`
+- `agents.defaults.model.fallbacksFromModels`
 - `agents.defaults.imageModel.primary` and `agents.defaults.imageModel.fallbacks`
 - `agents.defaults.pdfModel.primary` and `agents.defaults.pdfModel.fallbacks`
 - `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`

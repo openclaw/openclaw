@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { AgentModelListConfig } from "../config/types.js";
+import type { AgentDefaultModelConfig } from "../config/types.js";
 
-export function resolvePrimaryModel(model?: AgentModelListConfig | string): string | undefined {
+export function resolvePrimaryModel(model?: AgentDefaultModelConfig): string | undefined {
   if (typeof model === "string") {
     return model;
   }
@@ -48,20 +48,19 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
   const existingModels = defaults?.models;
-  const fallbacks =
-    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks
-      : undefined;
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
         ...defaults,
-        model: {
-          ...(fallbacks ? { fallbacks } : undefined),
-          primary: model,
-        },
+        model:
+          typeof existingModel === "object" && existingModel !== null
+            ? {
+                ...existingModel,
+                primary: model,
+              }
+            : { primary: model },
         models: {
           ...existingModels,
           [model]: existingModels?.[model] ?? {},

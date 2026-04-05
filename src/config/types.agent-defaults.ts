@@ -1,5 +1,9 @@
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
+import type {
+  AgentModelConfig,
+  AgentModelObjectConfig,
+  AgentSandboxConfig,
+} from "./types.agents-shared.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -16,10 +20,11 @@ export type AgentModelEntryConfig = {
   streaming?: boolean;
 };
 
-export type AgentModelListConfig = {
-  primary?: string;
-  fallbacks?: string[];
+export type AgentModelListConfig = AgentModelObjectConfig & {
+  fallbacksFromModels?: boolean;
 };
+
+export type AgentDefaultModelConfig = string | AgentModelListConfig;
 
 export type AgentContextPruningConfig = {
   mode?: "off" | "cache-ttl";
@@ -120,8 +125,11 @@ export type CliBackendConfig = {
 export type AgentDefaultsConfig = {
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params?: Record<string, unknown>;
-  /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  model?: AgentModelConfig;
+  /**
+   * Primary model and fallbacks (provider/model). Accepts string or
+   * {primary,fallbacks,fallbacksFromModels}.
+   */
+  model?: AgentDefaultModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentModelConfig;
   /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */

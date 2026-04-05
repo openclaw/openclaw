@@ -3021,6 +3021,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         description:
                           "Ordered fallback models (provider/model). Used when the primary model fails.",
                       },
+                      fallbacksFromModels: {
+                        type: "boolean",
+                        title: "Fallbacks From Models",
+                        description:
+                          "When true and explicit fallbacks are omitted, derive fallback candidates from agents.defaults.models in config order.",
+                      },
                     },
                     additionalProperties: false,
                   },
@@ -3090,12 +3096,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     properties: {
                       primary: {
                         type: "string",
+                        title: "Video Generation Model",
+                        description:
+                          "Optional video-generation model (provider/model) used by the shared video generation capability.",
                       },
                       fallbacks: {
                         type: "array",
                         items: {
                           type: "string",
                         },
+                        title: "Video Generation Model Fallbacks",
+                        description: "Ordered fallback video-generation models (provider/model).",
                       },
                     },
                     additionalProperties: false,
@@ -24984,6 +24995,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "agents.defaults.model.fallbacks": {
       label: "Model Fallbacks",
       help: "Ordered fallback models (provider/model). Used when the primary model fails.",
+      tags: ["reliability", "models"],
+    },
+    "agents.defaults.model.fallbacksFromModels": {
+      label: "Fallbacks From Models",
+      help: "When true and explicit fallbacks are omitted, derive fallback candidates from agents.defaults.models in config order.",
       tags: ["reliability", "models"],
     },
     "agents.defaults.imageModel.primary": {
