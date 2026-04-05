@@ -14,7 +14,6 @@ import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js"
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionKeyForRequest } from "../command/session.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
-import { resolveSessionKeyForRequest } from "../command/session.js";
 import {
   type AuthProfileFailureReason,
   markAuthProfileFailure,
