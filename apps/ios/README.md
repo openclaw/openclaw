@@ -92,6 +92,54 @@ If you need to force a specific build number:
 pnpm ios:beta -- --build-number 7
 ```
 
+### Maintainer Quick Release Checklist
+
+Use this when a clone is missing local iOS release setup and you want the shortest path to a TestFlight upload.
+
+1. Confirm Fastlane auth is set up:
+
+```bash
+cd apps/ios
+fastlane ios auth_check
+```
+
+2. If auth is missing, bootstrap it once on this Mac:
+
+```bash
+scripts/ios-asc-keychain-setup.sh \
+  --key-path /absolute/path/to/AuthKey_XXXXXXXXXX.p8 \
+  --issuer-id YOUR_ISSUER_ID \
+  --write-env
+```
+
+This should create `apps/ios/fastlane/.env` with the non-secret ASC variables while the private key stays in Keychain.
+
+3. Set the official/TestFlight relay URL for the build:
+
+```bash
+export OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com
+```
+
+4. Upload the beta:
+
+```bash
+pnpm ios:beta
+```
+
+5. Expected behavior:
+   - Fastlane reads `package.json.version`
+   - resolves the next TestFlight build number for that short version
+   - generates `apps/ios/build/BetaRelease.xcconfig`
+   - archives `OpenClaw`
+   - uploads the IPA to TestFlight
+
+6. Expected outputs after a successful run:
+   - `apps/ios/build/beta/OpenClaw-<version>.ipa`
+   - `apps/ios/build/beta/OpenClaw-<version>.app.dSYM.zip`
+   - Fastlane log line like `Uploaded iOS beta: version=<version> short=<short> build=<build>`
+
+7. If this is a fresh clone on a maintainer machine that already works elsewhere, it is OK to copy the non-secret `apps/ios/fastlane/.env` from another trusted local clone on the same Mac. The Keychain-backed private key remains machine-local and is not stored in the repo.
+
 ## APNs Expectations For Local/Manual Builds
 
 - The app calls `registerForRemoteNotifications()` at launch.
