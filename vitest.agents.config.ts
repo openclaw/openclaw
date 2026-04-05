@@ -5,6 +5,7 @@ export function createAgentsVitestConfig(env?: Record<string, string | undefined
     dir: "src/agents",
     env,
     name: "agents",
+    pool: "forks",
   });
 }
 

@@ -19,8 +19,12 @@ export function createBoundaryVitestConfig(
     test: {
       ...sharedVitestConfig.test,
       name: "boundary",
+      isolate: false,
+      runner: "./test/non-isolated-runner.ts",
       include: loadBoundaryIncludePatternsFromEnv(env) ?? cliIncludePatterns ?? boundaryTestFiles,
       ...(cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
+      // Boundary workers still need the shared isolated HOME/bootstrap. Only
+      // per-file module isolation is disabled here.
       setupFiles: sharedVitestConfig.test.setupFiles,
     },
   });

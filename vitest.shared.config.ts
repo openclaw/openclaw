@@ -167,7 +167,7 @@ export function resolveLocalVitestScheduling(
 export function resolveDefaultVitestPool(
   _env: Record<string, string | undefined> = process.env,
 ): OpenClawVitestPool {
-  return "forks";
+  return "threads";
 }
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -211,8 +211,9 @@ export const sharedVitestConfig = {
     hookTimeout: isWindows ? 180_000 : 120_000,
     unstubEnvs: true,
     unstubGlobals: true,
-    isolate: true,
+    isolate: false,
     pool: defaultPool,
+    runner: "./test/non-isolated-runner.ts",
     maxWorkers: isCI ? ciWorkers : localScheduling.maxWorkers,
     fileParallelism: isCI ? true : localScheduling.fileParallelism,
     forceRerunTriggers: [

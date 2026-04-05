@@ -31,7 +31,7 @@ function relativizeScopedPatterns(values: string[], dir?: string): string[] {
 export function resolveVitestIsolation(
   _env: Record<string, string | undefined> = process.env,
 ): boolean {
-  return true;
+  return false;
 }
 
 export function createScopedVitestConfig(
