@@ -1094,6 +1094,7 @@
     "test": "vitest run --config vitest.config.ts",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "node scripts/run-vitest.mjs run --config vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
+    "test:auto-reply:workflow-regression": "node scripts/test-auto-reply-workflow-regression.mjs",
     "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
     "test:bundled": "node scripts/run-vitest.mjs run --config vitest.bundled.config.ts",
     "test:changed": "vitest run --config vitest.config.ts --changed origin/main",

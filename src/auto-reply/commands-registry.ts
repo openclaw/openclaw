@@ -44,6 +44,15 @@ let cachedTextAliasCommands: ChatCommandDefinition[] | null = null;
 let cachedDetection: CommandDetection | undefined;
 let cachedDetectionCommands: ChatCommandDefinition[] | null = null;
 
+const BUILTIN_PROVIDER_NATIVE_NAME_OVERRIDES: Record<string, Record<string, string>> = {
+  discord: {
+    tts: "voice",
+  },
+  slack: {
+    status: "agentstatus",
+  },
+};
+
 function getTextAliasMap(): Map<string, TextAliasSpec> {
   const commands = getChatCommands();
   if (cachedTextAliasMap && cachedTextAliasCommands === commands) {
@@ -133,11 +142,15 @@ function resolveNativeName(command: ChatCommandDefinition, provider?: string): s
   if (!provider) {
     return command.nativeName;
   }
+  const providerOverride =
+    BUILTIN_PROVIDER_NATIVE_NAME_OVERRIDES[provider.trim().toLowerCase()]?.[command.key];
   return (
     getChannelPlugin(provider)?.commands?.resolveNativeCommandName?.({
       commandKey: command.key,
-      defaultName: command.nativeName,
-    }) ?? command.nativeName
+      defaultName: providerOverride ?? command.nativeName,
+    }) ??
+    providerOverride ??
+    command.nativeName
   );
 }
 

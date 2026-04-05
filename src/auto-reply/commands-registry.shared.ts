@@ -766,6 +766,14 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       textAlias: "/models",
       argsParsing: "none",
       acceptsArgs: true,
+      args: [
+        {
+          name: "input",
+          description: "Provider/page input",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
       category: "options",
     }),
     defineChatCommand({

@@ -64,6 +64,8 @@ describe("buildTasksReply", () => {
 
     const reply = await buildTasksReplyForTest();
 
+    expect(reply.text).toContain("Agent: main");
+    expect(reply.text).toContain("Workspace: /tmp");
     expect(reply.text).toContain("📋 Tasks");
     expect(reply.text).toContain("Current session: 2 active · 3 total");
     expect(reply.text).toContain("🟢 active background task");
@@ -142,6 +144,18 @@ describe("buildTasksReply", () => {
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("hidden background task");
     expect(reply.text).not.toContain("hidden progress detail");
+  });
+
+  it("includes the current workspace context in task replies", async () => {
+    const commandParams = buildCommandTestParams("/tasks", baseCfg, undefined, {
+      workspaceDir: "/tmp/openclaw-workspace-main",
+    });
+
+    const reply = await buildTasksReply(commandParams);
+
+    expect(reply.text).toContain("Agent: main");
+    expect(reply.text).toContain("Workspace: /tmp/openclaw-workspace-main");
+    expect(reply.text).toContain("📋 Tasks");
   });
 });
 

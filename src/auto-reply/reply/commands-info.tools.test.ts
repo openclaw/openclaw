@@ -129,6 +129,8 @@ describe("handleToolsCommand", () => {
 
     expect(result?.reply?.text).toContain("Available tools");
     expect(result?.reply?.text).toContain("Profile: coding");
+    expect(result?.reply?.text).toContain("Agent: main");
+    expect(result?.reply?.text).toContain("Workspace: /tmp");
     expect(result?.reply?.text).toContain("Built-in tools");
     expect(result?.reply?.text).toContain("exec");
     expect(result?.reply?.text).toContain("Connected tools");
@@ -193,6 +195,8 @@ describe("handleToolsCommand", () => {
 
     expect(result?.reply?.text).toContain("What this agent can use right now:");
     expect(result?.reply?.text).toContain("Profile: coding");
+    expect(result?.reply?.text).toContain("Agent: main");
+    expect(result?.reply?.text).toContain("Workspace: /tmp");
     expect(result?.reply?.text).toContain("Exec - Run shell commands");
     expect(result?.reply?.text).toContain("Docs Lookup - Search internal documentation");
   });

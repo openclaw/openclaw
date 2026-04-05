@@ -216,6 +216,19 @@ describe("commands registry", () => {
     expect(modeArg?.choices).toEqual(["status", "on", "off"]);
   });
 
+  it("exposes models input metadata for command discovery", () => {
+    const models = listChatCommands().find((command) => command.key === "models");
+    expect(models?.acceptsArgs).toBe(true);
+    expect(models?.args).toEqual([
+      {
+        name: "input",
+        description: "Provider/page input",
+        type: "string",
+        captureRemaining: true,
+      },
+    ]);
+  });
+
   it("detects known text commands", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/commands")).toBe(true);

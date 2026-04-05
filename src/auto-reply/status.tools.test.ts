@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { buildCommandsMessage, buildHelpMessage, buildToolsMessage } from "./status.js";
+import { buildCommandsMessage, buildHelpMessage, buildToolsMessage } from "./status-info.js";
 
 vi.mock("../plugins/commands.js", () => ({
   listPluginCommands: () => [],
@@ -13,9 +13,15 @@ describe("tools product copy", () => {
     } as unknown as OpenClawConfig;
 
     expect(buildCommandsMessage(cfg)).toContain("/tools - List available runtime tools.");
+    expect(buildCommandsMessage(cfg)).toContain(
+      "Tip: use /tools verbose for detailed capability descriptions.",
+    );
+    expect(buildCommandsMessage(cfg)).toContain("Browse models: /models  |  /models <provider>");
     expect(buildCommandsMessage(cfg)).toContain("More: /tools for available capabilities");
     expect(buildHelpMessage(cfg)).toContain("/tools for available capabilities");
+    expect(buildHelpMessage(cfg)).toContain("/models for provider browsing");
     expect(buildHelpMessage(cfg)).toContain("/tasks");
+    expect(buildHelpMessage(cfg)).toContain("/tools [compact|verbose]");
   });
 
   it("formats built-in and plugin tools for end users", () => {
@@ -64,6 +70,7 @@ describe("tools product copy", () => {
 
     expect(text).toContain("Available tools");
     expect(text).toContain("Profile: coding");
+    expect(text).toContain("Agent: main");
     expect(text).toContain("Built-in tools");
     expect(text).toContain("exec, web_search");
     expect(text).toContain("Connected tools");
@@ -99,9 +106,37 @@ describe("tools product copy", () => {
 
     expect(text).toContain("What this agent can use right now:");
     expect(text).toContain("Profile: minimal");
+    expect(text).toContain("Agent: main");
     expect(text).toContain("Exec - Run shell commands");
     expect(text).toContain("Tool availability depends on this agent's configuration.");
     expect(text).not.toContain("unavailable right now");
+  });
+
+  it("shows the resolved workspace when present", () => {
+    const text = buildToolsMessage({
+      agentId: "pm",
+      workspaceDir: "/tmp/openclaw-workspace-pm",
+      profile: "coding",
+      groups: [
+        {
+          id: "core",
+          label: "Built-in tools",
+          source: "core",
+          tools: [
+            {
+              id: "exec",
+              label: "Exec",
+              description: "Run shell commands",
+              rawDescription: "Run shell commands",
+              source: "core",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(text).toContain("Agent: pm");
+    expect(text).toContain("Workspace: /tmp/openclaw-workspace-pm");
   });
 
   it("trims verbose output before schema-like doc blocks", () => {

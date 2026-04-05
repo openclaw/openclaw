@@ -114,11 +114,16 @@ export async function buildTasksReply(params: HandleCommandsParams): Promise<Rep
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
+  const headerLines = [
+    `Agent: ${agentId}`,
+    ...(params.workspaceDir ? [`Workspace: ${params.workspaceDir}`] : []),
+  ];
+  const text = buildTasksText({
+    sessionKey: params.sessionKey,
+    agentId,
+  });
   return {
-    text: buildTasksText({
-      sessionKey: params.sessionKey,
-      agentId,
-    }),
+    text: [headerLines.join("\n"), "", text].join("\n"),
   };
 }
 

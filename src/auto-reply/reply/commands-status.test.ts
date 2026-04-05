@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  addSubagentRunForTests,
-  resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.js";
+import { subagentRuns } from "../../agents/subagent-registry-memory.js";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   completeTaskRunByRunId,
@@ -14,13 +12,25 @@ import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { buildStatusReply } from "./commands-status.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
+function resetSubagentRegistryForTests() {
+  subagentRuns.clear();
+}
+
+function addSubagentRunForTests(entry: SubagentRunRecord) {
+  subagentRuns.set(entry.runId, entry);
+}
+
 const baseCfg = {
   commands: { text: true },
   channels: { whatsapp: { allowFrom: ["*"] } },
   session: { mainKey: "main", scope: "per-sender" },
 } as OpenClawConfig;
 
-async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: boolean }) {
+async function buildStatusReplyForTest(params: {
+  sessionKey?: string;
+  verbose?: boolean;
+  workspaceDir?: string;
+}) {
   const commandParams = buildCommandTestParams("/status", baseCfg);
   const sessionKey = params.sessionKey ?? commandParams.sessionKey;
   return await buildStatusReply({
@@ -31,6 +41,7 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
     parentSessionKey: sessionKey,
     sessionScope: commandParams.sessionScope,
     storePath: commandParams.storePath,
+    workspaceDir: params.workspaceDir ?? "/tmp",
     provider: "anthropic",
     model: "claude-opus-4-5",
     contextTokens: 0,
@@ -83,6 +94,8 @@ describe("buildStatusReply subagent summary", () => {
 
     const reply = await buildStatusReplyForTest({});
 
+    expect(reply?.text).toContain("Agent: main");
+    expect(reply?.text).toContain("Workspace: /tmp");
     expect(reply?.text).toContain("🤖 Subagents: 1 active");
   });
 
@@ -260,6 +273,16 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).toContain("📌 Tasks: 1 recent failure");
     expect(reply?.text).toContain("failed background task");
     expect(reply?.text).toContain("approval denied");
+  });
+
+  it("includes the current workspace context in status replies", async () => {
+    const reply = await buildStatusReplyForTest({
+      workspaceDir: "/tmp/openclaw-workspace-main",
+    });
+
+    expect(reply?.text).toContain("Agent: main");
+    expect(reply?.text).toContain("Workspace: /tmp/openclaw-workspace-main");
+    expect(reply?.text).toContain("🧠 Model:");
   });
 
   it("does not leak internal runtime context through the task status line", async () => {

@@ -2581,6 +2581,24 @@ describe("/models command", () => {
     });
 
     expect(result.reply?.text).toContain("localai");
+    expect(result.reply?.text).toContain("Agent: support");
+  });
+
+  it("includes current workspace context in /models replies", async () => {
+    const params = buildPolicyParams("/models anthropic", cfg, {
+      Provider: "discord",
+      Surface: "discord",
+    });
+
+    const result = await handleCommands({
+      ...params,
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw-workspace-main",
+    });
+
+    expect(result.reply?.text).toContain("Agent: main");
+    expect(result.reply?.text).toContain("Workspace: /tmp/openclaw-workspace-main");
+    expect(result.reply?.text).toContain("Models (anthropic");
   });
 });
 

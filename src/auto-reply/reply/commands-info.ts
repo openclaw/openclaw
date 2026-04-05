@@ -1,5 +1,3 @@
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { logVerbose } from "../../globals.js";
 import { listSkillCommandsForAgents } from "../skill-commands.js";
@@ -8,15 +6,8 @@ import {
   buildCommandsMessagePaginated,
   buildHelpMessage,
   buildToolsMessage,
-} from "../status.js";
-import { buildThreadingToolContext } from "./agent-runner-utils.js";
-import { resolveChannelAccountId } from "./channel-context.js";
-import { buildContextReply } from "./commands-context-report.js";
-import { buildExportSessionReply } from "./commands-export-session.js";
-import { buildStatusReply } from "./commands-status.js";
+} from "../status-info.js";
 import type { CommandHandler } from "./commands-types.js";
-import { extractExplicitGroupId } from "./group-id.js";
-import { resolveReplyToMode } from "./reply-threading.js";
 
 export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -62,6 +53,10 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
     page: 1,
     surface,
   });
+  const headerLines = [
+    ...(params.agentId ? [`Agent: ${params.agentId}`] : []),
+    ...(params.workspaceDir ? [`Workspace: ${params.workspaceDir}`] : []),
+  ];
   const channelData = commandPlugin?.commands?.buildCommandsListChannelData?.({
     currentPage: paginated.currentPage,
     totalPages: paginated.totalPages,
@@ -71,7 +66,9 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
     return {
       shouldContinue: false,
       reply: {
-        text: paginated.text,
+        text: headerLines.length
+          ? [headerLines.join("\n"), "", paginated.text].join("\n")
+          : paginated.text,
         channelData,
       },
     };
@@ -79,7 +76,15 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
 
   return {
     shouldContinue: false,
-    reply: { text: buildCommandsMessage(params.cfg, skillCommands, { surface }) },
+    reply: {
+      text: headerLines.length
+        ? [
+            headerLines.join("\n"),
+            "",
+            buildCommandsMessage(params.cfg, skillCommands, { surface }),
+          ].join("\n")
+        : buildCommandsMessage(params.cfg, skillCommands, { surface }),
+    },
   };
 };
 
@@ -106,6 +111,13 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   }
 
   try {
+    const { resolveSessionAgentId } = await import("../../agents/agent-scope.js");
+    const { resolveEffectiveToolInventory } =
+      await import("../../agents/tools-effective-inventory.js");
+    const { buildThreadingToolContext } = await import("./agent-runner-utils.js");
+    const { resolveChannelAccountId } = await import("./channel-context.js");
+    const { extractExplicitGroupId } = await import("./group-id.js");
+    const { resolveReplyToMode } = await import("./reply-threading.js");
     const effectiveAccountId = resolveChannelAccountId({
       cfg: params.cfg,
       ctx: params.ctx,
@@ -183,6 +195,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     );
     return { shouldContinue: false };
   }
+  const { buildStatusReply } = await import("./commands-status.js");
   const reply = await buildStatusReply({
     cfg: params.cfg,
     command: params.command,
@@ -190,6 +203,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     sessionKey: params.sessionKey,
     parentSessionKey: params.ctx.ParentSessionKey,
     sessionScope: params.sessionScope,
+    workspaceDir: params.workspaceDir,
     provider: params.provider,
     model: params.model,
     contextTokens: params.contextTokens,
@@ -219,6 +233,7 @@ export const handleContextCommand: CommandHandler = async (params, allowTextComm
     );
     return { shouldContinue: false };
   }
+  const { buildContextReply } = await import("./commands-context-report.js");
   return { shouldContinue: false, reply: await buildContextReply(params) };
 };
 
@@ -241,6 +256,7 @@ export const handleExportSessionCommand: CommandHandler = async (params, allowTe
     );
     return { shouldContinue: false };
   }
+  const { buildExportSessionReply } = await import("./commands-export-session.js");
   return { shouldContinue: false, reply: await buildExportSessionReply(params) };
 };
 

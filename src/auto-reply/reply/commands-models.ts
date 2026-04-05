@@ -400,5 +400,18 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
   if (!reply) {
     return null;
   }
-  return { reply, shouldContinue: false };
+  const headerLines = [
+    ...(modelsAgentId ? [`Agent: ${modelsAgentId}`] : []),
+    ...(params.workspaceDir ? [`Workspace: ${params.workspaceDir}`] : []),
+  ];
+  if (headerLines.length === 0) {
+    return { reply, shouldContinue: false };
+  }
+  return {
+    reply: {
+      ...reply,
+      text: [headerLines.join("\n"), "", reply.text].join("\n"),
+    },
+    shouldContinue: false,
+  };
 };

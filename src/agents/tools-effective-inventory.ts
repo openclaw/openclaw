@@ -31,6 +31,7 @@ export type EffectiveToolInventoryGroup = {
 export type EffectiveToolInventoryResult = {
   agentId: string;
   profile: string;
+  workspaceDir?: string;
   groups: EffectiveToolInventoryGroup[];
 };
 
@@ -227,5 +228,5 @@ export function resolveEffectiveToolInventory(
     })
     .filter((group): group is EffectiveToolInventoryGroup => group !== null);
 
-  return { agentId, profile, groups };
+  return { agentId, profile, workspaceDir, groups };
 }

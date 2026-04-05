@@ -11,6 +11,9 @@ vi.mock("../../agents/model-auth-label.js", () => ({
 
 vi.mock("../../agents/subagent-registry.js", () => ({
   listSubagentRunsForRequester: () => [],
+  listSubagentRunsForController: () => [],
+  getLatestSubagentRunByChildSessionKey: () => undefined,
+  countPendingDescendantRuns: () => 0,
 }));
 
 vi.mock("../../infra/provider-usage.js", () => ({
@@ -26,8 +29,11 @@ vi.mock("../group-activation.js", () => ({
   normalizeGroupActivation: (value: unknown) => value,
 }));
 
-vi.mock("./queue.js", () => ({
+vi.mock("./queue/enqueue.js", () => ({
   getFollowupQueueDepth: () => 0,
+}));
+
+vi.mock("./queue/settings.js", () => ({
   resolveQueueSettings: () => ({ mode: "interrupt" }),
 }));
 

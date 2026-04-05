@@ -888,14 +888,16 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("");
 
   lines.push("Status");
-  lines.push("  /status  |  /tasks  |  /whoami  |  /context");
+  lines.push("  /status  |  /tasks  |  /whoami  |  /context  |  /tools [compact|verbose]");
   lines.push("");
 
   lines.push("Skills");
   lines.push("  /skill <name> [input]");
 
   lines.push("");
-  lines.push("More: /commands for full list, /tools for available capabilities");
+  lines.push(
+    "More: /commands for full list, /tools for available capabilities, /models for provider browsing",
+  );
 
   return lines.join("\n");
 }
@@ -978,8 +980,21 @@ export function buildToolsMessage(
 
   const verbose = options?.verbose === true;
   const lines = verbose
-    ? ["Available tools", "", `Profile: ${result.profile}`, "What this agent can use right now:"]
-    : ["Available tools", "", `Profile: ${result.profile}`];
+    ? [
+        "Available tools",
+        "",
+        `Profile: ${result.profile}`,
+        ...(result.agentId ? [`Agent: ${result.agentId}`] : []),
+        ...(result.workspaceDir ? [`Workspace: ${result.workspaceDir}`] : []),
+        "What this agent can use right now:",
+      ]
+    : [
+        "Available tools",
+        "",
+        `Profile: ${result.profile}`,
+        ...(result.agentId ? [`Agent: ${result.agentId}`] : []),
+        ...(result.workspaceDir ? [`Workspace: ${result.workspaceDir}`] : []),
+      ];
 
   for (const group of groups) {
     lines.push("", group.label);
@@ -1103,6 +1118,8 @@ export function buildCommandsMessagePaginated(
   if (!prefersPaginatedList) {
     const lines = ["ℹ️ Slash commands", ""];
     lines.push(formatCommandList(items));
+    lines.push("", "Tip: use /tools verbose for detailed capability descriptions.");
+    lines.push("Browse models: /models  |  /models <provider>");
     lines.push("", "More: /tools for available capabilities");
     return {
       text: lines.join("\n").trim(),
