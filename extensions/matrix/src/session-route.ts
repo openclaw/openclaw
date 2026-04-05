@@ -10,11 +10,8 @@ import {
 } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import { resolveDefaultMatrixAccountId } from "./matrix/accounts.js";
-import {
-  resolveMatrixSessionAccountId,
-  resolveMatrixStoredRoomId,
-} from "./matrix/session-store-metadata.js";
-import { resolveMatrixDirectUserId, resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
+import { resolveMatrixStoredSessionMeta } from "./matrix/session-store-metadata.js";
+import { resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 
 function resolveEffectiveMatrixAccountId(
   params: Pick<ChannelOutboundSessionRouteParams, "cfg" | "accountId">,
@@ -54,35 +51,17 @@ function resolveMatrixCurrentDmRoomId(params: {
       store,
       sessionKey,
     }).existing;
-    if (!existing) {
+    const currentSession = resolveMatrixStoredSessionMeta(existing);
+    if (!currentSession) {
       return undefined;
     }
-    const currentAccountId =
-      resolveMatrixSessionAccountId(
-        existing.deliveryContext?.accountId ?? existing.lastAccountId ?? existing.origin?.accountId,
-      ) ?? undefined;
-    if (!currentAccountId || currentAccountId !== params.accountId) {
+    if (!currentSession.accountId || currentSession.accountId !== params.accountId) {
       return undefined;
     }
-    const currentRoomId = resolveMatrixStoredRoomId({
-      deliveryTo: existing.deliveryContext?.to,
-      lastTo: existing.lastTo,
-      originNativeChannelId: existing.origin?.nativeChannelId,
-      originTo: existing.origin?.to,
-    });
-    const currentUserId = resolveMatrixDirectUserId({
-      from: existing.origin?.from,
-      to:
-        (currentRoomId ? `room:${currentRoomId}` : undefined) ??
-        existing.deliveryContext?.to ??
-        existing.lastTo ??
-        existing.origin?.to,
-      chatType: existing.origin?.chatType ?? existing.chatType,
-    });
-    if (!currentUserId || currentUserId !== params.targetUserId) {
+    if (!currentSession.directUserId || currentSession.directUserId !== params.targetUserId) {
       return undefined;
     }
-    return currentRoomId;
+    return currentSession.roomId;
   } catch {
     return undefined;
   }

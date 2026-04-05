@@ -1,5 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveMatrixTargetIdentity } from "./target-ids.js";
+import { resolveMatrixDirectUserId, resolveMatrixTargetIdentity } from "./target-ids.js";
 
 export function trimMaybeString(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -35,4 +35,68 @@ export function resolveMatrixStoredRoomId(params: {
     resolveMatrixRoomTargetId(params.originNativeChannelId) ??
     resolveMatrixRoomTargetId(params.originTo)
   );
+}
+
+type MatrixStoredSessionEntryLike = {
+  deliveryContext?: {
+    channel?: unknown;
+    to?: unknown;
+    accountId?: unknown;
+  };
+  origin?: {
+    provider?: unknown;
+    from?: unknown;
+    to?: unknown;
+    nativeChannelId?: unknown;
+    accountId?: unknown;
+    chatType?: unknown;
+  };
+  lastChannel?: unknown;
+  lastTo?: unknown;
+  lastAccountId?: unknown;
+  chatType?: unknown;
+};
+
+export function resolveMatrixStoredSessionMeta(entry?: MatrixStoredSessionEntryLike): {
+  channel?: string;
+  accountId?: string;
+  roomId?: string;
+  directUserId?: string;
+} | null {
+  if (!entry) {
+    return null;
+  }
+  const channel =
+    trimMaybeString(entry.deliveryContext?.channel) ??
+    trimMaybeString(entry.lastChannel) ??
+    trimMaybeString(entry.origin?.provider);
+  const accountId =
+    resolveMatrixSessionAccountId(
+      entry.deliveryContext?.accountId ?? entry.lastAccountId ?? entry.origin?.accountId,
+    ) ?? undefined;
+  const roomId = resolveMatrixStoredRoomId({
+    deliveryTo: entry.deliveryContext?.to,
+    lastTo: entry.lastTo,
+    originNativeChannelId: entry.origin?.nativeChannelId,
+    originTo: entry.origin?.to,
+  });
+  const directUserId = resolveMatrixDirectUserId({
+    from: trimMaybeString(entry.origin?.from),
+    to:
+      (roomId ? `room:${roomId}` : undefined) ??
+      trimMaybeString(entry.deliveryContext?.to) ??
+      trimMaybeString(entry.lastTo) ??
+      trimMaybeString(entry.origin?.to),
+    chatType:
+      trimMaybeString(entry.origin?.chatType) ?? trimMaybeString(entry.chatType) ?? undefined,
+  });
+  if (!channel && !accountId && !roomId && !directUserId) {
+    return null;
+  }
+  return {
+    ...(channel ? { channel } : {}),
+    ...(accountId ? { accountId } : {}),
+    ...(roomId ? { roomId } : {}),
+    ...(directUserId ? { directUserId } : {}),
+  };
 }

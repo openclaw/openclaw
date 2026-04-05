@@ -31,11 +31,7 @@ import {
   sendReadReceiptMatrix,
   sendTypingMatrix,
 } from "../send.js";
-import {
-  resolveMatrixSessionAccountId,
-  resolveMatrixStoredRoomId,
-  trimMaybeString,
-} from "../session-store-metadata.js";
+import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { resolveMatrixAllowListMatch } from "./allowlist.js";
@@ -207,50 +203,22 @@ function resolveMatrixSharedDmContextNotice(params: {
 
   try {
     const store = loadSessionStore(params.storePath);
-    const existing = resolveSessionStoreEntry({
-      store,
-      sessionKey: params.sessionKey,
-    }).existing as
-      | {
-          deliveryContext?: { channel?: unknown; to?: unknown; accountId?: unknown };
-          origin?: {
-            provider?: unknown;
-            to?: unknown;
-            nativeChannelId?: unknown;
-            accountId?: unknown;
-          };
-          lastChannel?: unknown;
-          lastTo?: unknown;
-          lastAccountId?: unknown;
-        }
-      | undefined;
-    if (!existing) {
+    const currentSession = resolveMatrixStoredSessionMeta(
+      resolveSessionStoreEntry({
+        store,
+        sessionKey: params.sessionKey,
+      }).existing,
+    );
+    if (!currentSession) {
       return null;
     }
-
-    const priorChannel =
-      trimMaybeString(existing.deliveryContext?.channel) ??
-      trimMaybeString(existing.lastChannel) ??
-      trimMaybeString(existing.origin?.provider);
-    if (priorChannel && priorChannel !== "matrix") {
+    if (currentSession.channel && currentSession.channel !== "matrix") {
       return null;
     }
-
-    const priorAccountId =
-      resolveMatrixSessionAccountId(
-        existing.deliveryContext?.accountId ?? existing.lastAccountId ?? existing.origin?.accountId,
-      ) ?? undefined;
-    if (priorAccountId && priorAccountId !== params.accountId) {
+    if (currentSession.accountId && currentSession.accountId !== params.accountId) {
       return null;
     }
-
-    const priorRoomId = resolveMatrixStoredRoomId({
-      deliveryTo: existing.deliveryContext?.to,
-      lastTo: existing.lastTo,
-      originNativeChannelId: existing.origin?.nativeChannelId,
-      originTo: existing.origin?.to,
-    });
-    if (!priorRoomId || priorRoomId === params.roomId) {
+    if (!currentSession.roomId || currentSession.roomId === params.roomId) {
       return null;
     }
 
