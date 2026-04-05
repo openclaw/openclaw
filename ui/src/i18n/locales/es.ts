@@ -47,6 +47,8 @@ export const es: TranslationMap = {
     debug: "Depuración",
     logs: "Registros",
     dreams: "Sueños",
+    files: "Files",
+    tools: "Tools",
   },
   subtitles: {
     agents: "Gestionar espacios de trabajo, herramientas e identidades de agentes.",

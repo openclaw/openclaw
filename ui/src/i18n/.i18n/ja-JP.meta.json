@@ -37,7 +37,9 @@
     "overview.notes.tailscaleTitle",
     "overview.stats.cron",
     "tabs.dreams",
+    "tabs.files",
     "tabs.skills",
+    "tabs.tools",
     "usage.common.emptyValue",
     "usage.details.skills",
     "usage.details.systemShort",
@@ -47,12 +49,12 @@
     "usage.filters.timeZoneUtc",
     "usage.overview.tokensPerMinute"
   ],
-  "generatedAt": "2026-04-05T21:50:09.720Z",
+  "generatedAt": "2026-04-05T23:40:22.478Z",
   "locale": "ja-JP",
   "model": "",
   "provider": "",
-  "sourceHash": "2bb94e0c1796a39575c7b80cba1cd16d9a2891e6c280a4dcf0836a9d1750dce5",
-  "totalKeys": 513,
+  "sourceHash": "d16e49ee77d2280e5696cab3a019af1954e51248bf51ca8c9ac7cdc822ea6342",
+  "totalKeys": 515,
   "translatedKeys": 467,
   "workflow": 1
 }

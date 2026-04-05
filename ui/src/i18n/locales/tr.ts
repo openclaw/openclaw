@@ -47,6 +47,8 @@ export const tr: TranslationMap = {
     debug: "Hata Ayıklama",
     logs: "Günlükler",
     dreams: "Düşler",
+    files: "Files",
+    tools: "Tools",
   },
   subtitles: {
     agents: "Çalışma alanları, araçlar, kimlikler.",

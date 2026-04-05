@@ -47,6 +47,8 @@ export const ko: TranslationMap = {
     debug: "디버그",
     logs: "로그",
     dreams: "Dreaming",
+    files: "Files",
+    tools: "Tools",
   },
   subtitles: {
     agents: "워크스페이스, 도구, 정체성.",

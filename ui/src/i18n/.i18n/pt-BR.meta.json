@@ -30,7 +30,9 @@
     "overview.snapshot.status",
     "overview.stats.cron",
     "tabs.chat",
+    "tabs.files",
     "tabs.logs",
+    "tabs.tools",
     "usage.breakdown.total",
     "usage.common.emptyValue",
     "usage.daily.total",
@@ -46,12 +48,12 @@
     "usage.presets.last30d",
     "usage.presets.last7d"
   ],
-  "generatedAt": "2026-04-05T21:50:08.302Z",
+  "generatedAt": "2026-04-05T23:40:21.067Z",
   "locale": "pt-BR",
   "model": "",
   "provider": "",
-  "sourceHash": "2bb94e0c1796a39575c7b80cba1cd16d9a2891e6c280a4dcf0836a9d1750dce5",
-  "totalKeys": 513,
+  "sourceHash": "d16e49ee77d2280e5696cab3a019af1954e51248bf51ca8c9ac7cdc822ea6342",
+  "totalKeys": 515,
   "translatedKeys": 468,
   "workflow": 1
 }

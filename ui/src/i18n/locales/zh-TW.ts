@@ -47,6 +47,8 @@ export const zh_TW: TranslationMap = {
     debug: "調試",
     logs: "日誌",
     dreams: "夢境",
+    files: "Files",
+    tools: "Tools",
   },
   subtitles: {
     agents: "工作區、工具、身份。",

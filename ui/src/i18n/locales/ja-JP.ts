@@ -47,6 +47,8 @@ export const ja_JP: TranslationMap = {
     debug: "デバッグ",
     logs: "ログ",
     dreams: "Dreaming",
+    files: "Files",
+    tools: "Tools",
   },
   subtitles: {
     agents: "ワークスペース、ツール、ID。",

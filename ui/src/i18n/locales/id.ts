@@ -47,6 +47,8 @@ export const id: TranslationMap = {
     debug: "Debug",
     logs: "Log",
     dreams: "Mimpi",
+    files: "Files",
+    tools: "Tools",
   },
   subtitles: {
     agents: "Ruang kerja, alat, identitas.",

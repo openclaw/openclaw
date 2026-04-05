@@ -47,6 +47,8 @@ export const uk: TranslationMap = {
     debug: "Налагодження",
     logs: "Журнали",
     dreams: "Сни",
+    files: "Files",
+    tools: "Tools",
   },
   subtitles: {
     agents: "Робочі простори, інструменти, ідентичності.",

@@ -33,10 +33,12 @@
     "tabs.agents",
     "tabs.chat",
     "tabs.communications",
+    "tabs.files",
     "tabs.infrastructure",
     "tabs.instances",
     "tabs.sessions",
     "tabs.skills",
+    "tabs.tools",
     "usage.breakdown.total",
     "usage.common.emptyValue",
     "usage.daily.total",
@@ -60,12 +62,12 @@
     "usage.overview.sessions",
     "usage.sessions.title"
   ],
-  "generatedAt": "2026-04-05T21:50:11.011Z",
+  "generatedAt": "2026-04-05T23:40:23.417Z",
   "locale": "fr",
   "model": "",
   "provider": "",
-  "sourceHash": "2bb94e0c1796a39575c7b80cba1cd16d9a2891e6c280a4dcf0836a9d1750dce5",
-  "totalKeys": 513,
+  "sourceHash": "d16e49ee77d2280e5696cab3a019af1954e51248bf51ca8c9ac7cdc822ea6342",
+  "totalKeys": 515,
   "translatedKeys": 454,
   "workflow": 1
 }
