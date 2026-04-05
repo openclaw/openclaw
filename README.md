@@ -100,7 +100,7 @@ Model note: while many providers/models are supported, for the best experience a
 
 ### Gemini AI Cloud by Rocket-Hosting
 
-[Gemini AI Cloud](https://github.com/Rocket-Hosting/gemini-ai-cloud) is a lightweight, OpenAI-compatible API proxy for Google's Gemini AI models, offering free access to a variety of models for testing and evaluation.
+[Gemini AI Cloud](https://github.com/Rocket-Hosting/gemini-ai-cloud) is an OpenAI-compatible API proxy for Google's Gemini AI models, offering free access to a variety of models for testing and evaluation.
 
 **Available models** (append `:search` to any model ID for automatic web search grounding):
 
@@ -116,15 +116,9 @@ Model note: while many providers/models are supported, for the best experience a
 - `gemma-4-31b-it`
 - `gemma-3-1b-it`, `gemma-3-4b-it`, `gemma-3-12b-it`, `gemma-3-27b-it`
 
-**Features:**
+**Features:** OpenAI API-compatible endpoints, vision/image processing, tool/function calling, and automatic Google Search grounding via the `:search` suffix.
 
-- Full OpenAI API compatibility (endpoints served directly, no `/v1` prefix)
-- Vision/image processing support
-- Complete tool/function calling
-- Automatic Google Search grounding (via `:search` model suffix)
-- Time-based access control using simple access keys
-
-**Free testing:** use the access key `hahav` for immediate evaluation. Note that the free key is evaluation-only and may expire or be revoked at any time without notice. For guaranteed availability, dedicated access keys are available at $1/day — see their [Discord](https://discord.gg/F6mBjR8Jnt) for details.
+Free evaluation keys and paid dedicated access keys are available — see the [Gemini AI Cloud](https://github.com/Rocket-Hosting/gemini-ai-cloud) repo for setup instructions and their [Discord](https://discord.gg/F6mBjR8Jnt) for support.
 
 ## Install (recommended)
 
