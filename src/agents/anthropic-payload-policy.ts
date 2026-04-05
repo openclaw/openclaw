@@ -26,6 +26,8 @@ export type AnthropicPayloadPolicy = {
   serviceTier: AnthropicServiceTier | undefined;
 };
 
+const ANTHROPIC_CACHEABLE_BLOCK_TYPES = new Set(["text", "image", "tool_result"]);
+
 function resolveBaseUrlHostname(baseUrl: string): string | undefined {
   try {
     return new URL(baseUrl).hostname;
@@ -226,24 +228,35 @@ export function applyAnthropicEphemeralCacheControlMarkers(
     return;
   }
 
-  for (const message of messages as Array<{ role?: string; content?: unknown }>) {
-    if (message.role === "system" || message.role === "developer") {
-      if (typeof message.content === "string") {
-        message.content = [
-          { type: "text", text: message.content, cache_control: { type: "ephemeral" } },
-        ];
+  const typedMessages = messages as Array<{ role?: string; content?: unknown }>;
+  let lastSystemOrDeveloperMessage: { role?: string; content?: unknown } | undefined;
+
+  const applyEphemeralCacheControl = (message: { content?: unknown }): void => {
+    const cacheControl: AnthropicEphemeralCacheControl = { type: "ephemeral" };
+    if (typeof message.content === "string") {
+      message.content = [{ type: "text", text: message.content, cache_control: cacheControl }];
+      return;
+    }
+    if (!Array.isArray(message.content) || message.content.length === 0) {
+      return;
+    }
+    for (let i = message.content.length - 1; i >= 0; i--) {
+      const block = message.content[i];
+      if (!block || typeof block !== "object") {
         continue;
       }
-      if (Array.isArray(message.content) && message.content.length > 0) {
-        const last = message.content[message.content.length - 1];
-        if (last && typeof last === "object") {
-          const record = last as Record<string, unknown>;
-          if (record.type !== "thinking" && record.type !== "redacted_thinking") {
-            record.cache_control = { type: "ephemeral" };
-          }
-        }
+      const record = block as Record<string, unknown>;
+      const type = record.type;
+      if (typeof type === "string" && ANTHROPIC_CACHEABLE_BLOCK_TYPES.has(type)) {
+        record.cache_control = cacheControl;
+        break;
       }
-      continue;
+    }
+  };
+
+  for (const message of typedMessages) {
+    if (message.role === "system" || message.role === "developer") {
+      lastSystemOrDeveloperMessage = message;
     }
 
     if (message.role === "assistant" && Array.isArray(message.content)) {
@@ -257,5 +270,14 @@ export function applyAnthropicEphemeralCacheControlMarkers(
         }
       }
     }
+  }
+
+  if (lastSystemOrDeveloperMessage) {
+    applyEphemeralCacheControl(lastSystemOrDeveloperMessage);
+  }
+
+  const lastMessage = typedMessages[typedMessages.length - 1];
+  if (lastMessage?.role === "user") {
+    applyEphemeralCacheControl(lastMessage);
   }
 }

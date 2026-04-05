@@ -30,7 +30,7 @@ function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
 }
 
 describe("extra-params: OpenRouter Anthropic cache_control", () => {
-  it("injects cache_control into system message for OpenRouter Anthropic models", () => {
+  it("injects cache_control into the last system/developer message and trailing user turn", () => {
     const payload = {
       messages: [
         { role: "system", content: "You are a helpful assistant." },
@@ -43,7 +43,9 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     expect(payload.messages[0].content).toEqual([
       { type: "text", text: "You are a helpful assistant.", cache_control: { type: "ephemeral" } },
     ]);
-    expect(payload.messages[1].content).toBe("Hello");
+    expect(payload.messages[1].content).toEqual([
+      { type: "text", text: "Hello", cache_control: { type: "ephemeral" } },
+    ]);
   });
 
   it("adds cache_control to last content block when system message is already array", () => {
@@ -87,10 +89,12 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
 
     runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
 
-    expect(payload.messages[0].content).toBe("Hello");
+    expect(payload.messages[0].content).toEqual([
+      { type: "text", text: "Hello", cache_control: { type: "ephemeral" } },
+    ]);
   });
 
-  it("does not inject cache_control into thinking blocks", () => {
+  it("walks back to the nearest cacheable system block when trailing thinking exists", () => {
     const payload = {
       messages: [
         {
@@ -106,7 +110,7 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
 
     expect(payload.messages[0].content).toEqual([
-      { type: "text", text: "Part 1" },
+      { type: "text", text: "Part 1", cache_control: { type: "ephemeral" } },
       { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
     ]);
   });
@@ -134,6 +138,56 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     expect(payload.messages[0].content).toEqual([
       { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
       { type: "text", text: "visible" },
+    ]);
+  });
+
+  it("only marks the last system/developer message when multiple exist", () => {
+    const payload = {
+      messages: [
+        { role: "system", content: "First system instruction." },
+        { role: "developer", content: "Second developer instruction." },
+        { role: "user", content: "Hello" },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    expect(payload.messages[0].content).toBe("First system instruction.");
+    expect(payload.messages[1].content).toEqual([
+      {
+        type: "text",
+        text: "Second developer instruction.",
+        cache_control: { type: "ephemeral" },
+      },
+    ]);
+    expect(payload.messages[2].content).toEqual([
+      { type: "text", text: "Hello", cache_control: { type: "ephemeral" } },
+    ]);
+  });
+
+  it("walks back to the nearest cacheable user block when the last block is not cacheable", () => {
+    const payload = {
+      messages: [
+        { role: "system", content: "System prompt." },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Describe this document" },
+            { type: "document", source: { type: "base64", data: "abc" } },
+          ],
+        },
+      ],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    expect(payload.messages[1].content).toEqual([
+      {
+        type: "text",
+        text: "Describe this document",
+        cache_control: { type: "ephemeral" },
+      },
+      { type: "document", source: { type: "base64", data: "abc" } },
     ]);
   });
 });
