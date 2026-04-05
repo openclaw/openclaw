@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
+import { OPENCLAW_SERVICE_RUNTIME_ENV_VARS } from "../infra/openclaw-exec-env.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
@@ -89,7 +90,7 @@ describe("exec PATH login shell merge", () => {
   });
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["PATH", "SHELL"]);
+    envSnapshot = captureEnv(["PATH", "SHELL", ...OPENCLAW_SERVICE_RUNTIME_ENV_VARS]);
     shellEnvMocks.getShellPathFromLoginShell.mockReset();
     shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
@@ -130,6 +131,28 @@ describe("exec PATH login shell merge", () => {
     const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
     expect(value).toBe("exec");
+  });
+
+  it("does not leak OpenClaw service runtime env vars to host=gateway commands", async () => {
+    if (isWin) {
+      return;
+    }
+
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    process.env.OPENCLAW_SERVICE_VERSION = "2026.3.13";
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    process.env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-openclaw-service-runtime-env", {
+      command:
+        'printf "%s" "${OPENCLAW_SERVICE_MARKER:-}|${OPENCLAW_SERVICE_KIND:-}|${OPENCLAW_SERVICE_VERSION:-}|${OPENCLAW_SYSTEMD_UNIT:-}|${OPENCLAW_LAUNCHD_LABEL:-}|${OPENCLAW_WINDOWS_TASK_NAME:-}|${OPENCLAW_SHELL:-}"',
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("||||||exec");
   });
 
   it("throws security violation when env.PATH is provided", async () => {
