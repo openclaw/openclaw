@@ -277,6 +277,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       channels: [{ plugin: { id: "discord" } }],
     } as unknown as ReturnType<typeof mocks.getActivePluginRegistry>);
 
+    // First call simulates a missing plugin, forcing the bootstrap path to run.
     mocks.getChannelPlugin.mockReturnValueOnce(undefined).mockReturnValue(plugin);
 
     const entry: ChannelDirectoryEntry = { kind: "group", id: "123456789", name: "support" };
@@ -291,7 +292,11 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     expect(display).toBe("support");
     expect(mocks.listGroups).toHaveBeenCalledTimes(1);
-    expect(mocks.getChannelPlugin).toHaveBeenCalled();
+    expect(mocks.getChannelPlugin.mock.results[0]?.value).toBeUndefined();
+    expect(mocks.getChannelPlugin.mock.calls.some((call) => call[0] === "telegram")).toBe(true);
+    expect(mocks.getChannelPlugin.mock.results.some((result) => result.value === plugin)).toBe(
+      true,
+    );
   });
 
   it("defers target display formatting to the plugin when available", () => {
