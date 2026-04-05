@@ -383,6 +383,12 @@ export type GatewayToolsConfig = {
 export type GatewayWebchatConfig = {
   /** Max characters per text field in chat.history responses before truncation (default: 12000). */
   chatHistoryMaxChars?: number;
+  /**
+   * Optional canonical/operator peer id for WebChat/TUI default session routing.
+   * When set, WebChat/TUI defaults to the DM session resolved from this peer id
+   * instead of the legacy main session.
+   */
+  defaultPeerId?: string;
 };
 
 export type GatewayConfig = {

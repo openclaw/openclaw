@@ -64,6 +64,27 @@ Full configuration: [Configuration](/gateway/configuration)
 WebChat options:
 
 - `gateway.webchat.chatHistoryMaxChars`: maximum character count for text fields in `chat.history` responses. When a transcript entry exceeds this limit, Gateway truncates long text fields and may replace oversized messages with a placeholder. Per-request `maxChars` can also be sent by the client to override this default for a single `chat.history` call.
+- `gateway.webchat.defaultPeerId`: optional canonical/operator peer id for default WebChat/TUI routing. When set, WebChat/TUI defaults to the DM session resolved from this peer identity via normal DM routing rules (`session.dmScope`, `session.identityLinks`) instead of the legacy main session.
+
+Example:
+
+```json5
+{
+  gateway: {
+    webchat: {
+      defaultPeerId: "operator",
+    },
+  },
+  session: {
+    dmScope: "per-peer",
+    identityLinks: {
+      operator: ["telegram:1234567890"],
+    },
+  },
+}
+```
+
+With this config, WebChat/TUI defaults to `agent:<agentId>:direct:operator` instead of `agent:<agentId>:main`.
 
 Related global options:
 

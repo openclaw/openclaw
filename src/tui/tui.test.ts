@@ -107,6 +107,33 @@ describe("resolveTuiSessionKey", () => {
       }),
     ).toBe("agent:main:test1");
   });
+
+  it("uses peer-based default session when webchat defaultPeerId is configured", () => {
+    expect(
+      resolveTuiSessionKey({
+        raw: "",
+        sessionScope: "per-sender",
+        currentAgentId: "main",
+        sessionMainKey: "main",
+        dmScope: "per-peer",
+        identityLinks: {
+          operator: ["telegram:1234567890", "webchat:operator"],
+        },
+        webchatDefaultPeerId: "operator",
+      }),
+    ).toBe("agent:main:direct:operator");
+  });
+
+  it("keeps legacy main-session default when webchat defaultPeerId is unset", () => {
+    expect(
+      resolveTuiSessionKey({
+        raw: "",
+        sessionScope: "per-sender",
+        currentAgentId: "main",
+        sessionMainKey: "main",
+      }),
+    ).toBe("agent:main:main");
+  });
 });
 
 describe("resolveInitialTuiAgentId", () => {

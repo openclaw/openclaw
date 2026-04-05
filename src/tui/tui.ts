@@ -11,6 +11,7 @@ import {
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
+  buildAgentPeerSessionKey,
   buildAgentMainSessionKey,
   normalizeAgentId,
   normalizeMainKey,
@@ -54,12 +55,29 @@ export function resolveTuiSessionKey(params: {
   sessionScope: SessionScope;
   currentAgentId: string;
   sessionMainKey: string;
+  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  identityLinks?: Record<string, string[]>;
+  webchatDefaultPeerId?: string;
 }) {
   const trimmed = (params.raw ?? "").trim();
   if (!trimmed) {
     if (params.sessionScope === "global") {
       return "global";
     }
+
+    const defaultPeerId = (params.webchatDefaultPeerId ?? "").trim();
+    if (defaultPeerId) {
+      return buildAgentPeerSessionKey({
+        agentId: params.currentAgentId,
+        mainKey: params.sessionMainKey,
+        channel: "webchat",
+        peerKind: "direct",
+        peerId: defaultPeerId,
+        dmScope: params.dmScope ?? "main",
+        identityLinks: params.identityLinks,
+      });
+    }
+
     return buildAgentMainSessionKey({
       agentId: params.currentAgentId,
       mainKey: params.sessionMainKey,
@@ -189,6 +207,9 @@ export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
+  const dmScope = config.session?.dmScope;
+  const identityLinks = config.session?.identityLinks;
+  const webchatDefaultPeerId = config.gateway?.webchat?.defaultPeerId;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
   let agentDefaultId = resolveDefaultAgentId(config);
   let currentAgentId = resolveInitialTuiAgentId({
@@ -457,6 +478,9 @@ export async function runTui(opts: TuiOptions) {
       sessionScope,
       currentAgentId,
       sessionMainKey,
+      dmScope,
+      identityLinks,
+      webchatDefaultPeerId,
     });
   };
 
