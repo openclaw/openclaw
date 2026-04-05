@@ -122,6 +122,28 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("does not warn about dotenv conflicts when the key is already set", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
+        process.env.HOME = base;
+        process.env.FOO = "from-shell";
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          "FOO=from-gateway\n",
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-shell");
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+  });
+
   it("blocks dangerous and workspace-control vars from CWD .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
@@ -471,6 +493,26 @@ describe("loadCliDotEnv", () => {
         expect(process.env.FOO).toBe("from-global");
         expect(process.env.BAR).toBe("from-gateway");
       });
+    });
+  });
+
+  it("keeps the legacy state-dir fallback for CLI dotenv loading", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-legacy-"));
+      const cwdDir = path.join(base, "cwd");
+      const legacyStateDir = path.join(base, ".clawdbot");
+      process.env.HOME = base;
+      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.OPENCLAW_TEST_FAST;
+      await fs.mkdir(cwdDir, { recursive: true });
+      await writeEnvFile(path.join(legacyStateDir, ".env"), "LEGACY_ONLY=from-legacy\n");
+
+      vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+      delete process.env.LEGACY_ONLY;
+
+      loadCliDotEnv({ quiet: true });
+
+      expect(process.env.LEGACY_ONLY).toBe("from-legacy");
     });
   });
 

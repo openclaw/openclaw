@@ -153,11 +153,15 @@ export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boole
 }
 
 function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
+  const preExistingKeys = new Set(Object.keys(process.env));
   const conflicts = new Map<string, { keptPath: string; ignoredPath: string; keys: Set<string> }>();
   const firstSeen = new Map<string, { value: string; filePath: string }>();
 
   for (const file of files) {
     for (const { key, value } of file.entries) {
+      if (preExistingKeys.has(key)) {
+        continue;
+      }
       const previous = firstSeen.get(key);
       if (previous) {
         if (previous.value !== value) {
@@ -193,9 +197,9 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]) {
   }
 }
 
-export function loadGlobalRuntimeDotEnvFiles(opts?: { quiet?: boolean }) {
+export function loadGlobalRuntimeDotEnvFiles(opts?: { quiet?: boolean; stateEnvPath?: string }) {
   const quiet = opts?.quiet ?? true;
-  const stateEnvPath = path.join(resolveConfigDir(process.env), ".env");
+  const stateEnvPath = opts?.stateEnvPath ?? path.join(resolveConfigDir(process.env), ".env");
   const compatGatewayEnvPath = path.join(
     resolveRequiredHomeDir(process.env, os.homedir),
     ".config",
