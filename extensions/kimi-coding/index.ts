@@ -86,6 +86,17 @@ export default definePluginEntry({
           };
         },
       },
+      augmentModelCatalog: () => {
+        const providerConfig = buildKimiCodingProvider();
+        return providerConfig.models.map((model) => ({
+          id: model.id,
+          name: model.name ?? model.id,
+          provider: PROVIDER_ID,
+          contextWindow: model.contextWindow,
+          reasoning: model.reasoning,
+          input: model.input,
+        }));
+      },
       buildReplayPolicy: () => buildKimiReplayPolicy(),
       wrapStreamFn: wrapKimiProviderStream,
     });

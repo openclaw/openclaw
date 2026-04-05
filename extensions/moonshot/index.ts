@@ -8,7 +8,7 @@ import {
   applyMoonshotConfigCn,
   MOONSHOT_DEFAULT_MODEL_REF,
 } from "./onboard.js";
-import { buildMoonshotProvider } from "./provider-catalog.js";
+import { buildMoonshotProvider, MOONSHOT_MODEL_CATALOG } from "./provider-catalog.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 const PROVIDER_ID = "moonshot";
@@ -57,6 +57,16 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildMoonshotProvider,
       allowExplicitBaseUrl: true,
+    },
+    augmentModelCatalog: () => {
+      return MOONSHOT_MODEL_CATALOG.map((model) => ({
+        provider: PROVIDER_ID,
+        id: model.id,
+        name: model.name,
+        reasoning: model.reasoning,
+        input: [...model.input],
+        contextWindow: model.contextWindow,
+      }));
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyMoonshotNativeStreamingUsageCompat(providerConfig),
