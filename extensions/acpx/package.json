@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "@agentclientprotocol/sdk": "0.18.0",
-    "acpx": "github:openclaw/acpx#6024ac80fb216ff358dec38030f6892b9721b30e"
+    "acpx": "github:openclaw/acpx#1672c4a6dbea62ebd82458ed7002b91470cc0ecb"
   },
   "openclaw": {
     "extensions": [
