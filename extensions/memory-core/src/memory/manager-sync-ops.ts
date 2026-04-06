@@ -55,6 +55,7 @@ import {
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
+import type { MemorySourceStateDb } from "./manager-source-state.js";
 import { runMemoryTargetedSessionSync } from "./manager-targeted-sync.js";
 
 type MemorySyncProgressState = {
@@ -63,6 +64,14 @@ type MemorySyncProgressState = {
   label?: string;
   report: (update: MemorySyncProgressUpdate) => void;
 };
+
+type TargetedSyncProgress = (update: MemorySyncProgressUpdate) => void;
+
+function toTargetedSyncProgress(
+  progress?: MemorySyncProgressState,
+): TargetedSyncProgress | undefined {
+  return progress ? (update) => progress.report(update) : undefined;
+}
 
 const META_KEY = "memory_index_meta_v1";
 const VECTOR_TABLE = "chunks_vec";
@@ -697,7 +706,7 @@ export abstract class MemoryManagerSyncOps {
       concurrency: this.getIndexConcurrency(),
     });
     const existingState = loadMemorySourceFileState({
-      db: this.db,
+      db: this.db as MemorySourceStateDb,
       source: "memory",
     });
     const existingRows = existingState.rows;
@@ -788,7 +797,7 @@ export abstract class MemoryManagerSyncOps {
       activePaths === null
         ? null
         : loadMemorySourceFileState({
-            db: this.db,
+            db: this.db as MemorySourceStateDb,
             source: "sessions",
           }).rows;
     const existingHashes =
@@ -835,7 +844,7 @@ export abstract class MemoryManagerSyncOps {
         return;
       }
       const existingHash = resolveMemorySourceExistingHash({
-        db: this.db,
+        db: this.db as MemorySourceStateDb,
         source: "sessions",
         path: entry.path,
         existingHashes,
@@ -949,21 +958,30 @@ export abstract class MemoryManagerSyncOps {
       hasSessionSource: this.sources.has("sessions"),
       targetSessionFiles,
       reason: params?.reason,
-      progress: progress ?? undefined,
+      progress: toTargetedSyncProgress(progress),
       useUnsafeReindex:
         process.env.OPENCLAW_TEST_FAST === "1" &&
         process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1",
       sessionsDirtyFiles: this.sessionsDirtyFiles,
       syncSessionFiles: async (targetedParams) => {
-        await this.syncSessionFiles(targetedParams);
+        await this.syncSessionFiles({
+          ...targetedParams,
+          progress: undefined,
+        });
       },
       shouldFallbackOnError: (message) => this.shouldFallbackOnError(message),
       activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
       runSafeReindex: async (reindexParams) => {
-        await this.runSafeReindex(reindexParams);
+        await this.runSafeReindex({
+          ...reindexParams,
+          progress: undefined,
+        });
       },
       runUnsafeReindex: async (reindexParams) => {
-        await this.runUnsafeReindex(reindexParams);
+        await this.runUnsafeReindex({
+          ...reindexParams,
+          progress: undefined,
+        });
       },
     });
     if (targetedSessionSync.handled) {
@@ -976,7 +994,7 @@ export abstract class MemoryManagerSyncOps {
         meta,
         // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
         provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
-        providerKey: this.providerKey,
+        providerKey: this.providerKey ?? undefined,
         configuredSources,
         configuredScopeHash,
         chunkTokens: this.settings.chunking.tokens,

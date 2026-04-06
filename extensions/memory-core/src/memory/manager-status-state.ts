@@ -13,7 +13,7 @@ type StatusAggregateRow = {
 
 type StatusAggregateDb = {
   prepare: (sql: string) => {
-    all: (...args: MemorySource[]) => StatusAggregateRow[];
+    all: (...args: any[]) => StatusAggregateRow[];
   };
 };
 

@@ -5,10 +5,10 @@ export type MemorySourceFileStateRow = {
   hash: string;
 };
 
-type MemorySourceStateDb = {
+export type MemorySourceStateDb = {
   prepare: (sql: string) => {
-    all: (...args: unknown[]) => unknown;
-    get: (...args: unknown[]) => unknown;
+    all: (...args: any[]) => unknown;
+    get: (...args: any[]) => unknown;
   };
 };
 

@@ -242,8 +242,8 @@ function recordFailedCandidateAttempt(params: {
   logModelFallbackDecision({
     decision: "candidate_failed",
     runId: params.runId,
-    requestedProvider: params.requestedProvider,
-    requestedModel: params.requestedModel,
+    requestedProvider: params.requestedProvider ?? params.candidate.provider,
+    requestedModel: params.requestedModel ?? params.candidate.model,
     candidate: params.candidate,
     attempt: params.attempt,
     total: params.total,
