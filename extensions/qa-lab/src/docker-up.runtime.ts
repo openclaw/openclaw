@@ -36,7 +36,7 @@ async function isPortFree(port: number) {
   return await new Promise<boolean>((resolve) => {
     const server = createServer();
     server.once("error", () => resolve(false));
-    server.listen(port, () => {
+    server.listen(port, "127.0.0.1", () => {
       server.close(() => resolve(true));
     });
   });
@@ -112,15 +112,17 @@ async function execCommand(command: string, args: string[], cwd: string) {
 async function waitForHealth(
   url: string,
   deps: {
+    label?: string;
     fetchImpl: FetchLike;
     sleepImpl: (ms: number) => Promise<unknown>;
     timeoutMs?: number;
     pollMs?: number;
   },
 ) {
-  const timeoutMs = deps.timeoutMs ?? 120_000;
+  const timeoutMs = deps.timeoutMs ?? 240_000;
   const pollMs = deps.pollMs ?? 1_000;
-  const deadline = Date.now() + timeoutMs;
+  const startMs = Date.now();
+  const deadline = startMs + timeoutMs;
   let lastError: unknown = null;
 
   while (Date.now() < deadline) {
@@ -136,9 +138,14 @@ async function waitForHealth(
     await deps.sleepImpl(pollMs);
   }
 
-  throw new Error(
-    `Timed out waiting for ${url}${lastError ? `: ${describeError(lastError)}` : ""}`,
-  );
+  const elapsedSec = Math.round((Date.now() - startMs) / 1000);
+  const service = deps.label ?? url;
+  const lines = [
+    `${service} did not become healthy within ${elapsedSec}s (limit ${Math.round(timeoutMs / 1000)}s).`,
+    lastError ? `Last error: ${describeError(lastError)}` : "",
+    "Hint: check container logs with `docker compose -f <compose-file> logs` and verify the port is not already in use.",
+  ];
+  throw new Error(lines.filter(Boolean).join("\n"));
 }
 
 export async function runQaDockerUp(
@@ -213,8 +220,8 @@ export async function runQaDockerUp(
   const qaLabUrl = `http://127.0.0.1:${qaLabPort}`;
   const gatewayUrl = `http://127.0.0.1:${gatewayPort}/`;
 
-  await waitForHealth(`${qaLabUrl}/healthz`, { fetchImpl, sleepImpl });
-  await waitForHealth(`${gatewayUrl}healthz`, { fetchImpl, sleepImpl });
+  await waitForHealth(`${qaLabUrl}/healthz`, { label: "QA Lab", fetchImpl, sleepImpl });
+  await waitForHealth(`${gatewayUrl}healthz`, { label: "Gateway", fetchImpl, sleepImpl });
 
   return {
     outputDir,

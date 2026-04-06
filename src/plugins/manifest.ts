@@ -89,6 +89,8 @@ export type PluginManifest = {
   cliBackends?: string[];
   /** Cheap provider-auth env lookup without booting plugin runtime. */
   providerAuthEnvVars?: Record<string, string[]>;
+  /** Cheap channel env lookup without booting plugin runtime. */
+  channelEnvVars?: Record<string, string[]>;
   /**
    * Cheap onboarding/auth-choice metadata used by config validation, CLI help,
    * and non-runtime auth-choice routing before provider runtime loads.
@@ -500,6 +502,7 @@ export function loadPluginManifest(
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const cliBackends = normalizeStringList(raw.cliBackends);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
+  const channelEnvVars = normalizeStringListRecord(raw.channelEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const skills = normalizeStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
@@ -527,6 +530,7 @@ export function loadPluginManifest(
       modelSupport,
       cliBackends,
       providerAuthEnvVars,
+      channelEnvVars,
       providerAuthChoices,
       skills,
       name,

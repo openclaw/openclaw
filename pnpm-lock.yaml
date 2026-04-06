@@ -291,6 +291,8 @@ importers:
 
   extensions/anthropic-vertex: {}
 
+  extensions/arcee: {}
+
   extensions/bluebubbles:
     devDependencies:
       openclaw:

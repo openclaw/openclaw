@@ -58,7 +58,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - No real keys required
   - Should be fast and stable
 - Projects note:
-  - Untargeted `pnpm test` now runs six smaller shard configs (`core-unit-src`, `core-unit-support`, `core-runtime`, `agentic`, `auto-reply`, `extensions`) instead of one giant native root-project process. This cuts peak RSS on loaded machines and avoids auto-reply/extension work starving unrelated suites.
+  - Untargeted `pnpm test` now runs eight smaller shard configs (`core-unit-src`, `core-unit-security`, `core-unit-support`, `core-contracts`, `core-runtime`, `agentic`, `auto-reply`, `extensions`) instead of one giant native root-project process. This cuts peak RSS on loaded machines and avoids auto-reply/extension work starving unrelated suites.
   - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
   - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
   - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun.
@@ -515,6 +515,9 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
     - `videoToVideo` when the provider declares `capabilities.videoToVideo.enabled` and the selected provider/model accepts buffer-backed local video input in the shared sweep
   - Current declared-but-skipped `imageToVideo` providers in the shared sweep:
     - `vydra` because bundled `veo3` is text-only and bundled `kling` requires a remote image URL
+  - Provider-specific Vydra coverage:
+    - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_VYDRA_VIDEO=1 pnpm test:live -- extensions/vydra/vydra.live.test.ts`
+    - that file runs `veo3` text-to-video plus a `kling` lane that uses a remote image URL fixture by default
   - Current `videoToVideo` live coverage:
     - `runway` only when the selected model is `runway/gen4_aleph`
   - Current declared-but-skipped `videoToVideo` providers in the shared sweep:

@@ -111,9 +111,11 @@ cleanup() {
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
-source /app/scripts/lib/live-docker-stage.sh
+source /src/scripts/lib/live-docker-stage.sh
 openclaw_live_stage_source_tree "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"
+openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
+openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 pnpm test:live:models-profiles
 EOF

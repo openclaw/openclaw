@@ -5,7 +5,6 @@ import {
   fetchWithTimeout,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import type { AuthStoreDataV1 } from "openclaw/plugin-sdk/provider-types";
 
 export const DEFAULT_VYDRA_BASE_URL = "https://www.vydra.ai/api/v1";
 export const DEFAULT_VYDRA_IMAGE_MODEL = "grok-imagine";
@@ -15,6 +14,7 @@ export const DEFAULT_VYDRA_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
 export const DEFAULT_HTTP_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 2_500;
 const MAX_POLL_ATTEMPTS = 120;
+type VydraAuthStore = Parameters<typeof resolveApiKeyForProvider>[0]["store"];
 
 type VydraMediaKind = "audio" | "image" | "video";
 
@@ -84,7 +84,7 @@ export function resolveVydraBaseUrlFromConfig(cfg: unknown): string {
 export async function resolveVydraRequestContext(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
-  authStore?: AuthStoreDataV1;
+  authStore?: VydraAuthStore;
   capability: "image" | "video";
 }): Promise<{
   fetchFn: typeof fetch;

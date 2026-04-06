@@ -20,6 +20,9 @@ describe("command secret targets module import", () => {
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
     expect(mod.getModelsCommandSecretTargetIds().has("models.providers.*.apiKey")).toBe(true);
     expect(mod.getQrRemoteCommandSecretTargetIds().has("gateway.remote.token")).toBe(true);
+    expect(
+      mod.getAgentRuntimeCommandSecretTargetIds().has("agents.defaults.memorySearch.remote.apiKey"),
+    ).toBe(true);
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
     expect(() => mod.getChannelsCommandSecretTargetIds()).toThrow("registry touched too early");
     expect(listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);

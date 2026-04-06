@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
@@ -54,11 +54,21 @@ let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
 let defaultRuntime: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").defaultRuntime;
 let isVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").isVerbose;
 let setVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").setVerbose;
+let fixtureRoot = "";
+let workspaceFixtureRoot = "";
+let qmdFixtureRoot = "";
+let workspaceCaseId = 0;
+let qmdCaseId = 0;
 
 beforeAll(async () => {
   ({ registerMemoryCli } = await import("./cli.js"));
   ({ defaultRuntime, isVerbose, setVerbose } =
     await import("openclaw/plugin-sdk/memory-core-host-runtime-cli"));
+  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fixtures-"));
+  workspaceFixtureRoot = path.join(fixtureRoot, "workspace");
+  qmdFixtureRoot = path.join(fixtureRoot, "qmd");
+  await fs.mkdir(workspaceFixtureRoot, { recursive: true });
+  await fs.mkdir(qmdFixtureRoot, { recursive: true });
 });
 
 beforeEach(() => {
@@ -75,6 +85,13 @@ afterEach(() => {
   vi.restoreAllMocks();
   process.exitCode = undefined;
   setVerbose(false);
+});
+
+afterAll(async () => {
+  if (!fixtureRoot) {
+    return;
+  }
+  await fs.rm(fixtureRoot, { recursive: true, force: true });
 });
 
 describe("memory cli", () => {
@@ -174,23 +191,17 @@ describe("memory cli", () => {
   }
 
   async function withQmdIndexDb(content: string, run: (dbPath: string) => Promise<void>) {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-qmd-index-"));
+    const tmpDir = path.join(qmdFixtureRoot, `case-${qmdCaseId++}`);
+    await fs.mkdir(tmpDir, { recursive: true });
     const dbPath = path.join(tmpDir, "index.sqlite");
-    try {
-      await fs.writeFile(dbPath, content, "utf-8");
-      await run(dbPath);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    await fs.writeFile(dbPath, content, "utf-8");
+    await run(dbPath);
   }
 
   async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-promote-"));
-    try {
-      await run(workspaceDir);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    const workspaceDir = path.join(workspaceFixtureRoot, `case-${workspaceCaseId++}`);
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await run(workspaceDir);
   }
 
   async function writeDailyMemoryNote(
@@ -456,8 +467,7 @@ describe("memory cli", () => {
   });
 
   it("shows the fix hint only before --fix has been run", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fix-hint-"));
-    try {
+    await withTempWorkspace(async (workspaceDir) => {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
       await fs.mkdir(path.dirname(storePath), { recursive: true });
       await fs.writeFile(storePath, " \n", "utf-8");
@@ -485,9 +495,7 @@ describe("memory cli", () => {
       expect(log).not.toHaveBeenCalledWith(
         expect.stringContaining("Fix: openclaw memory status --fix --agent main"),
       );
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("enables verbose logging with --verbose", async () => {

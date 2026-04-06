@@ -1231,6 +1231,7 @@
                 "pages": [
                   "providers/alibaba",
                   "providers/anthropic",
+                  "providers/arcee",
                   "providers/bedrock",
                   "providers/bedrock-mantle",
                   "providers/chutes",

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { markCompleteReplyConfig, withFastReplyConfig } from "./get-reply-fast-path.js";
+import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -43,11 +44,12 @@ vi.mock("./session.js", async (importOriginal) => {
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let loadConfigMock: typeof import("../../config/config.js").loadConfig;
+let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
-async function loadFreshGetReplyModuleForTest() {
-  vi.resetModules();
-  ({ getReplyFromConfig } = await import("./get-reply.js"));
+async function loadGetReplyRuntimeForTest() {
+  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
   ({ loadConfig: loadConfigMock } = await import("../../config/config.js"));
+  ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
 }
 
 function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
@@ -69,14 +71,16 @@ function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
 
 describe("getReplyFromConfig fast test bootstrap", () => {
   beforeEach(async () => {
-    await loadFreshGetReplyModuleForTest();
+    await loadGetReplyRuntimeForTest();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     mocks.ensureAgentWorkspace.mockReset();
     mocks.initSessionState.mockReset();
     mocks.resolveReplyDirectives.mockReset();
     vi.mocked(loadConfigMock).mockReset();
+    vi.mocked(runPreparedReplyMock).mockReset();
     vi.mocked(loadConfigMock).mockReturnValue({});
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
+    vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
     mocks.initSessionState.mockResolvedValue({
       sessionCtx: {},
       sessionEntry: {},
@@ -125,7 +129,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
-    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg,
       }),
@@ -175,5 +180,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
     await expect(getReplyFromConfig(buildCtx(), undefined, cfg)).resolves.toEqual({ text: "ok" });
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
   });
 });

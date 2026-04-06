@@ -6,6 +6,7 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
     const resolved = provider.resolveConfig?.({
       cfg: {} as never,
+      timeoutMs: 30_000,
       rawConfig: {
         providers: {
           openai: {

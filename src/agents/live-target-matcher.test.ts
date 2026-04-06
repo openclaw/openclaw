@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { createLiveTargetMatcher } from "./live-target-matcher.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+
+type CreateLiveTargetMatcher = typeof import("./live-target-matcher.js").createLiveTargetMatcher;
+let createLiveTargetMatcher: CreateLiveTargetMatcher;
+
+beforeAll(async () => {
+  vi.doUnmock("../plugins/providers.js");
+  vi.doUnmock("../plugins/manifest-registry.js");
+  vi.resetModules();
+  ({ createLiveTargetMatcher } = await import("./live-target-matcher.js"));
+});
 
 describe("createLiveTargetMatcher", () => {
   it("matches Anthropic-owned models for the claude-cli provider filter", () => {

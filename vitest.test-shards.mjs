@@ -13,15 +13,23 @@ export const fullSuiteVitestShards = [
     projects: ["vitest.unit-src.config.ts"],
   },
   {
+    config: "vitest.full-core-unit-security.config.ts",
+    name: "core-unit-security",
+    projects: ["vitest.unit-security.config.ts"],
+  },
+  {
     config: "vitest.full-core-unit-support.config.ts",
     name: "core-unit-support",
     projects: [
       "vitest.unit-support.config.ts",
       "vitest.boundary.config.ts",
-      "vitest.contracts.config.ts",
-      "vitest.bundled.config.ts",
       "vitest.tooling.config.ts",
     ],
+  },
+  {
+    config: "vitest.full-core-contracts.config.ts",
+    name: "core-contracts",
+    projects: ["vitest.contracts.config.ts", "vitest.bundled.config.ts"],
   },
   {
     config: "vitest.full-core-runtime.config.ts",

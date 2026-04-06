@@ -1,10 +1,21 @@
 #!/usr/bin/env -S node --import tsx
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
 import { loadShellEnvFallback } from "../src/infra/shell-env.js";
 import { getProviderEnvVars } from "../src/secrets/provider-env-vars.js";
+type SpawnPnpmRunner = (params: {
+  pnpmArgs: string[];
+  stdio: "inherit";
+  env: NodeJS.ProcessEnv;
+}) => ChildProcess;
+
+const require = createRequire(import.meta.url);
+const { spawnPnpmRunner: _spawnPnpmRunner } = require("./pnpm-runner.mjs") as {
+  spawnPnpmRunner: SpawnPnpmRunner;
+};
 
 export type MediaSuiteId = "image" | "music" | "video";
 

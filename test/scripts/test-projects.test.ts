@@ -170,7 +170,19 @@ describe("scripts/test-projects full-suite sharding", () => {
         watchMode: false,
       },
       {
+        config: "vitest.full-core-unit-security.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
         config: "vitest.full-core-unit-support.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-core-contracts.config.ts",
         forwardedArgs: [],
         includePatterns: null,
         watchMode: false,

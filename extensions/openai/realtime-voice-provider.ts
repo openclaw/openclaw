@@ -105,12 +105,6 @@ function normalizeProviderConfig(
   };
 }
 
-function readProviderConfig(
-  providerConfig: RealtimeVoiceProviderConfig,
-): OpenAIRealtimeVoiceProviderConfig {
-  return normalizeProviderConfig(providerConfig);
-}
-
 function base64ToBuffer(b64: string): Buffer {
   return Buffer.from(b64, "base64");
 }
@@ -493,9 +487,9 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(readProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
+      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
     createBridge: (req) => {
-      const config = readProviderConfig(req.providerConfig);
+      const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
