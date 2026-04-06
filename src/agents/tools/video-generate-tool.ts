@@ -766,10 +766,12 @@ export function createVideoGenerateTool(options?: {
             });
             try {
               await wakeVideoGenerationTaskCompletion({
+                config: effectiveCfg,
                 handle: taskHandle,
                 status: "ok",
                 statusLabel: "completed successfully",
                 result: executed.wakeResult,
+                mediaUrls: executed.savedPaths,
               });
             } catch (error) {
               log.warn("Video generation completion wake failed after successful generation", {
@@ -784,6 +786,7 @@ export function createVideoGenerateTool(options?: {
               error,
             });
             await wakeVideoGenerationTaskCompletion({
+              config: effectiveCfg,
               handle: taskHandle,
               status: "error",
               statusLabel: "failed",

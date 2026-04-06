@@ -588,6 +588,9 @@ export async function runExecProcess(opts: {
     if (!opts.onUpdate) {
       return;
     }
+    if (session.backgrounded || session.exited) {
+      return;
+    }
     const tailText = session.tail || session.aggregated;
     const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
     opts.onUpdate({

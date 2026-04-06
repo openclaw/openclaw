@@ -223,6 +223,7 @@ explicitly promotes one as public.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers plus media payload builders |
+    | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
     | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio helper exports |
     | `plugin-sdk/text-runtime` | Shared text/markdown/logging helpers such as assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, and safe-text utilities |
     | `plugin-sdk/text-chunking` | Outbound text chunking helper |
@@ -255,10 +256,17 @@ explicitly promotes one as public.
     | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |
     | `plugin-sdk/memory-core-host-query` | Memory host query helpers |
     | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers |
+    | `plugin-sdk/memory-core-host-events` | Memory host event journal helpers |
     | `plugin-sdk/memory-core-host-status` | Memory host status helpers |
     | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers |
+    | `plugin-sdk/memory-host-core` | Vendor-neutral alias for memory host core runtime helpers |
+    | `plugin-sdk/memory-host-events` | Vendor-neutral alias for memory host event journal helpers |
+    | `plugin-sdk/memory-host-files` | Vendor-neutral alias for memory host file/runtime helpers |
+    | `plugin-sdk/memory-host-markdown` | Shared managed-markdown helpers for memory-adjacent plugins |
+    | `plugin-sdk/memory-host-search` | Active memory runtime facade for search-manager access |
+    | `plugin-sdk/memory-host-status` | Vendor-neutral alias for memory host status helpers |
     | `plugin-sdk/memory-lancedb` | Bundled memory-lancedb helper surface |
   </Accordion>
 
@@ -304,14 +312,16 @@ methods:
 
 ### Infrastructure
 
-| Method                                         | What it registers     |
-| ---------------------------------------------- | --------------------- |
-| `api.registerHook(events, handler, opts?)`     | Event hook            |
-| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint |
-| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method    |
-| `api.registerCli(registrar, opts?)`            | CLI subcommand        |
-| `api.registerService(service)`                 | Background service    |
-| `api.registerInteractiveHandler(registration)` | Interactive handler   |
+| Method                                         | What it registers                       |
+| ---------------------------------------------- | --------------------------------------- |
+| `api.registerHook(events, handler, opts?)`     | Event hook                              |
+| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint                   |
+| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method                      |
+| `api.registerCli(registrar, opts?)`            | CLI subcommand                          |
+| `api.registerService(service)`                 | Background service                      |
+| `api.registerInteractiveHandler(registration)` | Interactive handler                     |
+| `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
+| `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
 
 Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
 `update.*`) always stay `operator.admin`, even if a plugin tries to assign a

@@ -1,11 +1,11 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
-let createSlackMessageHandler: typeof import("./message-handler.js").createSlackMessageHandler;
+const { createSlackMessageHandler } = await import("./message-handler.js");
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
@@ -72,10 +72,6 @@ async function handleDirectMessage(
 }
 
 describe("createSlackMessageHandler", () => {
-  beforeAll(async () => {
-    ({ createSlackMessageHandler } = await import("./message-handler.js"));
-  });
-
   beforeEach(() => {
     enqueueMock.mockClear();
     flushKeyMock.mockClear();

@@ -3053,6 +3053,33 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              musicGenerationModel: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      primary: {
+                        type: "string",
+                        title: "Music Generation Model",
+                        description:
+                          "Optional music-generation model (provider/model) used by the shared music generation capability.",
+                      },
+                      fallbacks: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                        title: "Music Generation Model Fallbacks",
+                        description: "Ordered fallback music-generation models (provider/model).",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
               pdfModel: {
                 anyOf: [
                   {
@@ -3144,6 +3171,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               },
               skipBootstrap: {
                 type: "boolean",
+              },
+              contextInjection: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "always",
+                  },
+                  {
+                    type: "string",
+                    const: "continuation-skip",
+                  },
+                ],
+                title: "Context Injection",
+                description:
+                  'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
               },
               bootstrapMaxChars: {
                 type: "integer",
@@ -22875,6 +22917,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
       tags: ["performance", "media", "tools"],
     },
+    "tools.media.asyncCompletion.directSend": {
+      label: "Async Media Completion Direct Send",
+      help: "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+      tags: ["storage", "media", "tools"],
+    },
     "tools.media.audio.enabled": {
       label: "Enable Audio Understanding",
       help: "Enable audio understanding so voice notes or audio clips can be transcribed/summarized for agent context. Disable when audio ingestion is outside policy or unnecessary for your workflows.",
@@ -23856,6 +23903,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
       tags: ["advanced"],
     },
+    "agents.defaults.contextInjection": {
+      label: "Context Injection",
+      help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+      tags: ["advanced"],
+    },
     "agents.defaults.bootstrapMaxChars": {
       label: "Bootstrap Max Chars",
       help: "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
@@ -24682,6 +24734,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Video Generation Model Fallbacks",
       help: "Ordered fallback video-generation models (provider/model).",
       tags: ["reliability", "media"],
+    },
+    "agents.defaults.musicGenerationModel.primary": {
+      label: "Music Generation Model",
+      help: "Optional music-generation model (provider/model) used by the shared music generation capability.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.musicGenerationModel.fallbacks": {
+      label: "Music Generation Model Fallbacks",
+      help: "Ordered fallback music-generation models (provider/model).",
+      tags: ["reliability"],
     },
     "agents.defaults.pdfModel.primary": {
       label: "PDF Model",

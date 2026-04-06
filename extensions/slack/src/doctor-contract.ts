@@ -4,8 +4,6 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
-  formatSlackStreamingBooleanMigrationMessage,
-  formatSlackStreamModeMigrationMessage,
   resolveSlackNativeStreaming,
   resolveSlackStreamingMode,
 } from "./streaming-compat.js";
@@ -16,55 +14,112 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
+  const existing = asObjectRecord(owner[key]);
+  if (existing) {
+    return { ...existing };
+  }
+  return {};
+}
+
 function normalizeSlackStreamingAliases(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
   changes: string[];
 }): { entry: Record<string, unknown>; changed: boolean } {
-  let updated = params.entry;
-  const hadLegacyStreamMode = updated.streamMode !== undefined;
-  const legacyStreaming = updated.streaming;
-  const beforeStreaming = updated.streaming;
-  const beforeNativeStreaming = updated.nativeStreaming;
-  const resolvedStreaming = resolveSlackStreamingMode(updated);
-  const resolvedNativeStreaming = resolveSlackNativeStreaming(updated);
+  const beforeStreaming = params.entry.streaming;
+  const hadLegacyStreamMode = params.entry.streamMode !== undefined;
+  const hasLegacyFlatFields =
+    params.entry.chunkMode !== undefined ||
+    params.entry.blockStreaming !== undefined ||
+    params.entry.blockStreamingCoalesce !== undefined ||
+    params.entry.nativeStreaming !== undefined;
+  const resolvedStreaming = resolveSlackStreamingMode(params.entry);
+  const resolvedNativeStreaming = resolveSlackNativeStreaming(params.entry);
   const shouldNormalize =
     hadLegacyStreamMode ||
-    typeof legacyStreaming === "boolean" ||
-    (typeof legacyStreaming === "string" && legacyStreaming !== resolvedStreaming);
+    typeof beforeStreaming === "boolean" ||
+    typeof beforeStreaming === "string" ||
+    hasLegacyFlatFields;
   if (!shouldNormalize) {
-    return { entry: updated, changed: false };
+    return { entry: params.entry, changed: false };
   }
 
+  let updated = { ...params.entry };
   let changed = false;
-  if (beforeStreaming !== resolvedStreaming) {
-    updated = { ...updated, streaming: resolvedStreaming };
-    changed = true;
-  }
+  const streaming = ensureNestedRecord(updated, "streaming");
+  const block = ensureNestedRecord(streaming, "block");
+
   if (
-    typeof beforeNativeStreaming !== "boolean" ||
-    beforeNativeStreaming !== resolvedNativeStreaming
+    (hadLegacyStreamMode ||
+      typeof beforeStreaming === "boolean" ||
+      typeof beforeStreaming === "string") &&
+    streaming.mode === undefined
   ) {
-    updated = { ...updated, nativeStreaming: resolvedNativeStreaming };
+    streaming.mode = resolvedStreaming;
+    if (hadLegacyStreamMode) {
+      params.changes.push(
+        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${resolvedStreaming}).`,
+      );
+    }
+    if (typeof beforeStreaming === "boolean") {
+      params.changes.push(
+        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${resolvedStreaming}).`,
+      );
+    } else if (typeof beforeStreaming === "string") {
+      params.changes.push(
+        `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${resolvedStreaming}).`,
+      );
+    }
     changed = true;
   }
   if (hadLegacyStreamMode) {
-    const { streamMode: _ignored, ...rest } = updated;
-    updated = rest;
+    delete updated.streamMode;
     changed = true;
-    params.changes.push(
-      formatSlackStreamModeMigrationMessage(params.pathPrefix, resolvedStreaming),
-    );
   }
-  if (typeof legacyStreaming === "boolean") {
+  if (updated.chunkMode !== undefined && streaming.chunkMode === undefined) {
+    streaming.chunkMode = updated.chunkMode;
+    delete updated.chunkMode;
     params.changes.push(
-      formatSlackStreamingBooleanMigrationMessage(params.pathPrefix, resolvedNativeStreaming),
+      `Moved ${params.pathPrefix}.chunkMode → ${params.pathPrefix}.streaming.chunkMode.`,
     );
-  } else if (typeof legacyStreaming === "string" && legacyStreaming !== resolvedStreaming) {
-    params.changes.push(
-      `Normalized ${params.pathPrefix}.streaming (${legacyStreaming}) → (${resolvedStreaming}).`,
-    );
+    changed = true;
   }
+  if (updated.blockStreaming !== undefined && block.enabled === undefined) {
+    block.enabled = updated.blockStreaming;
+    delete updated.blockStreaming;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.blockStreaming → ${params.pathPrefix}.streaming.block.enabled.`,
+    );
+    changed = true;
+  }
+  if (updated.blockStreamingCoalesce !== undefined && block.coalesce === undefined) {
+    block.coalesce = updated.blockStreamingCoalesce;
+    delete updated.blockStreamingCoalesce;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.blockStreamingCoalesce → ${params.pathPrefix}.streaming.block.coalesce.`,
+    );
+    changed = true;
+  }
+  if (updated.nativeStreaming !== undefined && streaming.nativeTransport === undefined) {
+    streaming.nativeTransport = resolvedNativeStreaming;
+    delete updated.nativeStreaming;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.nativeStreaming → ${params.pathPrefix}.streaming.nativeTransport.`,
+    );
+    changed = true;
+  } else if (typeof beforeStreaming === "boolean" && streaming.nativeTransport === undefined) {
+    streaming.nativeTransport = resolvedNativeStreaming;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.nativeTransport.`,
+    );
+    changed = true;
+  }
+
+  if (Object.keys(block).length > 0) {
+    streaming.block = block;
+  }
+  updated.streaming = streaming;
 
   return { entry: updated, changed };
 }
@@ -77,7 +132,11 @@ function hasLegacySlackStreamingAliases(value: unknown): boolean {
   return (
     entry.streamMode !== undefined ||
     typeof entry.streaming === "boolean" ||
-    (typeof entry.streaming === "string" && entry.streaming !== resolveSlackStreamingMode(entry))
+    typeof entry.streaming === "string" ||
+    entry.chunkMode !== undefined ||
+    entry.blockStreaming !== undefined ||
+    entry.blockStreamingCoalesce !== undefined ||
+    entry.nativeStreaming !== undefined
   );
 }
 
@@ -93,13 +152,13 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "slack"],
     message:
-      "channels.slack.streamMode and boolean channels.slack.streaming are legacy; use channels.slack.streaming and channels.slack.nativeStreaming.",
+      "channels.slack.streamMode, channels.slack.streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}.",
     match: hasLegacySlackStreamingAliases,
   },
   {
     path: ["channels", "slack", "accounts"],
     message:
-      "channels.slack.accounts.<id>.streamMode and boolean channels.slack.accounts.<id>.streaming are legacy; use channels.slack.accounts.<id>.streaming and channels.slack.accounts.<id>.nativeStreaming.",
+      "channels.slack.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.accounts.<id>.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}.",
     match: hasLegacySlackAccountStreamingAliases,
   },
 ];

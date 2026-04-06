@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -65,28 +65,48 @@ const loadedModuleExports = new Map<string, unknown>();
 
 function resolveSpecifierCandidates(modulePath: string): string[] {
   const ext = path.extname(modulePath).toLowerCase();
+  const candidates = [modulePath];
   if (ext === ".js") {
-    return [modulePath, modulePath.slice(0, -3) + ".ts"];
+    candidates.push(modulePath.slice(0, -3) + ".ts");
+  } else if (ext === ".mjs") {
+    candidates.push(modulePath.slice(0, -4) + ".mts");
+  } else if (ext === ".cjs") {
+    candidates.push(modulePath.slice(0, -4) + ".cts");
   }
-  if (ext === ".mjs") {
-    return [modulePath, modulePath.slice(0, -4) + ".mts"];
+
+  // If we are in 'dist', also look in the corresponding 'src' directory in the root.
+  const distSegment = `${path.sep}dist${path.sep}`;
+  if (modulePath.includes(distSegment)) {
+    for (const c of [...candidates]) {
+      candidates.push(c.replace(distSegment, `${path.sep}`));
+    }
   }
-  if (ext === ".cjs") {
-    return [modulePath, modulePath.slice(0, -4) + ".cts"];
-  }
-  return [modulePath];
+
+  return candidates;
 }
 
-function resolveEntryBoundaryRoot(importMetaUrl: string): string {
-  return path.dirname(fileURLToPath(importMetaUrl));
+function resolvePathBoundaryRoot(absolutePath: string): string {
+  let cursor = path.dirname(absolutePath);
+  while (cursor !== path.dirname(cursor)) {
+    if (
+      fs.existsSync(path.join(cursor, "openclaw.plugin.json")) ||
+      fs.existsSync(path.join(cursor, "package.json"))
+    ) {
+      return cursor;
+    }
+    cursor = path.dirname(cursor);
+  }
+  return path.dirname(absolutePath);
 }
 
 function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string): string {
   const importerPath = fileURLToPath(importMetaUrl);
   const resolved = path.resolve(path.dirname(importerPath), specifier);
-  const boundaryRoot = resolveEntryBoundaryRoot(importMetaUrl);
-  const candidate =
-    resolveSpecifierCandidates(resolved).find((entry) => fs.existsSync(entry)) ?? resolved;
+  
+  const candidates = resolveSpecifierCandidates(resolved);
+  const candidate = candidates.find((entry) => fs.existsSync(entry)) ?? resolved;
+  const boundaryRoot = resolvePathBoundaryRoot(candidate);
+
   const opened = openBoundaryFileSync({
     absolutePath: candidate,
     rootPath: boundaryRoot,
@@ -94,11 +114,15 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
     rejectHardlinks: false,
     skipLexicalRootCheck: true,
   });
+  
   if (!opened.ok) {
-    throw new Error(`plugin entry path escapes plugin root: ${specifier}`);
+    throw new Error(
+      `plugin entry path escapes plugin root: ${specifier} (resolved: ${candidate}, root: ${boundaryRoot})`,
+    );
   }
   fs.closeSync(opened.fd);
-  return opened.path;
+  
+  return candidate;
 }
 
 function getJiti(modulePath: string) {
@@ -149,6 +173,9 @@ export function loadBundledEntryExportSync<T>(
   importMetaUrl: string,
   reference: BundledEntryModuleRef,
 ): T {
+  if (!reference) {
+    throw new Error("plugin entry specifier is missing");
+  }
   const loaded = loadBundledEntryModuleSync(importMetaUrl, reference.specifier);
   const resolved =
     loaded && typeof loaded === "object" && "default" in (loaded as Record<string, unknown>)

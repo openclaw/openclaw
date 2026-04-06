@@ -5,6 +5,7 @@ import {
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import type {
   OpenClawConfig,
   ReplyToMode,
@@ -199,9 +200,8 @@ export const dispatchTelegramMessage = async ({
     parseMode: "HTML" as const,
   });
   const accountBlockStreamingEnabled =
-    typeof telegramCfg.blockStreaming === "boolean"
-      ? telegramCfg.blockStreaming
-      : cfg.agents?.defaults?.blockStreamingDefault === "on";
+    resolveChannelStreamingBlockEnabled(telegramCfg) ??
+    cfg.agents?.defaults?.blockStreamingDefault === "on";
   const resolvedReasoningLevel = resolveTelegramReasoningLevel({
     cfg,
     sessionKey: ctxPayload.SessionKey,
@@ -389,12 +389,13 @@ export const dispatchTelegramMessage = async ({
     await lane.stream.flush();
   };
 
+  const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(telegramCfg);
   const disableBlockStreaming = !previewStreamingEnabled
     ? true
     : forceBlockStreamingForReasoning
       ? false
-      : typeof telegramCfg.blockStreaming === "boolean"
-        ? !telegramCfg.blockStreaming
+      : typeof resolvedBlockStreamingEnabled === "boolean"
+        ? !resolvedBlockStreamingEnabled
         : canStreamAnswerDraft
           ? true
           : undefined;

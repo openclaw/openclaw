@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+const QA_IMAGE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3RQQkAMAzAwPg33Wnos+wgBo40dboAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANYADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAC+Azy47PDiI4pA2wAAAABJRU5ErkJggg==";
 
 afterEach(async () => {
   while (cleanups.length > 0) {
@@ -82,6 +84,8 @@ describe("qa mock openai server", () => {
     expect(debugResponse.status).toBe(200);
     expect(await debugResponse.json()).toMatchObject({
       prompt: 'Please inspect "message_id" metadata first, then read `./QA_KICKOFF_TASK.md`.',
+      allInputText: 'Please inspect "message_id" metadata first, then read `./QA_KICKOFF_TASK.md`.',
+      plannedToolName: "read",
     });
   });
 
@@ -199,5 +203,264 @@ describe("qa mock openai server", () => {
     expect(body).toContain('"name":"sessions_spawn"');
     expect(body).toContain('\\"label\\":\\"qa-sidecar\\"');
     expect(body).toContain('\\"thread\\":false');
+  });
+
+  it("plans memory tools and serves mock image generations", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const memorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(memorySearch.status).toBe(200);
+    expect(await memorySearch.text()).toContain('"name":"memory_search"');
+
+    const image = await fetch(`${server.baseUrl}/v1/images/generations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-image-1",
+        prompt: "Draw a QA lighthouse",
+        n: 1,
+        size: "1024x1024",
+      }),
+    });
+    expect(image.status).toBe(200);
+    expect(await image.json()).toMatchObject({
+      data: [{ b64_json: expect.any(String) }],
+    });
+
+    const imageRequests = await fetch(`${server.baseUrl}/debug/image-generations`);
+    expect(imageRequests.status).toBe(200);
+    expect(await imageRequests.json()).toMatchObject([
+      {
+        model: "gpt-image-1",
+        prompt: "Draw a QA lighthouse",
+        n: 1,
+        size: "1024x1024",
+      },
+    ]);
+  });
+
+  it("returns exact markers for visible and hot-installed skills", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const visible = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Visible skill marker: give me the visible skill marker exactly.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(visible.status).toBe(200);
+    expect(await visible.json()).toMatchObject({
+      output: [
+        {
+          content: [{ text: "VISIBLE-SKILL-OK" }],
+        },
+      ],
+    });
+
+    const hot = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Hot install marker: give me the hot install marker exactly.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(hot.status).toBe(200);
+    expect(await hot.json()).toMatchObject({
+      output: [
+        {
+          content: [{ text: "HOT-INSTALL-OK" }],
+        },
+      ],
+    });
+  });
+
+  it("records image inputs and describes attached images", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        model: "mock-openai/gpt-5.4",
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Image understanding check: what do you see?" },
+              {
+                type: "input_image",
+                source: {
+                  type: "base64",
+                  mime_type: "image/png",
+                  data: QA_IMAGE_PNG_BASE64,
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    const text = payload.output?.[0]?.content?.[0]?.text ?? "";
+    expect(text.toLowerCase()).toContain("red");
+    expect(text.toLowerCase()).toContain("blue");
+
+    const debug = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(debug.status).toBe(200);
+    expect(await debug.json()).toMatchObject([
+      expect.objectContaining({
+        imageInputCount: 1,
+      }),
+    ]);
+  });
+
+  it("ignores stale tool output from prior turns when planning the current turn", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text: "Read QA_KICKOFF_TASK.md first." }],
+          },
+          {
+            type: "function_call_output",
+            output: "QA mission: read source and docs first.",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Switch models now. Tool continuity check: reread QA_KICKOFF_TASK.md and mention the handoff in one short sentence.",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('"name":"read"');
+  });
+
+  it("returns NO_REPLY for unmentioned group chatter", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: 'Conversation info (untrusted metadata): {"is_group_chat": true}\n\nhello team, no bot ping here',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      output: [
+        {
+          content: [{ text: "NO_REPLY" }],
+        },
+      ],
+    });
   });
 });

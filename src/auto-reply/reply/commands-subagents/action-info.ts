@@ -1,5 +1,6 @@
 import { countPendingDescendantRuns } from "../../../agents/subagent-registry.js";
-import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { loadSessionStore } from "../../../config/sessions/store-load.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";

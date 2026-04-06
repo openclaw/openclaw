@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+## 2026.4.5
+
 ### Breaking
 
 - Config: remove legacy public config aliases such as `talk.voiceId` / `talk.apiKey`, `agents.*.sandbox.perSession`, `browser.ssrfPolicy.allowPrivateNetwork`, `hooks.internal.handlers`, and channel/group/room `allow` toggles in favor of the canonical public paths and `enabled`, while keeping load-time compatibility and `openclaw doctor --fix` migration support for existing configs. (#60726) Thanks @vincentkoc.
@@ -45,6 +49,10 @@ Docs: https://docs.openclaw.ai
 - Matrix/exec approvals: clarify unavailable-approval replies so Matrix no longer claims chat approvals are unsupported when native exec approvals are merely unconfigured. (#61424) Thanks @gumadeiras.
 - Docs/IRC: replace public IRC hostname examples with `irc.example.com` and recommend private servers for bot coordination while listing common public networks for intentional use.
 - Memory/dreaming: group nearby daily-note lines into short coherent chunks before staging them for dreaming, so one-off context from recent notes reaches REM/deep with better evidence and less line-level noise.
+- Memory/dreaming: drop generic date/day headings from daily-note chunk prefixes while keeping meaningful section labels, so staged snippets stay cleaner and more reusable. (#61597) Thanks @mbelinky.
+- Plugins/Lobster: run bundled Lobster workflows in process instead of spawning the external CLI, reducing transport overhead and unblocking native runtime integration. (#61523) Thanks @mbelinky.
+- Plugins/Lobster: harden managed resume validation so invalid TaskFlow resume calls fail earlier, and memoize embedded runtime loading per runner while keeping failed loads retryable. (#61566) Thanks @mbelinky.
+- Agents/bootstrap: add opt-in `agents.defaults.contextInjection: "continuation-skip"` so safe continuation turns can skip workspace bootstrap re-injection, while heartbeat runs and post-compaction retries still rebuild context when needed. Fixes #9157. Thanks @cgdusek.
 
 ### Fixes
 
@@ -85,6 +93,7 @@ Docs: https://docs.openclaw.ai
 - Windows/restart: fall back to the installed Startup-entry launcher when the scheduled task was never registered, so `/restart` can relaunch the gateway on Windows setups where `schtasks` install fell back during onboarding. (#58943) Thanks @imechZhangLY.
 - Windows/restart: clean up stale gateway listeners before Windows self-restart and treat listener and argv probe failures as inconclusive, so scheduled-task relaunch no longer falls into an `EADDRINUSE` retry loop. (#60480) Thanks @arifahmedjoy.
 - Update/npm: prefer the npm binary that owns the installed global OpenClaw prefix so mixed Homebrew-plus-nvm setups update the right install. (#60153) Thanks @jayeshp19.
+- Agents/music and video generation: add `tools.media.asyncCompletion.directSend` as an opt-in direct-delivery path for finished async media tasks, while keeping the legacy requester-session wake/model-delivery flow as the default.
 - CLI/skills JSON: route `skills list --json`, `skills info --json`, and `skills check --json` output to stdout instead of stderr so machine-readable consumers receive JSON on the expected stream again. (#60914; fixes #57599; landed from contributor PR #57611 by @Aftabbs) Thanks @Aftabbs.
 - CLI/Commander: preserve Commander-computed exit codes for argument and help-error paths, and cover the user-argv parse mode in the regression tests so invalid CLI invocations no longer report success when exits are intercepted. (#60923) Thanks @Linux2010.
 - Cron: replay interrupted recurring jobs on the first gateway restart instead of waiting for a second restart. (#60583) Thanks @joelnishanth.
@@ -130,7 +139,7 @@ Docs: https://docs.openclaw.ai
 - Discord: keep REST, webhook, and monitor traffic on the configured proxy, preserve component-only media sends, honor `@everyone` and `@here` mention gates, keep ACK reactions on the active account, and split voice connect/playback timeouts so auto-join is more reliable. (#57465, #60361, #60345) Thanks @geekhuashan.
 - WhatsApp: restore `channels.whatsapp.blockStreaming` and reset watchdog timeouts after reconnect so quiet chats stop falling into reconnect loops. (#60007, #60069) Thanks @MonkeyLeeT and @mcaxtr.
 - Memory: keep `memory-core` builtin embedding registration on the already-registered path so selecting `memory-core` no longer recurses through plugin discovery and crashes during startup. (#61402) Thanks @ngutman.
-- Agents/tool results: keep large `read` outputs visible longer and preserve the latest `read` output during tool-result context compaction so fresh file reads stop getting replaced by compacted stubs when older tool output can absorb the overflow budget. Thanks @vincentkoc.
+- Agents/tool results: keep large `read` outputs visible longer, preserve the latest `read` output when older tool output can absorb the overflow budget, and fall back to Pi's normal overflow compaction/retry path before replacing a fresh `read` with a compacted stub. Thanks @vincentkoc.
 - Memory/QMD: prefer modern `qmd collection add --glob`, accept newer single-line JSON hit metadata while keeping legacy line fields, refresh QMD docs/doctor install guidance and model-override guidance, and keep older QMD releases working. Thanks @vincentkoc.
 - MS Teams: download inline DM images via Graph API and preserve channel reply threading in proactive fallback. (#52212, #55198) Thanks @Ted-developer and @hyojin.
 - MS Teams: replace the deprecated Teams SDK HttpPlugin stub with `httpServerAdapter` so recurring gateway deprecation warnings stop firing and the Express 5 compatibility workaround stays on the supported SDK path. (#60939) Thanks @coolramukaka-sys.
@@ -230,8 +239,14 @@ Docs: https://docs.openclaw.ai
 - Plugins: suppress trust-warning noise during non-activating snapshot and CLI metadata loads. (#61427) Thanks @gumadeiras.
 - Agents/video generation: accept `agents.defaults.videoGenerationModel` in strict config validation and `openclaw config set/get`, so gateways using `video_generate` no longer fail to boot after enabling a video model.
 - Matrix/streaming: add a quiet preview mode for streamed Matrix replies, keep legacy `partial` preview-first behavior, and finalize quiet media captions correctly so previews stop notifying early without dropping final text semantics. (#61450) Thanks @gumadeiras.
-
 - Gateway/shutdown: bound websocket-server shutdown even when no tracked clients remain, so gateway restarts stop hanging until the watchdog kills the process. (#61565) Thanks @mbelinky.
+- Control UI/multilingual: localize the remaining shared channel, instances, nodes, and gateway-confirmation strings so the dashboard stops mixing translated UI with hardcoded English labels. Thanks @vincentkoc.
+- Discord/media: raise the default inbound and outbound media cap to `100MB` so Discord matches Telegram more closely and larger attachments stop failing on the old low default.
+- Matrix: keep direct transport requests on the pinned dispatcher by routing them through undici runtime fetch, so Matrix clients resume syncing on newer runtimes without dropping the validated address binding. (#61595) Thanks @gumadeiras.
+- Plugins/facades: resolve globally installed bundled-plugin runtime facades from registry roots so bundled channels like LINE still boot when the winning plugin install lives under the global extensions directory with an encoded scoped folder name. (#61297) Thanks @openperf.
+- Matrix: avoid failing startup when token auth already knows the user ID but still needs optional device metadata, retry transient auth bootstrap requests, and backfill missing device IDs after startup while keeping unknown-device storage reuse conservative until metadata is repaired. (#61383) Thanks @gumadeiras.
+- Agents/exec: stop streaming `tool_execution_update` events after an exec session backgrounds, preventing delayed background output from hitting a stale listener and crashing the gateway while keeping the output available through `process poll/log`. (#61627) Thanks @openperf.
+- Matrix: pass configured `deviceId` through health probes and keep probe-only client setup out of durable Matrix storage, so health checks preserve the correct device identity without rewriting `storage-meta.json` or related probe state on disk. (#61581) Thanks @MoerAI.
 
 ## 2026.4.2
 

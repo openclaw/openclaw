@@ -50,20 +50,20 @@ Outside of session-backed agent runs (for example, direct tool invocations), the
 
 ## Supported providers
 
-| Provider | Default model                   | Text | Image ref        | Video ref        | API key                                  |
-| -------- | ------------------------------- | ---- | ---------------- | ---------------- | ---------------------------------------- |
-| Alibaba  | `wan2.6-t2v`                    | Yes  | Yes (remote URL) | Yes (remote URL) | `MODELSTUDIO_API_KEY`                    |
-| BytePlus | `seedance-1-0-lite-t2v-250428`  | Yes  | 1 image          | No               | `BYTEPLUS_API_KEY`                       |
-| ComfyUI  | `workflow`                      | Yes  | 1 image          | No               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
-| fal      | `fal-ai/minimax/video-01-live`  | Yes  | 1 image          | No               | `FAL_KEY`                                |
-| Google   | `veo-3.1-fast-generate-preview` | Yes  | 1 image          | 1 video          | `GEMINI_API_KEY`                         |
-| MiniMax  | `MiniMax-Hailuo-2.3`            | Yes  | 1 image          | No               | `MINIMAX_API_KEY`                        |
-| OpenAI   | `sora-2`                        | Yes  | 1 image          | 1 video          | `OPENAI_API_KEY`                         |
-| Qwen     | `wan2.6-t2v`                    | Yes  | Yes (remote URL) | Yes (remote URL) | `QWEN_API_KEY`                           |
-| Runway   | `gen4.5`                        | Yes  | 1 image          | 1 video          | `RUNWAYML_API_SECRET`                    |
-| Together | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image          | No               | `TOGETHER_API_KEY`                       |
-| Vydra    | `veo3`                          | Yes  | 1 image (`kling`) | No              | `VYDRA_API_KEY`                          |
-| xAI      | `grok-imagine-video`            | Yes  | 1 image          | 1 video          | `XAI_API_KEY`                            |
+| Provider | Default model                   | Text | Image ref         | Video ref        | API key                                  |
+| -------- | ------------------------------- | ---- | ----------------- | ---------------- | ---------------------------------------- |
+| Alibaba  | `wan2.6-t2v`                    | Yes  | Yes (remote URL)  | Yes (remote URL) | `MODELSTUDIO_API_KEY`                    |
+| BytePlus | `seedance-1-0-lite-t2v-250428`  | Yes  | 1 image           | No               | `BYTEPLUS_API_KEY`                       |
+| ComfyUI  | `workflow`                      | Yes  | 1 image           | No               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
+| fal      | `fal-ai/minimax/video-01-live`  | Yes  | 1 image           | No               | `FAL_KEY`                                |
+| Google   | `veo-3.1-fast-generate-preview` | Yes  | 1 image           | 1 video          | `GEMINI_API_KEY`                         |
+| MiniMax  | `MiniMax-Hailuo-2.3`            | Yes  | 1 image           | No               | `MINIMAX_API_KEY`                        |
+| OpenAI   | `sora-2`                        | Yes  | 1 image           | 1 video          | `OPENAI_API_KEY`                         |
+| Qwen     | `wan2.6-t2v`                    | Yes  | Yes (remote URL)  | Yes (remote URL) | `QWEN_API_KEY`                           |
+| Runway   | `gen4.5`                        | Yes  | 1 image           | 1 video          | `RUNWAYML_API_SECRET`                    |
+| Together | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image           | No               | `TOGETHER_API_KEY`                       |
+| Vydra    | `veo3`                          | Yes  | 1 image (`kling`) | No               | `VYDRA_API_KEY`                          |
+| xAI      | `grok-imagine-video`            | Yes  | 1 image           | 1 video          | `XAI_API_KEY`                            |
 
 Some providers accept additional or alternate API key env vars. See individual [provider pages](#related) for details.
 
@@ -139,20 +139,20 @@ If a provider fails, the next candidate is tried automatically. If all candidate
 
 ## Provider notes
 
-| Provider | Notes                                                                                                                                    |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Alibaba  | Uses DashScope/Model Studio async endpoint. Reference images and videos must be remote `http(s)` URLs.                                   |
-| BytePlus | Single image reference only.                                                                                                             |
-| ComfyUI  | Workflow-driven local or cloud execution. Supports text-to-video and image-to-video through the configured graph.                        |
-| fal      | Uses queue-backed flow for long-running jobs. Single image reference only.                                                               |
-| Google   | Uses Gemini/Veo. Supports one image or one video reference.                                                                              |
-| MiniMax  | Single image reference only.                                                                                                             |
-| OpenAI   | Only `size` override is forwarded. Other style overrides (`aspectRatio`, `resolution`, `audio`, `watermark`) are ignored with a warning. |
-| Qwen     | Same DashScope backend as Alibaba. Reference inputs must be remote `http(s)` URLs; local files are rejected upfront.                     |
-| Runway   | Supports local files via data URIs. Video-to-video requires `runway/gen4_aleph`. Text-only runs expose `16:9` and `9:16` aspect ratios.  |
-| Together | Single image reference only.                                                                                                             |
+| Provider | Notes                                                                                                                                                       |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Alibaba  | Uses DashScope/Model Studio async endpoint. Reference images and videos must be remote `http(s)` URLs.                                                      |
+| BytePlus | Single image reference only.                                                                                                                                |
+| ComfyUI  | Workflow-driven local or cloud execution. Supports text-to-video and image-to-video through the configured graph.                                           |
+| fal      | Uses queue-backed flow for long-running jobs. Single image reference only.                                                                                  |
+| Google   | Uses Gemini/Veo. Supports one image or one video reference.                                                                                                 |
+| MiniMax  | Single image reference only.                                                                                                                                |
+| OpenAI   | Only `size` override is forwarded. Other style overrides (`aspectRatio`, `resolution`, `audio`, `watermark`) are ignored with a warning.                    |
+| Qwen     | Same DashScope backend as Alibaba. Reference inputs must be remote `http(s)` URLs; local files are rejected upfront.                                        |
+| Runway   | Supports local files via data URIs. Video-to-video requires `runway/gen4_aleph`. Text-only runs expose `16:9` and `9:16` aspect ratios.                     |
+| Together | Single image reference only.                                                                                                                                |
 | Vydra    | Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping redirects. `veo3` is bundled as text-to-video only; `kling` requires a remote image URL. |
-| xAI      | Supports text-to-video, image-to-video, and remote video edit/extend flows.                                                              |
+| xAI      | Supports text-to-video, image-to-video, and remote video edit/extend flows.                                                                                 |
 
 ## Configuration
 
@@ -182,7 +182,7 @@ openclaw config set agents.defaults.videoGenerationModel.primary "qwen/wan2.6-t2
 - [Tools Overview](/tools)
 - [Background Tasks](/automation/tasks) -- task tracking for async video generation
 - [Alibaba Model Studio](/providers/alibaba)
-- [BytePlus](/providers/byteplus)
+- [BytePlus](/concepts/model-providers#byteplus-international)
 - [ComfyUI](/providers/comfy)
 - [fal](/providers/fal)
 - [Google (Gemini)](/providers/google)

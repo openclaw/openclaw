@@ -1,18 +1,8 @@
 import { listControlledSubagentRuns } from "../../agents/subagent-control.js";
 import { logVerbose } from "../../globals.js";
-import { handleSubagentsAgentsAction } from "./commands-subagents/action-agents.js";
-import { handleSubagentsFocusAction } from "./commands-subagents/action-focus.js";
 import { handleSubagentsHelpAction } from "./commands-subagents/action-help.js";
-import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
-import { handleSubagentsKillAction } from "./commands-subagents/action-kill.js";
-import { handleSubagentsListAction } from "./commands-subagents/action-list.js";
-import { handleSubagentsLogAction } from "./commands-subagents/action-log.js";
-import { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
-import { handleSubagentsSpawnAction } from "./commands-subagents/action-spawn.js";
-import { handleSubagentsUnfocusAction } from "./commands-subagents/action-unfocus.js";
 import {
   type SubagentsCommandContext,
-  extractMessageText,
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
@@ -20,7 +10,72 @@ import {
 } from "./commands-subagents/shared.js";
 import type { CommandHandler } from "./commands-types.js";
 
-export { extractMessageText };
+export { extractMessageText } from "./commands-subagents-text.js";
+
+let actionAgentsPromise: Promise<typeof import("./commands-subagents/action-agents.js")> | null =
+  null;
+let actionFocusPromise: Promise<typeof import("./commands-subagents/action-focus.js")> | null =
+  null;
+let actionHelpPromise: Promise<typeof import("./commands-subagents/action-help.js")> | null = null;
+let actionInfoPromise: Promise<typeof import("./commands-subagents/action-info.js")> | null = null;
+let actionKillPromise: Promise<typeof import("./commands-subagents/action-kill.js")> | null = null;
+let actionListPromise: Promise<typeof import("./commands-subagents/action-list.js")> | null = null;
+let actionLogPromise: Promise<typeof import("./commands-subagents/action-log.js")> | null = null;
+let actionSendPromise: Promise<typeof import("./commands-subagents/action-send.js")> | null = null;
+let actionSpawnPromise: Promise<typeof import("./commands-subagents/action-spawn.js")> | null =
+  null;
+let actionUnfocusPromise: Promise<typeof import("./commands-subagents/action-unfocus.js")> | null =
+  null;
+
+function loadAgentsAction() {
+  actionAgentsPromise ??= import("./commands-subagents/action-agents.js");
+  return actionAgentsPromise;
+}
+
+function loadFocusAction() {
+  actionFocusPromise ??= import("./commands-subagents/action-focus.js");
+  return actionFocusPromise;
+}
+
+function loadHelpAction() {
+  actionHelpPromise ??= import("./commands-subagents/action-help.js");
+  return actionHelpPromise;
+}
+
+function loadInfoAction() {
+  actionInfoPromise ??= import("./commands-subagents/action-info.js");
+  return actionInfoPromise;
+}
+
+function loadKillAction() {
+  actionKillPromise ??= import("./commands-subagents/action-kill.js");
+  return actionKillPromise;
+}
+
+function loadListAction() {
+  actionListPromise ??= import("./commands-subagents/action-list.js");
+  return actionListPromise;
+}
+
+function loadLogAction() {
+  actionLogPromise ??= import("./commands-subagents/action-log.js");
+  return actionLogPromise;
+}
+
+function loadSendAction() {
+  actionSendPromise ??= import("./commands-subagents/action-send.js");
+  return actionSendPromise;
+}
+
+function loadSpawnAction() {
+  actionSpawnPromise ??= import("./commands-subagents/action-spawn.js");
+  return actionSpawnPromise;
+}
+
+function loadUnfocusAction() {
+  actionUnfocusPromise ??= import("./commands-subagents/action-unfocus.js");
+  return actionUnfocusPromise;
+}
 
 export const handleSubagentsCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -67,28 +122,28 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
 
   switch (action) {
     case "help":
-      return handleSubagentsHelpAction();
+      return (await loadHelpAction()).handleSubagentsHelpAction();
     case "agents":
-      return handleSubagentsAgentsAction(ctx);
+      return (await loadAgentsAction()).handleSubagentsAgentsAction(ctx);
     case "focus":
-      return await handleSubagentsFocusAction(ctx);
+      return await (await loadFocusAction()).handleSubagentsFocusAction(ctx);
     case "unfocus":
-      return await handleSubagentsUnfocusAction(ctx);
+      return await (await loadUnfocusAction()).handleSubagentsUnfocusAction(ctx);
     case "list":
-      return handleSubagentsListAction(ctx);
+      return (await loadListAction()).handleSubagentsListAction(ctx);
     case "kill":
-      return await handleSubagentsKillAction(ctx);
+      return await (await loadKillAction()).handleSubagentsKillAction(ctx);
     case "info":
-      return handleSubagentsInfoAction(ctx);
+      return (await loadInfoAction()).handleSubagentsInfoAction(ctx);
     case "log":
-      return await handleSubagentsLogAction(ctx);
+      return await (await loadLogAction()).handleSubagentsLogAction(ctx);
     case "send":
-      return await handleSubagentsSendAction(ctx, false);
+      return await (await loadSendAction()).handleSubagentsSendAction(ctx, false);
     case "steer":
-      return await handleSubagentsSendAction(ctx, true);
+      return await (await loadSendAction()).handleSubagentsSendAction(ctx, true);
     case "spawn":
-      return await handleSubagentsSpawnAction(ctx);
+      return await (await loadSpawnAction()).handleSubagentsSpawnAction(ctx);
     default:
-      return handleSubagentsHelpAction();
+      return (await loadHelpAction()).handleSubagentsHelpAction();
   }
 };

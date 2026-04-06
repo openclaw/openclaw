@@ -90,6 +90,59 @@ describe("matrixSetupAdapter", () => {
     });
   });
 
+  it("reuses an existing raw default-like key during promotion when defaultAccount is unset", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@default:example.org",
+          accessToken: "default-token",
+          avatarUrl: "mxc://example.org/default-avatar",
+          accounts: {
+            Default: {
+              enabled: true,
+              deviceName: "Legacy raw key",
+            },
+            support: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "support-token",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    const next = matrixSetupAdapter.applyAccountConfig({
+      cfg,
+      accountId: "ops",
+      input: {
+        name: "Ops",
+        homeserver: "https://matrix.example.org",
+        accessToken: "ops-token",
+      },
+    }) as CoreConfig;
+
+    expect(next.channels?.matrix?.accounts?.Default).toMatchObject({
+      enabled: true,
+      deviceName: "Legacy raw key",
+      homeserver: "https://matrix.example.org",
+      userId: "@default:example.org",
+      accessToken: "default-token",
+      avatarUrl: "mxc://example.org/default-avatar",
+    });
+    expect(next.channels?.matrix?.accounts?.default).toBeUndefined();
+    expect(next.channels?.matrix?.accounts?.support).toMatchObject({
+      homeserver: "https://matrix.example.org",
+      accessToken: "support-token",
+    });
+    expect(next.channels?.matrix?.accounts?.ops).toMatchObject({
+      name: "Ops",
+      enabled: true,
+      homeserver: "https://matrix.example.org",
+      accessToken: "ops-token",
+    });
+  });
+
   it("clears stored auth fields when switching an account to env-backed auth", () => {
     const cfg = {
       channels: {

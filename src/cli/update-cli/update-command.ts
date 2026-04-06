@@ -1046,6 +1046,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         ),
       );
     }
+    defaultRuntime.exit(0);
     return;
   }
 
@@ -1086,7 +1087,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
   }
 
-  const postUpdateRoot = result.root;
+  const postUpdateRoot = result.root ?? root;
 
   // A package -> git switch still runs inside the pre-update CLI process.
   // Any follow-up work that re-enters the CLI can then compare new bundled

@@ -1,26 +1,16 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerMemoryDreamingPhases } from "./dreaming-phases.js";
 import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
   resolveShortTermPhaseSignalStorePath,
 } from "./short-term-promotion.js";
+import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-async function createTempWorkspace(): Promise<string> {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dreaming-phases-"));
-  tempDirs.push(workspaceDir);
-  return workspaceDir;
-}
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+const { createTempWorkspace } = createMemoryCoreTestHarness();
 
 function createHarness(config: OpenClawConfig, workspaceDir?: string) {
   let beforeAgentReply:
@@ -67,7 +57,7 @@ function createHarness(config: OpenClawConfig, workspaceDir?: string) {
 
 describe("memory-core dreaming phases", () => {
   it("checkpoints daily ingestion and skips unchanged daily files", async () => {
-    const workspaceDir = await createTempWorkspace();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     const dailyPath = path.join(workspaceDir, "memory", "2026-04-05.md");
     await fs.writeFile(
@@ -124,7 +114,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("ingests recent daily memory files even before recall traffic exists", async () => {
-    const workspaceDir = await createTempWorkspace();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-05.md"),
@@ -188,7 +178,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("keeps section context when chunking durable daily notes", async () => {
-    const workspaceDir = await createTempWorkspace();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-05.md"),
@@ -247,8 +237,75 @@ describe("memory-core dreaming phases", () => {
     expect(after[0]?.snippet).toContain("messages short and low-pressure");
   });
 
+  it("drops generic day headings but keeps meaningful section labels", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      [
+        "# Friday, April 5, 2026",
+        "",
+        "## Morning",
+        "- Reviewed travel timing and calendar placement.",
+        "",
+        "## Emma Rees",
+        "- She prefers direct plans over open-ended maybes.",
+        "- Better to offer one concrete time window.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    await beforeAgentReply(
+      { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+      { trigger: "heartbeat", workspaceDir },
+    );
+
+    const after = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(after).toHaveLength(2);
+    expect(after.map((candidate) => candidate.snippet)).toEqual(
+      expect.arrayContaining([
+        "Reviewed travel timing and calendar placement.",
+        expect.stringContaining("Emma Rees:"),
+      ]),
+    );
+    for (const candidate of after) {
+      expect(candidate.snippet).not.toContain("Friday, April 5, 2026:");
+      expect(candidate.snippet).not.toContain("Morning:");
+    }
+  });
+
   it("splits noisy daily notes into a few coherent chunks instead of one line per item", async () => {
-    const workspaceDir = await createTempWorkspace();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-05.md"),
@@ -322,7 +379,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("records light/rem signals that reinforce deep promotion ranking", async () => {
-    const workspaceDir = await createTempWorkspace();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
     await recordShortTermRecalls({
       workspaceDir,
@@ -411,14 +468,15 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs,
     });
-    expect(reinforced).toHaveLength(1);
-    expect(reinforced[0]!.score).toBeGreaterThan(baselineScore);
+    const reinforcedCandidate = reinforced.find((candidate) => candidate.key === baseline[0]!.key);
+    expect(reinforcedCandidate).toBeDefined();
+    expect(reinforcedCandidate!.score).toBeGreaterThan(baselineScore);
 
     const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
     const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
       entries: Record<string, { lightHits: number; remHits: number }>;
     };
-    expect(phaseSignalStore.entries[reinforced[0]!.key]).toMatchObject({
+    expect(phaseSignalStore.entries[baseline[0]!.key]).toMatchObject({
       lightHits: 1,
       remHits: 1,
     });

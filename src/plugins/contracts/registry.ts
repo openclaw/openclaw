@@ -15,6 +15,7 @@ import type {
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
 } from "../types.js";
+import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
 import {
   loadVitestImageGenerationProviderContractRegistry,
   loadVitestMediaUnderstandingProviderContractRegistry,
@@ -91,6 +92,22 @@ function uniqueStrings(values: readonly string[]): string[] {
 }
 
 function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
+  if (process.env.VITEST) {
+    return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => ({
+      pluginId: entry.pluginId,
+      providerIds: [...entry.providerIds],
+      speechProviderIds: [...entry.speechProviderIds],
+      realtimeTranscriptionProviderIds: [...entry.realtimeTranscriptionProviderIds],
+      realtimeVoiceProviderIds: [...entry.realtimeVoiceProviderIds],
+      mediaUnderstandingProviderIds: [...entry.mediaUnderstandingProviderIds],
+      imageGenerationProviderIds: [...entry.imageGenerationProviderIds],
+      videoGenerationProviderIds: [...entry.videoGenerationProviderIds],
+      musicGenerationProviderIds: [...entry.musicGenerationProviderIds],
+      webFetchProviderIds: [...entry.webFetchProviderIds],
+      webSearchProviderIds: [...entry.webSearchProviderIds],
+      toolNames: [...entry.toolNames],
+    }));
+  }
   return loadPluginManifestRegistry({})
     .plugins.filter(
       (plugin) =>

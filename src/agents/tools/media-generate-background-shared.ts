@@ -1,11 +1,16 @@
 import crypto from "node:crypto";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
 } from "../../tasks/task-executor.js";
+import { sendMessage } from "../../tasks/task-registry-delivery-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
@@ -144,8 +149,8 @@ function buildMediaGenerationReplyInstruction(params: {
   if (params.status === "ok") {
     return [
       `A completed ${params.completionLabel} generation task is ready for user delivery.`,
-      `Reply in your normal assistant voice and post the finished ${params.completionLabel} to the original message channel now.`,
-      "If the result includes MEDIA: lines, include those exact MEDIA: lines in your reply so OpenClaw attaches the generated media.",
+      `Prefer the message tool for delivery: use action="send" to the current/original chat, put your user-facing caption in message, attach each generated file with path/filePath using the exact path from the result, then reply ONLY: ${SILENT_REPLY_TOKEN}.`,
+      `If you cannot use the message tool, reply in your normal assistant voice and include the exact MEDIA: lines from the result so OpenClaw attaches the finished ${params.completionLabel}.`,
       "Keep internal task/session details private and do not copy the internal event text verbatim.",
     ].join(" ");
   }
@@ -156,11 +161,55 @@ function buildMediaGenerationReplyInstruction(params: {
   ].join(" ");
 }
 
+function isAsyncMediaDirectSendEnabled(config: OpenClawConfig | undefined): boolean {
+  return config?.tools?.media?.asyncCompletion?.directSend === true;
+}
+
+async function maybeDeliverMediaGenerationResultDirectly(params: {
+  handle: MediaGenerationTaskHandle;
+  status: "ok" | "error";
+  result: string;
+  idempotencyKey: string;
+}): Promise<boolean> {
+  const origin = params.handle.requesterOrigin;
+  const channel = origin?.channel?.trim();
+  const to = origin?.to?.trim();
+  if (!channel || !to) {
+    return false;
+  }
+  const parsed = parseReplyDirectives(params.result);
+  const content = parsed.text.trim();
+  const mediaUrls = parsed.mediaUrls?.filter((entry) => entry.trim().length > 0);
+  const requesterAgentId = parseAgentSessionKey(params.handle.requesterSessionKey)?.agentId;
+  await sendMessage({
+    channel,
+    to,
+    accountId: origin?.accountId,
+    threadId: origin?.threadId,
+    content:
+      content ||
+      (params.status === "ok"
+        ? `Finished ${params.handle.taskLabel}.`
+        : "Background media generation failed."),
+    ...(mediaUrls?.length ? { mediaUrls } : {}),
+    agentId: requesterAgentId,
+    idempotencyKey: params.idempotencyKey,
+    mirror: {
+      sessionKey: params.handle.requesterSessionKey,
+      agentId: requesterAgentId,
+      idempotencyKey: params.idempotencyKey,
+    },
+  });
+  return true;
+}
+
 export async function wakeMediaGenerationTaskCompletion(params: {
+  config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle | null;
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  mediaUrls?: string[];
   statsLine?: string;
   eventSource: AgentInternalEvent["source"];
   announceType: string;
@@ -169,6 +218,27 @@ export async function wakeMediaGenerationTaskCompletion(params: {
 }) {
   if (!params.handle) {
     return;
+  }
+  const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
+  if (isAsyncMediaDirectSendEnabled(params.config)) {
+    try {
+      const deliveredDirect = await maybeDeliverMediaGenerationResultDirectly({
+        handle: params.handle,
+        status: params.status,
+        result: params.result,
+        idempotencyKey: announceId,
+      });
+      if (deliveredDirect) {
+        return;
+      }
+    } catch (error) {
+      log.warn("Media generation direct completion delivery failed; falling back to announce", {
+        taskId: params.handle.taskId,
+        runId: params.handle.runId,
+        toolName: params.toolName,
+        error,
+      });
+    }
   }
   const internalEvents: AgentInternalEvent[] = [
     {
@@ -181,6 +251,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       status: params.status,
       statusLabel: params.statusLabel,
       result: params.result,
+      ...(params.mediaUrls?.length ? { mediaUrls: params.mediaUrls } : {}),
       ...(params.statsLine?.trim() ? { statsLine: params.statsLine } : {}),
       replyInstruction: buildMediaGenerationReplyInstruction({
         status: params.status,
@@ -191,7 +262,6 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   const triggerMessage =
     formatAgentInternalEventsForPrompt(internalEvents) ||
     `A ${params.completionLabel} generation task finished. Process the completion update now.`;
-  const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
   const delivery = await deliverSubagentAnnouncement({
     requesterSessionKey: params.handle.requesterSessionKey,
     targetRequesterSessionKey: params.handle.requesterSessionKey,

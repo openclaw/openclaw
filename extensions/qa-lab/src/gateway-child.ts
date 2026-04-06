@@ -24,6 +24,53 @@ async function getFreePort() {
   });
 }
 
+function buildQaRuntimeEnv(params: {
+  configPath: string;
+  gatewayToken: string;
+  homeDir: string;
+  stateDir: string;
+  xdgConfigHome: string;
+  xdgDataHome: string;
+  xdgCacheHome: string;
+  providerMode?: "mock-openai" | "live-openai";
+}) {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: params.homeDir,
+    OPENCLAW_HOME: params.homeDir,
+    OPENCLAW_CONFIG_PATH: params.configPath,
+    OPENCLAW_STATE_DIR: params.stateDir,
+    OPENCLAW_OAUTH_DIR: path.join(params.stateDir, "credentials"),
+    OPENCLAW_GATEWAY_TOKEN: params.gatewayToken,
+    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+    OPENCLAW_SKIP_CANVAS_HOST: "1",
+    OPENCLAW_NO_RESPAWN: "1",
+    OPENCLAW_TEST_FAST: "1",
+    XDG_CONFIG_HOME: params.xdgConfigHome,
+    XDG_DATA_HOME: params.xdgDataHome,
+    XDG_CACHE_HOME: params.xdgCacheHome,
+  };
+  if (params.providerMode === "mock-openai") {
+    for (const key of [
+      "OPENAI_API_KEY",
+      "OPENAI_BASE_URL",
+      "GEMINI_API_KEY",
+      "GOOGLE_API_KEY",
+      "VOYAGE_API_KEY",
+      "MISTRAL_API_KEY",
+      "AWS_ACCESS_KEY_ID",
+      "AWS_SECRET_ACCESS_KEY",
+      "AWS_SESSION_TOKEN",
+      "AWS_REGION",
+      "AWS_BEARER_TOKEN_BEDROCK",
+    ]) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
 async function waitForGatewayReady(baseUrl: string, logs: () => string, timeoutMs = 30_000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -116,23 +163,16 @@ export async function startQaGatewayChild(params: {
 
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
-  const env = {
-    ...process.env,
-    HOME: homeDir,
-    OPENCLAW_HOME: homeDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
-    OPENCLAW_GATEWAY_TOKEN: gatewayToken,
-    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-    OPENCLAW_SKIP_CANVAS_HOST: "1",
-    OPENCLAW_NO_RESPAWN: "1",
-    OPENCLAW_TEST_FAST: "1",
-    XDG_CONFIG_HOME: xdgConfigHome,
-    XDG_DATA_HOME: xdgDataHome,
-    XDG_CACHE_HOME: xdgCacheHome,
-  };
+  const env = buildQaRuntimeEnv({
+    configPath,
+    gatewayToken,
+    homeDir,
+    stateDir,
+    xdgConfigHome,
+    xdgDataHome,
+    xdgCacheHome,
+    providerMode: params.providerMode,
+  });
 
   const child = spawn(
     process.execPath,
@@ -176,6 +216,7 @@ export async function startQaGatewayChild(params: {
     workspaceDir,
     tempRoot,
     configPath,
+    runtimeEnv: env,
     logs,
     async call(
       method: string,
