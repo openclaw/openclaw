@@ -5,6 +5,12 @@ export type CommandPathMatchRule =
       exact?: boolean;
     };
 
+function isStructuredCommandPathMatchRule(
+  rule: CommandPathMatchRule,
+): rule is Extract<CommandPathMatchRule, { pattern: readonly string[] }> {
+  return !Array.isArray(rule);
+}
+
 export function matchesCommandPath(
   commandPath: string[],
   pattern: readonly string[],
@@ -17,7 +23,7 @@ export function matchesCommandPath(
 }
 
 export function matchesCommandPathRule(commandPath: string[], rule: CommandPathMatchRule): boolean {
-  if (Array.isArray(rule)) {
+  if (!isStructuredCommandPathMatchRule(rule)) {
     return matchesCommandPath(commandPath, rule);
   }
   return matchesCommandPath(commandPath, rule.pattern, { exact: rule.exact });
