@@ -6,6 +6,7 @@ import { loadSessionStore } from "../config/sessions.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import {
   sendInvalidRequest,
   sendJson,
@@ -129,6 +130,19 @@ function canonicalizePath(value: string | undefined): string | undefined {
   }
 }
 
+/** Strip envelope/inbound metadata from paginated history before emitting to clients. */
+function sanitizePaginatedHistory(history: PaginatedSessionHistory): PaginatedSessionHistory {
+  const sanitized = stripEnvelopeFromMessages(history.items);
+  if (sanitized === history.items) {
+    return history;
+  }
+  return {
+    ...history,
+    items: sanitized,
+    messages: sanitized,
+  };
+}
+
 function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -211,7 +225,7 @@ export async function handleSessionHistoryHttpRequest(
   if (!shouldStreamSse(req)) {
     sendJson(res, 200, {
       sessionKey: target.canonicalKey,
-      ...history,
+      ...sanitizePaginatedHistory(history),
     });
     return true;
   }
@@ -229,7 +243,7 @@ export async function handleSessionHistoryHttpRequest(
       )
     : new Set<string>();
 
-  let sentHistory = history;
+  let sentHistory = sanitizePaginatedHistory(history);
   setSseHeaders(res);
   res.write("retry: 1000\n\n");
   sseWrite(res, "history", {
@@ -261,24 +275,27 @@ export async function handleSessionHistoryHttpRequest(
             : readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile).length,
       });
       if (limit === undefined && cursor === undefined) {
+        const sanitizedMessage = stripEnvelopeFromMessage(nextMessage);
         sentHistory = {
-          items: [...sentHistory.items, nextMessage],
-          messages: [...sentHistory.items, nextMessage],
+          items: [...sentHistory.items, sanitizedMessage],
+          messages: [...sentHistory.items, sanitizedMessage],
           hasMore: false,
         };
         sseWrite(res, "message", {
           sessionKey: target.canonicalKey,
-          message: nextMessage,
+          message: sanitizedMessage,
           ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
           messageSeq: resolveMessageSeq(nextMessage),
         });
         return;
       }
     }
-    sentHistory = paginateSessionMessages(
-      readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile),
-      limit,
-      cursor,
+    sentHistory = sanitizePaginatedHistory(
+      paginateSessionMessages(
+        readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile),
+        limit,
+        cursor,
+      ),
     );
     sseWrite(res, "history", {
       sessionKey: target.canonicalKey,
