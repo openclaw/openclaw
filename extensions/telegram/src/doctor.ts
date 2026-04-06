@@ -163,6 +163,7 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
 
   const tokenResolutionWarnings: string[] = [];
   const resolverAccountIds: string[] = [];
+  let sawConfiguredUnavailableToken = false;
   for (const accountId of listTelegramAccountIds(resolvedConfig)) {
     let inspected: ReturnType<typeof inspectTelegramAccount>;
     try {
@@ -174,6 +175,7 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
       continue;
     }
     if (inspected.tokenStatus === "configured_unavailable") {
+      sawConfiguredUnavailableToken = true;
       tokenResolutionWarnings.push(
         `- Telegram account ${accountId}: failed to inspect bot token (configured but unavailable in this command path).`,
       );
@@ -189,7 +191,9 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
       config: cfg,
       changes: [
         ...tokenResolutionWarnings,
-        "- Telegram allowFrom contains @username entries, but no Telegram bot token is available in this command path; cannot auto-resolve.",
+        sawConfiguredUnavailableToken
+          ? "- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve."
+          : "- Telegram allowFrom contains @username entries, but no Telegram bot token is available in this command path; cannot auto-resolve.",
       ],
     };
   }

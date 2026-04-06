@@ -260,6 +260,10 @@
       "types": "./dist/plugin-sdk/plugin-runtime.d.ts",
       "default": "./dist/plugin-sdk/plugin-runtime.js"
     },
+    "./plugin-sdk/channel-secret-runtime": {
+      "types": "./dist/plugin-sdk/channel-secret-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-secret-runtime.js"
+    },
     "./plugin-sdk/security-runtime": {
       "types": "./dist/plugin-sdk/security-runtime.d.ts",
       "default": "./dist/plugin-sdk/security-runtime.js"
@@ -1352,7 +1356,9 @@
       "protobufjs",
       "sharp"
     ],
-    "ignoredBuiltDependencies": ["koffi"],
+    "ignoredBuiltDependencies": [
+      "koffi"
+    ],
     "packageExtensions": {
       "@mariozechner/pi-coding-agent": {
         "dependencies": {

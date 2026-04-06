@@ -7,7 +7,10 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
-import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
+import {
+  collectRelevantDoctorPluginIds,
+  listPluginDoctorLegacyConfigRules,
+} from "../plugins/doctor-contract-registry.js";
 import {
   loadPluginManifestRegistry,
   resolveManifestContractPluginIds,
@@ -455,7 +458,11 @@ export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(raw);
-  const legacyIssues = findLegacyConfigIssues(raw, raw, listPluginDoctorLegacyConfigRules());
+  const legacyIssues = findLegacyConfigIssues(
+    raw,
+    raw,
+    listPluginDoctorLegacyConfigRules({ pluginIds: collectRelevantDoctorPluginIds(raw) }),
+  );
   if (legacyIssues.length > 0) {
     return {
       ok: false,

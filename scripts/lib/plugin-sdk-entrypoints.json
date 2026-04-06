@@ -54,6 +54,7 @@
   "simple-completion-runtime",
   "speech-core",
   "plugin-runtime",
+  "channel-secret-runtime",
   "security-runtime",
   "gateway-runtime",
   "github-copilot-login",

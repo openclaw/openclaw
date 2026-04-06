@@ -1,10 +1,19 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
 } from "openclaw/plugin-sdk/provider-model-shared";
+
+type SyntheticOpenAIModelCatalogEntry = {
+  provider: string;
+  id: string;
+  name: string;
+  reasoning?: boolean;
+  input?: ("text" | "image")[];
+  contextWindow?: number;
+  contextTokens?: number;
+};
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
@@ -41,7 +50,7 @@ export function buildOpenAISyntheticCatalogEntry(
     contextWindow: number;
     contextTokens?: number;
   },
-): ProviderRuntimeModel | undefined {
+): SyntheticOpenAIModelCatalogEntry | undefined {
   if (!template) {
     return undefined;
   }

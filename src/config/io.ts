@@ -5,6 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
+import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
@@ -13,7 +14,10 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
-import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
+import {
+  collectRelevantDoctorPluginIds,
+  listPluginDoctorLegacyConfigRules,
+} from "../plugins/doctor-contract-registry.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
@@ -1619,12 +1623,20 @@ function resolveLegacyConfigForRead(
   resolvedConfigRaw: unknown,
   sourceRaw: unknown,
 ): LegacyMigrationResolution {
+  const pluginIds = collectRelevantDoctorPluginIds(resolvedConfigRaw);
   const sourceLegacyIssues = findLegacyConfigIssues(
     resolvedConfigRaw,
     sourceRaw,
-    listPluginDoctorLegacyConfigRules(),
+    listPluginDoctorLegacyConfigRules({ pluginIds }),
   );
-  return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
+  if (!resolvedConfigRaw || typeof resolvedConfigRaw !== "object") {
+    return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
+  }
+  const compat = applyRuntimeLegacyConfigMigrations(resolvedConfigRaw);
+  return {
+    effectiveConfigRaw: compat.next ?? resolvedConfigRaw,
+    sourceLegacyIssues,
+  };
 }
 
 type ReadConfigFileSnapshotInternalResult = {

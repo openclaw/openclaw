@@ -1,17 +1,17 @@
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { isProviderApiKeyConfigured } from "@openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "@openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   fetchWithTimeout,
   postJsonRequest,
   resolveProviderHttpRequestConfig,
-} from "openclaw/plugin-sdk/provider-http";
+} from "@openclaw/plugin-sdk/provider-http";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
   VideoGenerationRequest,
   VideoGenerationSourceAsset,
-} from "openclaw/plugin-sdk/video-generation";
+} from "@openclaw/plugin-sdk/video-generation";
 
 const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video";

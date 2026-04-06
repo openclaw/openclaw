@@ -45,6 +45,7 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
+import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import {
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingMaxAgeBySessionKey,
@@ -126,33 +127,6 @@ function loadDiscordCarbonModule() {
 
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
-const DISCORD_VIDEO_MEDIA_EXTENSIONS = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"]);
-
-function normalizeMediaPathForExtension(mediaUrl: string): string {
-  const trimmed = mediaUrl.trim();
-  if (!trimmed) {
-    return "";
-  }
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.pathname.toLowerCase();
-  } catch {
-    const withoutHash = trimmed.split("#", 1)[0] ?? trimmed;
-    const withoutQuery = withoutHash.split("?", 1)[0] ?? withoutHash;
-    return withoutQuery.toLowerCase();
-  }
-}
-
-function isLikelyDiscordVideoMedia(mediaUrl: string): boolean {
-  const normalized = normalizeMediaPathForExtension(mediaUrl);
-  for (const ext of DISCORD_VIDEO_MEDIA_EXTENSIONS) {
-    if (normalized.endsWith(ext)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function resolveDiscordAttachedOutboundTarget(params: {
   to: string;
   threadId?: string | number | null;

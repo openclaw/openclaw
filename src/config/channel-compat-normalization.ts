@@ -3,7 +3,7 @@ type CompatMutationResult = {
   changed: boolean;
 };
 
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
+export function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;

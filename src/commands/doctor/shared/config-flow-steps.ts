@@ -42,7 +42,9 @@ export function applyLegacyCompatibilityStep(params: {
 
   return {
     state: {
-      cfg: params.shouldRepair ? migrated : params.state.cfg,
+      // Doctor should keep using the best-effort migrated shape in memory even
+      // during preview mode; confirmation only controls whether we write it.
+      cfg: migrated,
       candidate: migrated,
       pendingChanges: params.state.pendingChanges || changes.length > 0,
       fixHints: params.shouldRepair

@@ -3,11 +3,11 @@ import {
   normalizeNativeXaiModelId,
   normalizeProviderId,
   resolveProviderEndpoint,
-} from "openclaw/plugin-sdk/provider-model-shared";
+} from "@openclaw/plugin-sdk/provider-model-shared";
 import {
   applyXaiModelCompat,
   resolveXaiModelCompatPatch,
-} from "openclaw/plugin-sdk/provider-tools";
+} from "@openclaw/plugin-sdk/provider-tools";
 
 export { buildXaiProvider } from "./provider-catalog.js";
 export { applyXaiConfig, applyXaiProviderConfig } from "./onboard.js";
@@ -27,7 +27,7 @@ export {
   HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
   XAI_TOOL_SCHEMA_PROFILE,
   resolveXaiModelCompatPatch,
-} from "openclaw/plugin-sdk/provider-tools";
+} from "@openclaw/plugin-sdk/provider-tools";
 
 function isXaiNativeEndpoint(baseUrl: unknown): boolean {
   return (

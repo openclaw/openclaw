@@ -67,6 +67,23 @@ export function installEmbeddingManagerFixture(opts: {
     return manager as unknown as MemoryIndexManager;
   };
 
+  const createManager = async (params: {
+    indexPath: string;
+    tokens: number;
+    name: string;
+  }): Promise<MemoryIndexManager> => {
+    const managerResult = await getMemorySearchManager({
+      cfg: opts.createCfg({
+        workspaceDir: requireValue(workspaceDir, "workspaceDir"),
+        indexPath: params.indexPath,
+        tokens: params.tokens,
+      }),
+      agentId: "main",
+    });
+    expect(managerResult.manager).not.toBeNull();
+    return requireIndexManager(managerResult.manager, params.name);
+  };
+
   beforeAll(async () => {
     vi.resetModules();
     await import("./embedding.test-mocks.js");
@@ -93,31 +110,6 @@ export function installEmbeddingManagerFixture(opts: {
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
-
-    const indexPathLarge = path.join(fixtureRoot, "index.large.sqlite");
-    const indexPathSmall = path.join(fixtureRoot, "index.small.sqlite");
-
-    const large = await getMemorySearchManager({
-      cfg: opts.createCfg({
-        workspaceDir,
-        indexPath: indexPathLarge,
-        tokens: opts.largeTokens,
-      }),
-      agentId: "main",
-    });
-    expect(large.manager).not.toBeNull();
-    managerLarge = requireIndexManager(large.manager, "managerLarge");
-
-    const small = await getMemorySearchManager({
-      cfg: opts.createCfg({
-        workspaceDir,
-        indexPath: indexPathSmall,
-        tokens: opts.smallTokens,
-      }),
-      agentId: "main",
-    });
-    expect(small.manager).not.toBeNull();
-    managerSmall = requireIndexManager(small.manager, "managerSmall");
   });
 
   afterAll(async () => {
@@ -149,8 +141,12 @@ export function installEmbeddingManagerFixture(opts: {
     await fs.mkdir(dir, { recursive: true });
 
     if (resetIndexEachTest) {
-      resetManager(requireValue(managerLarge, "managerLarge"));
-      resetManager(requireValue(managerSmall, "managerSmall"));
+      if (managerLarge) {
+        resetManager(managerLarge);
+      }
+      if (managerSmall) {
+        resetManager(managerSmall);
+      }
     }
   });
 
@@ -161,8 +157,22 @@ export function installEmbeddingManagerFixture(opts: {
     getFixtureRoot: () => requireValue(fixtureRoot, "fixtureRoot"),
     getWorkspaceDir: () => requireValue(workspaceDir, "workspaceDir"),
     getMemoryDir: () => requireValue(memoryDir, "memoryDir"),
-    getManagerLarge: () => requireValue(managerLarge, "managerLarge"),
-    getManagerSmall: () => requireValue(managerSmall, "managerSmall"),
+    getManagerLarge: async () => {
+      managerLarge ??= await createManager({
+        indexPath: path.join(requireValue(fixtureRoot, "fixtureRoot"), "index.large.sqlite"),
+        tokens: opts.largeTokens,
+        name: "managerLarge",
+      });
+      return managerLarge;
+    },
+    getManagerSmall: async () => {
+      managerSmall ??= await createManager({
+        indexPath: path.join(requireValue(fixtureRoot, "fixtureRoot"), "index.small.sqlite"),
+        tokens: opts.smallTokens,
+        name: "managerSmall",
+      });
+      return managerSmall;
+    },
     resetManager,
   };
 }
