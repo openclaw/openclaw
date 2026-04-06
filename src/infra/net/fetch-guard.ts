@@ -107,12 +107,17 @@ function createPolicyDispatcherWithoutPinnedDns(
   const { Agent, EnvHttpProxyAgent, ProxyAgent } = loadUndiciRuntimeDeps();
 
   if (dispatcherPolicy.mode === "direct") {
-    return new Agent(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {});
+    return new Agent(
+      dispatcherPolicy.connect
+        ? { connect: { ...dispatcherPolicy.connect }, allowH2: false }
+        : { allowH2: false },
+    );
   }
 
   if (dispatcherPolicy.mode === "env-proxy") {
     return new EnvHttpProxyAgent({
       ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
+      allowH2: false,
       ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
     });
   }
@@ -121,9 +126,10 @@ function createPolicyDispatcherWithoutPinnedDns(
   return dispatcherPolicy.proxyTls
     ? new ProxyAgent({
         uri: proxyUrl,
+        allowH2: false,
         requestTls: { ...dispatcherPolicy.proxyTls },
       })
-    : new ProxyAgent(proxyUrl);
+    : new ProxyAgent({ uri: proxyUrl, allowH2: false });
 }
 
 async function assertExplicitProxyAllowed(

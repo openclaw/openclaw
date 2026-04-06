@@ -417,14 +417,19 @@ export function createPinnedDispatcher(
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
 
   if (!policy || policy.mode === "direct") {
+    // allowH2: false — undici 8 enabled HTTP/2 by default; the HTTP/2
+    // connection path is incompatible with the pinned lookup callback, so
+    // force HTTP/1.1 to match the undici 7 default and keep SSRF pinning intact.
     return new Agent({
       connect: withPinnedLookup(lookup, policy?.connect),
+      allowH2: false,
     });
   }
 
   if (policy.mode === "env-proxy") {
     return new EnvHttpProxyAgent({
       connect: withPinnedLookup(lookup, policy.connect),
+      allowH2: false,
       ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
     });
   }
@@ -432,10 +437,11 @@ export function createPinnedDispatcher(
   const proxyUrl = policy.proxyUrl.trim();
   const requestTls = withPinnedLookup(lookup, policy.proxyTls);
   if (!requestTls) {
-    return new ProxyAgent(proxyUrl);
+    return new ProxyAgent({ uri: proxyUrl, allowH2: false });
   }
   return new ProxyAgent({
     uri: proxyUrl,
+    allowH2: false,
     // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
     // transport hints for explicit proxies. Translate that to undici's
     // `requestTls` so HTTPS proxy tunnels keep the pinned DNS lookup.

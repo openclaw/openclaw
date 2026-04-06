@@ -41,7 +41,7 @@ Docs: https://docs.openclaw.ai
 - Memory/dreaming: strip managed Light Sleep and REM blocks before daily-note ingestion so dreaming summaries stop re-ingesting their own staged output into new candidates. (#61720) Thanks @MonkeyLeeT.
 - Docs/i18n: relocalize final localized-page links after translation so generated locale pages stop keeping stale English-root links when targets appear later in the same run. (#61796) thanks @hxy91819.
 - Docs/i18n: remove the zh-CN homepage redirect override so Mintlify can resolve the localized Chinese homepage without self-redirecting `/zh-CN/index`.
-
+- Tools/web_fetch and web_search: fix `TypeError: fetch failed` caused by undici 8.0 enabling HTTP/2 by default; pinned SSRF-guard dispatchers now explicitly set `allowH2: false` to restore HTTP/1.1 behavior and keep the custom DNS-pinning lookup compatible. (#61738, #61777) Thanks @zozo123.
 ## 2026.4.5
 
 ### Breaking

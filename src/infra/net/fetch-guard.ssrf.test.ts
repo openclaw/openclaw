@@ -448,6 +448,7 @@ describe("fetchWithSsrFGuard hardening", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://proxy.example:7890",
+      allowH2: false,
       requestTls: {
         servername: "public.example",
       },
