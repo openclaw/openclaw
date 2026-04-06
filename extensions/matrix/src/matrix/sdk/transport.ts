@@ -1,5 +1,7 @@
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
-import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  fetchWithRuntimeDispatcher,
+  type PinnedDispatcherPolicy,
+} from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildTimeoutAbortSignal,
   closeDispatcher,
