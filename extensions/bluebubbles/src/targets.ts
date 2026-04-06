@@ -128,7 +128,9 @@ export function normalizeBlueBubblesHandle(raw: string): string {
     return trimmed.toLowerCase();
   }
   const noSpaces = trimmed.replace(/\s+/g, "");
-  if (/^\d+$/.test(noSpaces)) return `+${noSpaces}`;
+  if (/^\d+$/.test(noSpaces)) {
+    return `+${noSpaces}`;
+  }
   return noSpaces;
 }
 
