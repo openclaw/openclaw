@@ -4,13 +4,13 @@ const loadEmbeddedPiMcpConfigMock = vi.hoisted(() => vi.fn());
 const createMcpOAuthProviderMock = vi.hoisted(() => vi.fn());
 const loadMcpOAuthStateMock = vi.hoisted(() => vi.fn());
 const saveMcpOAuthStateMock = vi.hoisted(() => vi.fn());
-const waitForOAuthCallbackMock = vi.hoisted(() => vi.fn());
 const resolveMcpTransportMock = vi.hoisted(() => vi.fn());
 const connectMock = vi.hoisted(() => vi.fn());
 const listToolsMock = vi.hoisted(() => vi.fn());
 const closeMock = vi.hoisted(() => vi.fn());
 const finishAuthMock = vi.hoisted(() => vi.fn());
 const terminateSessionMock = vi.hoisted(() => vi.fn());
+const waitForAuthorizationCodeMock = vi.hoisted(() => vi.fn());
 
 const { UnauthorizedError, FakeStreamableHTTPClientTransport, FakeSSEClientTransport } = vi.hoisted(
   () => {
@@ -64,7 +64,6 @@ vi.mock("./mcp-oauth-provider.js", () => ({
   createMcpOAuthProvider: createMcpOAuthProviderMock,
   loadMcpOAuthState: loadMcpOAuthStateMock,
   saveMcpOAuthState: saveMcpOAuthStateMock,
-  waitForOAuthCallback: waitForOAuthCallbackMock,
 }));
 
 vi.mock("./mcp-transport.js", () => ({
@@ -83,7 +82,7 @@ describe("createSessionMcpRuntime OAuth", () => {
     createMcpOAuthProviderMock.mockReset();
     loadMcpOAuthStateMock.mockReset();
     saveMcpOAuthStateMock.mockReset();
-    waitForOAuthCallbackMock.mockReset();
+    waitForAuthorizationCodeMock.mockReset();
     resolveMcpTransportMock.mockReset();
     connectMock.mockReset();
     listToolsMock.mockReset();
@@ -104,8 +103,11 @@ describe("createSessionMcpRuntime OAuth", () => {
         },
       },
     });
-    createMcpOAuthProviderMock.mockReturnValue({ provider: "oauth-provider" });
-    waitForOAuthCallbackMock.mockResolvedValue("oauth-code");
+    createMcpOAuthProviderMock.mockReturnValue({
+      provider: "oauth-provider",
+      waitForAuthorizationCode: waitForAuthorizationCodeMock,
+    });
+    waitForAuthorizationCodeMock.mockResolvedValue("oauth-code");
     listToolsMock.mockResolvedValue({
       tools: [
         {
@@ -151,16 +153,17 @@ describe("createSessionMcpRuntime OAuth", () => {
         transport: "streamable-http",
         auth: "oauth",
       },
-      { authProvider: { provider: "oauth-provider" } },
-    );
-    expect(waitForOAuthCallbackMock.mock.invocationCallOrder[0]).toBeLessThan(
-      connectMock.mock.invocationCallOrder[0],
+      {
+        authProvider: {
+          provider: "oauth-provider",
+          waitForAuthorizationCode: waitForAuthorizationCodeMock,
+        },
+      },
     );
     expect(connectMock).toHaveBeenCalledTimes(2);
-    expect(waitForOAuthCallbackMock).toHaveBeenCalledWith({
-      serverName: "oauthRemote",
-      getExpectedState: expect.any(Function),
-    });
+    expect(waitForAuthorizationCodeMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+      connectMock.mock.invocationCallOrder[0],
+    );
     expect(finishAuthMock).toHaveBeenCalledWith("oauth-code");
     expect(catalog.tools).toHaveLength(1);
     expect(catalog.tools[0]?.toolName).toBe("remote_tool");
@@ -188,6 +191,7 @@ describe("createSessionMcpRuntime OAuth", () => {
 
     await runtime.getCatalog();
 
+    expect(waitForAuthorizationCodeMock).toHaveBeenCalled();
     expect(finishAuthMock).toHaveBeenCalledWith("oauth-code");
     expect(closeMock).toHaveBeenCalled();
     expect(closeMock.mock.invocationCallOrder[0]).toBeLessThan(

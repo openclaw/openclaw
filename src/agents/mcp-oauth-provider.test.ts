@@ -128,6 +128,24 @@ describe("mcp-oauth-provider", () => {
     expect(persistedState?.csrfState).toBe(csrfState);
   });
 
+  it("does not start the callback listener until authorization begins", async () => {
+    const { createMcpOAuthProvider } = await import("./mcp-oauth-provider.js");
+
+    const provider = createMcpOAuthProvider({
+      serverName: "remote",
+      loadState: () => ({ csrfState: "expected-state" }),
+      saveState: () => undefined,
+    });
+
+    expect(serverState.listenPort).toBeUndefined();
+
+    await provider.redirectToAuthorization(new URL("https://example.com/oauth/start"));
+
+    expect(serverState.listenHost).toBe("127.0.0.1");
+    expect(serverState.listenPort).toBe(8093);
+    expect(openUrlMock).toHaveBeenCalledWith("https://example.com/oauth/start");
+  });
+
   it("rejects callback requests with the wrong csrf state", async () => {
     const { waitForOAuthCallback } = await import("./mcp-oauth-provider.js");
 

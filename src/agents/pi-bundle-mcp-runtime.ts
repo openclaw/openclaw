@@ -15,7 +15,6 @@ import {
   createMcpOAuthProvider,
   loadMcpOAuthState,
   saveMcpOAuthState,
-  waitForOAuthCallback,
   type McpOAuthProvider,
 } from "./mcp-oauth-provider.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
@@ -207,22 +206,15 @@ export function createSessionMcpRuntime(params: {
 
           try {
             failIfDisposed();
-            const callbackPromise =
-              resolved.auth === "oauth"
-                ? waitForOAuthCallback({
-                    serverName,
-                    getExpectedState: () => authProvider?.getExpectedState(),
-                  })
-                : undefined;
 
             try {
               await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
             } catch (connectError) {
-              if (connectError instanceof UnauthorizedError && callbackPromise) {
+              if (connectError instanceof UnauthorizedError && authProvider) {
                 logDebug(
                   `bundle-mcp: "${serverName}": OAuth authorization required, waiting for callback...`,
                 );
-                const code = await callbackPromise;
+                const code = await authProvider.waitForAuthorizationCode();
                 if (
                   resolved.transport instanceof StreamableHTTPClientTransport ||
                   resolved.transport instanceof SSEClientTransport
@@ -234,7 +226,6 @@ export function createSessionMcpRuntime(params: {
                 }
                 await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
               } else {
-                void callbackPromise?.catch(() => {});
                 throw connectError;
               }
             }

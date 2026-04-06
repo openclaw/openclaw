@@ -40,6 +40,7 @@ export type McpOAuthProviderOptions = {
 
 export type McpOAuthProvider = OAuthClientProvider & {
   getExpectedState: () => Promise<string | undefined>;
+  waitForAuthorizationCode: () => Promise<string>;
 };
 
 function toSafeFilename(name: string): string {
@@ -93,6 +94,11 @@ const REDIRECT_URI = `http://127.0.0.1:${CALLBACK_PORT}${CALLBACK_PATH}`;
 export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAuthProvider {
   let state: McpOAuthPersistedState = {};
   let stateLoaded = false;
+  let pendingAuthorizationCode:
+    | {
+        promise: Promise<string>;
+      }
+    | undefined;
 
   async function ensureState(): Promise<McpOAuthPersistedState> {
     if (!stateLoaded) {
@@ -150,6 +156,14 @@ export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAu
     },
 
     async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
+      pendingAuthorizationCode ??= {
+        promise: waitForOAuthCallback({
+          serverName: options.serverName,
+          getExpectedState: async () => (await ensureState()).csrfState,
+        }).finally(() => {
+          pendingAuthorizationCode = undefined;
+        }),
+      };
       const opened = await openUrl(authorizationUrl.toString());
       if (opened) {
         logDebug(`bundle-mcp: "${options.serverName}": opened browser for OAuth authorization`);
@@ -188,6 +202,13 @@ export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAu
     async getExpectedState(): Promise<string | undefined> {
       const s = await ensureState();
       return s.csrfState;
+    },
+
+    async waitForAuthorizationCode(): Promise<string> {
+      if (!pendingAuthorizationCode) {
+        throw new Error(`MCP OAuth authorization was not started for "${options.serverName}"`);
+      }
+      return await pendingAuthorizationCode.promise;
     },
   };
 }
