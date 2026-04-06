@@ -1,0 +1,36 @@
+{
+  "id": "openstream",
+  "name": "OpenStream",
+  "description": "Ollama companion plugin with diagnostics, prompt guidance, and heuristic recommendations for OpenClaw.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "promptGuidance": {
+        "type": "boolean",
+        "description": "When true, inject stable Ollama/open-source model guidance into system prompt space."
+      },
+      "streamingMode": {
+        "type": "string",
+        "enum": ["standard", "enhanced", "ultra"],
+        "description": "Preferred OpenStream streaming preset used by diagnostics and sample config output."
+      },
+      "enableMegaContext": {
+        "type": "boolean",
+        "description": "Whether diagnostics should recommend 2M-context behavior when model families support it."
+      },
+      "maxContextWindow": {
+        "type": "integer",
+        "minimum": 32768,
+        "maximum": 2097152,
+        "description": "Maximum context window OpenStream should recommend in generated config snippets."
+      },
+      "doctorDefaultProvider": {
+        "type": "string",
+        "enum": ["ollama", "openstream"],
+        "description": "Preferred provider label shown by doctor/sample-config output."
+      }
+    }
+  }
+}

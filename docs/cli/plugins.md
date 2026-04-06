@@ -16,6 +16,7 @@ Related:
 - Bundle compatibility: [Plugin bundles](/plugins/bundles)
 - Plugin manifest + schema: [Plugin manifest](/plugins/manifest)
 - Security hardening: [Security](/gateway/security)
+- Example bundled plugin: [OpenStream](/plugins/openstream)
 
 ## Commands
 

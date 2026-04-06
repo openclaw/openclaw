@@ -1106,6 +1106,7 @@
                 "group": "Plugins",
                 "pages": [
                   "tools/plugin",
+                  "plugins/openstream",
                   "plugins/community",
                   "plugins/bundles",
                   "plugins/voice-call",

@@ -113,6 +113,7 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
   <Accordion title="Other">
     - `browser` — bundled browser plugin for the browser tool, `openclaw browser` CLI, `browser.request` gateway method, browser runtime, and default browser control service (enabled by default; disable before replacing it)
     - `copilot-proxy` — VS Code Copilot Proxy bridge (disabled by default)
+    - `openstream` — bundled Ollama companion plugin for diagnostics, prompt guidance, and long-context heuristics (disabled by default). Docs: [OpenStream](/plugins/openstream)
   </Accordion>
 </AccordionGroup>
 
