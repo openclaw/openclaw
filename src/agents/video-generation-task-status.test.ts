@@ -6,6 +6,7 @@ import {
   findActiveVideoGenerationTaskForSession,
   getVideoGenerationTaskProviderId,
   isActiveVideoGenerationTask,
+  VIDEO_GENERATION_TASK_KIND,
 } from "./video-generation-task-status.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => ({
@@ -25,6 +26,7 @@ describe("video generation task status", () => {
       isActiveVideoGenerationTask({
         taskId: "task-1",
         runtime: "cli",
+        taskKind: VIDEO_GENERATION_TASK_KIND,
         sourceId: "video_generate:openai",
         requesterSessionKey: "agent:main",
         ownerKey: "agent:main",
@@ -40,6 +42,7 @@ describe("video generation task status", () => {
       isActiveVideoGenerationTask({
         taskId: "task-2",
         runtime: "cron",
+        taskKind: VIDEO_GENERATION_TASK_KIND,
         sourceId: "video_generate:openai",
         requesterSessionKey: "agent:main",
         ownerKey: "agent:main",
@@ -58,6 +61,7 @@ describe("video generation task status", () => {
       {
         taskId: "task-queued",
         runtime: "cli",
+        taskKind: VIDEO_GENERATION_TASK_KIND,
         sourceId: "video_generate:google",
         requesterSessionKey: "agent:main",
         ownerKey: "agent:main",
@@ -71,6 +75,7 @@ describe("video generation task status", () => {
       {
         taskId: "task-running",
         runtime: "cli",
+        taskKind: VIDEO_GENERATION_TASK_KIND,
         sourceId: "video_generate:openai",
         requesterSessionKey: "agent:main",
         ownerKey: "agent:main",
@@ -95,6 +100,7 @@ describe("video generation task status", () => {
       active: true,
       existingTask: true,
       status: "running",
+      taskKind: VIDEO_GENERATION_TASK_KIND,
       provider: "openai",
       progressSummary: "Generating video",
     });
@@ -105,6 +111,7 @@ describe("video generation task status", () => {
       {
         taskId: "task-running",
         runtime: "cli",
+        taskKind: VIDEO_GENERATION_TASK_KIND,
         sourceId: "video_generate:openai",
         requesterSessionKey: "agent:main",
         ownerKey: "agent:main",

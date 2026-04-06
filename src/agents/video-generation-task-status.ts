@@ -1,21 +1,18 @@
-import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import {
+  buildSessionAsyncTaskStatusDetails,
+  findActiveSessionTask,
+} from "./session-async-task-status.js";
 
-const ACTIVE_VIDEO_GENERATION_STATUSES = new Set(["queued", "running"]);
+export const VIDEO_GENERATION_TASK_KIND = "video_generation";
 const VIDEO_GENERATION_SOURCE_PREFIX = "video_generate";
 
-function isActiveStatus(status: string): boolean {
-  return ACTIVE_VIDEO_GENERATION_STATUSES.has(status);
-}
-
 export function isActiveVideoGenerationTask(task: TaskRecord): boolean {
-  const sourceId = task.sourceId?.trim() ?? "";
   return (
     task.runtime === "cli" &&
     task.scopeKind === "session" &&
-    isActiveStatus(task.status) &&
-    (sourceId === VIDEO_GENERATION_SOURCE_PREFIX ||
-      sourceId.startsWith(`${VIDEO_GENERATION_SOURCE_PREFIX}:`))
+    task.taskKind === VIDEO_GENERATION_TASK_KIND &&
+    (task.status === "queued" || task.status === "running")
   );
 }
 
@@ -29,32 +26,18 @@ export function getVideoGenerationTaskProviderId(task: TaskRecord): string | und
 }
 
 export function findActiveVideoGenerationTaskForSession(sessionKey?: string): TaskRecord | null {
-  const normalizedSessionKey = sessionKey?.trim();
-  if (!normalizedSessionKey) {
-    return null;
-  }
-  const activeTasks = listTasksForOwnerKey(normalizedSessionKey).filter(
-    isActiveVideoGenerationTask,
-  );
-  if (activeTasks.length === 0) {
-    return null;
-  }
-  return activeTasks.find((task) => task.status === "running") ?? activeTasks[0] ?? null;
+  return findActiveSessionTask({
+    sessionKey,
+    runtime: "cli",
+    taskKind: VIDEO_GENERATION_TASK_KIND,
+    sourceIdPrefix: VIDEO_GENERATION_SOURCE_PREFIX,
+  });
 }
 
 export function buildVideoGenerationTaskStatusDetails(task: TaskRecord): Record<string, unknown> {
   const provider = getVideoGenerationTaskProviderId(task);
   return {
-    async: true,
-    active: true,
-    existingTask: true,
-    status: task.status,
-    task: {
-      taskId: task.taskId,
-      ...(task.runId ? { runId: task.runId } : {}),
-    },
-    ...(task.progressSummary ? { progressSummary: task.progressSummary } : {}),
-    ...(task.sourceId ? { sourceId: task.sourceId } : {}),
+    ...buildSessionAsyncTaskStatusDetails(task),
     ...(provider ? { provider } : {}),
   };
 }
