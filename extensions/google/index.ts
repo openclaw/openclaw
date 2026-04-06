@@ -20,6 +20,7 @@ import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./pr
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 import {
   buildGoogleVertexBaseUrl,
+  isValidGoogleVertexRegion,
   resolveGoogleVertexProjectId,
   resolveGoogleVertexRegion,
 } from "./vertex-region.js";
@@ -210,7 +211,10 @@ export default definePluginEntry({
               initialValue: resolveGoogleVertexRegion(env),
               placeholder: "us-central1",
             });
-            const locationStr = String(location).trim() || resolveGoogleVertexRegion(env);
+            const raw = String(location).trim() || resolveGoogleVertexRegion(env);
+            const locationStr = isValidGoogleVertexRegion(raw)
+              ? raw
+              : resolveGoogleVertexRegion(env);
 
             const spin = ctx.prompter.progress("Starting Google OAuth for Vertex AI…");
             try {

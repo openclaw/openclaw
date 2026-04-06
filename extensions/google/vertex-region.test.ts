@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildGoogleVertexBaseUrl,
+  isValidGoogleVertexRegion,
   resolveGoogleVertexProjectId,
   resolveGoogleVertexRegion,
   resolveGoogleVertexRegionFromBaseUrl,
@@ -136,6 +137,32 @@ describe("google vertex region helpers", () => {
       expect(buildGoogleVertexBaseUrl({ region: "europe-west4", projectId: "eu-proj" })).toBe(
         "https://europe-west4-aiplatform.googleapis.com/v1/projects/eu-proj/locations/europe-west4/publishers/google",
       );
+    });
+
+    it("rejects malformed region values", () => {
+      expect(() =>
+        buildGoogleVertexBaseUrl({ region: "us-central1.typo", projectId: "proj" }),
+      ).toThrow("Invalid Vertex AI region");
+    });
+
+    it("rejects region with slashes", () => {
+      expect(() => buildGoogleVertexBaseUrl({ region: "us/central1", projectId: "proj" })).toThrow(
+        "Invalid Vertex AI region",
+      );
+    });
+  });
+
+  describe("isValidGoogleVertexRegion", () => {
+    it("accepts well-formed region strings", () => {
+      expect(isValidGoogleVertexRegion("us-central1")).toBe(true);
+      expect(isValidGoogleVertexRegion("europe-west4")).toBe(true);
+      expect(isValidGoogleVertexRegion("global")).toBe(true);
+    });
+
+    it("rejects malformed region strings", () => {
+      expect(isValidGoogleVertexRegion("us-central1.attacker.example")).toBe(false);
+      expect(isValidGoogleVertexRegion("us/central1")).toBe(false);
+      expect(isValidGoogleVertexRegion("")).toBe(false);
     });
   });
 });

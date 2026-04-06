@@ -3,6 +3,10 @@ import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-http";
 const GOOGLE_VERTEX_DEFAULT_REGION = "us-central1";
 const GOOGLE_VERTEX_REGION_RE = /^[a-z0-9-]+$/;
 
+export function isValidGoogleVertexRegion(value: string): boolean {
+  return GOOGLE_VERTEX_REGION_RE.test(value);
+}
+
 function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -42,6 +46,9 @@ export function resolveGoogleVertexRegionFromBaseUrl(baseUrl?: string): string |
  */
 export function buildGoogleVertexBaseUrl(params: { region: string; projectId: string }): string {
   const { region, projectId } = params;
+  if (!isValidGoogleVertexRegion(region)) {
+    throw new Error(`Invalid Vertex AI region: ${region}`);
+  }
   const host =
     region.toLowerCase() === "global"
       ? "https://aiplatform.googleapis.com"
