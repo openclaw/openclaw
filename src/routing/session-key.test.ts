@@ -10,6 +10,7 @@ import {
   classifySessionKeyShape,
   isValidAgentId,
   parseAgentSessionKey,
+  scopedHeartbeatWakeOptions,
   toAgentStoreSessionKey,
 } from "./session-key.js";
 
@@ -149,6 +150,23 @@ describe("session key canonicalization", () => {
     },
   ] as const)("$name", ({ run }) => {
     expectSessionKeyCanonicalizationCase({ run });
+  });
+});
+
+describe("scopedHeartbeatWakeOptions", () => {
+  it("preserves non-cron agent session keys", () => {
+    expect(
+      scopedHeartbeatWakeOptions("agent:main:telegram:direct:123", { reason: "exec:1:exit" }),
+    ).toEqual({
+      reason: "exec:1:exit",
+      sessionKey: "agent:main:telegram:direct:123",
+    });
+  });
+
+  it("does not preserve cron session keys", () => {
+    expect(
+      scopedHeartbeatWakeOptions("agent:main:cron:job-1:run:run-1", { reason: "exec:1:exit" }),
+    ).toEqual({ reason: "exec:1:exit" });
   });
 });
 

@@ -42,6 +42,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
+  isCronSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -211,7 +212,8 @@ function resolveHeartbeatSession(
       agentId: resolvedAgentId,
       sessionKey: forcedCandidate,
     });
-    if (forcedCanonical !== "global") {
+    const forcedIsCronSession = isCronSessionKey(forcedCanonical);
+    if (forcedCanonical !== "global" && !forcedIsCronSession) {
       const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
       if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
         return {

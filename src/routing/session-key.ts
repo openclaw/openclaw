@@ -1,5 +1,9 @@
 import type { ChatType } from "../channels/chat-type.js";
-import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  isCronSessionKey,
+  parseAgentSessionKey,
+  type ParsedAgentSessionKey,
+} from "../sessions/session-key-utils.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-id.js";
 
 export {
@@ -34,7 +38,14 @@ export function scopedHeartbeatWakeOptions<T extends object>(
   sessionKey: string,
   wakeOptions: T,
 ): T | (T & { sessionKey: string }) {
-  return parseAgentSessionKey(sessionKey) ? { ...wakeOptions, sessionKey } : wakeOptions;
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return wakeOptions;
+  }
+  if (isCronSessionKey(sessionKey)) {
+    return wakeOptions;
+  }
+  return { ...wakeOptions, sessionKey };
 }
 
 export function normalizeMainKey(value: string | undefined | null): string {
