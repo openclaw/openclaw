@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 const probeBlueBubblesMock = vi.hoisted(() => vi.fn());
@@ -18,11 +18,13 @@ vi.mock("../../../src/channels/plugins/bundled.js", () => ({
 let bluebubblesPlugin: typeof import("./channel.js").bluebubblesPlugin;
 
 describe("bluebubblesPlugin.status.probeAccount", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ bluebubblesPlugin } = await import("./channel.js"));
+  });
+
+  beforeEach(() => {
     probeBlueBubblesMock.mockReset();
     probeBlueBubblesMock.mockResolvedValue({ ok: true, status: 200 });
-    ({ bluebubblesPlugin } = await import("./channel.js"));
   });
 
   it("auto-enables private-network probes for loopback server URLs", async () => {
