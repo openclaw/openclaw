@@ -23,9 +23,7 @@ export function resolveDiscordDraftStreamingChunking(
   const accountCfg = resolveAccountEntry(cfg?.channels?.discord?.accounts, normalizedAccountId);
   const draftCfg =
     resolveChannelStreamingPreviewChunk(accountCfg) ??
-    resolveChannelStreamingPreviewChunk(cfg?.channels?.discord) ??
-    accountCfg?.draftChunk ??
-    cfg?.channels?.discord?.draftChunk;
+    resolveChannelStreamingPreviewChunk(cfg?.channels?.discord);
 
   const maxRequested = Math.max(
     1,
