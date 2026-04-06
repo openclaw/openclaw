@@ -191,7 +191,6 @@ function createHydratedGuildClient(restPayload: Record<string, unknown>) {
     rest: {
       get: restGet,
     },
-  });
   }) as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
   return { client, restGet };
 }

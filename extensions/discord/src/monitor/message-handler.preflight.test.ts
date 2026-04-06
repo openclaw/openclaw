@@ -484,7 +484,6 @@ describe("preflightDiscordMessage", () => {
       rest: {
         get: restGet,
       },
-    });
     }) as unknown as DiscordClient;
 
     const result = await preflightDiscordMessage({
