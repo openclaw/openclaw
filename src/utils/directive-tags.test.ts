@@ -191,6 +191,22 @@ describe("parseInlineDirectives", () => {
     expect(result.audioAsVoice).toBe(true);
     expect(result.text).toBe(["```bash", "  echo 'hello'", "    indented", "```"].join("\n"));
   });
+
+  test("preserves literal sentinel-like text while restoring masked code blocks", () => {
+    const sentinelLikeText = "\uE0000\uE000";
+    const input = [
+      "[[reply_to_current]]",
+      `literal ${sentinelLikeText} text`,
+      "```ts",
+      "    const value = 1;",
+      "```",
+    ].join("\n");
+    const result = parseInlineDirectives(input);
+    expect(result.hasReplyTag).toBe(true);
+    expect(result.text).toBe(
+      [`literal ${sentinelLikeText} text`, "```ts", "    const value = 1;", "```"].join("\n"),
+    );
+  });
 });
 
 describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
