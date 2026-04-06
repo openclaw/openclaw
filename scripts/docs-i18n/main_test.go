@@ -14,6 +14,8 @@ func (fakeDocsTranslator) Translate(_ context.Context, text, _, _ string) (strin
 }
 
 func (fakeDocsTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	// Keep the fake translator deterministic so this test exercises the
+	// docs-i18n pipeline wiring and final link relocalization, not model output.
 	replaced := strings.NewReplacer(
 		"Gateway", "网关",
 		"See ", "参见 ",
@@ -43,6 +45,9 @@ func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 	writeFile(t, filepath.Join(docsRoot, "zh-CN", "gateway", "troubleshooting.md"), "# 故障排除\n")
 	writeFile(t, filepath.Join(docsRoot, "zh-CN", "providers", "alibaba.md"), "# 阿里巴巴\n")
 
+	// This is the higher-level regression for the bug fixed in this PR:
+	// if the pipeline stops wiring postprocess through the main flow, the final
+	// localized output page will keep stale English-root links and this test fails.
 	err := runDocsI18N(context.Background(), runConfig{
 		targetLang: "zh-CN",
 		sourceLang: "en",
