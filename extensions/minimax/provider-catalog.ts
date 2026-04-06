@@ -5,14 +5,28 @@ import type {
 import {
   DEFAULT_MINIMAX_CONTEXT_WINDOW,
   DEFAULT_MINIMAX_MAX_TOKENS,
+  MINIMAX_API_BASE_URL,
   resolveMinimaxApiCost,
 } from "./model-definitions.js";
-import {
-  MINIMAX_TEXT_MODEL_CATALOG,
-  MINIMAX_TEXT_MODEL_ORDER,
-} from "./provider-models.js";
+import { MINIMAX_TEXT_MODEL_CATALOG, MINIMAX_TEXT_MODEL_ORDER } from "./provider-models.js";
 
-const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
+function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const rawHost = env.MINIMAX_API_HOST?.trim();
+  if (!rawHost) {
+    return MINIMAX_API_BASE_URL;
+  }
+
+  try {
+    const url = new URL(rawHost);
+    const basePath = url.pathname.replace(/\/+$/, "");
+    if (basePath.endsWith("/anthropic")) {
+      return `${url.origin}${basePath}`;
+    }
+    return `${url.origin}/anthropic`;
+  } catch {
+    return MINIMAX_API_BASE_URL;
+  }
+}
 
 function buildMinimaxModel(params: {
   id: string;
@@ -53,18 +67,18 @@ function buildMinimaxCatalog(): ModelDefinitionConfig[] {
   });
 }
 
-export function buildMinimaxProvider(): ModelProviderConfig {
+export function buildMinimaxProvider(env?: NodeJS.ProcessEnv): ModelProviderConfig {
   return {
-    baseUrl: MINIMAX_PORTAL_BASE_URL,
+    baseUrl: resolveMinimaxCatalogBaseUrl(env),
     api: "anthropic-messages",
     authHeader: true,
     models: buildMinimaxCatalog(),
   };
 }
 
-export function buildMinimaxPortalProvider(): ModelProviderConfig {
+export function buildMinimaxPortalProvider(env?: NodeJS.ProcessEnv): ModelProviderConfig {
   return {
-    baseUrl: MINIMAX_PORTAL_BASE_URL,
+    baseUrl: resolveMinimaxCatalogBaseUrl(env),
     api: "anthropic-messages",
     authHeader: true,
     models: buildMinimaxCatalog(),

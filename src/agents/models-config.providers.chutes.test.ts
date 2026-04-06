@@ -6,7 +6,6 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHUTES_BASE_URL } from "./chutes-models.js";
 import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 
 const CHUTES_OAUTH_MARKER = resolveOAuthApiKeyMarker("chutes");
 const ORIGINAL_VITEST_ENV = process.env.VITEST;
@@ -127,9 +126,11 @@ describe("chutes implicit provider auth mode", () => {
 
   it("auto-loads bundled chutes discovery for env api keys", async () => {
     const agentDir = createTempAgentDir();
-    const providers = await resolveImplicitProviders({
+    const providers = await resolveImplicitProvidersForTest({
       agentDir,
       env: {
+        VITEST: "true",
+        NODE_ENV: "test",
         CHUTES_API_KEY: "env-chutes-api-key",
       } as NodeJS.ProcessEnv,
     });

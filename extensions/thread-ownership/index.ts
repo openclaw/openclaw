@@ -1,7 +1,7 @@
 import {
   definePluginEntry,
   fetchWithSsrFGuard,
-  ssrfPolicyFromAllowPrivateNetwork,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   type OpenClawConfig,
   type OpenClawPluginApi,
 } from "./api.js";
@@ -105,7 +105,7 @@ export default definePluginEntry({
             body: JSON.stringify({ agent_id: agentId }),
           },
           timeoutMs: 3000,
-          policy: ssrfPolicyFromAllowPrivateNetwork(true),
+          policy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
           auditContext: "thread-ownership",
         });
 

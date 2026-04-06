@@ -420,6 +420,9 @@ vi.mock("../gateway/probe.js", () => ({
 }));
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+  buildGatewayConnectionDetails: vi.fn(() => ({
+    message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
+  })),
   resolveGatewayCredentialsWithSecretInputs: vi.fn(
     async (params: {
       config?: {

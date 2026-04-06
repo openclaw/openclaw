@@ -4,6 +4,12 @@ import { describeImageWithModel, describeImagesWithModel } from "./image-runtime
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
+type ConfigProvider = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
+>;
+
+type ConfigProviderModel = NonNullable<ConfigProvider["models"]>[number];
+
 function mergeProviderIntoRegistry(
   registry: Map<string, MediaUnderstandingProvider>,
   provider: MediaUnderstandingProvider,
@@ -47,9 +53,9 @@ export function buildMediaUnderstandingRegistry(
       if (registry.has(normalizedKey)) {
         continue;
       }
-      const models = (providerCfg as { models?: Array<{ input?: string[] }> })?.models ?? [];
+      const models = providerCfg.models ?? [];
       const hasImageModel = models.some(
-        (m) => Array.isArray(m?.input) && m.input.includes("image"),
+        (m: ConfigProviderModel) => Array.isArray(m?.input) && m.input.includes("image"),
       );
       if (hasImageModel) {
         const autoProvider: MediaUnderstandingProvider = {

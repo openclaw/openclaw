@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  TALK_TEST_PROVIDER_API_KEY_PATH,
+  TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
+} from "../../test-utils/talk-test-provider.js";
 import { createSecretsHandlers } from "./secrets.js";
 
 async function invokeSecretsReload(params: {
@@ -90,13 +94,13 @@ describe("secrets handlers", () => {
     const resolveSecrets = vi.fn().mockResolvedValue({
       assignments: [
         {
-          path: "talk.providers.elevenlabs.apiKey",
-          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
           value: "sk",
         },
       ],
       diagnostics: ["note"],
-      inactiveRefPaths: ["talk.providers.elevenlabs.apiKey"],
+      inactiveRefPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
     const handlers = createHandlers({ resolveSecrets });
     const respond = vi.fn();
@@ -114,13 +118,13 @@ describe("secrets handlers", () => {
       ok: true,
       assignments: [
         {
-          path: "talk.providers.elevenlabs.apiKey",
-          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
           value: "sk",
         },
       ],
       diagnostics: ["note"],
-      inactiveRefPaths: ["talk.providers.elevenlabs.apiKey"],
+      inactiveRefPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
   });
 
@@ -186,7 +190,7 @@ describe("secrets handlers", () => {
 
   it("returns unavailable when secrets.resolve handler returns an invalid payload shape", async () => {
     const resolveSecrets = vi.fn().mockResolvedValue({
-      assignments: [{ path: "talk.providers.elevenlabs.apiKey", pathSegments: [""], value: "sk" }],
+      assignments: [{ path: TALK_TEST_PROVIDER_API_KEY_PATH, pathSegments: [""], value: "sk" }],
       diagnostics: [],
       inactiveRefPaths: [],
     });

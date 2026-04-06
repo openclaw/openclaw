@@ -11,6 +11,12 @@ export function createOpenAIEmbeddingProviderMock(params: {
   const openAiClient = {
     baseUrl: "https://api.openai.com/v1",
     headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+    fetchImpl: (...args: Parameters<typeof fetch>) => {
+      if (!globalThis.fetch) {
+        throw new Error("fetch is not available");
+      }
+      return globalThis.fetch(...args);
+    },
     model: "text-embedding-3-small",
   };
   return {

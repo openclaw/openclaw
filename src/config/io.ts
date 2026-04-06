@@ -13,6 +13,7 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
+import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
@@ -30,7 +31,6 @@ import {
   readConfigIncludeFileWithGuards,
   resolveConfigIncludes,
 } from "./includes.js";
-import { migrateLegacyConfig } from "./legacy-migrate.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import {
   asResolvedSourceConfig,
@@ -80,6 +80,7 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "OPENROUTER_API_KEY",
   "AI_GATEWAY_API_KEY",
   "MINIMAX_API_KEY",
+  "QWEN_API_KEY",
   "MODELSTUDIO_API_KEY",
   "SYNTHETIC_API_KEY",
   "KILOCODE_API_KEY",
@@ -507,6 +508,21 @@ function createMergePatch(base: unknown, target: unknown): unknown {
     }
   }
   return patch;
+}
+
+function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown): unknown {
+  if (!isPlainObject(source) || !isPlainObject(runtime)) {
+    return cloneUnknown(source);
+  }
+
+  const next: Record<string, unknown> = {};
+  for (const [key, sourceValue] of Object.entries(source)) {
+    if (!(key in runtime)) {
+      continue;
+    }
+    next[key] = projectSourceOntoRuntimeShape(sourceValue, runtime[key]);
+  }
+  return next;
 }
 
 function collectEnvRefPaths(value: unknown, path: string, output: Map<string, string>): void {
@@ -1624,15 +1640,12 @@ function resolveLegacyConfigForRead(
   resolvedConfigRaw: unknown,
   sourceRaw: unknown,
 ): LegacyMigrationResolution {
-  const sourceLegacyIssues = findLegacyConfigIssues(resolvedConfigRaw, sourceRaw);
-  if (sourceLegacyIssues.length === 0) {
-    return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
-  }
-  const migrated = migrateLegacyConfig(resolvedConfigRaw);
-  return {
-    effectiveConfigRaw: migrated.config ?? resolvedConfigRaw,
-    sourceLegacyIssues,
-  };
+  const sourceLegacyIssues = findLegacyConfigIssues(
+    resolvedConfigRaw,
+    sourceRaw,
+    listPluginDoctorLegacyConfigRules(),
+  );
+  return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
 }
 
 type ReadConfigFileSnapshotInternalResult = {
@@ -2085,7 +2098,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     let changedPaths: Set<string> | null = null;
     if (snapshot.valid && snapshot.exists) {
       const patch = createMergePatch(snapshot.config, cfg);
-      persistCandidate = applyMergePatch(snapshot.resolved, patch);
+      const projectedSource = projectSourceOntoRuntimeShape(snapshot.resolved, snapshot.config);
+      persistCandidate = applyMergePatch(projectedSource, patch);
       try {
         const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {
           readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
@@ -2455,8 +2469,11 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   ) {
     return config;
   }
+  const projectedSource = coerceConfig(
+    projectSourceOntoRuntimeShape(runtimeConfigSourceSnapshot, runtimeConfigSnapshot),
+  );
   const runtimePatch = createMergePatch(runtimeConfigSnapshot, config);
-  return coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
+  return coerceConfig(applyMergePatch(projectedSource, runtimePatch));
 }
 
 export function loadConfig(): OpenClawConfig {

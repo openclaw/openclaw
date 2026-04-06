@@ -11,10 +11,10 @@ describe("media-understanding provider registry", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("returns no providers by default when no active registry is present", () => {
+  it("loads bundled providers by default when no active registry is present", () => {
     const registry = buildMediaUnderstandingRegistry();
-    expect(getMediaUnderstandingProvider("groq", registry)).toBeUndefined();
-    expect(getMediaUnderstandingProvider("deepgram", registry)).toBeUndefined();
+    expect(getMediaUnderstandingProvider("groq", registry)?.id).toBe("groq");
+    expect(getMediaUnderstandingProvider("deepgram", registry)?.id).toBe("deepgram");
   });
 
   it("merges plugin-registered media providers into the active registry", async () => {
@@ -81,5 +81,57 @@ describe("media-understanding provider registry", () => {
     expect(glmProvider?.describeImage).toBeDefined();
     expect(glmProvider?.describeImages).toBeDefined();
     expect(textOnlyProvider).toBeUndefined();
+  });
+
+  it("does not override plugin-registered providers when config also has image-capable models", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "google",
+      pluginName: "Google Plugin",
+      source: "test",
+      provider: {
+        id: "google",
+        capabilities: ["image", "audio", "video"],
+        describeImage: async () => ({ text: "plugin image" }),
+        transcribeAudio: async () => ({ text: "plugin audio" }),
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            models: [{ id: "custom-gemini", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as never;
+
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+    const provider = getMediaUnderstandingProvider("google", registry);
+
+    expect(provider?.capabilities).toEqual(["image", "audio", "video"]);
+    expect(await provider?.describeImage?.({} as never)).toEqual({ text: "plugin image" });
+    expect(await provider?.transcribeAudio?.({} as never)).toEqual({ text: "plugin audio" });
+  });
+
+  it("does not auto-register providers with audio or video only inputs", () => {
+    const cfg = {
+      models: {
+        providers: {
+          avOnly: {
+            models: [
+              { id: "audio-model", input: ["text", "audio"] },
+              { id: "video-model", input: ["text", "video"] },
+            ],
+          },
+        },
+      },
+    } as never;
+
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+
+    expect(getMediaUnderstandingProvider("avOnly", registry)).toBeUndefined();
   });
 });

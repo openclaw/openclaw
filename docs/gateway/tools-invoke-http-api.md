@@ -17,14 +17,25 @@ Default max payload size is 2 MB.
 
 ## Authentication
 
-Uses the Gateway auth configuration. Send a bearer token:
+Uses the Gateway auth configuration.
 
-- `Authorization: Bearer <token>`
+Common HTTP auth paths:
+
+- shared-secret auth (`gateway.auth.mode="token"` or `"password"`):
+  `Authorization: Bearer <token-or-password>`
+- trusted identity-bearing HTTP auth (`gateway.auth.mode="trusted-proxy"`):
+  route through the configured identity-aware proxy and let it inject the
+  required identity headers
+- private-ingress open auth (`gateway.auth.mode="none"`):
+  no auth header required
 
 Notes:
 
 - When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
 - When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
+- When `gateway.auth.mode="trusted-proxy"`, the HTTP request must come from a
+  configured non-loopback trusted proxy source; same-host loopback proxies do
+  not satisfy this mode.
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
 
 ## Security boundary (important)
@@ -43,7 +54,9 @@ Auth matrix:
 - `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
   - proves possession of the shared gateway operator secret
   - ignores narrower `x-openclaw-scopes`
-  - restores the full default operator scope set
+  - restores the full default operator scope set:
+    `operator.admin`, `operator.approvals`, `operator.pairing`,
+    `operator.read`, `operator.talk.secrets`, `operator.write`
   - treats direct tool invokes on this endpoint as owner-sender turns
 - trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
   - authenticate some outer trusted identity or deployment boundary

@@ -100,7 +100,7 @@ function createProviderWithModelsConfig(provider: string, models: Array<Record<s
 
 function resolveConfiguredRefForTest(cfg: Partial<OpenClawConfig>) {
   return resolveConfiguredModelRef({
-    cfg: cfg as OpenClawConfig,
+    cfg: cfg,
     defaultProvider: "openai",
     defaultModel: "gpt-5.4",
   });
@@ -222,6 +222,12 @@ describe("model-selection", () => {
         variants: ["openrouter/anthropic/claude-sonnet-4-6"],
         defaultProvider: "openai",
         expected: { provider: "openrouter", model: "anthropic/claude-sonnet-4-6" },
+      },
+      {
+        name: "strips duplicate Hugging Face provider prefixes",
+        variants: ["huggingface/deepseek-ai/DeepSeek-R1"],
+        defaultProvider: "huggingface",
+        expected: { provider: "huggingface", model: "deepseek-ai/DeepSeek-R1" },
       },
       {
         name: "normalizes Vercel Claude shorthand to anthropic-prefixed model ids",
@@ -419,7 +425,7 @@ describe("model-selection", () => {
             "qwen-dashscope": {
               models: [{ id: "qwen-max" }],
             },
-            modelstudio: {
+            qwen: {
               models: [{ id: "qwen-max" }],
             },
           },
@@ -449,7 +455,7 @@ describe("model-selection", () => {
       };
 
       const index = buildModelAliasIndex({
-        cfg: cfg as OpenClawConfig,
+        cfg: cfg,
         defaultProvider: "anthropic",
       });
 
@@ -473,7 +479,11 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
       expect(result.allowedCatalog).toEqual([
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        expect.objectContaining({
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          name: expect.any(String),
+        }),
       ]);
     });
 
@@ -700,6 +710,27 @@ describe("model-selection", () => {
   });
 
   describe("resolveConfiguredModelRef", () => {
+    it("should infer the unique provider from configured models for bare defaults", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "claude-opus-4-6" },
+            models: {
+              "anthropic/claude-opus-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
     it("should fall back to the configured default provider and warn if provider is missing for non-alias", () => {
       setLoggerOverride({ level: "silent", consoleLevel: "warn" });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -713,7 +744,7 @@ describe("model-selection", () => {
         };
 
         const result = resolveConfiguredModelRef({
-          cfg: cfg as OpenClawConfig,
+          cfg: cfg,
           defaultProvider: "google",
           defaultModel: "gemini-pro",
         });
@@ -741,7 +772,7 @@ describe("model-selection", () => {
         };
 
         const result = resolveConfiguredModelRef({
-          cfg: cfg as OpenClawConfig,
+          cfg: cfg,
           defaultProvider: "google",
           defaultModel: "gemini-pro",
         });
@@ -761,10 +792,40 @@ describe("model-selection", () => {
       }
     });
 
+    it("infers a unique configured provider for bare default model strings", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = {
+          agents: {
+            defaults: {
+              model: { primary: "claude-opus-4-6" },
+              models: {
+                "anthropic/claude-opus-4-6": {},
+              },
+            },
+          },
+        } as OpenClawConfig;
+
+        const result = resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+        });
+
+        expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    });
+
     it("should use default provider/model if config is empty", () => {
       const cfg: Partial<OpenClawConfig> = {};
       const result = resolveConfiguredModelRef({
-        cfg: cfg as OpenClawConfig,
+        cfg: cfg,
         defaultProvider: "openai",
         defaultModel: "gpt-4",
       });
@@ -844,7 +905,7 @@ describe("model-selection", () => {
         };
 
         const result = resolveConfiguredModelRef({
-          cfg: cfg as OpenClawConfig,
+          cfg: cfg,
           defaultProvider: "openai",
           defaultModel: "gpt-5.4",
         });

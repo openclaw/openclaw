@@ -414,6 +414,39 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("includes optional poll delivery identifiers in the gateway payload", async () => {
+    mocks.sendPoll.mockResolvedValue({
+      messageId: "poll-rich",
+      channelId: "C123",
+      conversationId: "conv-1",
+      toJid: "jid-1",
+      pollId: "poll-meta-1",
+    });
+
+    const { respond } = await runPoll({
+      to: "channel:C1",
+      question: "Q?",
+      options: ["A", "B"],
+      channel: "slack",
+      idempotencyKey: "idem-poll-rich",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "idem-poll-rich",
+        messageId: "poll-rich",
+        channel: "slack",
+        channelId: "C123",
+        conversationId: "conv-1",
+        toJid: "jid-1",
+        pollId: "poll-meta-1",
+      }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
   it("auto-picks the single configured channel for poll", async () => {
     const { respond } = await runPoll({
       to: "x",
@@ -595,6 +628,74 @@ describe("gateway send mirroring", () => {
       agentId: "work",
       sessionKey: "agent:work:slack:channel:c1",
     });
+  });
+
+  it("still resolves outbound routing metadata when a sessionKey is provided", async () => {
+    mockDeliverySuccess("m-matrix-session-route");
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:main:matrix:channel:!dm:example.org",
+      baseSessionKey: "agent:main:matrix:channel:!dm:example.org",
+      peer: { kind: "channel", id: "!dm:example.org" },
+      chatType: "direct",
+      from: "matrix:@alice:example.org",
+      to: "room:!dm:example.org",
+    });
+
+    await runSend({
+      to: "@alice:example.org",
+      message: "hello",
+      channel: "matrix",
+      sessionKey: "agent:main:matrix:channel:!dm:example.org",
+      idempotencyKey: "idem-matrix-session-route",
+    });
+
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "matrix",
+        target: "resolved",
+        currentSessionKey: "agent:main:matrix:channel:!dm:example.org",
+      }),
+    );
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: expect.objectContaining({
+          sessionKey: "agent:main:matrix:channel:!dm:example.org",
+          baseSessionKey: "agent:main:matrix:channel:!dm:example.org",
+          to: "room:!dm:example.org",
+        }),
+      }),
+    );
+    expectDeliverySessionMirror({
+      agentId: "main",
+      sessionKey: "agent:main:matrix:channel:!dm:example.org",
+    });
+  });
+
+  it("falls back to the provided sessionKey when outbound route lookup returns null", async () => {
+    mockDeliverySuccess("m-session-fallback");
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      sessionKey: "agent:work:slack:channel:c1",
+      idempotencyKey: "idem-session-fallback",
+    });
+
+    expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:slack:channel:c1",
+        }),
+        mirror: expect.objectContaining({
+          sessionKey: "agent:work:slack:channel:c1",
+          agentId: "work",
+        }),
+      }),
+    );
   });
 
   it("prefers explicit agentId over sessionKey agent for delivery and mirror", async () => {

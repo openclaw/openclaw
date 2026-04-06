@@ -117,4 +117,35 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.contextTokens).toBeUndefined();
     expect((entry.updatedAt ?? 0) > before).toBe(true);
   });
+
+  it("sets liveModelSwitchPending only when explicitly requested", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-5",
+      updatedAt: Date.now() - 5_000,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+    };
+
+    const withoutFlag = applyModelOverrideToSessionEntry({
+      entry: { ...entry },
+      selection: {
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+    });
+    expect(withoutFlag.updated).toBe(true);
+    expect(entry.liveModelSwitchPending).toBeUndefined();
+
+    const withFlagEntry: SessionEntry = { ...entry };
+    const withFlag = applyModelOverrideToSessionEntry({
+      entry: withFlagEntry,
+      selection: {
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+      markLiveSwitchPending: true,
+    });
+    expect(withFlag.updated).toBe(true);
+    expect(withFlagEntry.liveModelSwitchPending).toBe(true);
+  });
 });

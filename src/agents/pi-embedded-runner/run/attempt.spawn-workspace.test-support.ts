@@ -34,6 +34,8 @@ type SessionManagerMocks = {
   resetLeaf: UnknownMock;
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
   appendCustomEntry: UnknownMock;
+  flushPendingToolResults: UnknownMock;
+  clearPendingToolResults: UnknownMock;
 };
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
@@ -46,6 +48,8 @@ type AttemptSpawnWorkspaceHoisted = {
   flushPendingToolResultsAfterIdleMock: AsyncUnknownMock;
   releaseWsSessionMock: UnknownMock;
   resolveBootstrapContextForRunMock: Mock<() => Promise<BootstrapContext>>;
+  resolveContextInjectionModeMock: Mock<() => "always" | "continuation-skip">;
+  hasCompletedBootstrapTurnMock: Mock<() => Promise<boolean>>;
   getGlobalHookRunnerMock: Mock<() => unknown>;
   initializeGlobalHookRunnerMock: UnknownMock;
   runContextEngineMaintenanceMock: AsyncUnknownMock;
@@ -76,6 +80,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
         getLastToolError: () => undefined,
         getUsageTotals: () => undefined,
         getCompactionCount: () => 0,
+        getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
         isCompacting: () => false,
         isCompactionInFlight: () => false,
       }) satisfies SubscriptionMock,
@@ -87,6 +92,10 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     bootstrapFiles: [],
     contextFiles: [],
   }));
+  const resolveContextInjectionModeMock = vi.fn<() => "always" | "continuation-skip">(
+    () => "always",
+  );
+  const hasCompletedBootstrapTurnMock = vi.fn<() => Promise<boolean>>(async () => false);
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
   const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
@@ -96,6 +105,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     resetLeaf: vi.fn(),
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
     appendCustomEntry: vi.fn(),
+    flushPendingToolResults: vi.fn(),
+    clearPendingToolResults: vi.fn(),
   };
   return {
     spawnSubagentDirectMock,
@@ -108,6 +119,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     flushPendingToolResultsAfterIdleMock,
     releaseWsSessionMock,
     resolveBootstrapContextForRunMock,
+    resolveContextInjectionModeMock,
+    hasCompletedBootstrapTurnMock,
     getGlobalHookRunnerMock,
     initializeGlobalHookRunnerMock,
     runContextEngineMaintenanceMock,
@@ -172,6 +185,8 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
 vi.mock("../../bootstrap-files.js", () => ({
   makeBootstrapWarn: () => () => {},
   resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+  resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
+  hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,
 }));
 
 vi.mock("../../skills.js", () => ({
@@ -496,15 +511,6 @@ vi.mock("./history-image-prune.js", () => ({
   pruneProcessedHistoryImages: <T>(messages: T) => messages,
 }));
 
-let runEmbeddedAttemptPromise:
-  | Promise<typeof import("./attempt.js").runEmbeddedAttempt>
-  | undefined;
-
-async function loadRunEmbeddedAttempt() {
-  runEmbeddedAttemptPromise ??= import("./attempt.js").then((mod) => mod.runEmbeddedAttempt);
-  return await runEmbeddedAttemptPromise;
-}
-
 export type MutableSession = {
   sessionId: string;
   messages: unknown[];
@@ -512,7 +518,11 @@ export type MutableSession = {
   isStreaming: boolean;
   agent: {
     streamFn?: unknown;
-    replaceMessages: (messages: unknown[]) => void;
+    transport?: string;
+    state: {
+      messages: unknown[];
+      systemPrompt?: string;
+    };
   };
   prompt: (prompt: string, options?: { images?: unknown[] }) => Promise<void>;
   abort: () => Promise<void>;
@@ -535,9 +545,22 @@ export function createSubscriptionMock(): SubscriptionMock {
     getLastToolError: () => undefined,
     getUsageTotals: () => undefined,
     getCompactionCount: () => 0,
+    getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
     isCompacting: () => false,
     isCompactionInFlight: () => false,
   };
+}
+
+let runEmbeddedAttemptPromise:
+  | Promise<typeof import("./attempt.js").runEmbeddedAttempt>
+  | undefined;
+const ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER = "./attempt.ts?spawn-workspace-test";
+
+async function loadRunEmbeddedAttempt() {
+  runEmbeddedAttemptPromise ??= (
+    import(ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER) as Promise<typeof import("./attempt.js")>
+  ).then((mod) => mod.runEmbeddedAttempt);
+  return await runEmbeddedAttemptPromise;
 }
 
 export function resetEmbeddedAttemptHarness(
@@ -572,6 +595,8 @@ export function resetEmbeddedAttemptHarness(
     bootstrapFiles: [],
     contextFiles: [],
   });
+  hoisted.resolveContextInjectionModeMock.mockReset().mockReturnValue("always");
+  hoisted.hasCompletedBootstrapTurnMock.mockReset().mockResolvedValue(false);
   hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
@@ -608,8 +633,13 @@ export function createDefaultEmbeddedSession(params?: {
     isCompacting: false,
     isStreaming: false,
     agent: {
-      replaceMessages: (messages: unknown[]) => {
-        session.messages = [...messages];
+      state: {
+        get messages() {
+          return session.messages;
+        },
+        set messages(messages: unknown[]) {
+          session.messages = [...messages];
+        },
       },
     },
     prompt: async (prompt, options) => {
@@ -665,6 +695,10 @@ export const cacheTtlEligibleModel = {
   contextWindow: 8192,
   input: ["text"],
 } as unknown as Model<Api>;
+
+const testAuthStorage = {
+  getApiKey: async () => undefined,
+};
 
 export async function createContextEngineAttemptRunner(params: {
   contextEngine: {
@@ -756,8 +790,9 @@ export async function createContextEngineAttemptRunner(params: {
     session: createDefaultEmbeddedSession(),
   }));
 
-  const runEmbeddedAttempt = await loadRunEmbeddedAttempt();
-  return await runEmbeddedAttempt({
+  return await (
+    await loadRunEmbeddedAttempt()
+  )({
     sessionId: "embedded-session",
     sessionKey: params.sessionKey,
     sessionFile,
@@ -770,7 +805,7 @@ export async function createContextEngineAttemptRunner(params: {
     provider: "openai",
     modelId: "gpt-test",
     model: testModel,
-    authStorage: {} as never,
+    authStorage: testAuthStorage as never,
     modelRegistry: {} as never,
     thinkLevel: "off",
     senderIsOwner: true,

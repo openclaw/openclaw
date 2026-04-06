@@ -36,9 +36,15 @@ import {
 } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel, ProviderTransportTurnState } from "../plugins/types.js";
 import {
+  encodeAssistantTextSignature,
+  normalizeAssistantPhase,
+} from "../shared/chat-message-content.js";
+import { resolveOpenAIStrictToolSetting } from "./openai-tool-schema.js";
+import {
   getOpenAIWebSocketErrorDetails,
   OpenAIWebSocketManager,
   type FunctionToolDefinition,
+  type OpenAIResponsesAssistantPhase,
   type OpenAIWebSocketManagerOptions,
 } from "./openai-ws-connection.js";
 import {
@@ -49,6 +55,7 @@ import {
 } from "./openai-ws-message-conversion.js";
 import { buildOpenAIWebSocketResponseCreatePayload } from "./openai-ws-request.js";
 import { log } from "./pi-embedded-runner/logger.js";
+import { normalizeProviderId } from "./provider-id.js";
 import { createBoundaryAwareStreamFnForModel } from "./provider-transport-stream.js";
 import {
   buildAssistantMessageWithZeroUsage,
@@ -76,6 +83,18 @@ interface WsSession {
   degradeCooldownMs: number;
 }
 
+function resolveOpenAIWebSocketStrictToolSetting(
+  model: Parameters<StreamFn>[0],
+): boolean | undefined {
+  return resolveOpenAIStrictToolSetting(model, {
+    transport: "websocket",
+    supportsStrictMode:
+      model.compat && typeof model.compat === "object"
+        ? (model.compat as { supportsStrictMode?: boolean }).supportsStrictMode
+        : undefined,
+  });
+}
+
 /** Module-level registry: sessionId → WsSession */
 const wsRegistry = new Map<string, WsSession>();
 
@@ -84,6 +103,8 @@ type OpenAIWsStreamDeps = {
   createHttpFallbackStreamFn: (model: ProviderRuntimeModel) => StreamFn | undefined;
   streamSimple: typeof piAi.streamSimple;
 };
+
+type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
 
 const defaultOpenAIWsStreamDeps: OpenAIWsStreamDeps = {
   createManager: (options) => new OpenAIWebSocketManager(options),
@@ -314,6 +335,119 @@ function createWsManager(
   });
 }
 
+const AZURE_OPENAI_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
+const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+
+function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const url = new URL(trimmed);
+    return (
+      url.protocol === "https:" &&
+      url.hostname.toLowerCase() === "api.openai.com" &&
+      /^\/v1\/?$/u.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^https?:\/\/chatgpt\.com\/backend-api\/?$/iu.test(trimmed);
+}
+
+function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    return new URL(trimmed).hostname.toLowerCase().endsWith(".openai.azure.com");
+  } catch {
+    return false;
+  }
+}
+
+function normalizeTransportIdentityValue(value: string, maxLength = 160): string {
+  const trimmed = value.trim().replace(/[\r\n]+/gu, " ");
+  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+}
+
+function usesNativeOpenAIRoute(provider: string, baseUrl?: string): boolean {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!normalizedProvider) {
+    return false;
+  }
+  if (normalizedProvider === "openai") {
+    return !baseUrl || isOpenAIApiBaseUrl(baseUrl);
+  }
+  if (AZURE_OPENAI_PROVIDER_IDS.has(normalizedProvider)) {
+    return !baseUrl || isAzureOpenAIBaseUrl(baseUrl);
+  }
+  if (normalizedProvider === OPENAI_CODEX_PROVIDER_ID) {
+    return !baseUrl || isOpenAIApiBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl);
+  }
+  return false;
+}
+
+function resolveNativeOpenAISessionHeaders(params: {
+  provider: string;
+  baseUrl?: string;
+  sessionId?: string;
+}): Record<string, string> | undefined {
+  if (!params.sessionId || !usesNativeOpenAIRoute(params.provider, params.baseUrl)) {
+    return undefined;
+  }
+  const sessionId = normalizeTransportIdentityValue(params.sessionId);
+  if (!sessionId) {
+    return undefined;
+  }
+  return {
+    "x-client-request-id": sessionId,
+    "x-openclaw-session-id": sessionId,
+  };
+}
+
+function resolveNativeOpenAITransportTurnState(params: {
+  provider: string;
+  baseUrl?: string;
+  sessionId?: string;
+  turnId: string;
+  attempt: number;
+  transport: "stream" | "websocket";
+}): ProviderTransportTurnState | undefined {
+  const sessionHeaders = resolveNativeOpenAISessionHeaders({
+    provider: params.provider,
+    baseUrl: params.baseUrl,
+    sessionId: params.sessionId,
+  });
+  if (!sessionHeaders) {
+    return undefined;
+  }
+  const turnId = normalizeTransportIdentityValue(params.turnId);
+  const attempt = String(Math.max(1, params.attempt));
+  return {
+    headers: {
+      ...sessionHeaders,
+      "x-openclaw-turn-id": turnId,
+      "x-openclaw-turn-attempt": attempt,
+    },
+    metadata: {
+      openclaw_session_id: sessionHeaders["x-openclaw-session-id"] ?? "",
+      openclaw_turn_id: turnId,
+      openclaw_turn_attempt: attempt,
+      openclaw_transport: params.transport,
+    },
+  };
+}
+
 function resolveProviderTransportTurnState(
   model: Parameters<StreamFn>[0],
   params: {
@@ -323,24 +457,46 @@ function resolveProviderTransportTurnState(
     transport: "stream" | "websocket";
   },
 ): ProviderTransportTurnState | undefined {
-  return resolveProviderTransportTurnStateWithPlugin({
-    provider: model.provider,
-    context: {
+  if (usesNativeOpenAIRoute(model.provider, (model as { baseUrl?: string }).baseUrl)) {
+    return resolveNativeOpenAITransportTurnState({
       provider: model.provider,
-      modelId: model.id,
-      model: model as ProviderRuntimeModel,
+      baseUrl: (model as { baseUrl?: string }).baseUrl,
       sessionId: params.sessionId,
       turnId: params.turnId,
       attempt: params.attempt,
       transport: params.transport,
-    },
-  });
+    });
+  }
+  return (
+    resolveProviderTransportTurnStateWithPlugin({
+      provider: model.provider,
+      context: {
+        provider: model.provider,
+        modelId: model.id,
+        model: model as ProviderRuntimeModel,
+        sessionId: params.sessionId,
+        turnId: params.turnId,
+        attempt: params.attempt,
+        transport: params.transport,
+      },
+    }) ?? undefined
+  );
 }
 
 function resolveWebSocketSessionPolicy(
   model: Parameters<StreamFn>[0],
   sessionId: string,
 ): { headers?: Record<string, string>; degradeCooldownMs: number } {
+  if (usesNativeOpenAIRoute(model.provider, (model as { baseUrl?: string }).baseUrl)) {
+    return {
+      headers: resolveNativeOpenAISessionHeaders({
+        provider: model.provider,
+        baseUrl: (model as { baseUrl?: string }).baseUrl,
+        sessionId,
+      }),
+      degradeCooldownMs: Math.max(0, wsDegradeCooldownMsOverride ?? DEFAULT_WS_DEGRADE_COOLDOWN_MS),
+    };
+  }
   const policy = resolveProviderWebSocketSessionPolicyWithPlugin({
     provider: model.provider,
     context: {
@@ -593,7 +749,9 @@ export function createOpenAIWebSocketStreamFn(
             await runWarmUp({
               manager: session.manager,
               modelId: model.id,
-              tools: convertTools(context.tools),
+              tools: convertTools(context.tools, {
+                strict: resolveOpenAIWebSocketStrictToolSetting(model),
+              }),
               instructions: context.systemPrompt
                 ? stripSystemPromptCacheBoundary(context.systemPrompt)
                 : undefined,
@@ -688,10 +846,12 @@ export function createOpenAIWebSocketStreamFn(
           context,
           options: options as WsOptions | undefined,
           turnInput,
-          tools: convertTools(context.tools),
+          tools: convertTools(context.tools, {
+            strict: resolveOpenAIWebSocketStrictToolSetting(model),
+          }),
           metadata: turnState?.metadata,
         }) as Record<string, unknown>;
-        const nextPayload = options?.onPayload?.(payload, model);
+        const nextPayload = await options?.onPayload?.(payload, model);
         payload = mergeTransportMetadata(
           (nextPayload ?? payload) as Record<string, unknown>,
           turnState?.metadata,
@@ -752,12 +912,77 @@ export function createOpenAIWebSocketStreamFn(
           emittedStart = true;
         }
 
+        const outputItemPhaseById = new Map<string, OpenAIResponsesAssistantPhase | undefined>();
+        const outputTextByPart = new Map<string, string>();
+        const emittedTextByPart = new Map<string, string>();
+        const getOutputTextKey = (itemId: string, contentIndex: number) =>
+          `${itemId}:${contentIndex}`;
+        const emitTextDelta = (params: {
+          fullText: string;
+          deltaText: string;
+          itemId?: string;
+          contentIndex?: number;
+        }) => {
+          const resolvedItemId = params.itemId;
+          const contentIndex = params.contentIndex ?? 0;
+          const itemPhase = resolvedItemId
+            ? normalizeAssistantPhase(outputItemPhaseById.get(resolvedItemId))
+            : undefined;
+          const partialBase = buildAssistantMessageWithZeroUsage({
+            model,
+            content: [
+              {
+                type: "text",
+                text: params.fullText,
+                ...(resolvedItemId
+                  ? {
+                      textSignature: encodeAssistantTextSignature({
+                        id: resolvedItemId,
+                        ...(itemPhase ? { phase: itemPhase } : {}),
+                      }),
+                    }
+                  : {}),
+              },
+            ],
+            stopReason: "stop",
+          });
+          const partialMsg: AssistantMessageWithPhase = itemPhase
+            ? ({ ...partialBase, phase: itemPhase } as AssistantMessageWithPhase)
+            : partialBase;
+          eventStream.push({
+            type: "text_delta",
+            contentIndex,
+            delta: params.deltaText,
+            partial: partialMsg,
+          });
+        };
+        const emitBufferedTextDelta = (params: { itemId: string; contentIndex: number }) => {
+          const key = getOutputTextKey(params.itemId, params.contentIndex);
+          const fullText = outputTextByPart.get(key) ?? "";
+          const emittedText = emittedTextByPart.get(key) ?? "";
+          if (!fullText || fullText === emittedText) {
+            return;
+          }
+          const deltaText = fullText.startsWith(emittedText)
+            ? fullText.slice(emittedText.length)
+            : fullText;
+          emittedTextByPart.set(key, fullText);
+          emitTextDelta({
+            fullText,
+            deltaText,
+            itemId: params.itemId,
+            contentIndex: params.contentIndex,
+          });
+        };
         const capturedContextLength = context.messages.length;
         let sawWsOutput = false;
 
         try {
           await new Promise<void>((resolve, reject) => {
             const abortHandler = () => {
+              outputItemPhaseById.clear();
+              outputTextByPart.clear();
+              emittedTextByPart.clear();
               cleanup();
               reject(new Error("aborted"));
             };
@@ -768,6 +993,9 @@ export function createOpenAIWebSocketStreamFn(
             signal?.addEventListener("abort", abortHandler, { once: true });
 
             const closeHandler = (code: number, reason: string) => {
+              outputItemPhaseById.clear();
+              outputTextByPart.clear();
+              emittedTextByPart.clear();
               cleanup();
               const closeInfo = session.manager.lastCloseInfo;
               reject(
@@ -804,7 +1032,60 @@ export function createOpenAIWebSocketStreamFn(
                 sawWsOutput = true;
               }
 
+              if (
+                event.type === "response.output_item.added" ||
+                event.type === "response.output_item.done"
+              ) {
+                if (typeof event.item.id === "string") {
+                  const itemPhase =
+                    event.item.type === "message"
+                      ? normalizeAssistantPhase((event.item as { phase?: unknown }).phase)
+                      : undefined;
+                  outputItemPhaseById.set(event.item.id, itemPhase);
+                  for (const key of outputTextByPart.keys()) {
+                    if (key.startsWith(`${event.item.id}:`)) {
+                      const [, contentIndexText] = key.split(":");
+                      emitBufferedTextDelta({
+                        itemId: event.item.id,
+                        contentIndex: Number.parseInt(contentIndexText ?? "0", 10) || 0,
+                      });
+                    }
+                  }
+                }
+                return;
+              }
+
+              if (event.type === "response.output_text.delta") {
+                const key = getOutputTextKey(event.item_id, event.content_index);
+                const nextText = `${outputTextByPart.get(key) ?? ""}${event.delta}`;
+                outputTextByPart.set(key, nextText);
+                if (outputItemPhaseById.has(event.item_id)) {
+                  emitBufferedTextDelta({
+                    itemId: event.item_id,
+                    contentIndex: event.content_index,
+                  });
+                }
+                return;
+              }
+
+              if (event.type === "response.output_text.done") {
+                const key = getOutputTextKey(event.item_id, event.content_index);
+                if (event.text && event.text !== outputTextByPart.get(key)) {
+                  outputTextByPart.set(key, event.text);
+                }
+                if (outputItemPhaseById.has(event.item_id)) {
+                  emitBufferedTextDelta({
+                    itemId: event.item_id,
+                    contentIndex: event.content_index,
+                  });
+                }
+                return;
+              }
+
               if (event.type === "response.completed") {
+                outputItemPhaseById.clear();
+                outputTextByPart.clear();
+                emittedTextByPart.clear();
                 cleanup();
                 session.lastContextLength = capturedContextLength;
                 const assistantMsg = buildAssistantMessageFromResponse(event.response, {
@@ -817,6 +1098,9 @@ export function createOpenAIWebSocketStreamFn(
                 eventStream.push({ type: "done", reason, message: assistantMsg });
                 resolve();
               } else if (event.type === "response.failed") {
+                outputItemPhaseById.clear();
+                outputTextByPart.clear();
+                emittedTextByPart.clear();
                 cleanup();
                 reject(
                   new OpenAIWebSocketRuntimeError(
@@ -828,6 +1112,9 @@ export function createOpenAIWebSocketStreamFn(
                   ),
                 );
               } else if (event.type === "error") {
+                outputItemPhaseById.clear();
+                outputTextByPart.clear();
+                emittedTextByPart.clear();
                 cleanup();
                 reject(
                   new OpenAIWebSocketRuntimeError(
@@ -838,18 +1125,6 @@ export function createOpenAIWebSocketStreamFn(
                     },
                   ),
                 );
-              } else if (event.type === "response.output_text.delta") {
-                const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
-                  model,
-                  content: [{ type: "text", text: event.delta }],
-                  stopReason: "stop",
-                });
-                eventStream.push({
-                  type: "text_delta",
-                  contentIndex: 0,
-                  delta: event.delta,
-                  partial: partialMsg,
-                });
               }
             });
           });

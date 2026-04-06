@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import plugin from "./index.js";
 
@@ -18,15 +18,26 @@ const promptAndConfigureOllamaMock = vi.hoisted(() =>
   })),
 );
 const ensureOllamaModelPulledMock = vi.hoisted(() => vi.fn(async () => {}));
+const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./api.js", () => ({
   promptAndConfigureOllama: promptAndConfigureOllamaMock,
   ensureOllamaModelPulled: ensureOllamaModelPulledMock,
   configureOllamaNonInteractive: vi.fn(),
-  buildOllamaProvider: vi.fn(),
+  buildOllamaProvider: buildOllamaProviderMock,
 }));
 
+beforeEach(() => {
+  promptAndConfigureOllamaMock.mockClear();
+  ensureOllamaModelPulledMock.mockClear();
+  buildOllamaProviderMock.mockReset();
+});
+
 function registerProvider() {
+  return registerProviderWithPluginConfig({});
+}
+
+function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>) {
   const registerProviderMock = vi.fn();
 
   plugin.register(
@@ -35,6 +46,7 @@ function registerProvider() {
       name: "Ollama",
       source: "test",
       config: {},
+      pluginConfig,
       runtime: {} as never,
       registerProvider: registerProviderMock,
     }),
@@ -100,6 +112,19 @@ describe("ollama plugin", () => {
       model: "ollama/glm-4.7-flash",
       prompter,
     });
+  });
+
+  it("skips ambient discovery when plugin discovery is disabled", async () => {
+    const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
+
+    const result = await provider.discovery.run({
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: "", discoveryApiKey: "" }),
+    } as never);
+
+    expect(result).toBeNull();
+    expect(buildOllamaProviderMock).not.toHaveBeenCalled();
   });
 
   it("wraps OpenAI-compatible payloads with num_ctx for Ollama compat routes", () => {

@@ -1,10 +1,12 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicPayloadPolicyToParams,
+  composeProviderStreamWrappers,
   resolveAnthropicPayloadPolicy,
   streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 
 const log = createSubsystemLogger("anthropic-stream");
@@ -150,6 +152,10 @@ export function createAnthropicFastModeWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   const serviceTier = resolveAnthropicFastServiceTier(enabled);
   return (model, context, options) => {
+    if (isAnthropicOAuthApiKey(options?.apiKey)) {
+      return underlying(model, context, options);
+    }
+
     const payloadPolicy = resolveAnthropicPayloadPolicy({
       provider: typeof model.provider === "string" ? model.provider : undefined,
       api: typeof model.api === "string" ? model.api : undefined,
@@ -172,6 +178,10 @@ export function createAnthropicServiceTierWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    if (isAnthropicOAuthApiKey(options?.apiKey)) {
+      return underlying(model, context, options);
+    }
+
     const payloadPolicy = resolveAnthropicPayloadPolicy({
       provider: typeof model.provider === "string" ? model.provider : undefined,
       api: typeof model.api === "string" ? model.api : undefined,
@@ -206,6 +216,26 @@ export function resolveAnthropicServiceTier(
     log.warn(`ignoring invalid Anthropic service tier param: ${rawSummary}`);
   }
   return normalized;
+}
+
+export function wrapAnthropicProviderStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
+  const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
+  const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
+  const fastMode = resolveAnthropicFastMode(ctx.extraParams);
+  return composeProviderStreamWrappers(
+    ctx.streamFn,
+    anthropicBetas?.length
+      ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas)
+      : undefined,
+    serviceTier
+      ? (streamFn) => createAnthropicServiceTierWrapper(streamFn, serviceTier)
+      : undefined,
+    fastMode !== undefined
+      ? (streamFn) => createAnthropicFastModeWrapper(streamFn, fastMode)
+      : undefined,
+  );
 }
 
 export const __testing = { log };

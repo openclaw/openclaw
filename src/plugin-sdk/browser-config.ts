@@ -6,14 +6,11 @@ export {
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
   DEFAULT_UPLOAD_DIR,
-  parseBrowserHttpUrl,
-  redactCdpUrl,
   resolveBrowserConfig,
-  resolveBrowserControlAuth,
   resolveProfile,
-} from "../../extensions/browser/browser-config.js";
-export type {
-  BrowserControlAuth,
-  ResolvedBrowserConfig,
-  ResolvedBrowserProfile,
-} from "../../extensions/browser/browser-config.js";
+  type ResolvedBrowserConfig,
+  type ResolvedBrowserProfile,
+} from "./browser-profiles.js";
+export { parseBrowserHttpUrl, redactCdpUrl } from "./browser-cdp.js";
+export { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./browser-control-auth.js";
+export type { BrowserControlAuth } from "./browser-control-auth.js";

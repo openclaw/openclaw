@@ -28,6 +28,7 @@ import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestContracts } from "./manifest.js";
 import {
   clearMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviders,
@@ -38,6 +39,8 @@ import {
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
   getMemoryRuntime,
+  listMemoryCorpusSupplements,
+  listMemoryPromptSupplements,
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
@@ -128,9 +131,11 @@ export class PluginLoadFailureError extends Error {
 
 type CachedPluginState = {
   registry: PluginRegistry;
+  memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
   memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
+  memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
   memoryRuntime: ReturnType<typeof getMemoryRuntime>;
 };
 
@@ -565,6 +570,7 @@ function createPluginRecord(params: {
   enabled: boolean;
   activationState?: PluginActivationState;
   configSchema: boolean;
+  contracts?: PluginManifestContracts;
 }): PluginRecord {
   return {
     id: params.id,
@@ -587,15 +593,17 @@ function createPluginRecord(params: {
     toolNames: [],
     hookNames: [],
     channelIds: [],
-    cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    memoryEmbeddingProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
@@ -605,6 +613,7 @@ function createPluginRecord(params: {
     configSchema: params.configSchema,
     configUiHints: undefined,
     configJsonSchema: undefined,
+    contracts: params.contracts,
   };
 }
 
@@ -871,12 +880,16 @@ function compareDuplicateCandidateOrder(params: {
 }
 
 function warnWhenAllowlistIsOpen(params: {
+  emitWarning: boolean;
   logger: PluginLogger;
   pluginsEnabled: boolean;
   allow: string[];
   warningCacheKey: string;
   discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
 }) {
+  if (!params.emitWarning) {
+    return;
+  }
   if (!params.pluginsEnabled) {
     return;
   }
@@ -907,6 +920,7 @@ function warnAboutUntrackedLoadedPlugins(params: {
   registry: PluginRegistry;
   provenance: PluginProvenanceIndex;
   allowlist: string[];
+  emitWarning: boolean;
   logger: PluginLogger;
   env: NodeJS.ProcessEnv;
 }) {
@@ -936,7 +950,9 @@ function warnAboutUntrackedLoadedPlugins(params: {
       source: plugin.source,
       message,
     });
-    params.logger.warn(`[plugins] ${plugin.id}: ${message} (${plugin.source})`);
+    if (params.emitWarning) {
+      params.logger.warn(`[plugins] ${plugin.id}: ${message} (${plugin.source})`);
+    }
   }
 }
 
@@ -944,8 +960,9 @@ function activatePluginRegistry(
   registry: PluginRegistry,
   cacheKey: string,
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
+  workspaceDir?: string,
 ): void {
-  setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode);
+  setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
   initializeGlobalHookRunner(registry);
 }
 
@@ -980,12 +997,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (cached) {
       restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
       restoreMemoryPluginState({
+        corpusSupplements: cached.memoryCorpusSupplements,
         promptBuilder: cached.memoryPromptBuilder,
+        promptSupplements: cached.memoryPromptSupplements,
         flushPlanResolver: cached.memoryFlushPlanResolver,
         runtime: cached.memoryRuntime,
       });
       if (shouldActivate) {
-        activatePluginRegistry(cached.registry, cacheKey, runtimeSubagentMode);
+        activatePluginRegistry(
+          cached.registry,
+          cacheKey,
+          runtimeSubagentMode,
+          options.workspaceDir,
+        );
       }
       return cached.registry;
     }
@@ -1076,7 +1100,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     },
   });
 
-  const { registry, createApi } = createPluginRegistry({
+  const {
+    registry,
+    createApi,
+    registerReload,
+    registerNodeHostCommand,
+    registerSecurityAuditCollector,
+  } = createPluginRegistry({
     logger,
     runtime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
@@ -1099,6 +1129,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   });
   pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({
+    emitWarning: shouldActivate,
     logger,
     pluginsEnabled: normalized.enabled,
     allow: normalized.allow,
@@ -1178,6 +1209,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         enabled: false,
         activationState,
         configSchema: Boolean(manifestRecord.configSchema),
+        contracts: manifestRecord.contracts,
       });
       record.status = "disabled";
       record.error = `overridden by ${existingOrigin} plugin`;
@@ -1210,6 +1242,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       enabled: enableState.enabled,
       activationState,
       configSchema: Boolean(manifestRecord.configSchema),
+      contracts: manifestRecord.contracts,
     });
     record.kind = manifestRecord.kind;
     record.configUiHints = manifestRecord.configUiHints;
@@ -1516,6 +1549,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
     }
 
+    if (registrationMode === "full") {
+      if (definition?.reload) {
+        registerReload(record, definition.reload);
+      }
+      for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
+        registerNodeHostCommand(record, nodeHostCommand);
+      }
+      for (const collector of definition?.securityAuditCollectors ?? []) {
+        registerSecurityAuditCollector(record, collector);
+      }
+    }
+
     if (validateOnly) {
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
@@ -1537,6 +1582,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
     const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
     const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
+    const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
+    const previousMemoryPromptSupplements = listMemoryPromptSupplements();
     const previousMemoryRuntime = getMemoryRuntime();
 
     try {
@@ -1553,7 +1600,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       if (!shouldActivate) {
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
+          corpusSupplements: previousMemoryCorpusSupplements,
           promptBuilder: previousMemoryPromptBuilder,
+          promptSupplements: previousMemoryPromptSupplements,
           flushPlanResolver: previousMemoryFlushPlanResolver,
           runtime: previousMemoryRuntime,
         });
@@ -1563,7 +1612,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     } catch (err) {
       restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
       restoreMemoryPluginState({
+        corpusSupplements: previousMemoryCorpusSupplements,
         promptBuilder: previousMemoryPromptBuilder,
+        promptSupplements: previousMemoryPromptSupplements,
         flushPlanResolver: previousMemoryFlushPlanResolver,
         runtime: previousMemoryRuntime,
       });
@@ -1595,6 +1646,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     registry,
     provenance,
     allowlist: normalized.allow,
+    emitWarning: shouldActivate,
     logger,
     env,
   });
@@ -1614,15 +1666,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, {
+      memoryCorpusSupplements: listMemoryCorpusSupplements(),
       registry,
       memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
       memoryFlushPlanResolver: getMemoryFlushPlanResolver(),
       memoryPromptBuilder: getMemoryPromptSectionBuilder(),
+      memoryPromptSupplements: listMemoryPromptSupplements(),
       memoryRuntime: getMemoryRuntime(),
     });
   }
   if (shouldActivate) {
-    activatePluginRegistry(registry, cacheKey, runtimeSubagentMode);
+    activatePluginRegistry(registry, cacheKey, runtimeSubagentMode, options.workspaceDir);
   }
   return registry;
 }
@@ -1662,6 +1716,7 @@ export async function loadOpenClawPluginCliRegistry(
   });
   pushDiagnostics(registry.diagnostics, manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({
+    emitWarning: false,
     logger,
     pluginsEnabled: normalized.enabled,
     allow: normalized.allow,
@@ -1736,6 +1791,7 @@ export async function loadOpenClawPluginCliRegistry(
         enabled: false,
         activationState,
         configSchema: Boolean(manifestRecord.configSchema),
+        contracts: manifestRecord.contracts,
       });
       record.status = "disabled";
       record.error = `overridden by ${existingOrigin} plugin`;
@@ -1768,6 +1824,7 @@ export async function loadOpenClawPluginCliRegistry(
       enabled: enableState.enabled,
       activationState,
       configSchema: Boolean(manifestRecord.configSchema),
+      contracts: manifestRecord.contracts,
     });
     record.kind = manifestRecord.kind;
     record.configUiHints = manifestRecord.configUiHints;

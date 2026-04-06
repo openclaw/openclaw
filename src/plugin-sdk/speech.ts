@@ -1,12 +1,10 @@
 import { rmSync } from "node:fs";
-import type { OpenClawConfig } from "../config/config.js";
-import type { ResolvedTtsConfig } from "../tts/tts.js";
 
 // Public speech helpers for bundled or third-party plugins.
 //
-// Keep this surface neutral and import-light. Provider builders commonly import
-// this module just to get types and a few validation helpers, so avoid pulling
-// in the heavy TTS runtime graph at module load time.
+// Keep this surface provider-facing: types, validation, directive parsing, and
+// registry helpers. Runtime synthesis lives on `api.runtime.tts` or narrower
+// core/runtime seams, not here.
 
 export type { SpeechProviderPlugin } from "../plugins/types.js";
 export type {
@@ -97,15 +95,4 @@ export function scheduleCleanup(
     }
   }, delayMs);
   timer.unref();
-}
-
-export async function summarizeText(params: {
-  text: string;
-  targetLength: number;
-  cfg: OpenClawConfig;
-  config: ResolvedTtsConfig;
-  timeoutMs: number;
-}) {
-  const { summarizeText: summarizeTextRuntime } = await import("../tts/tts-core.js");
-  return summarizeTextRuntime(params);
 }

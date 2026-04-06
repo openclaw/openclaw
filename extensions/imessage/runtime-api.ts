@@ -29,6 +29,7 @@ export type { MonitorIMessageOpts } from "./src/monitor.js";
 export { probeIMessage } from "./src/probe.js";
 export type { IMessageProbe } from "./src/probe.js";
 export { sendMessageIMessage } from "./src/send.js";
+export { setIMessageRuntime } from "./src/runtime.js";
 export { chunkTextForOutbound } from "./src/channel-api.js";
 
 export type IMessageAccountConfig = Omit<

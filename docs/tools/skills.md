@@ -93,7 +93,7 @@ tool surface those skills teach.
 ## ClawHub (install + sync)
 
 ClawHub is the public skills registry for OpenClaw. Browse at
-[https://clawhub.com](https://clawhub.com). Use native `openclaw skills`
+[https://clawhub.ai](https://clawhub.ai). Use native `openclaw skills`
 commands to discover/install/update skills, or the separate `clawhub` CLI when
 you need publish/sync workflows.
 Full guide: [ClawHub](/tools/clawhub).
@@ -228,6 +228,12 @@ Notes:
 - Node installs honor `skills.install.nodeManager` in `openclaw.json` (default: npm; options: npm/pnpm/yarn/bun).
   This only affects **skill installs**; the Gateway runtime should still be Node
   (Bun is not recommended for WhatsApp/Telegram).
+- Gateway-backed installer selection is preference-driven, not node-only:
+  when install specs mix kinds, OpenClaw prefers Homebrew when
+  `skills.install.preferBrew` is enabled and `brew` exists, then `uv`, then the
+  configured node manager, then other fallbacks like `go` or `download`.
+- If every install spec is `download`, OpenClaw surfaces all download options
+  instead of collapsing to one preferred installer.
 - Go installs: if `go` is missing and `brew` is available, the gateway installs Go via Homebrew first and sets `GOBIN` to Homebrew’s `bin` when possible.
 - Download installs: `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when archive detected), `stripComponents`, `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
 
@@ -359,7 +365,7 @@ See [Skills config](/tools/skills-config) for the full configuration schema.
 
 ## Looking for more skills?
 
-Browse [https://clawhub.com](https://clawhub.com).
+Browse [https://clawhub.ai](https://clawhub.ai).
 
 ---
 

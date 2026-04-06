@@ -164,7 +164,6 @@ export function createDefaultExecApprovalRequestContext(params: {
 export function resolveBaseExecApprovalDecision(params: {
   decision: string | null;
   askFallback: ResolvedExecApprovals["agent"]["askFallback"];
-  obfuscationDetected: boolean;
 }): {
   approvedByAsk: boolean;
   deniedReason: string | null;
@@ -174,13 +173,6 @@ export function resolveBaseExecApprovalDecision(params: {
     return { approvedByAsk: false, deniedReason: "user-denied", timedOut: false };
   }
   if (!params.decision) {
-    if (params.obfuscationDetected) {
-      return {
-        approvedByAsk: false,
-        deniedReason: "approval-timeout (obfuscation-detected)",
-        timedOut: true,
-      };
-    }
     if (params.askFallback === "full") {
       return { approvedByAsk: true, deniedReason: null, timedOut: true };
     }
@@ -337,12 +329,10 @@ export function buildExecApprovalFollowupTarget(
 export function createExecApprovalDecisionState(params: {
   decision: string | null | undefined;
   askFallback: ResolvedExecApprovals["agent"]["askFallback"];
-  obfuscationDetected: boolean;
 }) {
   const baseDecision = resolveBaseExecApprovalDecision({
     decision: params.decision ?? null,
     askFallback: params.askFallback,
-    obfuscationDetected: params.obfuscationDetected,
   });
   return {
     baseDecision,
@@ -429,7 +419,9 @@ export function buildExecApprovalPendingToolResult(params: {
             ? (buildExecApprovalUnavailableReplyPayload({
                 warningText: params.warningText,
                 reason: params.unavailableReason,
+                channel: params.initiatingSurface.channel,
                 channelLabel: params.initiatingSurface.channelLabel,
+                accountId: params.initiatingSurface.accountId,
                 sentApproverDms: params.sentApproverDms,
               }).text ?? "")
             : buildApprovalPendingMessage({
@@ -449,7 +441,9 @@ export function buildExecApprovalPendingToolResult(params: {
         ? ({
             status: "approval-unavailable",
             reason: params.unavailableReason,
+            channel: params.initiatingSurface.channel,
             channelLabel: params.initiatingSurface.channelLabel,
+            accountId: params.initiatingSurface.accountId,
             sentApproverDms: params.sentApproverDms,
             host: params.host,
             command: params.command,

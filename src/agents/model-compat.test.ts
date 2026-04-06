@@ -10,7 +10,11 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
-import { isHighSignalLiveModelRef, isModernModelRef } from "./live-model-filter.js";
+import {
+  isHighSignalLiveModelRef,
+  isModernModelRef,
+  selectHighSignalLiveItems,
+} from "./live-model-filter.js";
 
 const baseModel = (): Model<Api> =>
   ({
@@ -157,11 +161,37 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("keeps supportsUsageInStreaming on for native ModelStudio endpoints", () => {
+  it("keeps supportsUsageInStreaming on for native Qwen endpoints", () => {
     const model = {
       ...baseModel(),
-      provider: "modelstudio",
+      provider: "qwen",
       baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("keeps supportsUsageInStreaming on for DashScope-compatible endpoints regardless of provider id", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-qwen",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("keeps supportsUsageInStreaming on for Moonshot-native endpoints regardless of provider id", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-kimi",
+      baseUrl: "https://api.moonshot.ai/v1",
     };
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model);
@@ -425,5 +455,31 @@ describe("isHighSignalLiveModelRef", () => {
     expect(
       isHighSignalLiveModelRef({ provider: "opencode", id: "claude-3-5-haiku-20241022" }),
     ).toBe(false);
+  });
+});
+
+describe("selectHighSignalLiveItems", () => {
+  it("prefers curated Google replacements before fallback provider spread", () => {
+    const items = [
+      { provider: "anthropic", id: "claude-opus-4-6" },
+      { provider: "google", id: "gemini-3.1-pro-preview" },
+      { provider: "google", id: "gemini-2.5-flash" },
+      { provider: "openai", id: "gpt-5.2" },
+      { provider: "opencode", id: "big-pickle" },
+    ];
+
+    expect(
+      selectHighSignalLiveItems(
+        items,
+        4,
+        (item) => item,
+        (item) => item.provider,
+      ),
+    ).toEqual([
+      { provider: "anthropic", id: "claude-opus-4-6" },
+      { provider: "google", id: "gemini-3.1-pro-preview" },
+      { provider: "google", id: "gemini-2.5-flash" },
+      { provider: "openai", id: "gpt-5.2" },
+    ]);
   });
 });
