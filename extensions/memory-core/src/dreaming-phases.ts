@@ -525,11 +525,9 @@ function stripManagedDailyDreamingLines(lines: string[]): string[] {
       continue;
     }
 
-    const headingIndex = findManagedDailyDreamingHeadingIndex(sanitized, index, block.heading);
-    if (headingIndex !== null) {
-      sanitized[headingIndex] = "";
-    }
-    for (let cursor = index; cursor <= endIndex; cursor += 1) {
+    const headingIndex = findManagedDailyDreamingHeadingIndex(lines, index, block.heading);
+    const startIndex = headingIndex ?? index;
+    for (let cursor = startIndex; cursor <= endIndex; cursor += 1) {
       sanitized[cursor] = "";
     }
     index = endIndex;
