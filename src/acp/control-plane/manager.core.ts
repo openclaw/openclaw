@@ -1244,17 +1244,25 @@ export class AcpSessionManager {
       }
       const meta = requireReadySessionMeta(resolution);
 
+      if (input.discardPersistentState) {
+        const configuredBackend = (meta.backend || input.cfg.acp?.backend || "").trim();
+        const runtimeBackend = this.deps.requireRuntimeBackend(configuredBackend || undefined);
+        await runtimeBackend.runtime.prepareFreshSession?.({
+          sessionKey,
+        });
+      }
+
       let runtimeClosed = false;
       let runtimeNotice: string | undefined;
       try {
-        const { runtime, handle } = await this.ensureRuntimeHandle({
+        const { runtime: ensuredRuntime, handle } = await this.ensureRuntimeHandle({
           cfg: input.cfg,
           sessionKey,
           meta,
         });
         await withAcpRuntimeErrorBoundary({
           run: async () =>
-            await runtime.close({
+            await ensuredRuntime.close({
               handle,
               reason: input.reason,
               discardPersistentState: input.discardPersistentState,
@@ -1274,6 +1282,7 @@ export class AcpSessionManager {
           input.allowBackendUnavailable &&
           (acpError.code === "ACP_BACKEND_MISSING" ||
             acpError.code === "ACP_BACKEND_UNAVAILABLE" ||
+            (input.discardPersistentState && acpError.code === "ACP_SESSION_INIT_FAILED") ||
             this.isRecoverableAcpxExitError(acpError.message))
         ) {
           // Treat unavailable backends as terminal for this cached handle so it

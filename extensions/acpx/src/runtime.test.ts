@@ -71,7 +71,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     mocks.state.capturedStore = undefined;
   });
 
-  it("forces the next persistent load to start fresh after discardPersistentState close", async () => {
+  it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
     const baseStore: AcpSessionStore = {
       load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
       save: vi.fn(async () => {}),
@@ -95,18 +95,20 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     expect(baseStore.load).toHaveBeenCalledTimes(1);
 
-    await runtime.close({
-      handle: {
-        sessionKey: "agent:codex:acp:binding:test",
-        backend: "acpx",
-        runtimeSessionName: "agent:codex:acp:binding:test",
-      },
-      reason: "new-in-place-reset",
-      discardPersistentState: true,
+    await runtime.prepareFreshSession({
+      sessionKey: "agent:codex:acp:binding:test",
     });
 
     expect(await wrappedStore?.load("agent:codex:acp:binding:test")).toBeUndefined();
     expect(baseStore.load).toHaveBeenCalledTimes(1);
+    expect(await wrappedStore?.load("agent:codex:acp:binding:test")).toBeUndefined();
+    expect(baseStore.load).toHaveBeenCalledTimes(1);
+
+    await wrappedStore?.save({
+      acpxRecordId: "fresh-record",
+      name: "agent:codex:acp:binding:test",
+    } as never);
+
     expect(await wrappedStore?.load("agent:codex:acp:binding:test")).toEqual({
       acpxRecordId: "stale",
     });

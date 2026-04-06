@@ -91,6 +91,7 @@ function createRuntime(): {
   runtime: AcpRuntime;
   ensureSession: ReturnType<typeof vi.fn>;
   runTurn: ReturnType<typeof vi.fn>;
+  prepareFreshSession: ReturnType<typeof vi.fn>;
   cancel: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   getCapabilities: ReturnType<typeof vi.fn>;
@@ -108,6 +109,7 @@ function createRuntime(): {
   const runTurn = vi.fn(async function* () {
     yield { type: "done" as const };
   });
+  const prepareFreshSession = vi.fn(async () => {});
   const cancel = vi.fn(async () => {});
   const close = vi.fn(async () => {});
   const getCapabilities = vi.fn(
@@ -129,11 +131,13 @@ function createRuntime(): {
       getStatus,
       setMode,
       setConfigOption,
+      prepareFreshSession,
       cancel,
       close,
     },
     ensureSession,
     runTurn,
+    prepareFreshSession,
     cancel,
     close,
     getCapabilities,
@@ -1286,6 +1290,39 @@ describe("AcpSessionManager", () => {
       }),
     ).resolves.toBeUndefined();
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats stale session init failures as recoverable during discard resets", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockRejectedValueOnce(
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Could not initialize ACP session runtime."),
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: readySessionMeta({
+        agent: "claude",
+      }),
+    });
+
+    const manager = new AcpSessionManager();
+    const closeResult = await manager.closeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-1",
+      reason: "new-in-place-reset",
+      allowBackendUnavailable: true,
+      discardPersistentState: true,
+    });
+
+    expect(closeResult.runtimeClosed).toBe(false);
+    expect(closeResult.runtimeNotice).toBe("Could not initialize ACP session runtime.");
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
+      sessionKey: "agent:claude:acp:session-1",
+    });
   });
 
   it("evicts idle cached runtimes before enforcing max concurrent limits", async () => {

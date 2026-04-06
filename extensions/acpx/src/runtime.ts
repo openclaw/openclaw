@@ -27,13 +27,17 @@ function createResetAwareSessionStore(baseStore: AcpSessionStore): ResetAwareSes
   return {
     async load(sessionId: string): Promise<AcpSessionRecord | undefined> {
       const normalized = sessionId.trim();
-      if (normalized && freshSessionKeys.delete(normalized)) {
+      if (normalized && freshSessionKeys.has(normalized)) {
         return undefined;
       }
       return await baseStore.load(sessionId);
     },
     async save(record: AcpSessionRecord): Promise<void> {
       await baseStore.save(record);
+      const sessionName = record.name.trim();
+      if (sessionName) {
+        freshSessionKeys.delete(sessionName);
+      }
     },
     markFresh(sessionKey: string): void {
       const normalized = sessionKey.trim();
@@ -106,6 +110,10 @@ export class AcpxRuntime implements AcpxRuntimeLike {
 
   cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {
     return this.delegate.cancel(input);
+  }
+
+  async prepareFreshSession(input: { sessionKey: string }): Promise<void> {
+    this.sessionStore.markFresh(input.sessionKey);
   }
 
   close(input: Parameters<AcpRuntime["close"]>[0]): Promise<void> {
