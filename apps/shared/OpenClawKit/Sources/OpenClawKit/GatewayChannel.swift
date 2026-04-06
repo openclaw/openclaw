@@ -542,6 +542,77 @@ public actor GatewayChannelActor {
             authSource: authSource)
     }
 
+    private func shouldPersistBootstrapHandoffTokens() -> Bool {
+        guard self.lastAuthSource == .bootstrapToken else { return false }
+        let scheme = self.url.scheme?.lowercased()
+        if scheme == "wss" {
+            return true
+        }
+        if let host = self.url.host, LoopbackHost.isLoopback(host) {
+            return true
+        }
+        return false
+    }
+
+    private func filteredBootstrapHandoffScopes(role: String, scopes: [String]) -> [String]? {
+        let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch normalizedRole {
+        case "node":
+            return []
+        case "operator":
+            let allowedOperatorScopes: Set<String> = [
+                "operator.approvals",
+                "operator.read",
+                "operator.talk.secrets",
+                "operator.write",
+            ]
+            return Array(Set(scopes.filter { allowedOperatorScopes.contains($0) })).sorted()
+        default:
+            return nil
+        }
+    }
+
+    private func persistBootstrapHandoffToken(
+        deviceId: String,
+        role: String,
+        token: String,
+        scopes: [String]
+    ) {
+        guard let filteredScopes = self.filteredBootstrapHandoffScopes(role: role, scopes: scopes) else {
+            return
+        }
+        _ = DeviceAuthStore.storeToken(
+            deviceId: deviceId,
+            role: role,
+            token: token,
+            scopes: filteredScopes)
+    }
+
+    private func persistIssuedDeviceToken(
+        authSource: GatewayAuthSource,
+        deviceId: String,
+        role: String,
+        token: String,
+        scopes: [String]
+    ) {
+        if authSource == .bootstrapToken {
+            guard self.shouldPersistBootstrapHandoffTokens() else {
+                return
+            }
+            self.persistBootstrapHandoffToken(
+                deviceId: deviceId,
+                role: role,
+                token: token,
+                scopes: scopes)
+            return
+        }
+        _ = DeviceAuthStore.storeToken(
+            deviceId: deviceId,
+            role: role,
+            token: token,
+            scopes: scopes)
+    }
+
     private func handleConnectResponse(
         _ res: ResponseFrame,
         identity: DeviceIdentity?,
@@ -572,17 +643,36 @@ public actor GatewayChannelActor {
         } else if let tick = ok.policy["tickIntervalMs"]?.value as? Int {
             self.tickIntervalMs = Double(tick)
         }
-        if let auth = ok.auth,
-           let deviceToken = auth["deviceToken"]?.value as? String {
-            let authRole = auth["role"]?.value as? String ?? role
-            let scopes = (auth["scopes"]?.value as? [ProtoAnyCodable])?
-                .compactMap { $0.value as? String } ?? []
-            if let identity {
-                _ = DeviceAuthStore.storeToken(
+        if let auth = ok.auth, let identity {
+            if let deviceToken = auth["deviceToken"]?.value as? String {
+                let authRole = auth["role"]?.value as? String ?? role
+                let scopes = (auth["scopes"]?.value as? [ProtoAnyCodable])?
+                    .compactMap { $0.value as? String } ?? []
+                self.persistIssuedDeviceToken(
+                    authSource: self.lastAuthSource,
                     deviceId: identity.deviceId,
                     role: authRole,
                     token: deviceToken,
                     scopes: scopes)
+            }
+            if self.shouldPersistBootstrapHandoffTokens(),
+               let tokenEntries = auth["deviceTokens"]?.value as? [ProtoAnyCodable]
+            {
+                for entry in tokenEntries {
+                    guard let rawEntry = entry.value as? [String: ProtoAnyCodable],
+                          let deviceToken = rawEntry["deviceToken"]?.value as? String,
+                          let authRole = rawEntry["role"]?.value as? String
+                    else {
+                        continue
+                    }
+                    let scopes = (rawEntry["scopes"]?.value as? [ProtoAnyCodable])?
+                        .compactMap { $0.value as? String } ?? []
+                    self.persistBootstrapHandoffToken(
+                        deviceId: identity.deviceId,
+                        role: authRole,
+                        token: deviceToken,
+                        scopes: scopes)
+                }
             }
         }
         self.lastTick = Date()

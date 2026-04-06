@@ -1,8 +1,19 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { createXaiFastModeWrapper, createXaiToolPayloadCompatibilityWrapper } from "./stream.js";
+import {
+  createXaiFastModeWrapper,
+  createXaiToolPayloadCompatibilityWrapper,
+  wrapXaiProviderStream,
+} from "./stream.js";
 
+type ToolPayload = {
+  function?: Record<string, unknown>;
+};
+type XaiTestPayload = Record<string, unknown> & {
+  tools?: Array<{ type?: string; function?: Record<string, unknown> }>;
+  input?: unknown[];
+};
 function captureWrappedModelId(params: {
   modelId: string;
   fastMode: boolean;
@@ -51,6 +62,54 @@ describe("xai stream wrappers", () => {
   it("leaves unsupported or disabled models unchanged", () => {
     expect(captureWrappedModelId({ modelId: "grok-3-fast", fastMode: true })).toBe("grok-3-fast");
     expect(captureWrappedModelId({ modelId: "grok-3", fastMode: false })).toBe("grok-3");
+  });
+
+  it("composes the xai provider stream chain from extra params", () => {
+    let capturedModelId = "";
+    let capturedPayload: XaiTestPayload | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      capturedModelId = String(model.id);
+      const payload: XaiTestPayload = {
+        reasoning: { effort: "high" },
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "write",
+              parameters: { type: "object", properties: {} },
+              strict: true,
+            },
+          },
+        ],
+      };
+      options?.onPayload?.(payload as never, model as never);
+      capturedPayload = payload;
+      return {
+        result: async () => ({}) as never,
+        async *[Symbol.asyncIterator]() {},
+      } as unknown as ReturnType<StreamFn>;
+    };
+
+    const wrapped = wrapXaiProviderStream({
+      streamFn: baseStreamFn,
+      extraParams: { fastMode: true },
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4",
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedModelId).toBe("grok-4-fast");
+    expect(capturedPayload).toMatchObject({ tool_stream: true });
+    expect(capturedPayload).not.toHaveProperty("reasoning");
+    const payloadTools = capturedPayload?.tools as ToolPayload[] | undefined;
+    expect(payloadTools?.[0]?.function).not.toHaveProperty("strict");
   });
 
   it("strips unsupported strict and reasoning controls from tool payloads", () => {

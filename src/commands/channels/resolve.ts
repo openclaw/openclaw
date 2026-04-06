@@ -52,14 +52,48 @@ function detectAutoKind(input: string): ChannelResolveKind {
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
     return "user";
   }
-  if (
-    /^(user|discord|slack|matrix|msteams|teams|zalo|zalouser|googlechat|google-chat|gchat):/i.test(
-      trimmed,
-    )
-  ) {
+  if (/^user:/i.test(trimmed)) {
     return "user";
   }
   return "group";
+}
+
+function detectAutoKindForPlugin(
+  input: string,
+  plugin?: {
+    id: string;
+    meta?: {
+      aliases?: readonly string[];
+    };
+  },
+): ChannelResolveKind {
+  const generic = detectAutoKind(input);
+  if (generic === "user" || !plugin) {
+    return generic;
+  }
+  const trimmed = input.trim();
+  const lowered = trimmed.toLowerCase();
+  const prefixes = [plugin.id, ...(plugin.meta?.aliases ?? [])]
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  for (const prefix of prefixes) {
+    if (!lowered.startsWith(`${prefix}:`)) {
+      continue;
+    }
+    const remainder = lowered.slice(prefix.length + 1);
+    if (
+      remainder.startsWith("group:") ||
+      remainder.startsWith("channel:") ||
+      remainder.startsWith("room:") ||
+      remainder.startsWith("conversation:") ||
+      remainder.startsWith("spaces/") ||
+      remainder.startsWith("channels/")
+    ) {
+      return "group";
+    }
+    return "user";
+  }
+  return generic;
 }
 
 function formatResolveResult(result: ResolveResult): string {
@@ -146,7 +180,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   } else {
     const byKind = new Map<ChannelResolveKind, string[]>();
     for (const entry of entries) {
-      const kind = detectAutoKind(entry);
+      const kind = detectAutoKindForPlugin(entry, plugin);
       byKind.set(kind, [...(byKind.get(kind) ?? []), entry]);
     }
     const resolved: ChannelResolveResult[] = [];

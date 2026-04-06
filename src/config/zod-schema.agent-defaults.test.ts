@@ -11,4 +11,15 @@ describe("agent defaults schema", () => {
       }),
     ).not.toThrow();
   });
+
+  it("accepts videoGenerationModel", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        videoGenerationModel: {
+          primary: "qwen/wan2.6-t2v",
+          fallbacks: ["minimax/video-01"],
+        },
+      }),
+    ).not.toThrow();
+  });
 });

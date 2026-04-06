@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { parseSessionThreadInfo } from "./delivery-info.js";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
@@ -11,58 +10,9 @@ import {
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
+import { parseSessionThreadInfo } from "./thread-info.js";
+import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import type { SessionEntry } from "./types.js";
-
-function stripQuery(value: string): string {
-  const noHash = value.split("#")[0] ?? value;
-  return noHash.split("?")[0] ?? noHash;
-}
-
-function extractFileNameFromMediaUrl(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const cleaned = stripQuery(trimmed);
-  try {
-    const parsed = new URL(cleaned);
-    const base = path.basename(parsed.pathname);
-    if (!base) {
-      return null;
-    }
-    try {
-      return decodeURIComponent(base);
-    } catch {
-      return base;
-    }
-  } catch {
-    const base = path.basename(cleaned);
-    if (!base || base === "/" || base === ".") {
-      return null;
-    }
-    return base;
-  }
-}
-
-export function resolveMirroredTranscriptText(params: {
-  text?: string;
-  mediaUrls?: string[];
-}): string | null {
-  const mediaUrls = params.mediaUrls?.filter((url) => url && url.trim()) ?? [];
-  if (mediaUrls.length > 0) {
-    const names = mediaUrls
-      .map((url) => extractFileNameFromMediaUrl(url))
-      .filter((name): name is string => Boolean(name && name.trim()));
-    if (names.length > 0) {
-      return names.join(", ");
-    }
-    return "media";
-  }
-
-  const text = params.text ?? "";
-  const trimmed = text.trim();
-  return trimmed ? trimmed : null;
-}
 
 async function ensureSessionHeader(params: {
   sessionFile: string;

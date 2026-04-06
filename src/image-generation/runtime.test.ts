@@ -1,87 +1,118 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { generateImage, listRuntimeImageGenerationProviders } from "./runtime.js";
+import type { ImageGenerationProvider } from "./types.js";
 
-const { resolveRuntimePluginRegistryMock } = vi.hoisted(() => ({
-  resolveRuntimePluginRegistryMock: vi.fn<
-    (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
-  >(() => undefined),
+const mocks = vi.hoisted(() => {
+  const debug = vi.fn();
+  return {
+    createSubsystemLogger: vi.fn(() => ({ debug })),
+    describeFailoverError: vi.fn(),
+    getImageGenerationProvider: vi.fn<
+      (providerId: string, config?: OpenClawConfig) => ImageGenerationProvider | undefined
+    >(() => undefined),
+    getProviderEnvVars: vi.fn<(providerId: string) => string[]>(() => []),
+    isFailoverError: vi.fn<(err: unknown) => boolean>(() => false),
+    listImageGenerationProviders: vi.fn<(config?: OpenClawConfig) => ImageGenerationProvider[]>(
+      () => [],
+    ),
+    parseImageGenerationModelRef: vi.fn<
+      (raw?: string) => { provider: string; model: string } | undefined
+    >((raw?: string) => {
+      const trimmed = raw?.trim();
+      if (!trimmed) {
+        return undefined;
+      }
+      const slash = trimmed.indexOf("/");
+      if (slash <= 0 || slash === trimmed.length - 1) {
+        return undefined;
+      }
+      return {
+        provider: trimmed.slice(0, slash),
+        model: trimmed.slice(slash + 1),
+      };
+    }),
+    resolveAgentModelFallbackValues: vi.fn<(value: unknown) => string[]>(() => []),
+    resolveAgentModelPrimaryValue: vi.fn<(value: unknown) => string | undefined>(() => undefined),
+    debug,
+  };
+});
+
+vi.mock("../agents/failover-error.js", () => ({
+  describeFailoverError: mocks.describeFailoverError,
+  isFailoverError: mocks.isFailoverError,
+}));
+vi.mock("../config/model-input.js", () => ({
+  resolveAgentModelFallbackValues: mocks.resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue: mocks.resolveAgentModelPrimaryValue,
+}));
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: mocks.createSubsystemLogger,
+}));
+vi.mock("../secrets/provider-env-vars.js", () => ({
+  getProviderEnvVars: mocks.getProviderEnvVars,
+}));
+vi.mock("./model-ref.js", () => ({
+  parseImageGenerationModelRef: mocks.parseImageGenerationModelRef,
+}));
+vi.mock("./provider-registry.js", () => ({
+  getImageGenerationProvider: mocks.getImageGenerationProvider,
+  listImageGenerationProviders: mocks.listImageGenerationProviders,
 }));
 
-vi.mock("../plugins/loader.js", () => ({
-  resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
-}));
-
-let generateImage: typeof import("./runtime.js").generateImage;
-let listRuntimeImageGenerationProviders: typeof import("./runtime.js").listRuntimeImageGenerationProviders;
-
-function setCompatibleActiveImageGenerationRegistry(
-  pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
-  _cfg: OpenClawConfig,
-) {
-  setActivePluginRegistry(pluginRegistry);
-}
-
-describe("image-generation runtime helpers", () => {
-  beforeAll(async () => {
-    ({ generateImage, listRuntimeImageGenerationProviders } = await import("./runtime.js"));
-  });
-
-  afterEach(() => {
-    resolveRuntimePluginRegistryMock.mockReset();
-    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
-    resetPluginRuntimeStateForTest();
-  });
-
+describe("image-generation runtime", () => {
   beforeEach(() => {
-    resetPluginRuntimeStateForTest();
+    mocks.createSubsystemLogger.mockClear();
+    mocks.describeFailoverError.mockReset();
+    mocks.getImageGenerationProvider.mockReset();
+    mocks.getProviderEnvVars.mockReset();
+    mocks.getProviderEnvVars.mockReturnValue([]);
+    mocks.isFailoverError.mockReset();
+    mocks.isFailoverError.mockReturnValue(false);
+    mocks.listImageGenerationProviders.mockReset();
+    mocks.listImageGenerationProviders.mockReturnValue([]);
+    mocks.parseImageGenerationModelRef.mockClear();
+    mocks.resolveAgentModelFallbackValues.mockReset();
+    mocks.resolveAgentModelFallbackValues.mockReturnValue([]);
+    mocks.resolveAgentModelPrimaryValue.mockReset();
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue(undefined);
+    mocks.debug.mockReset();
   });
 
-  it("generates images through the active image-generation registry", async () => {
-    const pluginRegistry = createEmptyPluginRegistry();
+  it("generates images through the active image-generation provider", async () => {
     const authStore = { version: 1, profiles: {} } as const;
     let seenAuthStore: unknown;
-    pluginRegistry.imageGenerationProviders.push({
-      pluginId: "image-plugin",
-      pluginName: "Image Plugin",
-      source: "test",
-      provider: {
-        id: "image-plugin",
-        capabilities: {
-          generate: {},
-          edit: { enabled: false },
-        },
-        async generateImage(req) {
-          seenAuthStore = req.authStore;
-          return {
-            images: [
-              {
-                buffer: Buffer.from("png-bytes"),
-                mimeType: "image/png",
-                fileName: "sample.png",
-              },
-            ],
-            model: "img-v1",
-          };
-        },
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("image-plugin/img-v1");
+    const provider: ImageGenerationProvider = {
+      id: "image-plugin",
+      capabilities: {
+        generate: {},
+        edit: { enabled: false },
       },
-    });
-    resolveRuntimePluginRegistryMock.mockReturnValue(pluginRegistry);
-
-    const cfg = {
-      agents: {
-        defaults: {
-          imageGenerationModel: {
-            primary: "image-plugin/img-v1",
-          },
-        },
+      async generateImage(req: { authStore?: unknown }) {
+        seenAuthStore = req.authStore;
+        return {
+          images: [
+            {
+              buffer: Buffer.from("png-bytes"),
+              mimeType: "image/png",
+              fileName: "sample.png",
+            },
+          ],
+          model: "img-v1",
+        };
       },
-    } as OpenClawConfig;
-    setCompatibleActiveImageGenerationRegistry(pluginRegistry, cfg);
+    };
+    mocks.getImageGenerationProvider.mockReturnValue(provider);
 
     const result = await generateImage({
-      cfg,
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "image-plugin/img-v1" },
+          },
+        },
+      } as OpenClawConfig,
       prompt: "draw a cat",
       agentDir: "/tmp/agent",
       authStore,
@@ -98,15 +129,76 @@ describe("image-generation runtime helpers", () => {
         fileName: "sample.png",
       },
     ]);
+    expect(result.ignoredOverrides).toEqual([]);
   });
 
-  it("lists runtime image-generation providers from the active registry", () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    pluginRegistry.imageGenerationProviders.push({
-      pluginId: "image-plugin",
-      pluginName: "Image Plugin",
-      source: "test",
-      provider: {
+  it("drops unsupported provider geometry overrides and reports them", async () => {
+    let seenRequest:
+      | {
+          size?: string;
+          aspectRatio?: string;
+          resolution?: string;
+        }
+      | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("openai/gpt-image-1");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "openai",
+      capabilities: {
+        generate: {
+          supportsSize: true,
+          supportsAspectRatio: false,
+          supportsResolution: false,
+        },
+        edit: {
+          enabled: true,
+          supportsSize: true,
+          supportsAspectRatio: false,
+          supportsResolution: false,
+        },
+        geometry: {
+          sizes: ["1024x1024", "1024x1536", "1536x1024"],
+        },
+      },
+      async generateImage(req) {
+        seenRequest = {
+          size: req.size,
+          aspectRatio: req.aspectRatio,
+          resolution: req.resolution,
+        };
+        return {
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        };
+      },
+    });
+
+    const result = await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "openai/gpt-image-1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      size: "1024x1024",
+      aspectRatio: "1:1",
+      resolution: "2K",
+    });
+
+    expect(seenRequest).toEqual({
+      size: "1024x1024",
+      aspectRatio: undefined,
+      resolution: undefined,
+    });
+    expect(result.ignoredOverrides).toEqual([
+      { key: "aspectRatio", value: "1:1" },
+      { key: "resolution", value: "2K" },
+    ]);
+  });
+
+  it("lists runtime image-generation providers through the provider registry", () => {
+    const providers: ImageGenerationProvider[] = [
+      {
         id: "image-plugin",
         defaultModel: "img-v1",
         models: ["img-v1", "img-v2"],
@@ -123,106 +215,60 @@ describe("image-generation runtime helpers", () => {
           },
         },
         generateImage: async () => ({
-          images: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
         }),
       },
-    });
-    resolveRuntimePluginRegistryMock.mockReturnValue(pluginRegistry);
-    setCompatibleActiveImageGenerationRegistry(pluginRegistry, {} as OpenClawConfig);
+    ];
+    mocks.listImageGenerationProviders.mockReturnValue(providers);
 
-    expect(listRuntimeImageGenerationProviders()).toMatchObject([
-      {
-        id: "image-plugin",
-        defaultModel: "img-v1",
-        models: ["img-v1", "img-v2"],
-        capabilities: {
-          generate: {
-            supportsResolution: true,
-          },
-          edit: {
-            enabled: true,
-            maxInputImages: 3,
-          },
-          geometry: {
-            resolutions: ["1K", "2K"],
-          },
-        },
-      },
-    ]);
+    expect(listRuntimeImageGenerationProviders({ config: {} as OpenClawConfig })).toEqual(
+      providers,
+    );
+    expect(mocks.listImageGenerationProviders).toHaveBeenCalledWith({} as OpenClawConfig);
   });
 
-  it("explains native image-generation config and provider auth when no model is configured", async () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    pluginRegistry.imageGenerationProviders.push(
+  it("builds a generic config hint without hardcoded provider ids", async () => {
+    mocks.listImageGenerationProviders.mockReturnValue([
       {
-        pluginId: "google",
-        pluginName: "Google",
-        source: "test",
-        provider: {
-          id: "google",
-          defaultModel: "gemini-3-pro-image-preview",
-          capabilities: {
-            generate: {},
-            edit: { enabled: false },
-          },
-          generateImage: async () => ({
-            images: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
-          }),
-        },
-      },
-      {
-        pluginId: "openai",
-        pluginName: "OpenAI",
-        source: "test",
-        provider: {
-          id: "openai",
-          defaultModel: "gpt-image-1",
-          capabilities: {
-            generate: {},
-            edit: { enabled: false },
-          },
-          generateImage: async () => ({
-            images: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
-          }),
-        },
-      },
-    );
-    resolveRuntimePluginRegistryMock.mockReturnValue(pluginRegistry);
-    setCompatibleActiveImageGenerationRegistry(pluginRegistry, {} as OpenClawConfig);
-
-    const promise = generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" });
-
-    await expect(promise).rejects.toThrow("No image-generation model configured.");
-    await expect(promise).rejects.toThrow(
-      'Set agents.defaults.imageGenerationModel.primary to a provider/model like "',
-    );
-    await expect(promise).rejects.toThrow("google: GEMINI_API_KEY / GOOGLE_API_KEY");
-    await expect(promise).rejects.toThrow("openai: OPENAI_API_KEY");
-  });
-
-  it("does not crash on prototype-like provider ids in auth hints", async () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    pluginRegistry.imageGenerationProviders.push({
-      pluginId: "proto-provider",
-      pluginName: "Proto Provider",
-      source: "test",
-      provider: {
-        id: "__proto__",
-        defaultModel: "proto-v1",
+        id: "vision-one",
+        defaultModel: "paint-v1",
         capabilities: {
           generate: {},
           edit: { enabled: false },
         },
         generateImage: async () => ({
-          images: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
         }),
       },
+      {
+        id: "vision-two",
+        defaultModel: "paint-v2",
+        capabilities: {
+          generate: {},
+          edit: { enabled: false },
+        },
+        generateImage: async () => ({
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        }),
+      },
+    ]);
+    mocks.getProviderEnvVars.mockImplementation((providerId: string) => {
+      if (providerId === "vision-one") {
+        return ["VISION_ONE_API_KEY"];
+      }
+      if (providerId === "vision-two") {
+        return ["VISION_TWO_API_KEY"];
+      }
+      return [];
     });
-    resolveRuntimePluginRegistryMock.mockReturnValue(pluginRegistry);
-    setCompatibleActiveImageGenerationRegistry(pluginRegistry, {} as OpenClawConfig);
 
-    await expect(
-      generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
-    ).rejects.toThrow("No image-generation model configured.");
+    const promise = generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" });
+
+    await expect(promise).rejects.toThrow("No image-generation model configured.");
+    await expect(promise).rejects.toThrow(
+      'Set agents.defaults.imageGenerationModel.primary to a provider/model like "vision-one/paint-v1".',
+    );
+    await expect(promise).rejects.toThrow("vision-one: VISION_ONE_API_KEY");
+    await expect(promise).rejects.toThrow("vision-two: VISION_TWO_API_KEY");
   });
 });

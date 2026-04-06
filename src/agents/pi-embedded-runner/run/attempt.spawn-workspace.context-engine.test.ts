@@ -9,10 +9,14 @@ import {
 import {
   cleanupTempPaths,
   createContextEngineBootstrapAndAssemble,
-  createContextEngineAttemptRunner,
   expectCalledWithSessionKey,
   getHoisted,
+  resetEmbeddedAttemptHarness,
 } from "./attempt.spawn-workspace.test-support.js";
+import {
+  buildEmbeddedSubscriptionParams,
+  cleanupEmbeddedAttemptResources,
+} from "./attempt.subscription-cleanup.js";
 
 const hoisted = getHoisted();
 const embeddedSessionId = "embedded-session";
@@ -101,6 +105,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const tempPaths: string[] = [];
 
   beforeEach(() => {
+    resetEmbeddedAttemptHarness();
     hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   });
 
@@ -175,26 +180,35 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("forwards silentExpected to the embedded subscription", async () => {
-    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
-
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: {
-        bootstrap,
-        assemble,
-      },
-      attemptOverrides: {
-        silentExpected: true,
-      },
+    const params = buildEmbeddedSubscriptionParams({
+      session: {} as never,
+      runId: "run-context-engine-forwarding",
+      hookRunner: undefined,
+      verboseLevel: undefined,
+      reasoningMode: "off",
+      toolResultFormat: undefined,
+      shouldEmitToolResult: undefined,
+      shouldEmitToolOutput: undefined,
+      onToolResult: undefined,
+      onReasoningStream: undefined,
+      onReasoningEnd: undefined,
+      onBlockReply: undefined,
+      onBlockReplyFlush: undefined,
+      blockReplyBreak: undefined,
+      blockReplyChunking: undefined,
+      onPartialReply: undefined,
+      onAssistantMessageStart: undefined,
+      onAgentEvent: undefined,
+      enforceFinalTag: undefined,
+      silentExpected: true,
+      config: undefined,
       sessionKey,
-      tempPaths,
+      sessionId: embeddedSessionId,
+      agentId: "main",
     });
 
-    expect(result.promptError).toBeNull();
-    expect(hoisted.subscribeEmbeddedPiSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        silentExpected: true,
-      }),
-    );
+    expect(params.silentExpected).toBe(true);
+    expect(params.sessionKey).toBe(sessionKey);
   });
 
   it("skips maintenance when afterTurn fails", async () => {
@@ -247,5 +261,29 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.runContextEngineMaintenanceMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ reason: "turn" }),
     );
+  });
+
+  it("releases the session lock even when teardown cleanup throws", async () => {
+    const releaseMock = vi.fn(async () => {});
+    const disposeMock = vi.fn();
+    const flushMock = vi.fn(async () => {
+      throw new Error("flush failed");
+    });
+
+    await cleanupEmbeddedAttemptResources({
+      removeToolResultContextGuard: () => {},
+      flushPendingToolResultsAfterIdle: flushMock,
+      session: { agent: {}, dispose: disposeMock },
+      sessionManager: hoisted.sessionManager,
+      releaseWsSession: hoisted.releaseWsSessionMock,
+      sessionId: embeddedSessionId,
+      bundleLspRuntime: undefined,
+      sessionLock: { release: releaseMock },
+    });
+
+    expect(flushMock).toHaveBeenCalledTimes(1);
+    expect(disposeMock).toHaveBeenCalledTimes(1);
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session");
   });
 });

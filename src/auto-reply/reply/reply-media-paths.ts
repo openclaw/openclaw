@@ -1,3 +1,4 @@
+import path from "node:path";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolvePathFromInput } from "../../agents/path-policy.js";
@@ -5,6 +6,8 @@ import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { logVerbose } from "../../globals.js";
+import { saveMediaSource } from "../../media/store.js";
 import type { ReplyPayload } from "../types.js";
 
 const HTTP_URL_RE = /^https?:\/\//i;
@@ -12,6 +15,12 @@ const FILE_URL_RE = /^file:\/\//i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT_RE = /\.\w{1,10}$/;
+const AGENT_STATE_MEDIA_DIRNAME = path.join(".openclaw", "media");
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
 
 function isLikelyLocalMediaSource(media: string): boolean {
   return (
@@ -44,6 +53,7 @@ export function createReplyMediaPathNormalizer(params: {
     agentId,
   });
   let sandboxRootPromise: Promise<string | undefined> | undefined;
+  const persistedMediaBySource = new Map<string, Promise<string>>();
 
   const resolveSandboxRoot = async (): Promise<string | undefined> => {
     if (!sandboxRootPromise) {
@@ -54,6 +64,36 @@ export function createReplyMediaPathNormalizer(params: {
       }).then((sandbox) => sandbox?.workspaceDir);
     }
     return await sandboxRootPromise;
+  };
+
+  const persistVolatileAgentMedia = async (media: string): Promise<string> => {
+    if (!path.isAbsolute(media)) {
+      return media;
+    }
+    const sandboxRoot = await resolveSandboxRoot();
+    const volatileRoots = [params.workspaceDir, sandboxRoot]
+      .filter((root): root is string => Boolean(root))
+      .map((root) => path.join(path.resolve(root), AGENT_STATE_MEDIA_DIRNAME));
+    if (!volatileRoots.some((root) => isPathInside(root, media))) {
+      return media;
+    }
+    const cached = persistedMediaBySource.get(media);
+    if (cached) {
+      return await cached;
+    }
+    const persistPromise = saveMediaSource(media, undefined, "outbound")
+      .then((saved) => saved.path)
+      .catch((err) => {
+        persistedMediaBySource.delete(media);
+        throw err;
+      });
+    persistedMediaBySource.set(media, persistPromise);
+    try {
+      return await persistPromise;
+    } catch (err) {
+      logVerbose(`failed to persist volatile reply media ${media}: ${String(err)}`);
+      return media;
+    }
   };
 
   const normalizeMediaSource = async (raw: string): Promise<string> => {
@@ -100,7 +140,7 @@ export function createReplyMediaPathNormalizer(params: {
     const normalizedMedia: string[] = [];
     const seen = new Set<string>();
     for (const media of mediaList) {
-      const normalized = await normalizeMediaSource(media);
+      const normalized = await persistVolatileAgentMedia(await normalizeMediaSource(media));
       if (!normalized || seen.has(normalized)) {
         continue;
       }

@@ -16,8 +16,9 @@ const resolveSessionAuthProfileOverrideMock = vi.fn();
 const getActiveEmbeddedRunSnapshotMock = vi.fn();
 const diagDebugMock = vi.fn();
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...original,
     streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
@@ -72,7 +73,7 @@ const { runBtwSideQuestion } = await import("./btw.js");
 type RunBtwSideQuestionParams = Parameters<typeof runBtwSideQuestion>[0];
 
 const DEFAULT_AGENT_DIR = "/tmp/agent";
-const DEFAULT_MODEL = "claude-sonnet-4-5";
+const DEFAULT_MODEL = "claude-sonnet-4-6";
 const DEFAULT_PROVIDER = "anthropic";
 const DEFAULT_REASONING_LEVEL = "off";
 const DEFAULT_SESSION_KEY = "agent:main:main";
@@ -201,7 +202,7 @@ describe("runBtwSideQuestion", () => {
     getLeafEntryMock.mockReturnValue(null);
     resolveModelWithRegistryMock.mockReturnValue({
       provider: "anthropic",
-      id: "claude-sonnet-4-5",
+      id: "claude-sonnet-4-6",
       api: "anthropic-messages",
     });
     getApiKeyForModelMock.mockResolvedValue({ apiKey: "secret", mode: "api-key", source: "test" });
@@ -221,7 +222,7 @@ describe("runBtwSideQuestion", () => {
             role: "assistant",
             content: [],
             provider: "anthropic",
-            model: "claude-sonnet-4-5",
+            model: "claude-sonnet-4-6",
           },
         },
         {
@@ -232,7 +233,7 @@ describe("runBtwSideQuestion", () => {
             role: "assistant",
             content: [],
             provider: "anthropic",
-            model: "claude-sonnet-4-5",
+            model: "claude-sonnet-4-6",
           },
         },
         {
@@ -243,7 +244,7 @@ describe("runBtwSideQuestion", () => {
             content: [{ type: "text", text: "Side answer." }],
             provider: "anthropic",
             api: "anthropic-messages",
-            model: "claude-sonnet-4-5",
+            model: "claude-sonnet-4-6",
             stopReason: "stop",
             usage: {
               input: 1,

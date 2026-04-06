@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -93,7 +93,7 @@ async function expectAcceptedWorkspace(params: { agentId: string; expectedWorksp
 }
 
 describe("spawnSubagentDirect workspace inheritance", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
       loadConfig: () => hoisted.configOverride,
@@ -101,7 +101,11 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       hookRunner: hoisted.hookRunner,
       resolveAgentConfig: resolveTestAgentConfig,
       resolveAgentWorkspaceDir: resolveTestAgentWorkspace,
+      resetModules: false,
     }));
+  });
+
+  beforeEach(() => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockClear();
     hoisted.registerSubagentRunMock.mockClear();

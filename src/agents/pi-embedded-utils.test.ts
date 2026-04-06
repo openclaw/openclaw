@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
+  extractAssistantVisibleText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
@@ -9,7 +10,9 @@ import {
 
 function makeAssistantMessage(
   message: Omit<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason"> &
-    Partial<Pick<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason">>,
+    Partial<Pick<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason">> & {
+      phase?: "commentary" | "final_answer";
+    },
 ): AssistantMessage {
   return {
     api: "responses",
@@ -462,6 +465,11 @@ File contents here`,
         expected: "The actual answer.",
       },
       {
+        name: "antml namespaced thinking tag",
+        text: "<antml:thinking>This shows Robin Waslander DMing maintainers o...</antml:thinking>Actual reply.",
+        expected: "Actual reply.",
+      },
+      {
         name: "final wrapper",
         text: "<final>\nAnswer\n</final>",
         expected: "Answer",
@@ -561,6 +569,78 @@ describe("stripDowngradedToolCallText", () => {
     for (const testCase of cases) {
       expect(stripDowngradedToolCallText(testCase.text), testCase.name).toBe(testCase.expected);
     }
+  });
+});
+
+describe("extractAssistantVisibleText", () => {
+  it("prefers non-empty final_answer text over commentary", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Working...",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("Done.");
+  });
+
+  it("does not fall back to commentary when final_answer is empty", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Working...",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "   ",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("");
+  });
+
+  it("falls back to legacy unphased text when phased text is absent", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Legacy answer" }],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("Legacy answer");
+  });
+
+  it("does not pull unphased legacy text into final_answer extraction when phased blocks are present", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      phase: "final_answer",
+      content: [
+        { type: "text", text: "Legacy." },
+        {
+          type: "text",
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("Done.");
   });
 });
 

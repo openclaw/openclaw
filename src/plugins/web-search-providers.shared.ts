@@ -1,12 +1,7 @@
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import {
-  withBundledPluginAllowlistCompat,
-  withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat,
-} from "./bundled-compat.js";
-import { resolveBundledWebSearchPluginIds } from "./bundled-web-search.js";
-import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
+import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
+import { type NormalizedPluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
+import { resolveManifestContractPluginIds } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 
 function resolveBundledWebSearchCompatPluginIds(params: {
@@ -14,7 +9,9 @@ function resolveBundledWebSearchCompatPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
 }): string[] {
-  return resolveBundledWebSearchPluginIds({
+  return resolveManifestContractPluginIds({
+    contract: "webSearchProviders",
+    origin: "bundled",
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
@@ -55,37 +52,26 @@ export function resolveBundledWebSearchResolutionConfig(params: {
 }): {
   config: PluginLoadOptions["config"];
   normalized: NormalizedPluginsConfig;
+  activationSourceConfig?: PluginLoadOptions["config"];
+  autoEnabledReasons: Record<string, string[]>;
 } {
-  const autoEnabledConfig =
-    params.config !== undefined
-      ? applyPluginAutoEnable({
-          config: params.config,
-          env: params.env ?? process.env,
-        }).config
-      : undefined;
-  const bundledCompatPluginIds = resolveBundledWebSearchCompatPluginIds({
-    config: autoEnabledConfig,
+  const activation = resolveBundledPluginCompatibleActivationInputs({
+    rawConfig: params.config,
+    env: params.env,
     workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  const allowlistCompat = params.bundledAllowlistCompat
-    ? withBundledPluginAllowlistCompat({
-        config: autoEnabledConfig,
-        pluginIds: bundledCompatPluginIds,
-      })
-    : autoEnabledConfig;
-  const enablementCompat = withBundledPluginEnablementCompat({
-    config: allowlistCompat,
-    pluginIds: bundledCompatPluginIds,
-  });
-  const config = withBundledPluginVitestCompat({
-    config: enablementCompat,
-    pluginIds: bundledCompatPluginIds,
-    env: params.env,
+    applyAutoEnable: true,
+    compatMode: {
+      allowlist: params.bundledAllowlistCompat,
+      enablement: "always",
+      vitest: true,
+    },
+    resolveCompatPluginIds: resolveBundledWebSearchCompatPluginIds,
   });
 
   return {
-    config,
-    normalized: normalizePluginsConfig(config?.plugins),
+    config: activation.config,
+    normalized: activation.normalized,
+    activationSourceConfig: activation.activationSourceConfig,
+    autoEnabledReasons: activation.autoEnabledReasons,
   };
 }

@@ -221,11 +221,11 @@ export function renderOverview(props: OverviewProps) {
             : html`
                 <label class="field">
                   <span>${t("overview.access.token")}</span>
-                  <div style="display: flex; align-items: center; gap: 8px;">
+                  <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
                     <input
                       type=${props.showGatewayToken ? "text" : "password"}
                       autocomplete="off"
-                      style="flex: 1;"
+                      style="flex: 1 1 0%; min-width: 0; box-sizing: border-box;"
                       .value=${props.settings.token}
                       @input=${(e: Event) => {
                         const v = (e.target as HTMLInputElement).value;
@@ -236,7 +236,7 @@ export function renderOverview(props: OverviewProps) {
                     <button
                       type="button"
                       class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
-                      style="width: 36px; height: 36px;"
+                      style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
                       title=${props.showGatewayToken ? "Hide token" : "Show token"}
                       aria-label="Toggle token visibility"
                       aria-pressed=${props.showGatewayToken}
@@ -248,11 +248,11 @@ export function renderOverview(props: OverviewProps) {
                 </label>
                 <label class="field">
                   <span>${t("overview.access.password")}</span>
-                  <div style="display: flex; align-items: center; gap: 8px;">
+                  <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
                     <input
                       type=${props.showGatewayPassword ? "text" : "password"}
                       autocomplete="off"
-                      style="flex: 1;"
+                      style="flex: 1 1 0%; min-width: 0; width: 100%; box-sizing: border-box;"
                       .value=${props.password}
                       @input=${(e: Event) => {
                         const v = (e.target as HTMLInputElement).value;
@@ -263,7 +263,7 @@ export function renderOverview(props: OverviewProps) {
                     <button
                       type="button"
                       class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
-                      style="width: 36px; height: 36px;"
+                      style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
                       title=${props.showGatewayPassword ? "Hide password" : "Show password"}
                       aria-label="Toggle password visibility"
                       aria-pressed=${props.showGatewayPassword}

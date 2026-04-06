@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawPluginApi } from "../api.js";
 import type { DiffScreenshotter } from "./browser.js";
@@ -16,11 +16,15 @@ vi.mock("./render.js", () => ({
 }));
 
 describe("diffs tool rendered output guards", () => {
+  let createDiffsTool: typeof import("./tool.js").createDiffsTool;
   let cleanupRootDir: () => Promise<void>;
   let store: Awaited<ReturnType<typeof createDiffStoreHarness>>["store"];
 
+  beforeAll(async () => {
+    ({ createDiffsTool } = await import("./tool.js"));
+  });
+
   beforeEach(async () => {
-    vi.resetModules();
     renderDiffDocumentMock.mockReset();
     ({ store, cleanup: cleanupRootDir } = await createDiffStoreHarness(
       "openclaw-diffs-tool-render-output-",
@@ -39,7 +43,6 @@ describe("diffs tool rendered output guards", () => {
       imageHtml: "",
     });
 
-    const { createDiffsTool } = await import("./tool.js");
     const screenshotter = createPngScreenshotter({
       assertHtml: (html) => {
         expect(html).toBe("");

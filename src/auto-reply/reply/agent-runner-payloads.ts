@@ -5,7 +5,7 @@ import { logVerbose } from "../../globals.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { ReplyPayload } from "../types.js";
+import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
 import { createBlockReplyContentKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import {
@@ -99,6 +99,7 @@ export async function buildReplyPayloads(params: {
   replyToMode: ReplyToMode;
   replyToChannel?: OriginatingChannelType;
   currentMessageId?: string;
+  replyThreading?: ReplyThreadingPolicy;
   messageProvider?: string;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -140,6 +141,7 @@ export async function buildReplyPayloads(params: {
         replyToMode: params.replyToMode,
         replyToChannel: params.replyToChannel,
         currentMessageId: params.currentMessageId,
+        replyThreading: params.replyThreading,
       }).map(async (payload) => {
         const parsed = normalizeReplyPayloadDirectives({
           payload,

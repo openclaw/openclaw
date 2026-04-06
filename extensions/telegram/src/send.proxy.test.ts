@@ -90,7 +90,6 @@ describe("telegram proxy client", () => {
   };
 
   beforeAll(async () => {
-    vi.resetModules();
     ({
       deleteMessageTelegram,
       reactMessageTelegram,
