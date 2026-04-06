@@ -21,10 +21,14 @@ const PROMOTION_MARKER_PREFIX = "openclaw-memory-promotion:";
 const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
+const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join("memory", ".dreams", "phase-signals.json");
 const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-promotion.lock");
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
+const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.05;
+const PHASE_SIGNAL_REM_BOOST_MAX = 0.08;
+const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 
 export type PromotionWeights = {
   frequency: number;
@@ -52,6 +56,7 @@ export type ShortTermRecallEntry = {
   source: "memory";
   snippet: string;
   recallCount: number;
+  dailyCount: number;
   totalScore: number;
   maxScore: number;
   firstRecalledAt: string;
@@ -66,6 +71,20 @@ type ShortTermRecallStore = {
   version: 1;
   updatedAt: string;
   entries: Record<string, ShortTermRecallEntry>;
+};
+
+type ShortTermPhaseSignalEntry = {
+  key: string;
+  lightHits: number;
+  remHits: number;
+  lastLightAt?: string;
+  lastRemAt?: string;
+};
+
+type ShortTermPhaseSignalStore = {
+  version: 1;
+  updatedAt: string;
+  entries: Record<string, ShortTermPhaseSignalEntry>;
 };
 
 export type PromotionComponents = {
@@ -85,6 +104,8 @@ export type PromotionCandidate = {
   source: "memory";
   snippet: string;
   recallCount: number;
+  dailyCount?: number;
+  signalCount?: number;
   avgScore: number;
   maxScore: number;
   uniqueQueries: number;
@@ -339,6 +360,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
       }
 
       const recallCount = Math.max(0, Math.floor(Number(entry.recallCount) || 0));
+      const dailyCount = Math.max(0, Math.floor(Number(entry.dailyCount) || 0));
       const totalScore = Math.max(0, Number(entry.totalScore) || 0);
       const maxScore = clampScore(Number(entry.maxScore) || 0);
       const firstRecalledAt =
@@ -371,6 +393,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         source,
         snippet,
         recallCount,
+        dailyCount,
         totalScore,
         maxScore,
         firstRecalledAt,
@@ -446,8 +469,48 @@ function calculateRecencyComponent(ageDays: number, halfLifeDays: number): numbe
   return Math.exp(-lambda * ageDays);
 }
 
+function calculatePhaseSignalAgeDays(lastSeenAt: string | undefined, nowMs: number): number | null {
+  if (!lastSeenAt) {
+    return null;
+  }
+  const parsed = Date.parse(lastSeenAt);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return Math.max(0, (nowMs - parsed) / DAY_MS);
+}
+
+function calculatePhaseSignalBoost(
+  entry: ShortTermPhaseSignalEntry | undefined,
+  nowMs: number,
+): number {
+  if (!entry) {
+    return 0;
+  }
+  const lightStrength = clampScore(Math.log1p(Math.max(0, entry.lightHits)) / Math.log1p(6));
+  const remStrength = clampScore(Math.log1p(Math.max(0, entry.remHits)) / Math.log1p(6));
+  const lightAgeDays = calculatePhaseSignalAgeDays(entry.lastLightAt, nowMs);
+  const remAgeDays = calculatePhaseSignalAgeDays(entry.lastRemAt, nowMs);
+  const lightRecency =
+    lightAgeDays === null
+      ? 0
+      : clampScore(calculateRecencyComponent(lightAgeDays, PHASE_SIGNAL_HALF_LIFE_DAYS));
+  const remRecency =
+    remAgeDays === null
+      ? 0
+      : clampScore(calculateRecencyComponent(remAgeDays, PHASE_SIGNAL_HALF_LIFE_DAYS));
+  return clampScore(
+    PHASE_SIGNAL_LIGHT_BOOST_MAX * lightStrength * lightRecency +
+      PHASE_SIGNAL_REM_BOOST_MAX * remStrength * remRecency,
+  );
+}
+
 function resolveStorePath(workspaceDir: string): string {
   return path.join(workspaceDir, SHORT_TERM_STORE_RELATIVE_PATH);
+}
+
+function resolvePhaseSignalPath(workspaceDir: string): string {
+  return path.join(workspaceDir, SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH);
 }
 
 function resolveLockPath(workspaceDir: string): string {
@@ -552,6 +615,89 @@ async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTer
   }
 }
 
+function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore {
+  return {
+    version: 1,
+    updatedAt: nowIso,
+    entries: {},
+  };
+}
+
+function normalizePhaseSignalStore(raw: unknown, nowIso: string): ShortTermPhaseSignalStore {
+  const record = asRecord(raw);
+  if (!record) {
+    return emptyPhaseSignalStore(nowIso);
+  }
+  const entriesRaw = asRecord(record?.entries);
+  if (!entriesRaw) {
+    return emptyPhaseSignalStore(nowIso);
+  }
+  const entries: Record<string, ShortTermPhaseSignalEntry> = {};
+  for (const [mapKey, value] of Object.entries(entriesRaw)) {
+    const entry = asRecord(value);
+    if (!entry) {
+      continue;
+    }
+    const key = typeof entry.key === "string" && entry.key.trim().length > 0 ? entry.key : mapKey;
+    const lightHits = toFiniteNonNegativeInt(entry.lightHits, 0);
+    const remHits = toFiniteNonNegativeInt(entry.remHits, 0);
+    if (lightHits === 0 && remHits === 0) {
+      continue;
+    }
+    const lastLightAt =
+      typeof entry.lastLightAt === "string" && entry.lastLightAt.trim().length > 0
+        ? entry.lastLightAt
+        : undefined;
+    const lastRemAt =
+      typeof entry.lastRemAt === "string" && entry.lastRemAt.trim().length > 0
+        ? entry.lastRemAt
+        : undefined;
+    entries[key] = {
+      key,
+      lightHits,
+      remHits,
+      ...(lastLightAt ? { lastLightAt } : {}),
+      ...(lastRemAt ? { lastRemAt } : {}),
+    };
+  }
+  return {
+    version: 1,
+    updatedAt:
+      typeof record.updatedAt === "string" && record.updatedAt.trim().length > 0
+        ? record.updatedAt
+        : nowIso,
+    entries,
+  };
+}
+
+async function readPhaseSignalStore(
+  workspaceDir: string,
+  nowIso: string,
+): Promise<ShortTermPhaseSignalStore> {
+  const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
+  try {
+    const raw = await fs.readFile(phaseSignalPath, "utf-8");
+    return normalizePhaseSignalStore(JSON.parse(raw) as unknown, nowIso);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT" || err instanceof SyntaxError) {
+      return emptyPhaseSignalStore(nowIso);
+    }
+    return emptyPhaseSignalStore(nowIso);
+  }
+}
+
+async function writePhaseSignalStore(
+  workspaceDir: string,
+  store: ShortTermPhaseSignalStore,
+): Promise<void> {
+  const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
+  await fs.mkdir(path.dirname(phaseSignalPath), { recursive: true });
+  const tmpPath = `${phaseSignalPath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
+  await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
+  await fs.rename(tmpPath, phaseSignalPath);
+}
+
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   const storePath = resolveStorePath(workspaceDir);
   await fs.mkdir(path.dirname(storePath), { recursive: true });
@@ -572,6 +718,9 @@ export async function recordShortTermRecalls(params: {
   workspaceDir?: string;
   query: string;
   results: MemorySearchResult[];
+  signalType?: "recall" | "daily";
+  dedupeByQueryPerDay?: boolean;
+  dayBucket?: string;
   nowMs?: number;
   timezone?: string;
 }): Promise<void> {
@@ -592,7 +741,10 @@ export async function recordShortTermRecalls(params: {
 
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const nowIso = new Date(nowMs).toISOString();
+  const signalType = params.signalType ?? "recall";
   const queryHash = hashQuery(query);
+  const todayBucket =
+    normalizeIsoDay(params.dayBucket ?? "") ?? formatMemoryDreamingDay(nowMs, params.timezone);
   await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
 
@@ -602,15 +754,24 @@ export async function recordShortTermRecalls(params: {
       const existing = store.entries[key];
       const snippet = normalizeSnippet(result.snippet);
       const score = clampScore(result.score);
-      const recallCount = Math.max(1, Math.floor(existing?.recallCount ?? 0) + 1);
-      const totalScore = Math.max(0, (existing?.totalScore ?? 0) + score);
-      const maxScore = Math.max(existing?.maxScore ?? 0, score);
+      const recallDaysBase = existing?.recallDays ?? [];
+      const queryHashesBase = existing?.queryHashes ?? [];
+      const dedupeSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        recallDaysBase.includes(todayBucket);
+      const recallCount =
+        signalType === "recall"
+          ? Math.max(0, Math.floor(existing?.recallCount ?? 0) + (dedupeSignal ? 0 : 1))
+          : Math.max(0, Math.floor(existing?.recallCount ?? 0));
+      const dailyCount =
+        signalType === "daily"
+          ? Math.max(0, Math.floor(existing?.dailyCount ?? 0) + (dedupeSignal ? 0 : 1))
+          : Math.max(0, Math.floor(existing?.dailyCount ?? 0));
+      const totalScore = Math.max(0, (existing?.totalScore ?? 0) + (dedupeSignal ? 0 : score));
+      const maxScore = Math.max(existing?.maxScore ?? 0, dedupeSignal ? 0 : score);
       const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
-      const recallDays = mergeRecentDistinct(
-        existing?.recallDays ?? [],
-        formatMemoryDreamingDay(nowMs, params.timezone),
-        MAX_RECALL_DAYS,
-      );
+      const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
 
       store.entries[key] = {
@@ -621,6 +782,7 @@ export async function recordShortTermRecalls(params: {
         source: "memory",
         snippet: snippet || existing?.snippet || "",
         recallCount,
+        dailyCount,
         totalScore,
         maxScore,
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
@@ -634,6 +796,60 @@ export async function recordShortTermRecalls(params: {
 
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
+  });
+}
+
+export async function recordDreamingPhaseSignals(params: {
+  workspaceDir?: string;
+  phase: "light" | "rem";
+  keys: string[];
+  nowMs?: number;
+}): Promise<void> {
+  const workspaceDir = params.workspaceDir?.trim();
+  if (!workspaceDir) {
+    return;
+  }
+  const keys = [...new Set(params.keys.map((key) => key.trim()).filter(Boolean))];
+  if (keys.length === 0) {
+    return;
+  }
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+
+  await withShortTermLock(workspaceDir, async () => {
+    const [store, phaseSignals] = await Promise.all([
+      readStore(workspaceDir, nowIso),
+      readPhaseSignalStore(workspaceDir, nowIso),
+    ]);
+    const knownKeys = new Set(Object.keys(store.entries));
+
+    for (const key of keys) {
+      if (!knownKeys.has(key)) {
+        continue;
+      }
+      const entry = phaseSignals.entries[key] ?? {
+        key,
+        lightHits: 0,
+        remHits: 0,
+      };
+      if (params.phase === "light") {
+        entry.lightHits = Math.min(9999, entry.lightHits + 1);
+        entry.lastLightAt = nowIso;
+      } else {
+        entry.remHits = Math.min(9999, entry.remHits + 1);
+        entry.lastRemAt = nowIso;
+      }
+      phaseSignals.entries[key] = entry;
+    }
+
+    for (const [key, entry] of Object.entries(phaseSignals.entries)) {
+      if (!knownKeys.has(key) || (entry.lightHits <= 0 && entry.remHits <= 0)) {
+        delete phaseSignals.entries[key];
+      }
+    }
+
+    phaseSignals.updatedAt = nowIso;
+    await writePhaseSignalStore(workspaceDir, phaseSignals);
   });
 }
 
@@ -664,7 +880,10 @@ export async function rankShortTermPromotionCandidates(
   );
   const weights = normalizeWeights(options.weights);
 
-  const store = await readStore(workspaceDir, nowIso);
+  const [store, phaseSignals] = await Promise.all([
+    readStore(workspaceDir, nowIso),
+    readPhaseSignalStore(workspaceDir, nowIso),
+  ]);
   const candidates: PromotionCandidate[] = [];
 
   for (const entry of Object.values(store.entries)) {
@@ -674,20 +893,24 @@ export async function rankShortTermPromotionCandidates(
     if (!includePromoted && entry.promotedAt) {
       continue;
     }
-    if (!Number.isFinite(entry.recallCount) || entry.recallCount <= 0) {
+    const recallCount = Math.max(0, Math.floor(entry.recallCount ?? 0));
+    const dailyCount = Math.max(0, Math.floor(entry.dailyCount ?? 0));
+    const signalCount = recallCount + dailyCount;
+    if (signalCount <= 0) {
       continue;
     }
-    if (entry.recallCount < minRecallCount) {
+    if (signalCount < minRecallCount) {
       continue;
     }
 
-    const avgScore = clampScore(entry.totalScore / Math.max(1, entry.recallCount));
-    const frequency = clampScore(Math.log1p(entry.recallCount) / Math.log1p(10));
+    const avgScore = clampScore(entry.totalScore / Math.max(1, signalCount));
+    const frequency = clampScore(Math.log1p(signalCount) / Math.log1p(10));
     const uniqueQueries = entry.queryHashes?.length ?? 0;
-    if (uniqueQueries < minUniqueQueries) {
+    const contextDiversity = Math.max(uniqueQueries, entry.recallDays?.length ?? 0);
+    if (contextDiversity < minUniqueQueries) {
       continue;
     }
-    const diversity = clampScore(uniqueQueries / 5);
+    const diversity = clampScore(contextDiversity / 5);
     const lastRecalledAtMs = Date.parse(entry.lastRecalledAt);
     const ageDays = Number.isFinite(lastRecalledAtMs)
       ? Math.max(0, (nowMs - lastRecalledAtMs) / DAY_MS)
@@ -701,13 +924,15 @@ export async function rankShortTermPromotionCandidates(
     const consolidation = calculateConsolidationComponent(recallDays);
     const conceptual = calculateConceptualComponent(conceptTags);
 
+    const phaseBoost = calculatePhaseSignalBoost(phaseSignals.entries[entry.key], nowMs);
     const score =
       weights.frequency * frequency +
       weights.relevance * avgScore +
       weights.diversity * diversity +
       weights.recency * recency +
       weights.consolidation * consolidation +
-      weights.conceptual * conceptual;
+      weights.conceptual * conceptual +
+      phaseBoost;
 
     if (score < minScore) {
       continue;
@@ -720,7 +945,9 @@ export async function rankShortTermPromotionCandidates(
       endLine: entry.endLine,
       source: entry.source,
       snippet: entry.snippet,
-      recallCount: entry.recallCount,
+      recallCount,
+      dailyCount,
+      signalCount,
       avgScore,
       maxScore: clampScore(entry.maxScore),
       uniqueQueries,
@@ -998,10 +1225,13 @@ export async function applyShortTermPromotions(
         if (candidate.score < minScore) {
           return false;
         }
-        if (candidate.recallCount < minRecallCount) {
+        const candidateSignalCount =
+          candidate.signalCount ??
+          Math.max(0, candidate.recallCount) + Math.max(0, candidate.dailyCount ?? 0);
+        if (candidateSignalCount < minRecallCount) {
           return false;
         }
-        if (candidate.uniqueQueries < minUniqueQueries) {
+        if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
           return false;
         }
         if (maxAgeDays >= 0 && candidate.ageDays > maxAgeDays) {
@@ -1080,6 +1310,10 @@ export async function applyShortTermPromotions(
 
 export function resolveShortTermRecallStorePath(workspaceDir: string): string {
   return resolveStorePath(workspaceDir);
+}
+
+export function resolveShortTermPhaseSignalStorePath(workspaceDir: string): string {
+  return resolvePhaseSignalPath(workspaceDir);
 }
 
 export function resolveShortTermRecallLockPath(workspaceDir: string): string {
@@ -1286,6 +1520,10 @@ export async function repairShortTermPromotionArtifacts(params: {
             key,
             {
               ...entry,
+              dailyCount: Math.max(
+                0,
+                Math.floor((entry as { dailyCount?: number }).dailyCount ?? 0),
+              ),
               queryHashes: (entry.queryHashes ?? []).slice(-MAX_QUERY_HASHES),
               recallDays: mergeRecentDistinct(entry.recallDays ?? [], fallbackDay, MAX_RECALL_DAYS),
               conceptTags: conceptTags.length > 0 ? conceptTags : (entry.conceptTags ?? []),
@@ -1327,4 +1565,5 @@ export const __testing = {
   isProcessLikelyAlive,
   deriveConceptTags,
   calculateConsolidationComponent,
+  calculatePhaseSignalBoost,
 };

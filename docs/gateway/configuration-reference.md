@@ -2611,17 +2611,10 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
 - `plugins.entries.xai.config.xSearch`: xAI X Search (Grok web search) settings.
   - `enabled`: enable the X Search provider.
   - `model`: Grok model to use for search (e.g. `"grok-4-1-fast"`).
-- `plugins.entries.memory-core.config.dreaming`: memory dreaming (experimental) settings. See [Dreaming](/concepts/dreaming) for modes and thresholds.
-  - `mode`: dreaming cadence preset (`"off"`, `"core"`, `"rem"`, `"deep"`). Default: `"off"`.
-  - `cron`: optional cron expression override for the dreaming schedule.
-  - `timezone`: timezone for schedule evaluation (falls back to `agents.defaults.userTimezone`).
-  - `limit`: maximum candidates to promote per cycle.
-  - `minScore`: minimum weighted score threshold for promotion.
-  - `minRecallCount`: minimum recall count threshold.
-  - `minUniqueQueries`: minimum distinct query count threshold.
-  - `recencyHalfLifeDays`: days for the recency score to decay by half. Default: `14`.
-  - `maxAgeDays`: optional maximum daily-note age in days allowed for promotion.
-  - `verboseLogging`: emit detailed per-run dreaming logs into the normal gateway log stream.
+- `plugins.entries.memory-core.config.dreaming`: memory dreaming (experimental) settings. See [Dreaming](/concepts/dreaming) for phases and thresholds.
+  - `enabled`: master dreaming switch (default `false`).
+  - `frequency`: cron cadence for each full dreaming sweep (`"0 3 * * *"` by default).
+  - phase policy and thresholds are implementation details (not user-facing config keys).
 - Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.

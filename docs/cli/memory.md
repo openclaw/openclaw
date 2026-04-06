@@ -34,8 +34,6 @@ openclaw memory status --deep --index
 openclaw memory status --deep --index --verbose
 openclaw memory status --agent main
 openclaw memory index --agent main --verbose
-openclaw memory promote-explain "router vlan"
-openclaw memory rem-harness --json
 ```
 
 ## Options
@@ -80,9 +78,9 @@ openclaw memory promote [--apply] [--limit <n>] [--include-promoted]
 
 Full options:
 
-- Ranks short-term candidates from `memory/YYYY-MM-DD.md` using weighted recall signals (`frequency`, `relevance`, `query diversity`, `recency`).
-- Uses recall events captured when `memory_search` returns daily-memory hits.
-- When dreaming is enabled, `memory-core` auto-manages a cron job for the deep phase that triggers promotion in the background (no manual `openclaw cron add` required).
+- Ranks short-term candidates from `memory/YYYY-MM-DD.md` using weighted promotion signals (`frequency`, `relevance`, `query diversity`, `recency`, `consolidation`, `conceptual richness`).
+- Uses short-term signals from both memory recalls and daily-ingestion passes, plus light/REM phase reinforcement signals.
+- When dreaming is enabled, `memory-core` auto-manages one cron job that runs a full sweep (`light -> REM -> deep`) in the background (no manual `openclaw cron add` required).
 - `--agent <id>`: scope to a single agent (default: the default agent).
 - `--limit <n>`: max candidates to return/apply.
 - `--min-score <n>`: minimum weighted promotion score.
@@ -92,54 +90,26 @@ Full options:
 - `--include-promoted`: include already promoted candidates in output.
 - `--json`: print JSON output.
 
-`memory promote-explain`:
-
-Explain why a specific candidate would or would not promote, with a full score breakdown.
-
-```bash
-openclaw memory promote-explain "<selector>"
-```
-
-- `<selector>`: candidate key, path fragment, or snippet fragment to match.
-- `--agent <id>`: scope to a single agent (default: the default agent).
-- `--include-promoted`: include already promoted candidates.
-- `--json`: print JSON output.
-
-`memory rem-harness`:
-
-Preview REM reflections, candidate truths, and deep promotion output without writing anything. Useful for staging and debugging the REM phase before it runs for real.
-
-```bash
-openclaw memory rem-harness [--json] [--agent <id>] [--include-promoted]
-```
-
-- `--agent <id>`: scope to a single agent (default: the default agent).
-- `--include-promoted`: include already promoted deep candidates.
-- `--json`: print JSON output.
-
-See [Dreaming](/concepts/dreaming) for the full phase model and how REM fits in.
-
 ## Dreaming (experimental)
 
 Dreaming is the background memory consolidation system with three cooperative
-phases: **light** (organize into `DREAMS.md` in inline mode), **deep**
-(promote into `MEMORY.md`), and **REM** (reflect and find patterns in
-`DREAMS.md` in inline mode).
+phases: **light** (sort/stage short-term material), **deep** (promote durable
+facts into `MEMORY.md`), and **REM** (reflect and surface themes).
 
 - Enable with `plugins.entries.memory-core.config.dreaming.enabled: true`.
-- Toggle from chat with `/dreaming on|off` or `/dreaming enable|disable light|deep|rem`.
-- Each phase runs on its own cron schedule, managed automatically by `memory-core`.
-- Only the deep phase writes durable memory to `MEMORY.md`. With default inline storage, Light and REM write to `DREAMS.md`.
+- Toggle from chat with `/dreaming on|off` (or inspect with `/dreaming status`).
+- Dreaming runs on one managed sweep schedule (`dreaming.frequency`) and executes phases in order: light, REM, deep.
+- Only the deep phase writes durable memory to `MEMORY.md`.
+- Human-readable phase output and diary entries are written to `DREAMS.md` (or existing `dreams.md`), with optional per-phase reports in `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 - Ranking uses weighted signals: recall frequency, retrieval relevance, query diversity, temporal recency, cross-day consolidation, and derived concept richness.
 - Promotion re-reads the live daily note before writing to `MEMORY.md`, so edited or deleted short-term snippets do not get promoted from stale recall-store snapshots.
 - Scheduled and manual `memory promote` runs share the same deep phase defaults unless you pass CLI threshold overrides.
 - Automatic runs fan out across configured memory workspaces.
 
-Default phase schedules:
+Default scheduling:
 
-- **Light**: every 6 hours (`0 */6 * * *`), `lookbackDays=2`, `limit=100`
-- **Deep**: daily at 3 AM (`0 3 * * *`), `limit=10`, `minScore=0.8`, `minRecallCount=3`, `minUniqueQueries=3`, `recencyHalfLifeDays=14`
-- **REM**: weekly, Sunday 5 AM (`0 5 * * 0`), `lookbackDays=7`, `limit=10`
+- **Sweep cadence**: `dreaming.frequency = 0 3 * * *`
+- **Deep thresholds**: `minScore=0.8`, `minRecallCount=3`, `minUniqueQueries=3`, `recencyHalfLifeDays=14`, `maxAgeDays=30`
 
 Example:
 
@@ -165,6 +135,5 @@ Notes:
 - `memory status` includes any extra paths configured via `memorySearch.extraPaths`.
 - If effectively active memory remote API key fields are configured as SecretRefs, the command resolves those values from the active gateway snapshot. If gateway is unavailable, the command fails fast.
 - Gateway version skew note: this command path requires a gateway that supports `secrets.resolve`; older gateways return an unknown-method error.
-- Override each phase schedule with `phases.<phase>.cron` and fine-tune deep promotion with `phases.deep.minScore`, `phases.deep.minRecallCount`, `phases.deep.minUniqueQueries`, `phases.deep.recencyHalfLifeDays`, and `phases.deep.maxAgeDays`.
-- Set `plugins.entries.memory-core.config.dreaming.verboseLogging` to `true` to emit per-run candidate and apply details into the normal gateway logs while tuning the feature.
+- Tune scheduled sweep cadence with `dreaming.frequency`. Deep promotion policy is otherwise internal; use CLI flags on `memory promote` when you need one-off manual overrides.
 - See [Dreaming](/concepts/dreaming) for full phase descriptions and configuration reference.

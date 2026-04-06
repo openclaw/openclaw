@@ -58,6 +58,17 @@ const invokeDoctorMemoryStatus = async (
   });
 };
 
+const invokeDoctorMemoryDreamDiary = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.dreamDiary"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
 const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
   expect(respond).toHaveBeenCalledWith(
     true,
@@ -241,9 +252,10 @@ describe("doctor.memory.status", () => {
           "memory-core": {
             config: {
               dreaming: {
+                enabled: true,
+                frequency: "0 */4 * * *",
                 phases: {
                   deep: {
-                    cron: "0 */4 * * *",
                     recencyHalfLifeDays: 21,
                     maxAgeDays: 30,
                   },
@@ -486,6 +498,84 @@ describe("doctor.memory.status", () => {
     } finally {
       readFileSpy.mockRestore();
       await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("doctor.memory.dreamDiary", () => {
+  beforeEach(() => {
+    loadConfig.mockClear();
+    resolveDefaultAgentId.mockClear();
+    resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
+  });
+
+  it("reads DREAMS.md when present", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-upper-"));
+    const diaryPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(diaryPath, "## Dream Diary\n- staged durable memory\n", "utf-8");
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryDreamDiary(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          found: true,
+          path: "DREAMS.md",
+          content: "## Dream Diary\n- staged durable memory\n",
+          updatedAtMs: expect.any(Number),
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to lowercase dreams.md", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-lower-"));
+    await fs.writeFile(path.join(workspaceDir, "dreams.md"), "lowercase diary\n", "utf-8");
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryDreamDiary(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          found: true,
+          path: "dreams.md",
+          content: "lowercase diary\n",
+          updatedAtMs: expect.any(Number),
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns not-found payload when no dream diary exists", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-missing-"));
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryDreamDiary(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          found: false,
+          path: "DREAMS.md",
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 });
