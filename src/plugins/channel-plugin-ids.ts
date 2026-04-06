@@ -8,6 +8,55 @@ import {
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { hasKind } from "./slots.js";
 
+function normalizeSpeechProviderIdForTts(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  return trimmed ? trimmed : undefined;
+}
+
+/** Bundled plugin ids that must load at gateway startup so TTS speech providers register (see issue #61412). */
+export function resolveGatewayTtsSpeechPluginIds(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  const tts = params.config.messages?.tts;
+  if (!tts) {
+    return [];
+  }
+  const requested = new Set<string>();
+  const primary = normalizeSpeechProviderIdForTts(tts.provider);
+  if (primary) {
+    requested.add(primary);
+  }
+  for (const key of Object.keys(tts.providers ?? {})) {
+    const normalized = normalizeSpeechProviderIdForTts(key);
+    if (normalized) {
+      requested.add(normalized);
+    }
+  }
+  if (requested.size === 0) {
+    return [];
+  }
+  const manifest = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const owners = new Set<string>();
+  for (const speechProviderId of requested) {
+    const normalized = speechProviderId.trim().toLowerCase();
+    const pluginId = manifest.plugins.find((plugin) =>
+      (plugin.contracts?.speechProviders ?? []).some(
+        (candidate) => candidate.trim().toLowerCase() === normalized,
+      ),
+    )?.id;
+    if (pluginId) {
+      owners.add(pluginId);
+    }
+  }
+  return [...owners].toSorted((left, right) => left.localeCompare(right));
+}
+
 function hasRuntimeContractSurface(plugin: PluginManifestRecord): boolean {
   return Boolean(
     plugin.providers.length > 0 ||
@@ -95,7 +144,7 @@ export function resolveGatewayStartupPluginIds(params: {
   const activationSource = createPluginActivationSource({
     config: params.activationSourceConfig ?? params.config,
   });
-  return loadPluginManifestRegistry({
+  const baseIds = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
@@ -124,4 +173,22 @@ export function resolveGatewayStartupPluginIds(params: {
       return activationState.source === "explicit" || activationState.source === "default";
     })
     .map((plugin) => plugin.id);
+
+  const ttsSpeechPluginIds = resolveGatewayTtsSpeechPluginIds({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  if (ttsSpeechPluginIds.length === 0) {
+    return baseIds;
+  }
+  const seen = new Set(baseIds);
+  const merged = [...baseIds];
+  for (const id of ttsSpeechPluginIds) {
+    if (!seen.has(id)) {
+      merged.push(id);
+      seen.add(id);
+    }
+  }
+  return merged;
 }

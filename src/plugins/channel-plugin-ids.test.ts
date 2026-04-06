@@ -12,7 +12,10 @@ vi.mock("./manifest-registry.js", () => ({
   loadPluginManifestRegistry,
 }));
 
-import { resolveGatewayStartupPluginIds } from "./channel-plugin-ids.js";
+import {
+  resolveGatewayStartupPluginIds,
+  resolveGatewayTtsSpeechPluginIds,
+} from "./channel-plugin-ids.js";
 
 function createManifestRegistryFixture() {
   return {
@@ -235,5 +238,78 @@ describe("resolveGatewayStartupPluginIds", () => {
       activationSourceConfig: rawConfig,
       expected: ["demo-channel", "browser"],
     });
+  });
+
+  it("includes plugins that own configured TTS speech providers", () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        ...createManifestRegistryFixture().plugins,
+        {
+          id: "minimax",
+          channels: [],
+          origin: "bundled",
+          enabledByDefault: true,
+          providers: ["minimax"],
+          contracts: { speechProviders: ["minimax"] },
+        },
+      ],
+      diagnostics: [],
+    });
+    expectStartupPluginIds({
+      config: {
+        ...createStartupConfig({}),
+        messages: { tts: { provider: "minimax" } },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser", "minimax"],
+    });
+  });
+
+  it("includes TTS speech plugin owners from messages.tts.providers keys", () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        ...createManifestRegistryFixture().plugins,
+        {
+          id: "minimax",
+          channels: [],
+          origin: "bundled",
+          enabledByDefault: true,
+          providers: ["minimax"],
+          contracts: { speechProviders: ["minimax"] },
+        },
+      ],
+      diagnostics: [],
+    });
+    expectStartupPluginIds({
+      config: {
+        ...createStartupConfig({}),
+        messages: { tts: { providers: { minimax: { apiKey: "test" } } } },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser", "minimax"],
+    });
+  });
+
+  it("resolveGatewayTtsSpeechPluginIds returns owning plugin ids for configured speech providers", () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        ...createManifestRegistryFixture().plugins,
+        {
+          id: "minimax",
+          channels: [],
+          origin: "bundled",
+          providers: ["minimax"],
+          contracts: { speechProviders: ["minimax"] },
+        },
+      ],
+      diagnostics: [],
+    });
+    expect(
+      resolveGatewayTtsSpeechPluginIds({
+        config: {
+          messages: { tts: { provider: "minimax" } },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual(["minimax"]);
   });
 });
