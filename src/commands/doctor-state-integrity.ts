@@ -460,8 +460,8 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if (env.OPENCLAW_OAUTH_DIR?.trim()) {
     return true;
   }
-  const channels = cfg.channels;
-  if (!isRecord(channels)) {
+  const channels = asNullableObjectRecord(cfg.channels);
+  if (!channels) {
     return false;
   }
   for (const channelId of listBundledChannelPluginIds()) {
