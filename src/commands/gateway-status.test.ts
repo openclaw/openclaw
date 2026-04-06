@@ -664,6 +664,45 @@ describe("gateway-status command", () => {
     );
   });
 
+  it("warns when local TLS is enabled but the certificate fingerprint cannot be loaded", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    probeGateway.mockClear();
+    loadGatewayTlsRuntime.mockResolvedValueOnce({
+      enabled: false,
+      required: true,
+      error: "gateway tls: cert/key missing",
+    });
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        tls: { enabled: true },
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+
+    await runGatewayStatus(runtime, { timeout: "15000", json: true });
+
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://127.0.0.1:18789",
+        tlsFingerprint: undefined,
+      }),
+    );
+
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
+    };
+    expect(parsed.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "local_tls_runtime_unavailable",
+        targetIds: ["localLoopback"],
+      }),
+    );
+    expect(
+      parsed.warnings?.find((warning) => warning.code === "local_tls_runtime_unavailable")?.message,
+    ).toContain("gateway tls: cert/key missing");
+  });
+
   it("passes the full caller timeout through to local loopback probes", async () => {
     const { runtime } = createRuntimeCapture();
     probeGateway.mockClear();

@@ -122,6 +122,10 @@ export async function gatewayStatusCommand(
     sshTarget: probePass.sshTarget,
     sshTunnelStarted: probePass.sshTunnelStarted,
     sshTunnelError: probePass.sshTunnelError,
+    localTlsLoadError:
+      localTlsRuntime && !localTlsRuntime.enabled && localTlsRuntime.required
+        ? (localTlsRuntime.error ?? "gateway tls is enabled but local TLS runtime could not load")
+        : null,
   });
   const primary = pickPrimaryProbedTarget(probePass.probed);
 
