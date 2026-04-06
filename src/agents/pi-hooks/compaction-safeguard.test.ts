@@ -132,13 +132,16 @@ const createCompactionEvent = (params: { messageText: string; tokensBefore: numb
 const createCompactionContext = (params: {
   sessionManager: ExtensionContext["sessionManager"];
   getApiKeyAndHeadersMock?: ReturnType<typeof vi.fn>;
+  getApiKeyForProviderMock?: ReturnType<typeof vi.fn>;
   getApiKeyMock?: ReturnType<typeof vi.fn>;
+  includeGetApiKeyAndHeaders?: boolean;
+  includeGetApiKeyForProvider?: boolean;
+  includeGetApiKey?: boolean;
 }) =>
-  ({
-    model: undefined,
-    sessionManager: params.sessionManager,
-    modelRegistry: {
-      getApiKeyAndHeaders:
+  {
+    const modelRegistry: Record<string, unknown> = {};
+    if (params.includeGetApiKeyAndHeaders !== false) {
+      modelRegistry.getApiKeyAndHeaders =
         params.getApiKeyAndHeadersMock ??
         vi.fn(async (model) => {
           const legacyGetApiKey = params.getApiKeyMock as
@@ -146,9 +149,21 @@ const createCompactionContext = (params: {
             | ((model: NonNullable<ExtensionContext["model"]>) => Promise<string | undefined>);
           const apiKey = await legacyGetApiKey?.(model);
           return apiKey !== undefined ? { ok: true, apiKey } : { ok: false, error: "missing auth" };
-        }),
-    },
-  }) as unknown as Partial<ExtensionContext>;
+        });
+    }
+    if (params.includeGetApiKeyForProvider) {
+      modelRegistry.getApiKeyForProvider =
+        params.getApiKeyForProviderMock ?? vi.fn(async () => undefined);
+    }
+    if (params.includeGetApiKey) {
+      modelRegistry.getApiKey = params.getApiKeyMock ?? vi.fn(async () => undefined);
+    }
+    return {
+      model: undefined,
+      sessionManager: params.sessionManager,
+      modelRegistry,
+    } as unknown as Partial<ExtensionContext>;
+  };
 
 async function runCompactionScenario(params: {
   sessionManager: ExtensionContext["sessionManager"];
@@ -1686,6 +1701,138 @@ describe("compaction-safeguard extension model fallback", () => {
 
     // Verify early return: request auth should NOT have been resolved when both models are missing.
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to provider auth lookup when request auth lookup is unavailable", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(
+      [
+        "## Decisions",
+        "Used provider lookup.",
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "None.",
+        "## Pending user asks",
+        "Handled.",
+        "## Exact identifiers",
+        "None.",
+      ].join("\n"),
+    );
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    const getApiKeyForProviderMock = vi.fn().mockResolvedValue("test-key");
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      includeGetApiKeyAndHeaders: false,
+      includeGetApiKeyForProvider: true,
+      getApiKeyForProviderMock,
+    });
+    const event = createCompactionEvent({ messageText: "test", tokensBefore: 500 });
+    const result = (await compactionHandler(
+      {
+        ...event,
+        preparation: {
+          ...event.preparation,
+          settings: { reserveTokens: 4_000 },
+        },
+      },
+      mockContext,
+    )) as {
+      cancel?: boolean;
+      compaction?: {
+        summary: string;
+        firstKeptEntryId: string;
+        tokensBefore: number;
+      };
+    };
+
+    const compaction = expectCompactionResult(result);
+    expect(getApiKeyForProviderMock).toHaveBeenCalledWith(model.provider);
+    expect(compaction.firstKeptEntryId).toBe("entry-1");
+    expect(compaction.tokensBefore).toBe(500);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+  });
+
+  it("falls through to legacy getApiKey when provider auth lookup misses", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(
+      [
+        "## Decisions",
+        "Used legacy lookup.",
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "None.",
+        "## Pending user asks",
+        "Handled.",
+        "## Exact identifiers",
+        "None.",
+      ].join("\n"),
+    );
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    const getApiKeyForProviderMock = vi.fn().mockResolvedValue(undefined);
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      includeGetApiKeyAndHeaders: false,
+      includeGetApiKeyForProvider: true,
+      getApiKeyForProviderMock,
+      includeGetApiKey: true,
+      getApiKeyMock,
+    });
+    const event = createCompactionEvent({ messageText: "test", tokensBefore: 500 });
+    const result = (await compactionHandler(
+      {
+        ...event,
+        preparation: {
+          ...event.preparation,
+          settings: { reserveTokens: 4_000 },
+        },
+      },
+      mockContext,
+    )) as {
+      cancel?: boolean;
+      compaction?: {
+        summary: string;
+        firstKeptEntryId: string;
+        tokensBefore: number;
+      };
+    };
+
+    const compaction = expectCompactionResult(result);
+    expect(getApiKeyForProviderMock).toHaveBeenCalledWith(model.provider);
+    expect(getApiKeyMock).toHaveBeenCalledWith(model);
+    expect(compaction.firstKeptEntryId).toBe("entry-1");
+    expect(compaction.tokensBefore).toBe(500);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
+  });
+
+  it("records a clear cancel reason when no compatible auth lookup exists", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      includeGetApiKeyAndHeaders: false,
+    });
+    const result = await compactionHandler(createCompactionEvent({ messageText: "test", tokensBefore: 500 }), mockContext);
+
+    expect(result).toEqual({ cancel: true });
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toContain(
+      "model registry auth lookup unavailable",
+    );
   });
 });
 

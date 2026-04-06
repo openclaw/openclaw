@@ -74,6 +74,8 @@ type ModelRegistryWithRequestAuthLookup = {
   getApiKeyAndHeaders?: (
     model: NonNullable<ExtensionContext["model"]>,
   ) => Promise<ResolvedRequestAuth>;
+  getApiKeyForProvider?: (provider: string) => Promise<string | undefined>;
+  getApiKey?: (model: NonNullable<ExtensionContext["model"]>) => Promise<string | undefined>;
 };
 
 type ResolvedRequestAuth =
@@ -86,6 +88,31 @@ type ResolvedRequestAuth =
       ok: false;
       error: string;
     };
+
+async function resolveCompactionRequestAuth(
+  modelRegistry: ModelRegistryWithRequestAuthLookup,
+  model: NonNullable<ExtensionContext["model"]>,
+): Promise<ResolvedRequestAuth> {
+  if (typeof modelRegistry.getApiKeyAndHeaders === "function") {
+    return await modelRegistry.getApiKeyAndHeaders(model);
+  }
+
+  if (typeof modelRegistry.getApiKeyForProvider === "function") {
+    const apiKey = await modelRegistry.getApiKeyForProvider(model.provider);
+    if (apiKey !== undefined) {
+      return { ok: true, apiKey };
+    }
+  }
+
+  if (typeof modelRegistry.getApiKey === "function") {
+    const apiKey = await modelRegistry.getApiKey(model);
+    return apiKey !== undefined
+      ? { ok: true, apiKey }
+      : { ok: false, error: `missing auth for provider "${model.provider}"` };
+  }
+
+  throw new Error("model registry auth lookup unavailable");
+}
 
 function clampNonNegativeInt(value: unknown, fallback: number): number {
   const normalized = typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -634,10 +661,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let requestAuth: ResolvedRequestAuth;
     try {
       const modelRegistry = ctx.modelRegistry as ModelRegistryWithRequestAuthLookup;
-      if (typeof modelRegistry.getApiKeyAndHeaders !== "function") {
-        throw new Error("model registry auth lookup unavailable");
-      }
-      requestAuth = await modelRegistry.getApiKeyAndHeaders(model);
+      requestAuth = await resolveCompactionRequestAuth(modelRegistry, model);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       log.warn(
