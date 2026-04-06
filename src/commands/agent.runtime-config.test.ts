@@ -205,11 +205,37 @@ describe("agentCommand runtime config", () => {
       expect(resolveConfigWithSecretsSpy).toHaveBeenCalledWith({
         config: loadedConfig,
         commandName: "agent",
-        targetIds: expect.any(Set),
+        targetIds: expect.objectContaining({
+          has: expect.any(Function),
+        }),
         runtime,
       });
+      const targetIds = resolveConfigWithSecretsSpy.mock.calls[0]?.[0].targetIds;
+      expect(targetIds.has("models.providers.*.apiKey")).toBe(true);
+      expect(targetIds.has("channels.telegram.botToken")).toBe(false);
       expect(setRuntimeConfigSnapshotSpy).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
       expect(prepared.cfg).toBe(resolvedConfig);
+    });
+  });
+
+  it("includes channel secret targets when delivery is requested", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const loadedConfig = mockConfig(home, store);
+      const resolveConfigWithSecretsSpy = vi
+        .spyOn(commandConfigResolutionModule, "resolveCommandConfigWithSecrets")
+        .mockResolvedValueOnce({
+          resolvedConfig: loadedConfig,
+          effectiveConfig: loadedConfig,
+          diagnostics: [],
+        });
+
+      await agentCommandTesting.resolveAgentRuntimeConfig(runtime, {
+        runtimeTargetsChannelSecrets: true,
+      });
+
+      const targetIds = resolveConfigWithSecretsSpy.mock.calls[0]?.[0].targetIds;
+      expect(targetIds.has("channels.telegram.botToken")).toBe(true);
     });
   });
 

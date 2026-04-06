@@ -1,5 +1,6 @@
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
@@ -16,9 +17,14 @@ import { buildCommandContext } from "./commands-context.js";
 import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
+import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import {
+  createFastTestModelSelectionState,
+  createModelSelectionState,
+  resolveContextTokens,
+} from "./model-selection.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { stripInlineStatus } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
@@ -449,23 +455,38 @@ export async function resolveReplyDirectives(params: {
   const blockReplyChunking = blockStreamingEnabled
     ? resolveBlockStreamingChunking(cfg, sessionCtx.Provider, sessionCtx.AccountId)
     : undefined;
-
-  const modelState = await createModelSelectionState({
+  const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
-    agentId,
-    agentCfg,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    parentSessionKey: ctx.ParentSessionKey,
-    storePath,
-    defaultProvider,
-    defaultModel,
-    provider,
-    model,
-    hasModelDirective: directives.hasModelDirective,
-    hasResolvedHeartbeatModelOverride,
+    isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
   });
+
+  const modelState =
+    useFastReplyRuntime &&
+    !directives.hasModelDirective &&
+    !hasResolvedHeartbeatModelOverride &&
+    !sessionEntry?.modelOverride?.trim() &&
+    !sessionEntry?.providerOverride?.trim()
+      ? createFastTestModelSelectionState({
+          agentCfg,
+          provider,
+          model,
+        })
+      : await createModelSelectionState({
+          cfg,
+          agentId,
+          agentCfg,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          parentSessionKey: ctx.ParentSessionKey,
+          storePath,
+          defaultProvider,
+          defaultModel,
+          provider,
+          model,
+          hasModelDirective: directives.hasModelDirective,
+          hasResolvedHeartbeatModelOverride,
+        });
   provider = modelState.provider;
   model = modelState.model;
   const resolvedThinkLevelWithDefault =
@@ -487,12 +508,14 @@ export async function resolveReplyDirectives(params: {
     resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
   }
 
-  let contextTokens = resolveContextTokens({
-    cfg,
-    agentCfg,
-    provider,
-    model,
-  });
+  let contextTokens = useFastReplyRuntime
+    ? (agentCfg?.contextTokens ?? DEFAULT_CONTEXT_TOKENS)
+    : resolveContextTokens({
+        cfg,
+        agentCfg,
+        provider,
+        model,
+      });
 
   const initialModelLabel = `${provider}/${model}`;
   const formatModelSwitchEvent = (label: string, alias?: string) =>

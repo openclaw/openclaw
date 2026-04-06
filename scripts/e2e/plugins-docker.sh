@@ -150,7 +150,10 @@ const { randomUUID } = require("node:crypto");
 
 const [, , entry, sessionKey, message, outputFile, timeoutRaw] = process.argv;
 const timeoutMs = Number(timeoutRaw) > 0 ? Number(timeoutRaw) : 45000;
-const gatewayCallTimeoutMs = Math.max(15000, Math.min(timeoutMs, 30000));
+// Plugin install/enable can intentionally restart the gateway mid-request.
+// Keep the underlying gateway call budget aligned with the scenario timeout
+// instead of clamping too aggressively, or normal restarts look like failures.
+const gatewayCallTimeoutMs = Math.max(15000, Math.min(timeoutMs, 90000));
 const retryableGatewayErrorPattern =
   /gateway ws open timeout|gateway connect timeout|gateway closed|ECONNREFUSED|socket hang up|gateway timeout after/i;
 const gatewayArgs = [
@@ -253,7 +256,7 @@ async function main() {
   const sendResult = await callGateway(
     "chat.send",
     sendParams,
-    Date.now() + Math.min(timeoutMs, gatewayCallTimeoutMs),
+    Date.now() + gatewayCallTimeoutMs,
   );
   if (!sendResult.ok) {
     throw sendResult.error;

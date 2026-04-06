@@ -219,34 +219,40 @@ export async function parseAndSendMediaTags(
     if (item.type === "text") {
       await sendTextChunks(item.content, event, actx, sendWithRetry, consumeQuoteRef);
     } else if (item.type === "image") {
-      const result = await sendPhoto(mediaTarget, item.content);
-      if (result.error) {
-        log?.error(`${prefix} sendPhoto error: ${result.error}`);
-      }
+      await sendQQBotPhotoWithLogging({
+        target: mediaTarget,
+        imageUrl: item.content,
+        log,
+        onError: (error) => `${prefix} sendPhoto error: ${error}`,
+      });
     } else if (item.type === "voice") {
       await sendVoiceWithTimeout(mediaTarget, item.content, account, log, prefix);
     } else if (item.type === "video") {
-      const result = await sendVideoMsg(mediaTarget, item.content);
-      if (result.error) {
-        log?.error(`${prefix} sendVideoMsg error: ${result.error}`);
-      }
-    } else if (item.type === "file") {
-      const result = await sendDocument(mediaTarget, item.content);
-      if (result.error) {
-        log?.error(`${prefix} sendDocument error: ${result.error}`);
-      }
-    } else if (item.type === "media") {
-      const result = await sendMediaAuto({
-        to: actx.qualifiedTarget,
-        text: "",
-        mediaUrl: item.content,
-        accountId: account.accountId,
-        replyToId: event.messageId,
-        account,
+      await sendQQBotResultWithLogging({
+        run: async () => await sendVideoMsg(mediaTarget, item.content),
+        log,
+        onError: (error) => `${prefix} sendVideoMsg error: ${error}`,
       });
-      if (result.error) {
-        log?.error(`${prefix} sendMedia(auto) error: ${result.error}`);
-      }
+    } else if (item.type === "file") {
+      await sendQQBotResultWithLogging({
+        run: async () => await sendDocument(mediaTarget, item.content),
+        log,
+        onError: (error) => `${prefix} sendDocument error: ${error}`,
+      });
+    } else if (item.type === "media") {
+      await sendQQBotResultWithLogging({
+        run: async () =>
+          await sendMediaAuto({
+            to: actx.qualifiedTarget,
+            text: "",
+            mediaUrl: item.content,
+            accountId: account.accountId,
+            replyToId: event.messageId,
+            account,
+          }),
+        log,
+        onError: (error) => `${prefix} sendMedia(auto) error: ${error}`,
+      });
     }
   }
 
@@ -548,6 +554,42 @@ async function sendQQBotTextChunksWithRetry(params: {
   }
 }
 
+async function sendQQBotResultWithLogging(params: {
+  run: () => Promise<{ error?: string }>;
+  log?: DeliverAccountContext["log"];
+  onSuccess?: () => string | undefined;
+  onError: (error: string) => string;
+}): Promise<void> {
+  try {
+    const result = await params.run();
+    if (result.error) {
+      params.log?.error(params.onError(result.error));
+      return;
+    }
+    const successMessage = params.onSuccess?.();
+    if (successMessage) {
+      params.log?.info(successMessage);
+    }
+  } catch (err) {
+    params.log?.error(params.onError(String(err)));
+  }
+}
+
+async function sendQQBotPhotoWithLogging(params: {
+  target: MediaTargetContext;
+  imageUrl: string;
+  log?: DeliverAccountContext["log"];
+  onSuccess?: (imageUrl: string) => string | undefined;
+  onError: (error: string) => string;
+}): Promise<void> {
+  await sendQQBotResultWithLogging({
+    run: async () => await sendPhoto(params.target, params.imageUrl),
+    log: params.log,
+    onSuccess: params.onSuccess ? () => params.onSuccess?.(params.imageUrl) : undefined,
+    onError: params.onError,
+  });
+}
+
 /** Send voice with a 45s timeout guard. */
 async function sendVoiceWithTimeout(
   target: MediaTargetContext,
@@ -755,16 +797,14 @@ async function sendPlainTextReply(
 
   try {
     for (const imageUrl of imageUrls) {
-      try {
-        const imgResult = await sendPhoto(imgMediaTarget, imageUrl);
-        if (imgResult.error) {
-          log?.error(`${prefix} Failed to send image: ${imgResult.error}`);
-        } else {
-          log?.info(`${prefix} Sent image via sendPhoto: ${imageUrl.slice(0, 80)}...`);
-        }
-      } catch (imgErr) {
-        log?.error(`${prefix} Failed to send image: ${String(imgErr)}`);
-      }
+      await sendQQBotPhotoWithLogging({
+        target: imgMediaTarget,
+        imageUrl,
+        log,
+        onSuccess: (nextImageUrl) =>
+          `${prefix} Sent image via sendPhoto: ${nextImageUrl.slice(0, 80)}...`,
+        onError: (error) => `${prefix} Failed to send image: ${error}`,
+      });
     }
 
     if (result.trim()) {

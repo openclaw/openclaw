@@ -42,6 +42,23 @@ type ModelSelectionState = {
   needsModelCatalog: boolean;
 };
 
+export function createFastTestModelSelectionState(params: {
+  agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
+  provider: string;
+  model: string;
+}): ModelSelectionState {
+  return {
+    provider: params.provider,
+    model: params.model,
+    allowedModelKeys: new Set<string>(),
+    allowedModelCatalog: [],
+    resetModelOverride: false,
+    resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
+    resolveDefaultReasoningLevel: async () => "off",
+    needsModelCatalog: false,
+  };
+}
+
 function shouldLogModelSelectionTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 }

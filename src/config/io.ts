@@ -50,6 +50,7 @@ import {
   setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState,
   setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState,
 } from "./runtime-snapshot.js";
+import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
@@ -69,29 +70,7 @@ export {
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
 export { MissingEnvVarError } from "./env-substitution.js";
-
-const SHELL_ENV_EXPECTED_KEYS = [
-  "OPENAI_API_KEY",
-  "ANTHROPIC_API_KEY",
-  "DEEPSEEK_API_KEY",
-  "ANTHROPIC_OAUTH_TOKEN",
-  "GEMINI_API_KEY",
-  "ZAI_API_KEY",
-  "OPENROUTER_API_KEY",
-  "AI_GATEWAY_API_KEY",
-  "MINIMAX_API_KEY",
-  "QWEN_API_KEY",
-  "MODELSTUDIO_API_KEY",
-  "SYNTHETIC_API_KEY",
-  "KILOCODE_API_KEY",
-  "ELEVENLABS_API_KEY",
-  "TELEGRAM_BOT_TOKEN",
-  "DISCORD_BOT_TOKEN",
-  "SLACK_BOT_TOKEN",
-  "SLACK_APP_TOKEN",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_GATEWAY_PASSWORD",
-];
+export { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 
 const OPEN_DM_POLICY_ALLOW_FROM_RE =
   /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
@@ -1710,7 +1689,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           loadShellEnvFallback({
             enabled: true,
             env: deps.env,
-            expectedKeys: SHELL_ENV_EXPECTED_KEYS,
+            expectedKeys: resolveShellEnvExpectedKeys(deps.env),
             logger: deps.logger,
             timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
           });
@@ -1840,7 +1819,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         loadShellEnvFallback({
           enabled: true,
           env: deps.env,
-          expectedKeys: SHELL_ENV_EXPECTED_KEYS,
+          expectedKeys: resolveShellEnvExpectedKeys(deps.env),
           logger: deps.logger,
           timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
         });

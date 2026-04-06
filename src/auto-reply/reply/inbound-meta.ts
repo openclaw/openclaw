@@ -50,7 +50,10 @@ function resolveInboundFormattingHints(ctx: TemplateContext):
   });
 }
 
-export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
+export function buildInboundMetaSystemPrompt(
+  ctx: TemplateContext,
+  options?: { includeFormattingHints?: boolean },
+): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
 
@@ -73,7 +76,8 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
-    response_format: resolveInboundFormattingHints(ctx),
+    response_format:
+      options?.includeFormattingHints === false ? undefined : resolveInboundFormattingHints(ctx),
   };
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.

@@ -128,7 +128,10 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   });
 }
 
-async function resolveAgentRuntimeConfig(runtime: RuntimeEnv): Promise<{
+async function resolveAgentRuntimeConfig(
+  runtime: RuntimeEnv,
+  params?: { runtimeTargetsChannelSecrets?: boolean },
+): Promise<{
   loadedRaw: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   cfg: OpenClawConfig;
@@ -148,7 +151,9 @@ async function resolveAgentRuntimeConfig(runtime: RuntimeEnv): Promise<{
   const { resolvedConfig: cfg } = await resolveCommandConfigWithSecrets({
     config: loadedRaw,
     commandName: "agent",
-    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+    targetIds: getAgentRuntimeCommandSecretTargetIds({
+      includeChannelTargets: params?.runtimeTargetsChannelSecrets === true,
+    }),
     runtime,
   });
   setRuntimeConfigSnapshot(cfg, sourceConfig);
@@ -196,7 +201,9 @@ async function prepareAgentCommandExecution(
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
 
-  const { cfg } = await resolveAgentRuntimeConfig(runtime);
+  const { cfg } = await resolveAgentRuntimeConfig(runtime, {
+    runtimeTargetsChannelSecrets: opts.deliver === true,
+  });
   const normalizedSpawned = normalizeSpawnedRunMetadata({
     spawnedBy: opts.spawnedBy,
     groupId: opts.groupId,
