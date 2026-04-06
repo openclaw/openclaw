@@ -43,12 +43,21 @@ export function createMinimaxFastModeWrapper(
 }
 
 /**
- * MiniMax's Anthropic-compatible streaming endpoint returns reasoning_content
- * in OpenAI-style delta chunks ({delta: {content: "", reasoning_content: "..."}})
- * rather than the native Anthropic thinking block format. Pi-ai's Anthropic
- * provider cannot process this format and leaks the reasoning text as visible
- * content. Disable thinking in the outgoing payload so MiniMax does not produce
- * reasoning_content deltas during streaming.
+ * MiniMax's Anthropic-compatible streaming endpoint implements reasoning
+ * natively but does NOT support the Anthropic extended thinking protocol
+ * (i.e. sending `thinking: { type: "enabled", budget_tokens: N }` in the
+ * request payload). When a thinking payload is forwarded, MiniMax returns
+ * reasoning output as OpenAI-style `reasoning_content` deltas rather than
+ * Anthropic `thinking` content blocks. Pi-ai's Anthropic stream handler
+ * cannot parse this format, causing the raw reasoning text to leak into the
+ * visible assistant reply.
+ *
+ * OpenClaw's Anthropic transport sets `thinking: { type: "enabled" }` for any
+ * model with `reasoning: true` whenever a thinking level is active (which is
+ * the default for MiniMax M2.7). This wrapper unconditionally overrides that
+ * to `thinking: { type: "disabled" }` for every MiniMax Anthropic-messages
+ * request, ensuring MiniMax performs its reasoning silently without leaking
+ * content into the response stream.
  */
 export function createMinimaxThinkingDisabledWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
@@ -63,11 +72,12 @@ export function createMinimaxThinkingDisabledWrapper(baseStreamFn: StreamFn | un
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
-          // Only inject if thinking is not already explicitly set.
-          // This preserves any intentional override from other wrappers.
-          if (payloadObj.thinking === undefined) {
-            payloadObj.thinking = { type: "disabled" };
-          }
+          // Always override to disabled. MiniMax does not support the Anthropic
+          // extended thinking protocol and returns reasoning_content in OpenAI
+          // delta format instead. Sending thinking:enabled causes that content
+          // to leak into the visible reply, so we must suppress it regardless
+          // of what the upstream transport layer set.
+          payloadObj.thinking = { type: "disabled" };
         }
         return originalOnPayload?.(payload, model);
       },

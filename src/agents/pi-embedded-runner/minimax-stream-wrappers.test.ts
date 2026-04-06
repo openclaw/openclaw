@@ -74,7 +74,11 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
     ).toBeUndefined();
   });
 
-  it("preserves an already-set thinking value", () => {
+  it("overrides an upstream thinking:enabled payload to disabled", () => {
+    // Regression: the Anthropic transport sets thinking:enabled for any model
+    // with reasoning:true (which MiniMax M2.7 is). The wrapper must override
+    // this unconditionally because MiniMax does not support the Anthropic
+    // extended thinking protocol and leaks reasoning_content into the reply.
     let capturedThinking: unknown = undefined;
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -96,7 +100,7 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
       {},
     );
 
-    expect(capturedThinking).toEqual({ type: "enabled", budget_tokens: 1024 });
+    expect(capturedThinking).toEqual({ type: "disabled" });
   });
 });
 
