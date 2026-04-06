@@ -13,8 +13,8 @@ vi.mock("../logger.js", () => ({
 }));
 
 let toToolDefinitions: typeof import("./pi-tool-definition-adapter.js").toToolDefinitions;
-let wrapToolParamNormalization: typeof import("./pi-tools.params.js").wrapToolParamNormalization;
-let CLAUDE_PARAM_GROUPS: typeof import("./pi-tools.params.js").CLAUDE_PARAM_GROUPS;
+let wrapToolParamValidation: typeof import("./pi-tools.params.js").wrapToolParamValidation;
+let REQUIRED_PARAM_GROUPS: typeof import("./pi-tools.params.js").REQUIRED_PARAM_GROUPS;
 let logError: typeof import("../logger.js").logError;
 
 type ToolExecute = ReturnType<
@@ -25,7 +25,7 @@ const extensionContext = {} as Parameters<ToolExecute>[4];
 describe("pi tool definition adapter logging", () => {
   beforeAll(async () => {
     ({ toToolDefinitions } = await import("./pi-tool-definition-adapter.js"));
-    ({ wrapToolParamNormalization, CLAUDE_PARAM_GROUPS } = await import("./pi-tools.params.js"));
+    ({ wrapToolParamValidation, REQUIRED_PARAM_GROUPS } = await import("./pi-tools.params.js"));
     ({ logError } = await import("../logger.js"));
   });
 
@@ -41,8 +41,12 @@ describe("pi tool definition adapter logging", () => {
       description: "edits files",
       parameters: Type.Object({
         path: Type.String(),
-        oldText: Type.String(),
-        newText: Type.String(),
+        edits: Type.Array(
+          Type.Object({
+            oldText: Type.String(),
+            newText: Type.String(),
+          }),
+        ),
       }),
       execute: async () => ({
         content: [{ type: "text" as const, text: "ok" }],
@@ -50,7 +54,7 @@ describe("pi tool definition adapter logging", () => {
       }),
     } satisfies AgentTool;
 
-    const tool = wrapToolParamNormalization(baseTool, CLAUDE_PARAM_GROUPS.edit);
+    const tool = wrapToolParamValidation(baseTool, REQUIRED_PARAM_GROUPS.edit);
     const [def] = toToolDefinitions([tool]);
     if (!def) {
       throw new Error("missing tool definition");
@@ -60,7 +64,7 @@ describe("pi tool definition adapter logging", () => {
 
     expect(logError).toHaveBeenCalledWith(
       expect.stringContaining(
-        '[tools] edit failed: Missing required parameters: oldText alias, newText alias. Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
+        '[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
       ),
     );
   });
@@ -86,7 +90,7 @@ describe("pi tool definition adapter logging", () => {
       execute,
     } satisfies AgentTool;
 
-    const tool = wrapToolParamNormalization(baseTool, CLAUDE_PARAM_GROUPS.edit);
+    const tool = wrapToolParamValidation(baseTool, REQUIRED_PARAM_GROUPS.edit);
     const [def] = toToolDefinitions([tool]);
     if (!def) {
       throw new Error("missing tool definition");

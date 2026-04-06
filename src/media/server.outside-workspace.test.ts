@@ -4,37 +4,43 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => ({
   readFileWithinRoot: vi.fn(),
   cleanOldMedia: vi.fn().mockResolvedValue(undefined),
+  isSafeOpenError: vi.fn(
+    (error: unknown) => typeof error === "object" && error !== null && "code" in error,
+  ),
 }));
 
 let mediaDir = "";
 
-vi.mock("../infra/fs-safe.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/fs-safe.js")>();
+vi.mock("./server.runtime.js", () => {
   return {
-    ...actual,
+    MEDIA_MAX_BYTES: 5 * 1024 * 1024,
     readFileWithinRoot: mocks.readFileWithinRoot,
-  };
-});
-
-vi.mock("./store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./store.js")>();
-  return {
-    ...actual,
+    isSafeOpenError: mocks.isSafeOpenError,
     getMediaDir: () => mediaDir,
     cleanOldMedia: mocks.cleanOldMedia,
   };
 });
 
-let SafeOpenError: typeof import("../infra/fs-safe.js").SafeOpenError;
 let startMediaServer: typeof import("./server.js").startMediaServer;
 let realFetch: typeof import("undici").fetch;
+const LOOPBACK_FETCH_ENV = {
+  HTTP_PROXY: undefined,
+  HTTPS_PROXY: undefined,
+  ALL_PROXY: undefined,
+  http_proxy: undefined,
+  https_proxy: undefined,
+  all_proxy: undefined,
+  NO_PROXY: "127.0.0.1,localhost",
+  no_proxy: "127.0.0.1,localhost",
+} as const;
 
 async function expectOutsideWorkspaceServerResponse(url: string) {
-  const response = await realFetch(url);
+  const response = await withEnvAsync(LOOPBACK_FETCH_ENV, () => realFetch(url));
   expect(response.status).toBe(400);
   expect(await response.text()).toBe("file is outside workspace root");
 }
@@ -48,7 +54,6 @@ describe("media server outside-workspace mapping", () => {
     vi.useRealTimers();
     vi.doUnmock("undici");
     const require = createRequire(import.meta.url);
-    ({ SafeOpenError } = await import("../infra/fs-safe.js"));
     ({ startMediaServer } = await import("./server.js"));
     ({ fetch: realFetch } = require("undici") as typeof import("undici"));
     mediaDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-outside-workspace-"));
@@ -90,9 +95,10 @@ describe("media server outside-workspace mapping", () => {
     if (listenBlocked) {
       return;
     }
-    mocks.readFileWithinRoot.mockRejectedValueOnce(
-      new SafeOpenError("outside-workspace", "file is outside workspace root"),
-    );
+    mocks.readFileWithinRoot.mockRejectedValueOnce({
+      code: "outside-workspace",
+      message: "file is outside workspace root",
+    });
 
     await expectOutsideWorkspaceServerResponse(`http://127.0.0.1:${port}/media/ok-id`);
   });

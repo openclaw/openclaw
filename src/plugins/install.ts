@@ -283,6 +283,7 @@ async function installPluginDirectoryIntoExtensions(params: {
   manifestName?: string;
   version?: string;
   extensions: string[];
+  targetDir?: string;
   extensionsDir?: string;
   logger: PluginInstallLogger;
   timeoutMs: number;
@@ -295,20 +296,19 @@ async function installPluginDirectoryIntoExtensions(params: {
   nameEncoder?: (pluginId: string) => string;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
-  const extensionsDir = params.extensionsDir
-    ? resolveUserPath(params.extensionsDir)
-    : path.join(CONFIG_DIR, "extensions");
-  const targetDirResult = await runtime.resolveCanonicalInstallTarget({
-    baseDir: extensionsDir,
-    id: params.pluginId,
-    invalidNameMessage: "invalid plugin name: path traversal detected",
-    boundaryLabel: "extensions directory",
-    nameEncoder: params.nameEncoder,
-  });
-  if (!targetDirResult.ok) {
-    return { ok: false, error: targetDirResult.error };
+  let targetDir = params.targetDir;
+  if (!targetDir) {
+    const targetDirResult = await resolvePluginInstallTarget({
+      runtime,
+      pluginId: params.pluginId,
+      extensionsDir: params.extensionsDir,
+      nameEncoder: params.nameEncoder,
+    });
+    if (!targetDirResult.ok) {
+      return { ok: false, error: targetDirResult.error };
+    }
+    targetDir = targetDirResult.targetDir;
   }
-  const targetDir = targetDirResult.targetDir;
   const availability = await runtime.ensureInstallTargetAvailable({
     mode: params.mode,
     targetDir,
@@ -372,6 +372,35 @@ export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string
   return targetDirResult.path;
 }
 
+async function resolvePluginInstallTarget(params: {
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  pluginId: string;
+  extensionsDir?: string;
+  nameEncoder?: (pluginId: string) => string;
+}): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
+  const extensionsDir = params.extensionsDir
+    ? resolveUserPath(params.extensionsDir)
+    : path.join(CONFIG_DIR, "extensions");
+  return await params.runtime.resolveCanonicalInstallTarget({
+    baseDir: extensionsDir,
+    id: params.pluginId,
+    invalidNameMessage: "invalid plugin name: path traversal detected",
+    boundaryLabel: "extensions directory",
+    nameEncoder: params.nameEncoder,
+  });
+}
+
+async function resolveEffectiveInstallMode(params: {
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  requestedMode: "install" | "update";
+  targetPath: string;
+}): Promise<"install" | "update"> {
+  if (params.requestedMode !== "update") {
+    return "install";
+  }
+  return (await params.runtime.fileExists(params.targetPath)) ? "update" : "install";
+}
+
 async function installBundleFromSourceDir(
   params: {
     sourceDir: string;
@@ -409,6 +438,20 @@ async function installBundleFromSourceDir(
     };
   }
 
+  const targetDirResult = await resolvePluginInstallTarget({
+    runtime,
+    pluginId,
+    extensionsDir: params.extensionsDir,
+  });
+  if (!targetDirResult.ok) {
+    return { ok: false, error: targetDirResult.error };
+  }
+  const effectiveMode = await resolveEffectiveInstallMode({
+    runtime,
+    requestedMode: mode,
+    targetPath: targetDirResult.targetDir,
+  });
+
   try {
     const scanResult = await runtime.scanBundleInstallSource({
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
@@ -417,7 +460,7 @@ async function installBundleFromSourceDir(
       logger,
       requestKind: params.installPolicyRequest?.kind,
       requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
-      mode,
+      mode: effectiveMode,
       version: manifestRes.manifest.version,
     });
     if (scanResult?.blocked) {
@@ -437,10 +480,11 @@ async function installBundleFromSourceDir(
     manifestName: manifestRes.manifest.name,
     version: manifestRes.manifest.version,
     extensions: [],
+    targetDir: targetDirResult.targetDir,
     extensionsDir: params.extensionsDir,
     logger,
     timeoutMs,
-    mode,
+    mode: effectiveMode,
     dryRun,
     copyErrorPrefix: "failed to copy plugin bundle",
     hasDeps: false,
@@ -588,6 +632,21 @@ async function installPluginFromPackageDir(
       code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
     };
   }
+
+  const targetDirResult = await resolvePluginInstallTarget({
+    runtime,
+    pluginId,
+    extensionsDir: params.extensionsDir,
+    nameEncoder: encodePluginInstallDirName,
+  });
+  if (!targetDirResult.ok) {
+    return { ok: false, error: targetDirResult.error };
+  }
+  const effectiveMode = await resolveEffectiveInstallMode({
+    runtime,
+    requestedMode: mode,
+    targetPath: targetDirResult.targetDir,
+  });
   try {
     const scanResult = await runtime.scanPackageInstallSource({
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
@@ -597,7 +656,7 @@ async function installPluginFromPackageDir(
       extensions,
       requestKind: params.installPolicyRequest?.kind,
       requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
-      mode,
+      mode: effectiveMode,
       packageName: pkgName || undefined,
       manifestId: manifestPluginId,
       version: typeof manifest.version === "string" ? manifest.version : undefined,
@@ -620,10 +679,11 @@ async function installPluginFromPackageDir(
     manifestName: pkgName || undefined,
     version: typeof manifest.version === "string" ? manifest.version : undefined,
     extensions,
+    targetDir: targetDirResult.targetDir,
     extensionsDir: params.extensionsDir,
     logger,
     timeoutMs,
-    mode,
+    mode: effectiveMode,
     dryRun,
     copyErrorPrefix: "failed to copy plugin",
     hasDeps: Object.keys(deps).length > 0,
@@ -747,9 +807,14 @@ export async function installPluginFromFile(params: {
     return { ok: false, error: pluginIdError };
   }
   const targetFile = path.join(extensionsDir, `${safeFileName(pluginId)}${path.extname(filePath)}`);
+  const effectiveMode = await resolveEffectiveInstallMode({
+    runtime,
+    requestedMode: mode,
+    targetPath: targetFile,
+  });
 
   const availability = await runtime.ensureInstallTargetAvailable({
-    mode,
+    mode: effectiveMode,
     targetDir: targetFile,
     alreadyExistsError: `plugin already exists: ${targetFile} (delete it first)`,
   });
@@ -766,7 +831,7 @@ export async function installPluginFromFile(params: {
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       filePath,
       logger,
-      mode,
+      mode: effectiveMode,
       pluginId,
       requestedSpecifier: installPolicyRequest.requestedSpecifier,
     });

@@ -26,7 +26,6 @@ function buildRegistry(params: { acpxRoot: string; helperRoot: string }): Plugin
         name: "ACPX Runtime",
         channels: [],
         providers: [],
-        cliBackends: [],
         skills: ["./skills"],
         hooks: [],
         origin: "workspace",
@@ -39,7 +38,6 @@ function buildRegistry(params: { acpxRoot: string; helperRoot: string }): Plugin
         name: "Helper",
         channels: [],
         providers: [],
-        cliBackends: [],
         skills: ["./skills"],
         hooks: [],
         origin: "workspace",
@@ -55,6 +53,7 @@ function createSinglePluginRegistry(params: {
   pluginRoot: string;
   skills: string[];
   format?: "openclaw" | "bundle";
+  legacyPluginIds?: string[];
 }): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -65,7 +64,7 @@ function createSinglePluginRegistry(params: {
         format: params.format,
         channels: [],
         providers: [],
-        cliBackends: [],
+        legacyPluginIds: params.legacyPluginIds,
         skills: params.skills,
         hooks: [],
         origin: "workspace",
@@ -231,5 +230,32 @@ describe("resolvePluginSkillDirs", () => {
       path.resolve(pluginRoot, "skills"),
       path.resolve(pluginRoot, "commands"),
     ]);
+  });
+
+  it("resolves enabled plugin skills through legacy manifest aliases", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const pluginRoot = await tempDirs.make("openclaw-legacy-plugin-");
+    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+
+    hoisted.loadPluginManifestRegistry.mockReturnValue(
+      createSinglePluginRegistry({
+        pluginRoot,
+        skills: ["./skills"],
+        legacyPluginIds: ["helper-legacy"],
+      }),
+    );
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {
+        plugins: {
+          entries: {
+            "helper-legacy": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);
   });
 });

@@ -369,7 +369,7 @@ async function handleBroadcastAction(
   }
   return {
     kind: "broadcast",
-    channel: targetChannels[0] ?? "discord",
+    channel: targetChannels[0] ?? channelHint?.trim().toLowerCase() ?? "unknown",
     action: "broadcast",
     handledBy: input.dryRun ? "dry-run" : "core",
     payload: { results },
@@ -502,6 +502,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     toolContext: input.toolContext,
     agentId,
+    currentSessionKey: input.sessionKey,
     dryRun,
     resolvedTarget,
     resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,

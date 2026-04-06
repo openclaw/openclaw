@@ -49,17 +49,9 @@ export type CanvasHostConfig = {
 };
 
 export type TalkProviderConfig = {
-  /** Default voice ID for the provider's Talk mode implementation. */
-  voiceId?: string;
-  /** Optional voice name -> provider voice ID map. */
-  voiceAliases?: Record<string, string>;
-  /** Default provider model ID for Talk mode. */
-  modelId?: string;
-  /** Default provider output format (for example pcm_44100). */
-  outputFormat?: string;
   /** Provider API key (optional; provider-specific env fallback may apply). */
   apiKey?: SecretInput;
-  /** Provider-specific extensions. */
+  /** Provider-owned Talk config fields. */
   [key: string]: unknown;
 };
 
@@ -71,7 +63,7 @@ export type ResolvedTalkConfig = {
 };
 
 export type TalkConfig = {
-  /** Active Talk TTS provider (for example "elevenlabs"). */
+  /** Active Talk TTS provider (for example "acme-speech"). */
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
   providers?: Record<string, TalkProviderConfig>;
@@ -79,16 +71,6 @@ export type TalkConfig = {
   interruptOnSpeech?: boolean;
   /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
   silenceTimeoutMs?: number;
-
-  /**
-   * Legacy ElevenLabs compatibility fields.
-   * Kept during rollout while older clients migrate to provider/providers.
-   */
-  voiceId?: string;
-  voiceAliases?: Record<string, string>;
-  modelId?: string;
-  outputFormat?: string;
-  apiKey?: SecretInput;
 };
 
 export type TalkConfigResponse = TalkConfig & {

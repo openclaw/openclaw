@@ -22,34 +22,35 @@ function buildConfig(
 }
 
 describe("discord exec approvals", () => {
-  it("requires enablement and explicit or owner approvers", () => {
+  it("auto-enables when owner approvers resolve and disables only when forced off", () => {
     expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
-    expect(isDiscordExecApprovalClientEnabled({ cfg: buildConfig({ enabled: true }) })).toBe(false);
     expect(
       isDiscordExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true }, { allowFrom: ["123"] }),
+        cfg: buildConfig({ enabled: true }),
       }),
     ).toBe(false);
     expect(
       isDiscordExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true, approvers: ["123"] }),
+        cfg: buildConfig({ approvers: ["123"] }),
       }),
     ).toBe(true);
     expect(
       isDiscordExecApprovalClientEnabled({
         cfg: {
-          ...buildConfig({ enabled: true }),
+          ...buildConfig(),
           commands: { ownerAllowFrom: ["discord:789"] },
         } as OpenClawConfig,
       }),
     ).toBe(true);
+    expect(
+      isDiscordExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: false, approvers: ["123"] }),
+      }),
+    ).toBe(false);
   });
 
   it("prefers explicit approvers when configured", () => {
-    const cfg = buildConfig(
-      { enabled: true, approvers: ["456"] },
-      { allowFrom: ["123"], defaultTo: "user:789" },
-    );
+    const cfg = buildConfig({ approvers: ["456"] }, { allowFrom: ["123"], defaultTo: "user:789" });
 
     expect(getDiscordExecApprovalApprovers({ cfg })).toEqual(["456"]);
     expect(isDiscordExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
@@ -72,7 +73,7 @@ describe("discord exec approvals", () => {
 
   it("falls back to commands.ownerAllowFrom for exec approvers", () => {
     const cfg = {
-      ...buildConfig({ enabled: true }),
+      ...buildConfig(),
       commands: { ownerAllowFrom: ["discord:123", "user:456", "789"] },
     } as OpenClawConfig;
 

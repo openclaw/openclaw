@@ -42,12 +42,7 @@ import { resolveSubagentLabel } from "./subagents-utils.js";
 
 // Some usage endpoints only work with CLI/session OAuth tokens, not API keys.
 // Skip those probes when the active auth mode cannot satisfy the endpoint.
-const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
-  "anthropic",
-  "github-copilot",
-  "google-gemini-cli",
-  "openai-codex",
-]);
+const USAGE_OAUTH_ONLY_PROVIDERS = new Set(["anthropic", "github-copilot", "openai-codex"]);
 
 function shouldLoadUsageSummary(params: {
   provider?: string;
@@ -149,6 +144,7 @@ export async function buildStatusText(params: {
   primaryModelLabelOverride?: string;
   modelAuthOverride?: string;
   activeModelAuthOverride?: string;
+  includeTranscriptUsage?: boolean;
 }): Promise<string> {
   const {
     cfg,
@@ -345,7 +341,7 @@ export async function buildStatusText(params: {
     subagentsLine,
     taskLine,
     mediaDecisions: params.mediaDecisions,
-    includeTranscriptUsage: false,
+    includeTranscriptUsage: params.includeTranscriptUsage ?? true,
   });
 
   return statusText;

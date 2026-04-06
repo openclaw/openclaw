@@ -28,7 +28,7 @@ describe("plugin-sdk/approval-renderers", () => {
               },
               {
                 label: "Allow Always",
-                value: "/approve plugin:approval-123 always",
+                value: "/approve plugin:approval-123 allow-always",
                 style: "primary",
               },
               {
@@ -75,7 +75,7 @@ describe("plugin-sdk/approval-renderers", () => {
               },
               {
                 label: "Allow Always",
-                value: "/approve plugin-approval-123 always",
+                value: "/approve plugin-approval-123 allow-always",
                 style: "primary",
               },
               {
@@ -89,9 +89,12 @@ describe("plugin-sdk/approval-renderers", () => {
       },
       channelDataExpected: {
         execApproval: {
+          agentId: undefined,
           approvalId: "plugin-approval-123",
+          approvalKind: "plugin",
           approvalSlug: "custom-slug",
           allowedDecisions: ["allow-once", "allow-always", "deny"],
+          sessionKey: undefined,
           state: "pending",
         },
         telegram: {

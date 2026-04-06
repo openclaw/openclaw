@@ -1,5 +1,10 @@
 import type { Bot } from "grammy";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveChunkMode as resolveChunkModeRuntime } from "../../../src/auto-reply/chunk.js";
+import { resolveMarkdownTableMode as resolveMarkdownTableModeRuntime } from "../../../src/config/markdown-tables.js";
+import { resolveSessionStoreEntry as resolveSessionStoreEntryRuntime } from "../../../src/config/sessions/store.js";
+import { getAgentScopedMediaLocalRoots as getAgentScopedMediaLocalRootsRuntime } from "../../../src/media/local-roots.js";
+import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createSequencedTestDraftStream,
@@ -45,7 +50,6 @@ const listSkillCommandsForAgents = vi.hoisted(() => vi.fn(() => []));
 const createChannelReplyPipeline = vi.hoisted(() =>
   vi.fn(() => ({
     responsePrefix: undefined,
-    enableSlackInteractiveReplies: undefined,
     responsePrefixContextProvider: () => ({ identityName: undefined }),
     onModelSelected: () => undefined,
   })),
@@ -58,14 +62,6 @@ const generateTopicLabel = vi.hoisted(() => vi.fn());
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
 }));
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    generateTopicLabel,
-  };
-});
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
@@ -88,15 +84,16 @@ vi.mock("./send.js", () => ({
   sendStickerTelegram,
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig,
-    loadSessionStore,
-    resolveStorePath,
-  };
-});
+vi.mock("./bot-message-dispatch.runtime.js", () => ({
+  generateTopicLabel,
+  getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsRuntime,
+  loadSessionStore,
+  resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
+  resolveChunkMode: resolveChunkModeRuntime,
+  resolveMarkdownTableMode: resolveMarkdownTableModeRuntime,
+  resolveSessionStoreEntry: resolveSessionStoreEntryRuntime,
+  resolveStorePath,
+}));
 
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
@@ -540,6 +537,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
     expect(reasoningDraftStream.update).toHaveBeenCalledWith("Reasoning:\n_step_");
     expect(loadSessionStore).toHaveBeenCalledWith("/tmp/sessions.json", { skipCache: true });
+  });
+
+  it("does not expose reasoning preview callbacks unless session reasoning is stream", async () => {
+    let seenReasoningCallback: unknown;
+    const answerDraftStream = createDraftStream(999);
+    createTelegramDraftStream.mockImplementationOnce(() => answerDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      seenReasoningCallback = replyOptions?.onReasoningStream;
+      await replyOptions?.onPartialReply?.({
+        text: "<think>internal chain of thought</think>Visible answer",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(seenReasoningCallback).toBeUndefined();
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Visible answer");
   });
 
   it("does not overwrite finalized preview when additional final payloads are sent", async () => {
