@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -10,9 +10,11 @@ import {
   loadRunOverflowCompactionHarness,
   mockedContextEngine,
   mockedCompactDirect,
+  mockedEvaluateContextWindowGuard,
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
   mockedLog,
+  mockedResolveContextWindowInfo,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
@@ -168,6 +170,86 @@ describe("overflow compaction in run loop", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedLog.info).toHaveBeenCalledWith(
       expect.stringContaining("Truncated 1 tool result(s)"),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("falls back to tool-result truncation and retries when real aggregate tool-result detection trips", async () => {
+    const { sessionLikelyHasOversizedToolResults } = await vi.importActual<
+      typeof import("./tool-result-truncation.js")
+    >("./tool-result-truncation.js");
+    mockedResolveContextWindowInfo.mockReturnValue({
+      tokens: 10_000,
+      source: "model",
+    });
+    mockedEvaluateContextWindowGuard.mockReturnValue({
+      shouldWarn: false,
+      shouldBlock: false,
+      tokens: 10_000,
+      source: "model",
+    });
+
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: makeOverflowError(),
+          messagesSnapshot: [
+            {
+              role: "user",
+              content: "u".repeat(20_000),
+            } as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+            {
+              role: "toolResult",
+              toolCallId: "call_a",
+              toolName: "read",
+              content: [{ type: "text", text: "a".repeat(10_000) }],
+              isError: false,
+            } as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+            {
+              role: "toolResult",
+              toolCallId: "call_b",
+              toolName: "read",
+              content: [{ type: "text", text: "b".repeat(10_000) }],
+              isError: false,
+            } as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+            {
+              role: "toolResult",
+              toolCallId: "call_c",
+              toolName: "read",
+              content: [{ type: "text", text: "c".repeat(10_000) }],
+              isError: false,
+            } as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
+    });
+    mockedSessionLikelyHasOversizedToolResults.mockImplementation(
+      ((params: Parameters<typeof sessionLikelyHasOversizedToolResults>[0]) =>
+        sessionLikelyHasOversizedToolResults(params)) as never,
+    );
+    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
+      truncated: true,
+      truncatedCount: 2,
+    });
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedSessionLikelyHasOversizedToolResults).toHaveBeenCalledWith(
+      expect.objectContaining({ contextWindowTokens: 10_000 }),
+    );
+    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionFile: "/tmp/session.json" }),
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("Truncated 2 tool result(s)"),
     );
     expect(result.meta.error).toBeUndefined();
   });

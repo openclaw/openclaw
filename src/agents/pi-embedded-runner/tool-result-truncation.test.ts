@@ -342,6 +342,112 @@ describe("truncateOversizedToolResultsInSession", () => {
       openSpy.mockRestore();
     }
   });
+
+  it("rewrites aggregate medium tool results when their combined size still overflows the session", async () => {
+    const sessionFile = "/tmp/tool-result-truncation-aggregate-session.jsonl";
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage(makeUserMessage("u".repeat(20_000)));
+    sessionManager.appendMessage(makeAssistantMessage("reading files"));
+    sessionManager.appendMessage(makeToolResult("a".repeat(10_000)));
+    sessionManager.appendMessage(makeToolResult("b".repeat(10_000)));
+    sessionManager.appendMessage(makeToolResult("c".repeat(10_000)));
+
+    const openSpy = vi
+      .spyOn(SessionManager, "open")
+      .mockReturnValue(sessionManager as unknown as ReturnType<typeof SessionManager.open>);
+
+    try {
+      const result = await truncateOversizedToolResultsInSession({
+        sessionFile,
+        contextWindowTokens: 10_000,
+        sessionKey: "agent:main:aggregate-test",
+      });
+
+      expect(result.truncated).toBe(true);
+      expect(result.truncatedCount).toBeGreaterThan(0);
+
+      const branch = sessionManager.getBranch();
+      const toolTexts = branch
+        .filter((entry) => entry.type === "message" && entry.message.role === "toolResult")
+        .map((entry) =>
+          entry.type === "message" && entry.message.role === "toolResult"
+            ? getFirstToolResultText(entry.message)
+            : "",
+        );
+      expect(toolTexts.some((text) => text.includes("truncated"))).toBe(true);
+      expect(toolTexts.some((text) => text.length < 10_000)).toBe(true);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it("lets a retry pass the real guard after aggregate session rewrite", async () => {
+    const { PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE, installToolResultContextGuard } =
+      await import("./tool-result-context-guard.js");
+    const sessionFile = "/tmp/tool-result-truncation-seam-session.jsonl";
+    const contextWindowTokens = 10_000;
+    const originalMessages = [
+      makeUserMessage("u".repeat(20_000)),
+      makeAssistantMessage("reading files"),
+      makeToolResult("a".repeat(10_000), "call_a"),
+      makeToolResult("b".repeat(10_000), "call_b"),
+      makeToolResult("c".repeat(10_000), "call_c"),
+    ];
+    const guardAgent = {};
+    installToolResultContextGuard({ agent: guardAgent, contextWindowTokens });
+
+    await expect(
+      (
+        guardAgent as {
+          transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown;
+        }
+      ).transformContext?.(originalMessages, new AbortController().signal),
+    ).rejects.toThrow(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+
+    expect(
+      sessionLikelyHasOversizedToolResults({
+        messages: originalMessages,
+        contextWindowTokens,
+      }),
+    ).toBe(true);
+
+    const sessionManager = SessionManager.inMemory();
+    for (const message of originalMessages) {
+      sessionManager.appendMessage(message);
+    }
+    const openSpy = vi
+      .spyOn(SessionManager, "open")
+      .mockReturnValue(sessionManager as unknown as ReturnType<typeof SessionManager.open>);
+
+    try {
+      const rewriteResult = await truncateOversizedToolResultsInSession({
+        sessionFile,
+        contextWindowTokens,
+        sessionKey: "agent:main:seam-test",
+      });
+
+      expect(rewriteResult.truncated).toBe(true);
+      expect(rewriteResult.truncatedCount).toBeGreaterThan(0);
+
+      const rewrittenMessages = sessionManager
+        .getBranch()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => (entry.type === "message" ? entry.message : null))
+        .filter((message): message is AgentMessage => message !== null);
+
+      const retryAgent = {};
+      installToolResultContextGuard({ agent: retryAgent, contextWindowTokens });
+      await expect(
+        (
+          retryAgent as {
+            transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown;
+          }
+        ).transformContext?.(rewrittenMessages, new AbortController().signal),
+      ).resolves.toBeDefined();
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
 });
 
 describe("sessionLikelyHasOversizedToolResults", () => {
@@ -361,6 +467,21 @@ describe("sessionLikelyHasOversizedToolResults", () => {
       sessionLikelyHasOversizedToolResults({
         messages,
         contextWindowTokens: 128_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true when several medium tool results exceed the aggregate overflow budget", () => {
+    const messages = [
+      makeUserMessage("u".repeat(20_000)),
+      makeToolResult("a".repeat(10_000)),
+      makeToolResult("b".repeat(10_000)),
+      makeToolResult("c".repeat(10_000)),
+    ];
+    expect(
+      sessionLikelyHasOversizedToolResults({
+        messages,
+        contextWindowTokens: 10_000,
       }),
     ).toBe(true);
   });

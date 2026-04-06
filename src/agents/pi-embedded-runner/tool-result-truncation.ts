@@ -4,6 +4,12 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
 import { log } from "./logger.js";
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
+  createMessageCharEstimateCache,
+  estimateContextChars,
+} from "./tool-result-char-estimator.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
 /**
@@ -12,6 +18,11 @@ import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.j
  * consume more than 30% of the context window even without other messages.
  */
 const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
+const CONTEXT_INPUT_HEADROOM_RATIO = 0.75;
+const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
+const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO =
+  CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
+const AGGREGATE_TRUNCATION_MIN_KEEP_CHARS = 256;
 
 /**
  * Default hard cap for a single live tool result text block.
@@ -43,9 +54,59 @@ const TRUNCATION_SUFFIX =
   "offset/limit parameters to read smaller chunks.]";
 
 type ToolResultTruncationOptions = {
-  suffix?: string;
+  suffix?: string | ((truncatedChars: number) => string);
   minKeepChars?: number;
 };
+
+type ToolResultRewriteCandidate = {
+  entryId: string;
+  entryIndex: number;
+  message: AgentMessage;
+  textLength: number;
+};
+
+function calculateContextBudgetChars(contextWindowTokens: number): number {
+  return Math.max(
+    1_024,
+    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * CONTEXT_INPUT_HEADROOM_RATIO),
+  );
+}
+
+function calculatePreemptiveOverflowChars(contextWindowTokens: number): number {
+  return Math.max(
+    calculateContextBudgetChars(contextWindowTokens),
+    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * PREEMPTIVE_OVERFLOW_RATIO),
+  );
+}
+
+function estimateToolResultCharsFromTextLength(textLength: number): number {
+  return Math.ceil(textLength * TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO);
+}
+
+function collectToolResultRewriteCandidates(branch: ReturnType<SessionManager["getBranch"]>): {
+  candidates: ToolResultRewriteCandidate[];
+  messages: AgentMessage[];
+} {
+  const candidates: ToolResultRewriteCandidate[] = [];
+  const messages: AgentMessage[] = [];
+  for (let i = 0; i < branch.length; i++) {
+    const entry = branch[i];
+    if (entry.type !== "message") {
+      continue;
+    }
+    messages.push(entry.message);
+    if ((entry.message as { role?: string }).role !== "toolResult") {
+      continue;
+    }
+    candidates.push({
+      entryId: entry.id,
+      entryIndex: i,
+      message: entry.message,
+      textLength: getToolResultTextLength(entry.message),
+    });
+  }
+  return { candidates, messages };
+}
 
 /**
  * Marker inserted between head and tail when using head+tail truncation.
@@ -82,12 +143,16 @@ export function truncateToolResultText(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): string {
-  const suffix = options.suffix ?? TRUNCATION_SUFFIX;
+  const suffixFactory: (truncatedChars: number) => string =
+    typeof options.suffix === "function"
+      ? options.suffix
+      : () => (options.suffix ?? TRUNCATION_SUFFIX);
   const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
   if (text.length <= maxChars) {
     return text;
   }
-  const budget = Math.max(minKeepChars, maxChars - suffix.length);
+  const defaultSuffix = suffixFactory(Math.max(1, text.length - maxChars));
+  const budget = Math.max(minKeepChars, maxChars - defaultSuffix.length);
 
   // If tail looks important, split budget between head and tail
   if (hasImportantTail(text) && budget > minKeepChars * 2) {
@@ -108,7 +173,9 @@ export function truncateToolResultText(
         tailStart = tailNewline + 1;
       }
 
-      return text.slice(0, headCut) + MIDDLE_OMISSION_MARKER + text.slice(tailStart) + suffix;
+      const keptText = text.slice(0, headCut) + MIDDLE_OMISSION_MARKER + text.slice(tailStart);
+      const suffix = suffixFactory(Math.max(1, text.length - keptText.length));
+      return keptText + suffix;
     }
   }
 
@@ -118,7 +185,9 @@ export function truncateToolResultText(
   if (lastNewline > budget * 0.8) {
     cutPoint = lastNewline;
   }
-  return text.slice(0, cutPoint) + suffix;
+  const keptText = text.slice(0, cutPoint);
+  const suffix = suffixFactory(Math.max(1, text.length - keptText.length));
+  return keptText + suffix;
 }
 
 /**
@@ -167,7 +236,10 @@ export function truncateToolResultMessage(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
-  const suffix = options.suffix ?? TRUNCATION_SUFFIX;
+  const suffixFactory: (truncatedChars: number) => string =
+    typeof options.suffix === "function"
+      ? options.suffix
+      : () => (options.suffix ?? TRUNCATION_SUFFIX);
   const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
@@ -191,10 +263,19 @@ export function truncateToolResultMessage(
     }
     // Proportional budget for this block
     const blockShare = textBlock.text.length / totalTextChars;
-    const blockBudget = Math.max(minKeepChars + suffix.length, Math.floor(maxChars * blockShare));
+    const defaultSuffix = suffixFactory(
+      Math.max(1, textBlock.text.length - Math.floor(maxChars * blockShare)),
+    );
+    const blockBudget = Math.max(
+      minKeepChars + defaultSuffix.length,
+      Math.floor(maxChars * blockShare),
+    );
     return {
       ...textBlock,
-      text: truncateToolResultText(textBlock.text, blockBudget, { suffix, minKeepChars }),
+      text: truncateToolResultText(textBlock.text, blockBudget, {
+        suffix: suffixFactory,
+        minKeepChars,
+      }),
     };
   });
 
@@ -231,46 +312,83 @@ export async function truncateOversizedToolResultsInSession(params: {
       return { truncated: false, truncatedCount: 0, reason: "empty session" };
     }
 
-    // Find oversized tool result entries and their indices in the branch
-    const oversizedIndices: number[] = [];
-    for (let i = 0; i < branch.length; i++) {
-      const entry = branch[i];
-      if (entry.type !== "message") {
-        continue;
-      }
-      const msg = entry.message;
-      if ((msg as { role?: string }).role !== "toolResult") {
-        continue;
-      }
-      const textLength = getToolResultTextLength(msg);
-      if (textLength > maxChars) {
-        oversizedIndices.push(i);
-        log.info(
-          `[tool-result-truncation] Found oversized tool result: ` +
-            `entry=${entry.id} chars=${textLength} maxChars=${maxChars} ` +
-            `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
-        );
-      }
-    }
-
-    if (oversizedIndices.length === 0) {
-      return { truncated: false, truncatedCount: 0, reason: "no oversized tool results" };
-    }
-
-    const replacements = oversizedIndices.flatMap((index) => {
-      const entry = branch[index];
-      if (!entry || entry.type !== "message") {
-        return [];
-      }
-      const message = truncateToolResultMessage(entry.message, maxChars);
-      const newLength = getToolResultTextLength(message);
+    const { candidates, messages } = collectToolResultRewriteCandidates(branch);
+    const oversizedCandidates = candidates.filter((candidate) => candidate.textLength > maxChars);
+    for (const candidate of oversizedCandidates) {
       log.info(
-        `[tool-result-truncation] Truncated tool result: ` +
-          `originalEntry=${entry.id} newChars=${newLength} ` +
+        `[tool-result-truncation] Found oversized tool result: ` +
+          `entry=${candidate.entryId} chars=${candidate.textLength} maxChars=${maxChars} ` +
           `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
       );
-      return [{ entryId: entry.id, message }];
+    }
+
+    const currentContextChars = estimateContextChars(messages, createMessageCharEstimateCache());
+    const overflowThresholdChars = calculatePreemptiveOverflowChars(contextWindowTokens);
+    const aggregateCharsNeeded = Math.max(0, currentContextChars - overflowThresholdChars);
+
+    if (oversizedCandidates.length === 0 && aggregateCharsNeeded <= 0) {
+      return { truncated: false, truncatedCount: 0, reason: "no tool result truncation needed" };
+    }
+
+    let remainingAggregateCharsNeeded = aggregateCharsNeeded;
+    const candidatesByRecency = [...candidates].toSorted((a, b) => b.entryIndex - a.entryIndex);
+    const replacements = candidatesByRecency.flatMap((candidate) => {
+      const aggregateEligible =
+        remainingAggregateCharsNeeded > 0 &&
+        candidate.textLength > AGGREGATE_TRUNCATION_MIN_KEEP_CHARS;
+      const targetChars =
+        candidate.textLength > maxChars
+          ? maxChars
+          : aggregateEligible
+            ? Math.max(
+                AGGREGATE_TRUNCATION_MIN_KEEP_CHARS,
+                candidate.textLength -
+                  Math.ceil(remainingAggregateCharsNeeded / TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO),
+              )
+            : candidate.textLength;
+
+      if (targetChars >= candidate.textLength) {
+        return [];
+      }
+
+      const minKeepChars =
+        candidate.textLength > maxChars ? undefined : AGGREGATE_TRUNCATION_MIN_KEEP_CHARS;
+      const message = truncateToolResultMessage(
+        candidate.message,
+        targetChars,
+        minKeepChars === undefined ? {} : { minKeepChars },
+      );
+      const newLength = getToolResultTextLength(message);
+      if (newLength >= candidate.textLength) {
+        return [];
+      }
+
+      const reducedEstimateChars = estimateToolResultCharsFromTextLength(
+        candidate.textLength - newLength,
+      );
+      remainingAggregateCharsNeeded = Math.max(
+        0,
+        remainingAggregateCharsNeeded - reducedEstimateChars,
+      );
+
+      log.info(
+        `[tool-result-truncation] Truncated tool result: ` +
+          `originalEntry=${candidate.entryId} newChars=${newLength} ` +
+          `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
+      );
+      return [{ entryId: candidate.entryId, message }];
     });
+
+    if (replacements.length === 0) {
+      return {
+        truncated: false,
+        truncatedCount: 0,
+        reason:
+          oversizedCandidates.length > 0
+            ? "oversized tool results could not be reduced"
+            : "aggregate tool result overflow could not be reduced",
+      };
+    }
 
     const rewriteResult = rewriteTranscriptEntriesInSessionManager({
       sessionManager,
@@ -351,16 +469,21 @@ export function sessionLikelyHasOversizedToolResults(params: {
 }): boolean {
   const { messages, contextWindowTokens } = params;
   const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+  const contextBudgetChars = calculatePreemptiveOverflowChars(contextWindowTokens);
+  let sawToolResult = false;
+  let aggregateToolResultChars = 0;
 
   for (const msg of messages) {
     if ((msg as { role?: string }).role !== "toolResult") {
       continue;
     }
+    sawToolResult = true;
     const textLength = getToolResultTextLength(msg);
+    aggregateToolResultChars += estimateToolResultCharsFromTextLength(textLength);
     if (textLength > maxChars) {
       return true;
     }
   }
 
-  return false;
+  return sawToolResult && aggregateToolResultChars > contextBudgetChars;
 }
