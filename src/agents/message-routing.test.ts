@@ -53,6 +53,14 @@ describe("resolveMessageRoutingModel", () => {
     expect(resolveMessageRoutingModel(cfg, "test-agent", "what is the weather")).toBeUndefined();
   });
 
+  it("returns default when no rules configured but default set", () => {
+    const cfg = baseConfig({
+      rules: [],
+      default: "vllm/qwen35",
+    });
+    expect(resolveMessageRoutingModel(cfg, "test-agent", "anything")).toBe("vllm/qwen35");
+  });
+
   it("first rule wins when multiple rules match", () => {
     const cfg = baseConfig({
       rules: [

@@ -410,7 +410,7 @@ export function resolveMessageRoutingModel(
     )?.tasks?.messageRouting;
 
   if (!routing?.rules?.length) {
-    return undefined;
+    return routing?.default?.trim() || undefined;
   }
 
   const normalizedText = messageText.toLowerCase();

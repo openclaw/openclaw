@@ -329,7 +329,7 @@ export async function getReplyFromConfig(
 
   // Apply keyword-based message routing if no higher-priority override is in effect.
   if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && !channelModelOverride) {
-    const messageText = ctx.BodyForAgent ?? ctx.Body ?? "";
+    const messageText = ctx.RawBody ?? ctx.Body ?? "";
     const routingModel = resolveMessageRoutingModel(cfg, agentId, messageText);
     if (routingModel) {
       const resolved = resolveModelRefFromString({
