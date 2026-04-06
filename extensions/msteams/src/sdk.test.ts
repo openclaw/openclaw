@@ -9,6 +9,7 @@ import type { MSTeamsCredentials } from "./token.js";
 
 const clientConstructorState = vi.hoisted(() => ({
   calls: [] as Array<{ serviceUrl: string; options: unknown }>,
+  outboundCreatePayloads: [] as unknown[],
 }));
 
 // Track jwt.verify calls to assert audience/issuer/algorithm config.
@@ -53,6 +54,7 @@ const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
   clientConstructorState.calls.length = 0;
+  clientConstructorState.outboundCreatePayloads.length = 0;
   jwtState.verifyCalls.length = 0;
   jwtState.verifyBehavior = "success";
   jwtState.decodedHeader = { kid: "key-1" };
@@ -78,7 +80,10 @@ function createSdkStub(): MSTeamsTeamsSdk {
 
     conversations = {
       activities: (_conversationId: string) => ({
-        create: async (_activity: unknown) => ({ id: "created" }),
+        create: async (activity: unknown) => {
+          clientConstructorState.outboundCreatePayloads.push(activity);
+          return { id: "created" };
+        },
       }),
     };
   }
@@ -185,6 +190,59 @@ describe("createMSTeamsAdapter", () => {
         headers: {
           "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
         },
+      },
+    });
+  });
+
+  it("includes conversation.tenantId and bot aadObjectId on connector activity create (matches ActivitySender)", async () => {
+    const creds = {
+      appId: "app-id",
+      appPassword: "secret",
+      tenantId: "tenant-id",
+    } satisfies MSTeamsCredentials;
+    const sdk = createSdkStub();
+    const app = new sdk.App({
+      clientId: creds.appId,
+      clientSecret: creds.appPassword,
+      tenantId: creds.tenantId,
+    });
+    const adapter = createMSTeamsAdapter(app, sdk);
+
+    await adapter.continueConversation(
+      creds.appId,
+      {
+        serviceUrl: "https://service.example.com/",
+        conversation: {
+          id: "19:conversation@thread.tacv2",
+          conversationType: "channel",
+          tenantId: "6d8e5c5b-4f2f-4e4a-9b2b-0b4e5f6a7c8d",
+        },
+        channelId: "msteams",
+        agent: {
+          id: "28:bot-id",
+          name: "TestBot",
+          aadObjectId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        },
+      },
+      async (ctx) => {
+        await ctx.sendActivity("hello");
+      },
+    );
+
+    expect(clientConstructorState.outboundCreatePayloads).toHaveLength(1);
+    expect(clientConstructorState.outboundCreatePayloads[0]).toMatchObject({
+      type: "message",
+      text: "hello",
+      from: {
+        id: "28:bot-id",
+        name: "TestBot",
+        aadObjectId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        role: "bot",
+      },
+      conversation: {
+        id: "19:conversation@thread.tacv2",
+        conversationType: "channel",
+        tenantId: "6d8e5c5b-4f2f-4e4a-9b2b-0b4e5f6a7c8d",
       },
     });
   });

@@ -31,6 +31,8 @@ export type MSTeamsTokenProvider = {
 type MSTeamsBotIdentity = {
   id?: string;
   name?: string;
+  /** Present on inbound activities as `recipient.aadObjectId`; include on outbound for Connector validation. */
+  aadObjectId?: string;
 };
 
 type MSTeamsSendContext = {
@@ -146,6 +148,8 @@ function createSendContext(params: {
   serviceUrl?: string;
   conversationId?: string;
   conversationType?: string;
+  /** Teams tenant for this conversation (`activity.conversation.tenantId`); required by Connector for many outbound sends. */
+  conversationTenantId?: string;
   bot?: MSTeamsBotIdentity;
   replyToActivityId?: string;
   getToken: () => Promise<string | undefined>;
@@ -166,16 +170,29 @@ function createSendContext(params: {
         return { id: "unknown" };
       }
 
+      const conversationPayload: Record<string, unknown> = {
+        id: params.conversationId,
+        conversationType: params.conversationType ?? "personal",
+      };
+      if (params.conversationTenantId) {
+        conversationPayload.tenantId = params.conversationTenantId;
+      }
+
+      const fromPayload =
+        params.bot?.id != null && params.bot.id !== ""
+          ? {
+              id: params.bot.id,
+              name: params.bot.name ?? "",
+              ...(params.bot.aadObjectId ? { aadObjectId: params.bot.aadObjectId } : {}),
+              role: "bot",
+            }
+          : undefined;
+
       return await apiClient.conversations.activities(params.conversationId).create({
         type: "message",
         ...msg,
-        from: params.bot?.id
-          ? { id: params.bot.id, name: params.bot.name ?? "", role: "bot" }
-          : undefined,
-        conversation: {
-          id: params.conversationId,
-          conversationType: params.conversationType ?? "personal",
-        },
+        from: fromPayload,
+        conversation: conversationPayload,
         ...(params.replyToActivityId && !msg.replyToId
           ? { replyToId: params.replyToActivityId }
           : {}),
@@ -234,12 +251,17 @@ function createProcessContext(params: {
     | undefined;
   const conversationType = (params.activity?.conversation as Record<string, unknown>)
     ?.conversationType as string | undefined;
+  const conversationTenantId = (params.activity?.conversation as Record<string, unknown>)
+    ?.tenantId as string | undefined;
   const replyToActivityId = params.activity?.id as string | undefined;
   const bot: MSTeamsBotIdentity | undefined =
     params.activity?.recipient && typeof params.activity.recipient === "object"
       ? {
           id: (params.activity.recipient as Record<string, unknown>).id as string | undefined,
           name: (params.activity.recipient as Record<string, unknown>).name as string | undefined,
+          aadObjectId: (params.activity.recipient as Record<string, unknown>).aadObjectId as
+            | string
+            | undefined,
         }
       : undefined;
   const sendContext = createSendContext({
@@ -247,6 +269,7 @@ function createProcessContext(params: {
     serviceUrl,
     conversationId,
     conversationType,
+    conversationTenantId,
     bot,
     replyToActivityId,
     getToken: params.getToken,
@@ -369,6 +392,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         serviceUrl,
         conversationId,
         conversationType: reference.conversation?.conversationType,
+        conversationTenantId: reference.conversation?.tenantId,
         bot: reference.agent ?? undefined,
         getToken: createBotTokenGetter(app),
       });
