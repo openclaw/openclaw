@@ -42,18 +42,29 @@ function attachStderrLogging(serverName: string, transport: StdioClientTransport
   };
 }
 
+function toHeaderRecord(headers: HeadersInit | undefined): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  if (!headers) {
+    return normalized;
+  }
+  if (headers instanceof Headers) {
+    headers.forEach((value, key) => {
+      normalized[key] = value;
+    });
+    return normalized;
+  }
+  if (Array.isArray(headers)) {
+    for (const [key, value] of headers) {
+      normalized[key] = value;
+    }
+    return normalized;
+  }
+  return { ...headers };
+}
+
 function buildSseEventSourceFetch(headers: Record<string, string>) {
   return (url: string | URL, init?: RequestInit) => {
-    const sdkHeaders: Record<string, string> = {};
-    if (init?.headers) {
-      if (init.headers instanceof Headers) {
-        init.headers.forEach((value, key) => {
-          sdkHeaders[key] = value;
-        });
-      } else {
-        Object.assign(sdkHeaders, init.headers);
-      }
-    }
+    const sdkHeaders = toHeaderRecord(init?.headers);
     return fetch(url, {
       ...init,
       headers: { ...sdkHeaders, ...headers },

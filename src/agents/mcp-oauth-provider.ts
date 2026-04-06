@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { homedir } from "node:os";
@@ -21,6 +22,7 @@ export type McpOAuthPersistedState = {
   clientInfo?: OAuthClientInformationFull;
   discoveryState?: OAuthDiscoveryState;
   codeVerifier?: string;
+  csrfState?: string;
 };
 
 export type McpOAuthProviderOptions = {
@@ -36,8 +38,14 @@ export type McpOAuthProviderOptions = {
 // Per-server OAuth state persistence
 // ---------------------------------------------------------------------------
 
+export type McpOAuthProvider = OAuthClientProvider & {
+  getExpectedState: () => Promise<string | undefined>;
+};
+
 function toSafeFilename(name: string): string {
-  return name.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const safe = name.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const hash = createHash("sha1").update(name).digest("hex").slice(0, 8);
+  return `${safe}_${hash}`;
 }
 
 function mcpOAuthStateDir(): string {
@@ -82,7 +90,7 @@ const REDIRECT_URI = `http://127.0.0.1:${CALLBACK_PORT}${CALLBACK_PATH}`;
  * Bridges the MCP SDK's OAuth flow to OpenClaw's persistence layer and
  * handles the browser redirect + local callback server pattern.
  */
-export function createMcpOAuthProvider(options: McpOAuthProviderOptions): OAuthClientProvider {
+export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAuthProvider {
   let state: McpOAuthPersistedState = {};
   let stateLoaded = false;
 
@@ -111,6 +119,14 @@ export function createMcpOAuthProvider(options: McpOAuthProviderOptions): OAuthC
         response_types: ["code"],
         client_name: "OpenClaw",
       };
+    },
+
+    async state(): Promise<string> {
+      await ensureState();
+      const csrfState = randomUUID();
+      state.csrfState = csrfState;
+      await persistState();
+      return csrfState;
     },
 
     async clientInformation() {
@@ -168,6 +184,11 @@ export function createMcpOAuthProvider(options: McpOAuthProviderOptions): OAuthC
       const s = await ensureState();
       return s.discoveryState;
     },
+
+    async getExpectedState(): Promise<string | undefined> {
+      const s = await ensureState();
+      return s.csrfState;
+    },
   };
 }
 
@@ -180,6 +201,7 @@ export function createMcpOAuthProvider(options: McpOAuthProviderOptions): OAuthC
 export function waitForOAuthCallback(params: {
   serverName: string;
   timeoutMs?: number;
+  getExpectedState?: () => string | undefined | Promise<string | undefined>;
 }): Promise<string> {
   const timeoutMs = params.timeoutMs ?? 120_000;
 
@@ -214,6 +236,7 @@ export function waitForOAuthCallback(params: {
 
       const error = requestUrl.searchParams.get("error");
       const code = requestUrl.searchParams.get("code")?.trim();
+      const returnedState = requestUrl.searchParams.get("state")?.trim();
 
       if (error) {
         res.statusCode = 400;
@@ -231,13 +254,36 @@ export function waitForOAuthCallback(params: {
         return;
       }
 
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "text/html");
-      res.end(
-        "<html><body><h1>Authorization successful</h1>" +
-          "<p>You can close this tab and return to OpenClaw.</p></body></html>",
-      );
-      finish(code);
+      Promise.resolve(params.getExpectedState?.())
+        .then((expectedState) => {
+          if (expectedState && returnedState !== expectedState) {
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "text/plain");
+            res.end("OAuth state mismatch");
+            finish(
+              new Error(`MCP OAuth callback for "${params.serverName}" failed state validation`),
+            );
+            return;
+          }
+
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "text/html");
+          res.end(
+            "<html><body><h1>Authorization successful</h1>" +
+              "<p>You can close this tab and return to OpenClaw.</p></body></html>",
+          );
+          finish(code);
+        })
+        .catch((error) => {
+          res.statusCode = 500;
+          res.setHeader("Content-Type", "text/plain");
+          res.end("OAuth state validation failed");
+          finish(
+            error instanceof Error
+              ? error
+              : new Error(`MCP OAuth callback state validation failed: ${String(error)}`),
+          );
+        });
     });
 
     server.on("error", (err) => {

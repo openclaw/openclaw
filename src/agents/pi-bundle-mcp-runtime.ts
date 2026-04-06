@@ -16,6 +16,7 @@ import {
   loadMcpOAuthState,
   saveMcpOAuthState,
   waitForOAuthCallback,
+  type McpOAuthProvider,
 } from "./mcp-oauth-provider.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 import { sanitizeServerName } from "./pi-bundle-mcp-names.js";
@@ -169,7 +170,7 @@ export function createSessionMcpRuntime(params: {
 
           // Only create an OAuth provider when the server config requests it.
           const wantsOAuth = isMcpConfigRecord(rawServer) && rawServer.auth === "oauth";
-          const authProvider = wantsOAuth
+          const authProvider: McpOAuthProvider | undefined = wantsOAuth
             ? createMcpOAuthProvider({
                 serverName,
                 loadState: () => loadMcpOAuthState(serverName),
@@ -206,15 +207,22 @@ export function createSessionMcpRuntime(params: {
 
           try {
             failIfDisposed();
+            const callbackPromise =
+              resolved.auth === "oauth"
+                ? waitForOAuthCallback({
+                    serverName,
+                    getExpectedState: () => authProvider?.getExpectedState(),
+                  })
+                : undefined;
 
             try {
               await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
             } catch (connectError) {
-              if (connectError instanceof UnauthorizedError && resolved.auth === "oauth") {
+              if (connectError instanceof UnauthorizedError && callbackPromise) {
                 logDebug(
                   `bundle-mcp: "${serverName}": OAuth authorization required, waiting for callback...`,
                 );
-                const code = await waitForOAuthCallback({ serverName });
+                const code = await callbackPromise;
                 if (
                   resolved.transport instanceof StreamableHTTPClientTransport ||
                   resolved.transport instanceof SSEClientTransport
@@ -223,6 +231,7 @@ export function createSessionMcpRuntime(params: {
                 }
                 await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
               } else {
+                void callbackPromise?.catch(() => {});
                 throw connectError;
               }
             }
