@@ -171,6 +171,68 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("retries without hitting compaction when attempt-level preflight truncation already handled the overflow", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: null,
+          preflightRecovery: {
+            route: "truncate_tool_results_only",
+            handled: true,
+            truncatedCount: 2,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedTruncateOversizedToolResultsInSession).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("early recovery route=truncate_tool_results_only"),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("runs post-compaction tool-result truncation before retry for mixed precheck routes", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: makeOverflowError(
+            "Context overflow: prompt too large for the model (precheck).",
+          ),
+          preflightRecovery: { route: "compact_then_truncate" },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
+      truncated: true,
+      truncatedCount: 2,
+    });
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionFile: "/tmp/session.json" }),
+    );
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("post-compaction tool-result truncation succeeded"),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
   it("retries compaction up to 3 times before giving up", async () => {
     const overflowError = makeOverflowError();
 

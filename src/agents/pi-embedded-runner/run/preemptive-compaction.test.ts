@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   estimatePrePromptTokens,
@@ -43,6 +44,7 @@ describe("preemptive-compaction", () => {
     });
 
     expect(result.shouldCompact).toBe(true);
+    expect(result.route).toBe("compact_only");
     expect(result.estimatedPromptTokens).toBeGreaterThan(result.promptBudgetBeforeReserve);
   });
 
@@ -56,6 +58,85 @@ describe("preemptive-compaction", () => {
     });
 
     expect(result.shouldCompact).toBe(false);
+    expect(result.route).toBe("fits");
     expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
+  });
+
+  it("routes to direct tool-result truncation when recent tool tails can clearly absorb the overflow", () => {
+    const medium = "alpha beta gamma delta epsilon ".repeat(2200);
+    const messages = [
+      { role: "assistant", content: "short history" },
+      {
+        role: "toolResult",
+        content: [
+          { type: "text", text: medium },
+          { type: "text", text: medium },
+          { type: "text", text: medium },
+          { type: "text", text: medium },
+        ],
+      } as never,
+    ];
+    const reserveTokens = 2_000;
+    const contextTokenBudget = 26_000;
+    const estimatedPromptTokens = estimatePrePromptTokens({
+      messages,
+      systemPrompt: "sys",
+      prompt: "hello",
+    });
+    const desiredOverflowTokens = 200;
+    const adjustedContextTokenBudget =
+      estimatedPromptTokens - desiredOverflowTokens + reserveTokens;
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: Math.max(contextTokenBudget, adjustedContextTokenBudget),
+      reserveTokens,
+    });
+
+    expect(result.route).toBe("truncate_tool_results_only");
+    expect(result.shouldCompact).toBe(false);
+    expect(result.overflowTokens).toBeGreaterThan(0);
+    expect(result.toolResultReducibleChars).toBeGreaterThan(0);
+  });
+
+  it("routes to compact then truncate when recent tool tails help but cannot fully cover the overflow", () => {
+    const medium = "alpha beta gamma delta epsilon ".repeat(220);
+    const longHistory = "old discussion with substantial retained context and decisions ".repeat(
+      5000,
+    );
+    const messages = [
+      { role: "assistant", content: longHistory },
+      { role: "toolResult", content: [{ type: "text", text: medium }] } as never,
+      { role: "toolResult", content: [{ type: "text", text: medium }] } as never,
+      { role: "toolResult", content: [{ type: "text", text: medium }] } as never,
+    ];
+    const reserveTokens = 500;
+    const baseContextTokenBudget = 3_500;
+    const estimatedPromptTokens = estimatePrePromptTokens({
+      messages,
+      systemPrompt: verboseSystem,
+      prompt: verbosePrompt,
+    });
+    const toolResultPotential = estimateToolResultReductionPotential({
+      messages: messages as never,
+      contextWindowTokens: baseContextTokenBudget,
+    });
+    const desiredOverflowTokens = Math.ceil((toolResultPotential.maxReducibleChars + 4_096) / 4);
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: verboseSystem,
+      prompt: verbosePrompt,
+      contextTokenBudget: Math.max(
+        baseContextTokenBudget,
+        estimatedPromptTokens - desiredOverflowTokens + reserveTokens,
+      ),
+      reserveTokens,
+    });
+
+    expect(result.route).toBe("compact_then_truncate");
+    expect(result.shouldCompact).toBe(true);
+    expect(result.overflowTokens).toBeGreaterThan(0);
+    expect(result.toolResultReducibleChars).toBeGreaterThan(0);
   });
 });

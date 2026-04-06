@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 
@@ -15,6 +15,7 @@ let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncat
 let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
 let isOversizedToolResult: typeof import("./tool-result-truncation.js").isOversizedToolResult;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
+let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let HARD_MAX_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").HARD_MAX_TOOL_RESULT_CHARS;
 let tmpDir: string | undefined;
@@ -29,6 +30,7 @@ async function loadFreshToolResultTruncationModuleForTest() {
     truncateOversizedToolResultsInSession,
     isOversizedToolResult,
     sessionLikelyHasOversizedToolResults,
+    estimateToolResultReductionPotential,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     HARD_MAX_TOOL_RESULT_CHARS,
   } = await import("./tool-result-truncation.js"));
@@ -242,6 +244,58 @@ describe("sessionLikelyHasOversizedToolResults", () => {
     expect(sessionLikelyHasOversizedToolResults({ messages, contextWindowTokens: 128_000 })).toBe(
       true,
     );
+  });
+});
+
+describe("estimateToolResultReductionPotential", () => {
+  it("reports no reducible budget when tool results are already small", () => {
+    const messages: AgentMessage[] = [makeToolResult("small result")];
+
+    const estimate = estimateToolResultReductionPotential({
+      messages,
+      contextWindowTokens: 128_000,
+    });
+
+    expect(estimate.toolResultCount).toBe(1);
+    expect(estimate.maxReducibleChars).toBe(0);
+  });
+
+  it("estimates reducible chars for aggregate medium tool-result tails", () => {
+    const medium = "alpha beta gamma delta epsilon ".repeat(600);
+    const messages: AgentMessage[] = [
+      makeToolResult(medium, "call_1"),
+      makeToolResult(medium, "call_2"),
+      makeToolResult(medium, "call_3"),
+    ];
+
+    const estimate = estimateToolResultReductionPotential({
+      messages,
+      contextWindowTokens: 128_000,
+    });
+
+    expect(estimate.toolResultCount).toBe(3);
+    expect(estimate.oversizedCount).toBe(0);
+    expect(estimate.aggregateReducibleChars).toBeGreaterThan(0);
+    expect(estimate.maxReducibleChars).toBe(estimate.aggregateReducibleChars);
+  });
+
+  it("does not count aggregate savings on top of oversized savings in a single pass", () => {
+    const oversized = "x".repeat(500_000);
+    const medium = "alpha beta gamma delta epsilon ".repeat(800);
+    const messages: AgentMessage[] = [
+      makeToolResult(oversized, "call_1"),
+      makeToolResult(medium, "call_2"),
+      makeToolResult(medium, "call_3"),
+    ];
+
+    const estimate = estimateToolResultReductionPotential({
+      messages,
+      contextWindowTokens: 128_000,
+    });
+
+    expect(estimate.oversizedCount).toBeGreaterThan(0);
+    expect(estimate.oversizedReducibleChars).toBeGreaterThan(0);
+    expect(estimate.maxReducibleChars).toBe(estimate.oversizedReducibleChars);
   });
 });
 
