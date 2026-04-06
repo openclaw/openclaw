@@ -858,8 +858,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
       // Emit lifecycle error without any assistant deltas
       emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "error" } } as never);
-      // Hang briefly so the event listener processes before the promise settles
-      await new Promise((r) => setTimeout(r, 50));
+      // Yield the microtask queue so the synchronous event handler runs before we return
+      await Promise.resolve();
       return { payloads: [{ text: "" }] };
     }) as never);
 
