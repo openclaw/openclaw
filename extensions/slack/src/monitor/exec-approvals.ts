@@ -228,13 +228,16 @@ export class SlackExecApprovalHandler {
     this.runtime = createChannelNativeApprovalRuntime<
       SlackPendingApproval,
       { to: string; threadTs?: string },
-      SlackPendingDelivery
+      SlackPendingDelivery,
+      ExecApprovalRequest,
+      ExecApprovalResolved
     >({
       label: "slack/exec-approvals",
       clientDisplayName: "Slack Exec Approvals",
       cfg: opts.cfg,
       accountId: opts.accountId,
       gatewayUrl: opts.gatewayUrl,
+      eventKinds: ["exec"],
       nativeAdapter: slackNativeApprovalAdapter.native,
       isConfigured: () =>
         isSlackExecApprovalClientEnabled({
