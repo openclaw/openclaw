@@ -501,5 +501,5 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 Notes:
 
 - Dreaming writes machine state to `memory/.dreams/`.
-- Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
+- Dreaming writes Dream Diary narrative output to `DREAMS.md` (or existing `dreams.md`) and keeps phase output in daily memory notes and optional per-phase reports.
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.

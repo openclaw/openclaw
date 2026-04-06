@@ -20,7 +20,7 @@ Dreaming is **opt-in** and disabled by default.
 Dreaming keeps two kinds of output:
 
 - **Machine state** in `memory/.dreams/` (recall store, phase signals, ingestion checkpoints, locks).
-- **Human-readable output** in `DREAMS.md` (or existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
+- **Human-readable output** split across the Dream Diary in `DREAMS.md` (or existing `dreams.md`), inline phase notes in daily memory files when applicable, and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 
 Long-term promotion still writes only to `MEMORY.md`.
 
@@ -43,7 +43,7 @@ Light phase ingests recent daily memory signals and recall traces, dedupes them,
 and stages candidate lines.
 
 - Reads from short-term recall state and recent daily memory files.
-- Writes a managed `## Light Sleep` block when storage includes inline output.
+- Writes a managed `## Light Sleep` block into the daily memory file when inline phase output is enabled.
 - Records reinforcement signals for later deep ranking.
 - Never writes to `MEMORY.md`.
 
@@ -55,14 +55,14 @@ Deep phase decides what becomes long-term memory.
 - Requires `minScore`, `minRecallCount`, and `minUniqueQueries` to pass.
 - Rehydrates snippets from live daily files before writing, so stale/deleted snippets are skipped.
 - Appends promoted entries to `MEMORY.md`.
-- Writes a `## Deep Sleep` summary into `DREAMS.md` and optionally writes `memory/dreaming/deep/YYYY-MM-DD.md`.
+- Writes a `# Deep Sleep` report under `memory/dreaming/deep/YYYY-MM-DD.md` when report output is enabled.
 
 ### REM phase
 
 REM phase extracts patterns and reflective signals.
 
 - Builds theme and reflection summaries from recent short-term traces.
-- Writes a managed `## REM Sleep` block when storage includes inline output.
+- Writes a managed `## REM Sleep` block into the daily memory file when inline phase output is enabled.
 - Records REM reinforcement signals used by deep ranking.
 - Never writes to `MEMORY.md`.
 

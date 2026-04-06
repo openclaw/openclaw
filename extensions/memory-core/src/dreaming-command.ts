@@ -47,7 +47,7 @@ function formatPhaseGuide(): string {
   return [
     "- implementation detail: each sweep runs light -> REM -> deep.",
     "- deep is the only stage that writes durable entries to MEMORY.md.",
-    "- DREAMS.md is for human-readable dreaming summaries and diary entries.",
+    "- DREAMS.md is for Dream Diary entries; phase output lives in daily memory notes or per-phase reports.",
   ].join("\n");
 }
 

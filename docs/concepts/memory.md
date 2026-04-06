@@ -20,8 +20,8 @@ Your agent has three memory-related files:
   decisions. Loaded at the start of every DM session.
 - **`memory/YYYY-MM-DD.md`** -- daily notes. Running context and observations.
   Today and yesterday's notes are loaded automatically.
-- **`DREAMS.md`** (experimental, optional) -- Dream Diary and dreaming sweep
-  summaries for human review.
+- **`DREAMS.md`** (experimental, optional) -- Dream Diary entries for human
+  review.
 
 These files live in the agent workspace (default `~/.openclaw/workspace`).
 
@@ -98,8 +98,8 @@ It is designed to keep long-term memory high signal:
   for a full dreaming sweep.
 - **Thresholded**: promotions must pass score, recall frequency, and query
   diversity gates.
-- **Reviewable**: phase summaries and diary entries are written to `DREAMS.md`
-  for human review.
+- **Reviewable**: Dream Diary entries are written to `DREAMS.md`, and phase
+  output can be inspected in daily memory notes and dated dreaming reports.
 
 For phase behavior, scoring signals, and Dream Diary details, see
 [Dreaming (experimental)](/concepts/dreaming).

@@ -129,7 +129,7 @@ facts into `MEMORY.md`), and **REM** (reflect and surface themes).
 - Toggle from chat with `/dreaming on|off` (or inspect with `/dreaming status`).
 - Dreaming runs on one managed sweep schedule (`dreaming.frequency`) and executes phases in order: light, REM, deep.
 - Only the deep phase writes durable memory to `MEMORY.md`.
-- Human-readable phase output and diary entries are written to `DREAMS.md` (or existing `dreams.md`), with optional per-phase reports in `memory/dreaming/<phase>/YYYY-MM-DD.md`.
+- Dream Diary entries are written to `DREAMS.md` (or existing `dreams.md`), while human-readable phase output is written to daily memory notes and optional per-phase reports in `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 - Ranking uses weighted signals: recall frequency, retrieval relevance, query diversity, temporal recency, cross-day consolidation, and derived concept richness.
 - Promotion re-reads the live daily note before writing to `MEMORY.md`, so edited or deleted short-term snippets do not get promoted from stale recall-store snapshots.
 - Scheduled and manual `memory promote` runs share the same deep phase defaults unless you pass CLI threshold overrides.
