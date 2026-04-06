@@ -12,6 +12,7 @@ import {
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
+import { extensionForMime } from "../media/mime.js";
 import { hasEnvHttpProxyConfigured, matchesNoProxy } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
@@ -24,17 +25,18 @@ const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
 
 export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
-  const trimmed = fileName?.trim();
-  const baseName = trimmed ? path.basename(trimmed) : "audio";
-  const lowerMime = mime?.trim().toLowerCase();
-
-  if (/\.aac$/i.test(baseName)) {
-    return `${baseName.slice(0, -4) || "audio"}.m4a`;
+  const baseName = path.basename(fileName?.trim() || "audio");
+  const parsed = path.parse(baseName);
+  const mimeExt = extensionForMime(mime);
+  if (!mimeExt || parsed.ext.toLowerCase() === mimeExt.toLowerCase()) {
+    return baseName;
   }
-  if (!path.extname(baseName) && lowerMime === "audio/aac") {
-    return `${baseName || "audio"}.m4a`;
-  }
-  return baseName;
+  return path.format({
+    ...parsed,
+    base: "",
+    ext: mimeExt,
+    name: parsed.name || parsed.base || "audio",
+  });
 }
 
 export function buildAudioTranscriptionFormData(params: {
@@ -173,6 +175,19 @@ function sanitizeAuditContext(auditContext: string | undefined): string | undefi
     return undefined;
   }
   return cleaned.slice(0, MAX_AUDIT_CONTEXT_CHARS);
+}
+
+function resolveTranscriptionPinDns(
+  body: BodyInit,
+  pinDns: boolean | undefined,
+): boolean | undefined {
+  if (pinDns !== undefined) {
+    return pinDns;
+  }
+  if (typeof FormData !== "undefined" && body instanceof FormData) {
+    return false;
+  }
+  return undefined;
 }
 
 export function resolveProviderHttpRequestConfig(params: {
@@ -381,6 +396,7 @@ export async function postTranscriptionRequest(params: {
    */
   mode?: GuardedFetchMode;
 }) {
+  const pinDns = resolveTranscriptionPinDns(params.body, params.pinDns);
   return fetchWithTimeoutGuarded(
     params.url,
     {
@@ -390,7 +406,10 @@ export async function postTranscriptionRequest(params: {
     },
     params.timeoutMs,
     params.fetchFn,
-    resolveGuardedPostRequestOptions(params),
+    resolveGuardedPostRequestOptions({
+      ...params,
+      pinDns,
+    }),
   );
 }
 

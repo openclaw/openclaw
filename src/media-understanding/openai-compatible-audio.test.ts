@@ -49,19 +49,19 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     expect(headers.get("user-agent")).toBeNull();
   });
 
-  it("remaps AAC uploads to an M4A filename before submitting the form", async () => {
+  it("replaces mismatched upload extensions from the audio MIME type", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
 
     await transcribeOpenAiCompatibleAudio({
       buffer: Buffer.from("audio"),
-      fileName: "voice-note.aac",
-      mime: "audio/aac",
+      fileName: " voice-note.aac ",
+      mime: "audio/x-m4a",
       apiKey: "test-key",
       timeoutMs: 1000,
       fetchFn,
       provider: "openai",
       defaultBaseUrl: "https://api.openai.com/v1",
-      defaultModel: "gpt-4o-transcribe",
+      defaultModel: "gpt-4o-mini-transcribe",
     });
 
     const form = getRequest().init?.body;
@@ -69,5 +69,24 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     const file = (form as FormData).get("file");
     expect(file).toBeInstanceOf(File);
     expect((file as File).name).toBe("voice-note.m4a");
+  });
+
+  it("falls back to an audio filename when the caller only provides whitespace", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+
+    await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "   ",
+      mime: "audio/x-m4a",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+      provider: "openai",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-4o-mini-transcribe",
+    });
+
+    const file = ((getRequest().init?.body as FormData).get("file") as File | null)?.name;
+    expect(file).toBe("audio.m4a");
   });
 });
