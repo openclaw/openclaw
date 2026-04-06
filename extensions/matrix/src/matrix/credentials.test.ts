@@ -8,6 +8,7 @@ import {
   loadMatrixCredentials,
   clearMatrixCredentials,
   resolveMatrixCredentialsPath,
+  saveBackfilledMatrixDeviceId,
   saveMatrixCredentials,
   touchMatrixCredentials,
 } from "./credentials.js";
@@ -82,6 +83,69 @@ describe("matrix credentials storage", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("backfill updates deviceId when credentials still match the same auth lineage", async () => {
+    setupStateDir();
+    await saveMatrixCredentials(
+      {
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "tok-123",
+      },
+      {},
+      "default",
+    );
+
+    await expect(
+      saveBackfilledMatrixDeviceId(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok-123",
+          deviceId: "DEVICE123",
+        },
+        {},
+        "default",
+      ),
+    ).resolves.toBe("saved");
+
+    expect(loadMatrixCredentials({}, "default")).toMatchObject({
+      accessToken: "tok-123",
+      deviceId: "DEVICE123",
+    });
+  });
+
+  it("backfill skips when newer credentials already changed the token", async () => {
+    setupStateDir();
+    await saveMatrixCredentials(
+      {
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "tok-new",
+        deviceId: "DEVICE999",
+      },
+      {},
+      "default",
+    );
+
+    await expect(
+      saveBackfilledMatrixDeviceId(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok-old",
+          deviceId: "DEVICE123",
+        },
+        {},
+        "default",
+      ),
+    ).resolves.toBe("skipped");
+
+    expect(loadMatrixCredentials({}, "default")).toMatchObject({
+      accessToken: "tok-new",
+      deviceId: "DEVICE999",
+    });
   });
 
   it("migrates legacy matrix credential files on read", async () => {

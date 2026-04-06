@@ -16,6 +16,7 @@ function createLookupFn(addresses: Array<{ address: string; family: number }>): 
 }
 
 const saveMatrixCredentialsMock = vi.hoisted(() => vi.fn());
+const saveBackfilledMatrixDeviceIdMock = vi.hoisted(() => vi.fn(async () => "saved"));
 const touchMatrixCredentialsMock = vi.hoisted(() => vi.fn());
 const repairCurrentTokenStorageMetaDeviceIdMock = vi.hoisted(() => vi.fn());
 
@@ -25,6 +26,7 @@ vi.mock("./credentials-read.js", () => ({
 }));
 
 vi.mock("./credentials-write.runtime.js", () => ({
+  saveBackfilledMatrixDeviceId: saveBackfilledMatrixDeviceIdMock,
   saveMatrixCredentials: saveMatrixCredentialsMock,
   touchMatrixCredentials: touchMatrixCredentialsMock,
 }));
@@ -751,6 +753,7 @@ describe("resolveMatrixAuth", () => {
     vi.mocked(readModule.credentialsMatchConfig).mockReset();
     vi.mocked(readModule.credentialsMatchConfig).mockReturnValue(false);
     saveMatrixCredentialsMock.mockReset();
+    saveBackfilledMatrixDeviceIdMock.mockReset().mockResolvedValue("saved");
     touchMatrixCredentialsMock.mockReset();
     repairCurrentTokenStorageMetaDeviceIdMock.mockReset().mockReturnValue(true);
     ensureMatrixSdkLoggingConfiguredMock.mockReset();
@@ -1228,7 +1231,7 @@ describe("resolveMatrixAuth", () => {
     });
 
     expect(matrixDoRequestMock).toHaveBeenCalledWith("GET", "/_matrix/client/v3/account/whoami");
-    expect(saveMatrixCredentialsMock).toHaveBeenCalledWith(
+    expect(saveBackfilledMatrixDeviceIdMock).toHaveBeenCalledWith(
       {
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
@@ -1247,7 +1250,7 @@ describe("resolveMatrixAuth", () => {
       env: expect.any(Object),
     });
     expect(repairCurrentTokenStorageMetaDeviceIdMock.mock.invocationCallOrder[0]).toBeLessThan(
-      saveMatrixCredentialsMock.mock.invocationCallOrder[0],
+      saveBackfilledMatrixDeviceIdMock.mock.invocationCallOrder[0],
     );
     expect(deviceId).toBe("DEVICE123");
   });
@@ -1266,6 +1269,7 @@ describe("resolveMatrixAuth", () => {
 
     expect(matrixDoRequestMock).not.toHaveBeenCalled();
     expect(saveMatrixCredentialsMock).not.toHaveBeenCalled();
+    expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
     expect(repairCurrentTokenStorageMetaDeviceIdMock).not.toHaveBeenCalled();
     expect(deviceId).toBe("DEVICE123");
   });
@@ -1288,7 +1292,69 @@ describe("resolveMatrixAuth", () => {
         env: {} as NodeJS.ProcessEnv,
       }),
     ).rejects.toThrow("Matrix deviceId backfill failed to repair current-token storage metadata");
-    expect(saveMatrixCredentialsMock).not.toHaveBeenCalled();
+    expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
+  });
+
+  it("skips stale deviceId backfill writes after newer credentials take over", async () => {
+    matrixDoRequestMock.mockResolvedValue({
+      user_id: "@bot:example.org",
+      device_id: "DEVICE123",
+    });
+    vi.mocked(requireCredentialsReadModule().loadMatrixCredentials).mockReturnValue({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "tok-new",
+      deviceId: "DEVICE999",
+      createdAt: "2026-03-01T00:00:00.000Z",
+    });
+
+    const deviceId = await backfillMatrixAuthDeviceIdAfterStartup({
+      auth: {
+        accountId: "default",
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "tok-old",
+      },
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(deviceId).toBeUndefined();
+    expect(repairCurrentTokenStorageMetaDeviceIdMock).not.toHaveBeenCalled();
+    expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
+  });
+
+  it("skips persistence when startup backfill is aborted before whoami resolves", async () => {
+    let resolveWhoami: ((value: { user_id: string; device_id: string }) => void) | undefined;
+    matrixDoRequestMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveWhoami = resolve;
+        }),
+    );
+    const abortController = new AbortController();
+    const backfillPromise = backfillMatrixAuthDeviceIdAfterStartup({
+      auth: {
+        accountId: "default",
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "tok-123",
+      },
+      env: {} as NodeJS.ProcessEnv,
+      abortSignal: abortController.signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(resolveWhoami).toBeTypeOf("function");
+    });
+    abortController.abort();
+    resolveWhoami?.({
+      user_id: "@bot:example.org",
+      device_id: "DEVICE123",
+    });
+
+    await expect(backfillPromise).resolves.toBeUndefined();
+    expect(repairCurrentTokenStorageMetaDeviceIdMock).not.toHaveBeenCalled();
+    expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
   });
 
   it("resolves file-backed accessToken SecretRefs during Matrix auth", async () => {

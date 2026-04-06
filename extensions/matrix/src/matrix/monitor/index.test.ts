@@ -424,6 +424,11 @@ describe("monitorMatrixProvider", () => {
       expect(hoisted.callOrder).toContain("start-client");
       expect(hoisted.backfillMatrixAuthDeviceIdAfterStartup).toHaveBeenCalledTimes(1);
     });
+    expect(hoisted.backfillMatrixAuthDeviceIdAfterStartup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+      }),
+    );
 
     abortController.abort();
     await expect(monitorPromise).resolves.toBeUndefined();

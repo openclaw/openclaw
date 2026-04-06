@@ -16,6 +16,7 @@ import {
   listNormalizedMatrixAccountIds,
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-paths.js";
+import type { MatrixStoredCredentials } from "../credentials-read.js";
 import {
   DEFAULT_ACCOUNT_ID,
   assertHttpUrlTargetsPrivateNetwork,
@@ -94,6 +95,24 @@ async function loadMatrixSecretInputDeps(): Promise<MatrixSecretInputDeps> {
 
 function shouldRetryMatrixAuthRequest(err: unknown): boolean {
   return MATRIX_AUTH_REQUEST_RETRY_RE.test(formatErrorMessage(err));
+}
+
+function isAbortSignalTriggered(signal?: AbortSignal): boolean {
+  return signal?.aborted === true;
+}
+
+function credentialsMatchBackfillAuthLineage(params: {
+  stored: MatrixStoredCredentials | null;
+  auth: Pick<MatrixAuth, "homeserver" | "userId" | "accessToken">;
+}): boolean {
+  if (!params.stored) {
+    return true;
+  }
+  return (
+    params.stored.homeserver === params.auth.homeserver &&
+    params.stored.userId === params.auth.userId &&
+    params.stored.accessToken === params.auth.accessToken
+  );
 }
 
 async function retryMatrixAuthRequest<T>(label: string, run: () => Promise<T>): Promise<T> {
@@ -946,10 +965,14 @@ export async function resolveMatrixAuth(params?: {
 export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
   auth: MatrixAuth;
   env?: NodeJS.ProcessEnv;
+  abortSignal?: AbortSignal;
 }): Promise<string | undefined> {
   const knownDeviceId = params.auth.deviceId?.trim();
   if (knownDeviceId) {
     return knownDeviceId;
+  }
+  if (isAbortSignalTriggered(params.abortSignal)) {
+    return undefined;
   }
 
   const whoami = await fetchMatrixWhoamiIdentity({
@@ -961,6 +984,20 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
   });
   const deviceId = whoami.device_id?.trim();
   if (!deviceId) {
+    return undefined;
+  }
+  if (isAbortSignalTriggered(params.abortSignal)) {
+    return undefined;
+  }
+
+  const env = params.env ?? process.env;
+  const { loadMatrixCredentials } = await loadMatrixCredentialsReadDeps();
+  if (
+    !credentialsMatchBackfillAuthLineage({
+      stored: loadMatrixCredentials(env, params.auth.accountId),
+      auth: params.auth,
+    })
+  ) {
     return undefined;
   }
 
@@ -975,17 +1012,20 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
   if (!repairedStorageMeta) {
     throw new Error("Matrix deviceId backfill failed to repair current-token storage metadata");
   }
+  if (isAbortSignalTriggered(params.abortSignal)) {
+    return undefined;
+  }
 
   const credentialsWriter = await import("../credentials-write.runtime.js");
-  await credentialsWriter.saveMatrixCredentials(
+  const saved = await credentialsWriter.saveBackfilledMatrixDeviceId(
     {
       homeserver: params.auth.homeserver,
       userId: params.auth.userId,
       accessToken: params.auth.accessToken,
       deviceId,
     },
-    params.env ?? process.env,
+    env,
     params.auth.accountId,
   );
-  return deviceId;
+  return saved === "saved" ? deviceId : undefined;
 }

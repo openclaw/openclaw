@@ -30,6 +30,25 @@ export async function saveMatrixCredentials(
   await writeJsonFileAtomically(credPath, toSave);
 }
 
+export async function saveBackfilledMatrixDeviceId(
+  credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">,
+  env: NodeJS.ProcessEnv = process.env,
+  accountId?: string | null,
+): Promise<"saved" | "skipped"> {
+  const existing = loadMatrixCredentials(env, accountId);
+  if (
+    existing &&
+    (existing.homeserver !== credentials.homeserver ||
+      existing.userId !== credentials.userId ||
+      existing.accessToken !== credentials.accessToken)
+  ) {
+    return "skipped";
+  }
+
+  await saveMatrixCredentials(credentials, env, accountId);
+  return "saved";
+}
+
 export async function touchMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
