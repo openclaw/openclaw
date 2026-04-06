@@ -257,9 +257,6 @@ importers:
 
   extensions/acpx:
     dependencies:
-      '@agentclientprotocol/sdk':
-        specifier: 0.18.0
-        version: 0.18.0(zod@4.3.6)
       acpx:
         specifier: github:openclaw/acpx#1b56415b1927cde4c1593cb0b9125af4c203e1ad
         version: https://codeload.github.com/openclaw/acpx/tar.gz/1b56415b1927cde4c1593cb0b9125af4c203e1ad
