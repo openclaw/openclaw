@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
   buildPluginLoaderAliasMap,
@@ -95,7 +95,12 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
     skipLexicalRootCheck: true,
   });
   if (!opened.ok) {
-    throw new Error(`plugin entry path escapes plugin root: ${specifier}`);
+    throw new Error(
+      matchBoundaryFileOpenFailure(opened, {
+        path: () => `plugin entry file not found in build output: ${specifier}`,
+        fallback: () => `plugin entry path escapes plugin root: ${specifier}`,
+      }),
+    );
   }
   fs.closeSync(opened.fd);
   return opened.path;
