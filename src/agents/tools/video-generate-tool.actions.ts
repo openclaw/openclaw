@@ -91,7 +91,8 @@ export function createVideoGenerateStatusActionResult(
   return createMediaGenerateStatusActionResult({
     sessionKey,
     inactiveText: "No active video generation task is currently running for this session.",
-    findActiveTask: findActiveVideoGenerationTaskForSession,
+    findActiveTask: (activeSessionKey) =>
+      findActiveVideoGenerationTaskForSession(activeSessionKey) ?? undefined,
     buildStatusText: buildVideoGenerationTaskStatusText,
     buildStatusDetails: buildVideoGenerationTaskStatusDetails,
   });
@@ -102,7 +103,8 @@ export function createVideoGenerateDuplicateGuardResult(
 ): VideoGenerateActionResult | null {
   return createMediaGenerateDuplicateGuardResult({
     sessionKey,
-    findActiveTask: findActiveVideoGenerationTaskForSession,
+    findActiveTask: (activeSessionKey) =>
+      findActiveVideoGenerationTaskForSession(activeSessionKey) ?? undefined,
     buildStatusText: buildVideoGenerationTaskStatusText,
     buildStatusDetails: buildVideoGenerationTaskStatusDetails,
   });

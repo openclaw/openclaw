@@ -77,6 +77,7 @@ describe("createPinnedDispatcher", () => {
       connect: {
         lookup,
       },
+      allowH2: false,
     });
     const firstCallArg = agentCtor.mock.calls[0]?.[0] as
       | { connect?: Record<string, unknown> }
@@ -108,6 +109,7 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamilyAttemptTimeout: 300,
         lookup,
       },
+      allowH2: false,
     });
   });
 
@@ -183,6 +185,7 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamily: true,
         lookup,
       },
+      allowH2: false,
       proxyTls: {
         autoSelectFamily: true,
       },
@@ -207,6 +210,7 @@ describe("createPinnedDispatcher", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://127.0.0.1:7890",
+      allowH2: false,
       requestTls: {
         autoSelectFamily: false,
         lookup,

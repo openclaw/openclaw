@@ -783,8 +783,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup", {
       command: "echo ok",
       workdir: process.cwd(),
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -826,8 +824,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-discord", {
       command: "echo ok",
       workdir: process.cwd(),
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -889,8 +885,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-discord-delayed", {
       command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
       workdir: tempDir,
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -965,8 +959,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-webchat", {
       command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
       workdir: tempDir,
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -1021,8 +1013,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-deny", {
       command: "echo ok",
       workdir: process.cwd(),
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");

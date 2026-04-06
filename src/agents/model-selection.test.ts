@@ -134,6 +134,10 @@ describe("model-selection", () => {
   });
 
   describe("isCliProvider", () => {
+    it("returns true for setup-registered cli backends", () => {
+      expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
+    });
+
     it("returns false for provider ids", () => {
       expect(isCliProvider("example-cli", {} as OpenClawConfig)).toBe(false);
     });

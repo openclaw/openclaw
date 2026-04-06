@@ -155,6 +155,8 @@ vi.mock("@mariozechner/pi-coding-agent", () => {
     AuthStorage,
     createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
     DefaultResourceLoader,
+    estimateTokens: () => 0,
+    generateSummary: async () => "",
     ModelRegistry,
     SessionManager: {
       open: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
@@ -264,6 +266,8 @@ vi.mock("../../session-write-lock.js", () => ({
 }));
 
 vi.mock("../tool-result-context-guard.js", () => ({
+  formatContextLimitTruncationNotice: (truncatedChars: number) =>
+    `[... ${Math.max(1, Math.floor(truncatedChars))} more characters truncated]`,
   installToolResultContextGuard: (...args: unknown[]) =>
     (hoisted.installToolResultContextGuardMock as (...args: unknown[]) => unknown)(...args),
 }));
