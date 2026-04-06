@@ -1,0 +1,1 @@
+CI smoke probe marker to force non-doc scope on the probe branch.
