@@ -49,6 +49,7 @@ import { resolvePluginCacheInputs } from "./roots.js";
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
+  getActivePluginRuntimeSubagentMode,
   recordImportedPluginId,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -442,9 +443,29 @@ function getCompatibleActivePluginRegistry(
   if (!activeCacheKey) {
     return undefined;
   }
-  return resolvePluginLoadCacheContext(options).cacheKey === activeCacheKey
-    ? activeRegistry
-    : undefined;
+  const requestedContext = resolvePluginLoadCacheContext(options);
+  if (requestedContext.cacheKey === activeCacheKey) {
+    return activeRegistry;
+  }
+  // A gateway-bindable runtime is a strict superset of the default runtime for
+  // plugin loading purposes, so default callers should still reuse that active
+  // registry instead of forcing a redundant reload and another register() pass.
+  if (
+    getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
+    requestedContext.runtimeSubagentMode === "default"
+  ) {
+    const gatewayBindableContext = resolvePluginLoadCacheContext({
+      ...options,
+      runtimeOptions: {
+        ...(options.runtimeOptions ?? {}),
+        allowGatewaySubagentBinding: true,
+      },
+    });
+    if (gatewayBindableContext.cacheKey === activeCacheKey) {
+      return activeRegistry;
+    }
+  }
+  return undefined;
 }
 
 export function resolveRuntimePluginRegistry(
