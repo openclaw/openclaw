@@ -145,4 +145,34 @@ describe("config validation allowed-values metadata", () => {
       });
     }
   });
+
+  it("appends bound hint for numeric ceiling violations", () => {
+    const result = validateConfigObjectRaw({
+      session: { agentToAgent: { maxPingPongTurns: 10 } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find(
+        (entry) => entry.path === "session.agentToAgent.maxPingPongTurns",
+      );
+      expect(issue).toBeDefined();
+      expect(issue?.message).toContain("(maximum: 5)");
+    }
+  });
+
+  it("appends bound hint for numeric floor violations", () => {
+    const result = validateConfigObjectRaw({
+      session: { agentToAgent: { maxPingPongTurns: -1 } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find(
+        (entry) => entry.path === "session.agentToAgent.maxPingPongTurns",
+      );
+      expect(issue).toBeDefined();
+      expect(issue?.message).toContain("(minimum: 0)");
+    }
+  });
 });
