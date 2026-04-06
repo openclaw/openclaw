@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 - Browser/plugin SDK: route browser auth, profile, host-inspection, and doctor readiness helpers through browser plugin public facades so core compatibility helpers stop carrying duplicate runtime implementations. (#63957) Thanks @joshavant.
 - Browser/act: centralize `/act` request normalization and execution dispatch while adding stable machine-readable route-level error codes for invalid requests, selector misuse, evaluate-disabled gating, target mismatch, and existing-session unsupported actions. (#63977) Thanks @joshavant.
 - Windows/exec: settle supervisor waits from child exit state after stdout and stderr drain even when `close` never arrives, so CLI commands stop hanging or dying with forced `SIGKILL` on Windows. (#64072) Thanks @obviyus.
+- Providers/Google video: fall back to the REST Veo path for affected text-only SDK 404 and empty-result failures, while keeping reference-input generation on the SDK path and normalizing REST video downloads. (#61878) Thanks @leoleedev.
 
 ## 2026.4.9
 
