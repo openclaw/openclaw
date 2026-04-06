@@ -2385,6 +2385,28 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards internal message:received hook messages as additive notices", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:main",
+      CommandBody: "/help",
+    });
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(async (eventUnknown: unknown) => {
+      const event = eventUnknown as { messages: string[] };
+      event.messages.push("hook notice", "   ");
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "hook notice" });
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+  });
+
   it("skips internal message:received hook when session key is unavailable", async () => {
     setNoAbort();
     const cfg = emptyConfig;

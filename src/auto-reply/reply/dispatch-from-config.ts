@@ -486,13 +486,20 @@ export async function dispatchReplyFromConfig(params: {
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
   if (sessionKey) {
+    const internalHookEvent = createInternalHookEvent("message", "received", sessionKey, {
+      ...toInternalMessageReceivedContext(hookContext),
+      timestamp,
+    });
     fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent("message", "received", sessionKey, {
-          ...toInternalMessageReceivedContext(hookContext),
-          timestamp,
-        }),
-      ),
+      (async () => {
+        await triggerInternalHook(internalHookEvent);
+        for (const message of internalHookEvent.messages) {
+          if (typeof message !== "string" || !message.trim()) {
+            continue;
+          }
+          await sendBindingNotice({ text: message }, "additive");
+        }
+      })(),
       "dispatch-from-config: message_received internal hook failed",
     );
   }
