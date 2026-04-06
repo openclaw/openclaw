@@ -1,13 +1,13 @@
-export type CommandPathMatchRule =
-  | readonly string[]
-  | {
-      pattern: readonly string[];
-      exact?: boolean;
-    };
+export type StructuredCommandPathMatchRule = {
+  pattern: readonly string[];
+  exact?: boolean;
+};
+
+export type CommandPathMatchRule = readonly string[] | StructuredCommandPathMatchRule;
 
 function isStructuredCommandPathMatchRule(
   rule: CommandPathMatchRule,
-): rule is Extract<CommandPathMatchRule, { pattern: readonly string[] }> {
+): rule is StructuredCommandPathMatchRule {
   return !Array.isArray(rule);
 }
 

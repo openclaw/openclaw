@@ -16,10 +16,11 @@ export type RoutedCommandDefinition<TArgs = unknown> = {
   runParsedArgs: (args: TArgs) => Promise<void>;
 };
 
-function defineRoutedCommand<TArgs>(
-  definition: RoutedCommandDefinition<TArgs>,
-): RoutedCommandDefinition<TArgs> {
-  return definition;
+function defineRoutedCommand<TParse extends (argv: string[]) => unknown>(definition: {
+  parseArgs: TParse;
+  runParsedArgs: (args: Exclude<ReturnType<TParse>, null>) => Promise<void>;
+}): RoutedCommandDefinition<Exclude<ReturnType<TParse>, null>> {
+  return definition as RoutedCommandDefinition<Exclude<ReturnType<TParse>, null>>;
 }
 
 export const routedCommandDefinitions = {

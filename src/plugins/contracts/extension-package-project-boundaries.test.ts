@@ -32,7 +32,12 @@ describe("opt-in extension package boundaries", () => {
     const tsconfig = readJsonFile<TsConfigJson>("extensions/tsconfig.package-boundary.base.json");
     expect(tsconfig.extends).toBe("../tsconfig.json");
     expect(tsconfig.compilerOptions?.paths).toEqual({
-      "@openclaw/plugin-sdk/*": ["packages/plugin-sdk/dist/packages/plugin-sdk/src/*.d.ts"],
+      "openclaw/extension-api": ["../src/extensionAPI.ts"],
+      "openclaw/plugin-sdk": ["../src/plugin-sdk/index.ts"],
+      "openclaw/plugin-sdk/*": ["../src/plugin-sdk/*.ts"],
+      "openclaw/plugin-sdk/account-id": ["../src/plugin-sdk/account-id.ts"],
+      "@openclaw/*": ["../extensions/*"],
+      "@openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/packages/plugin-sdk/src/*.d.ts"],
     });
   });
 
