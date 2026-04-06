@@ -112,8 +112,6 @@ function isHeicSource(opts: { contentType?: string; fileName?: string }): boolea
 function assertHostReadMediaAllowed(params: {
   contentType?: string;
   kind: MediaKind | undefined;
-  mediaUrl: string;
-  fileName?: string;
 }): void {
   if (params.kind === "image" || params.kind === "audio" || params.kind === "video") {
     return;
@@ -386,8 +384,6 @@ async function loadWebMediaInternal(
     assertHostReadMediaAllowed({
       contentType: verifiedMime,
       kind: kindFromMime(detectedMime ?? verifiedMime),
-      mediaUrl,
-      fileName,
     });
   }
   return await clampAndFinalize({
