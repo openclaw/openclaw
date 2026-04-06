@@ -35,7 +35,7 @@ function createParsedRoute(params: {
       if (!args) {
         return false;
       }
-      await params.definition.runParsedArgs(args);
+      await params.definition.runParsedArgs(args as never);
       return true;
     },
   };

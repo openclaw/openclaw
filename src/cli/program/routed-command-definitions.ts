@@ -20,7 +20,10 @@ export type RoutedCommandDefinition<TParse extends RouteArgParser<unknown>> = {
   runParsedArgs: (args: ParsedRouteArgs<TParse>) => Promise<void>;
 };
 
-export type AnyRoutedCommandDefinition = RoutedCommandDefinition<RouteArgParser<unknown>>;
+export type AnyRoutedCommandDefinition = {
+  parseArgs: RouteArgParser<unknown>;
+  runParsedArgs: (args: never) => Promise<void>;
+};
 
 function defineRoutedCommand<TParse extends RouteArgParser<unknown>>(
   definition: RoutedCommandDefinition<TParse>,

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import type { LookupFn, SsrFPolicy } from "../../api.js";
 import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
@@ -206,7 +207,11 @@ export class UrbitSSEClient {
     if (!body) {
       return;
     }
-    const stream = body instanceof ReadableStream ? Readable.fromWeb(body) : body;
+    // Bridge DOM fetch stream types to Node's stream/web declaration on newer TS/node combos.
+    const stream =
+      body instanceof ReadableStream
+        ? Readable.fromWeb(body as unknown as WebReadableStream)
+        : body;
     let buffer = "";
 
     try {

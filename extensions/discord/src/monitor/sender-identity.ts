@@ -23,6 +23,7 @@ type DiscordWebhookMessageLike = {
 
 type DiscordMemberLike = {
   nickname?: string | null;
+  nick?: string | null;
 };
 
 export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): string | null {
@@ -61,7 +62,10 @@ export function resolveDiscordSenderIdentity(params: {
 
   const senderTag = formatDiscordUserTag(params.author);
   const senderDisplay =
-    params.member?.nickname ?? params.author.globalName ?? params.author.username;
+    params.member?.nickname ??
+    params.member?.nick ??
+    params.author.globalName ??
+    params.author.username;
   const senderLabel =
     senderDisplay && senderTag && senderDisplay !== senderTag
       ? `${senderDisplay} (${senderTag})`
