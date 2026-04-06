@@ -8,7 +8,7 @@ export default defineBundledChannelEntry({
   description: "Matrix channel plugin (matrix-js-sdk)",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "matrixPlugin",
   },
   runtime: {
