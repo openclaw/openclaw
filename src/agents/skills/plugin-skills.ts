@@ -56,6 +56,15 @@ type ResolvedPluginSkillDir = {
   watchDir: string;
 };
 
+/**
+ * On Windows a bare drive letter like "C:" is CWD-relative; ensure it
+ * becomes "C:\" so path.join produces absolute paths.
+ * @internal Exported for testing only.
+ */
+export function normalizeDriveRoot(raw: string, sep: string): string {
+  return raw.length === 2 && raw[1] === ":" ? raw + sep : raw;
+}
+
 function maybeResolveBundledRuntimeSkillDir(
   candidate: string,
   rootDir: string,
@@ -70,7 +79,7 @@ function maybeResolveBundledRuntimeSkillDir(
   }
 
   // packageRoot is everything before the sep that starts segmentMarker.
-  const packageRoot = normalized.slice(0, markerIndex);
+  const packageRoot = normalizeDriveRoot(normalized.slice(0, markerIndex), path.sep);
   const bundledLeaf = normalized.slice(markerIndex + segmentMarker.length);
 
   // Verify the plugin rootDir itself is under the same dist-runtime/extensions subtree.

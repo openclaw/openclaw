@@ -14,6 +14,7 @@ vi.mock("../../plugins/manifest-registry.js", () => ({
 }));
 
 let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
+let normalizeDriveRoot: typeof import("./plugin-skills.js").normalizeDriveRoot;
 
 const tempDirs = createTrackedTempDirs();
 
@@ -107,6 +108,27 @@ async function setupBundledRuntimeOverlayPlugin() {
 afterEach(async () => {
   hoisted.loadPluginManifestRegistry.mockReset();
   await tempDirs.cleanup();
+});
+
+describe("normalizeDriveRoot", () => {
+  beforeAll(async () => {
+    ({ normalizeDriveRoot } = await import("./plugin-skills.js"));
+  });
+
+  it("appends sep to a bare Windows drive letter", () => {
+    expect(normalizeDriveRoot("C:", "\\")).toBe("C:\\");
+    expect(normalizeDriveRoot("D:", "\\")).toBe("D:\\");
+  });
+
+  it("leaves Unix absolute paths unchanged", () => {
+    expect(normalizeDriveRoot("/srv/pkg", "/")).toBe("/srv/pkg");
+    expect(normalizeDriveRoot("", "/")).toBe("");
+  });
+
+  it("does not alter longer strings that end with a colon", () => {
+    expect(normalizeDriveRoot("CC:", "\\")).toBe("CC:");
+    expect(normalizeDriveRoot("/tmp/x:", "/")).toBe("/tmp/x:");
+  });
 });
 
 describe("resolvePluginSkillDirs", () => {
