@@ -25,3 +25,10 @@ export {
   applyMinimaxApiProviderConfig,
   applyMinimaxApiProviderConfigCn,
 } from "./onboard.js";
+export { buildMinimaxSpeechProvider } from "./speech-provider.js";
+export {
+  DEFAULT_MINIMAX_TTS_BASE_URL,
+  MINIMAX_TTS_MODELS,
+  MINIMAX_TTS_VOICES,
+  minimaxTTS,
+} from "./tts.js";
