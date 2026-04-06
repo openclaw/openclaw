@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 - Agents/history: keep truly legacy unsigned replay text unphased when mixed with phased OpenAI WS assistant blocks, while still inheriting message phase for id-only replay signatures. (#61529) Thanks @100yenadmin.
 - Discord/thread titles: stop forcing a hardcoded temperature for generated auto-thread names so Codex-backed thread title generation works on `openai-codex/*` models again. (#59525)
 - Providers/OpenAI: keep WebSocket text buffered until a real assistant phase arrives, even when text deltas land before a phaseless `output_item.added` announcement. (#61954) Thanks @100yenadmin.
+- Agents/history: keep history-based reply reads and subagent completion summaries on `final_answer` text only so internal commentary stops leaking into user-visible follow-up replies. (#61747) Thanks @afurm.
 
 ## 2026.4.5
 

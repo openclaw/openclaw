@@ -16,9 +16,11 @@ function createLogger(): HookRunnerLogger & {
   warn: ReturnType<typeof vi.fn>;
   error: ReturnType<typeof vi.fn>;
 } {
+  const warn = vi.fn<(message: string) => void>();
+  const error = vi.fn<(message: string) => void>();
   return {
-    warn: vi.fn(),
-    error: vi.fn(),
+    warn,
+    error,
   };
 }
 
