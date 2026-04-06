@@ -1643,6 +1643,14 @@ export const chatHandlers: GatewayRequestHandlers = {
           agentId: sessionAgentId,
         });
         if (allowAny) {
+          // NOTE: We assume the configured imageModel actually supports image input.
+          // We don't validate this via catalog here because:
+          // 1. This is a user configuration error edge case - if they configure a text-only
+          //    model as imageModel, runtime failure is appropriate feedback.
+          // 2. This matches the allowlist path behavior where we also don't validate
+          //    image capability, only membership in the allowlist.
+          // 3. Adding catalog validation here would add complexity and API overhead.
+          // If users report this as a real-world issue, we can add validation then.
           imageModelIsUsable = true;
         } else {
           // Determine the image model provider for fallback resolution.
