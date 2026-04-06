@@ -86,6 +86,18 @@ const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
 const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
+const MANAGED_DAILY_DREAMING_BLOCKS = [
+  {
+    heading: "## Light Sleep",
+    startMarker: "<!-- openclaw:dreaming:light:start -->",
+    endMarker: "<!-- openclaw:dreaming:light:end -->",
+  },
+  {
+    heading: "## REM Sleep",
+    startMarker: "<!-- openclaw:dreaming:rem:start -->",
+    endMarker: "<!-- openclaw:dreaming:rem:end -->",
+  },
+] as const;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -476,6 +488,67 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
   return chunks.slice(0, limit);
 }
 
+function findManagedDailyDreamingHeadingIndex(
+  lines: string[],
+  startIndex: number,
+  heading: string,
+): number | null {
+  for (let index = startIndex - 1; index >= 0; index -= 1) {
+    const trimmed = lines[index]?.trim() ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    return trimmed === heading ? index : null;
+  }
+  return null;
+}
+
+function isManagedDailyDreamingBoundary(
+  line: string,
+  blockByStartMarker: ReadonlyMap<string, (typeof MANAGED_DAILY_DREAMING_BLOCKS)[number]>,
+): boolean {
+  const trimmed = line.trim();
+  return /^#{1,6}\s+/.test(trimmed) || blockByStartMarker.has(trimmed);
+}
+
+function stripManagedDailyDreamingLines(lines: string[]): string[] {
+  const blockByStartMarker: ReadonlyMap<string, (typeof MANAGED_DAILY_DREAMING_BLOCKS)[number]> =
+    new Map(MANAGED_DAILY_DREAMING_BLOCKS.map((block) => [block.startMarker, block]));
+  const sanitized = [...lines];
+  for (let index = 0; index < sanitized.length; index += 1) {
+    const block = blockByStartMarker.get(sanitized[index]?.trim() ?? "");
+    if (!block) {
+      continue;
+    }
+
+    let stripUntilIndex = -1;
+    for (let cursor = index + 1; cursor < sanitized.length; cursor += 1) {
+      const line = sanitized[cursor];
+      const trimmed = line?.trim() ?? "";
+      if (trimmed === block.endMarker) {
+        stripUntilIndex = cursor;
+        break;
+      }
+      if (line && isManagedDailyDreamingBoundary(line, blockByStartMarker)) {
+        stripUntilIndex = cursor - 1;
+        break;
+      }
+    }
+    if (stripUntilIndex < index) {
+      continue;
+    }
+
+    const headingIndex = findManagedDailyDreamingHeadingIndex(lines, index, block.heading);
+    const startIndex = headingIndex ?? index;
+    for (let cursor = startIndex; cursor <= stripUntilIndex; cursor += 1) {
+      sanitized[cursor] = "";
+    }
+    index = stripUntilIndex;
+  }
+
+  return sanitized;
+}
+
 function entryWithinLookback(entry: ShortTermRecallEntry, cutoffMs: number): boolean {
   const byDay = (entry.recallDays ?? []).some((day) => isDayWithinLookback(day, cutoffMs));
   if (byDay) {
@@ -640,7 +713,7 @@ async function collectDailyIngestionBatches(params: {
     if (!raw) {
       continue;
     }
-    const lines = raw.split(/\r?\n/);
+    const lines = stripManagedDailyDreamingLines(raw.split(/\r?\n/));
     const chunks = buildDailySnippetChunks(lines, perFileCap);
     const results: MemorySearchResult[] = [];
     for (const chunk of chunks) {
