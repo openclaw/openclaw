@@ -87,6 +87,7 @@ export function normalizeAgentCommandReplyPayloads(params: {
   if (!channel) {
     return payloads as ReplyPayload[];
   }
+  const deliveryPlugin = getChannelPlugin(channel);
 
   const sessionKey = params.outboundSession?.key ?? params.opts.sessionKey;
   const agentId =
@@ -112,14 +113,22 @@ export function normalizeAgentCommandReplyPayloads(params: {
   }
   const responsePrefixContext = replyPrefix.responsePrefixContextProvider();
   const applyChannelTransforms = params.applyChannelTransforms ?? true;
+  const transformReplyPayload = deliveryPlugin?.messaging?.transformReplyPayload
+    ? (payload: ReplyPayload) =>
+        deliveryPlugin.messaging?.transformReplyPayload?.({
+          payload,
+          cfg: params.cfg,
+          accountId: params.accountId,
+        }) ?? payload
+    : undefined;
 
   const normalizedPayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
     const normalized = normalizeReplyPayload(payload as ReplyPayload, {
       responsePrefix: replyPrefix.responsePrefix,
-      enableSlackInteractiveReplies: replyPrefix.enableSlackInteractiveReplies,
       applyChannelTransforms,
       responsePrefixContext,
+      transformReplyPayload,
     });
     if (normalized) {
       normalizedPayloads.push(normalized);
@@ -204,9 +213,17 @@ export async function deliverAgentCommandResult(params: {
   const resolvedTarget = resolved.resolvedTarget;
   const deliveryTarget = resolved.resolvedTo;
   const resolvedThreadId = deliveryPlan.resolvedThreadId ?? opts.threadId;
-  const resolvedReplyToId =
-    deliveryChannel === "slack" && resolvedThreadId != null ? String(resolvedThreadId) : undefined;
-  const resolvedThreadTarget = deliveryChannel === "slack" ? undefined : resolvedThreadId;
+  const replyTransport =
+    deliveryPlugin?.threading?.resolveReplyTransport?.({
+      cfg,
+      accountId: resolvedAccountId,
+      threadId: resolvedThreadId,
+    }) ?? null;
+  const resolvedReplyToId = replyTransport?.replyToId ?? undefined;
+  const resolvedThreadTarget =
+    replyTransport && Object.hasOwn(replyTransport, "threadId")
+      ? (replyTransport.threadId ?? null)
+      : (resolvedThreadId ?? null);
 
   const logDeliveryError = (err: unknown) => {
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;

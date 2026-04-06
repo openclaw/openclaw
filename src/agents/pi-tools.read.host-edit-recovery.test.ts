@@ -103,7 +103,7 @@ describe("edit tool recovery hardening", () => {
     await expect(
       tool.execute(
         "call-1",
-        { path: filePath, oldText: "missing", newText: "replacement" },
+        { path: filePath, edits: [{ oldText: "missing", newText: "replacement" }] },
         undefined,
       ),
     ).rejects.toThrow(/Current file contents:\nactual current content/);
@@ -126,8 +126,12 @@ describe("edit tool recovery hardening", () => {
       "call-1",
       {
         path: filePath,
-        oldText: 'const value = "foo";\n',
-        newText: 'const value = "foobar";\n',
+        edits: [
+          {
+            oldText: 'const value = "foo";\n',
+            newText: 'const value = "foobar";\n',
+          },
+        ],
       },
       undefined,
     );
@@ -154,7 +158,10 @@ describe("edit tool recovery hardening", () => {
     await expect(
       tool.execute(
         "call-1",
-        { path: filePath, oldText: "missing", newText: "replacement already present" },
+        {
+          path: filePath,
+          edits: [{ oldText: "missing", newText: "replacement already present" }],
+        },
         undefined,
       ),
     ).rejects.toThrow("Simulated post-write failure");
@@ -175,7 +182,7 @@ describe("edit tool recovery hardening", () => {
     });
     const result = await tool.execute(
       "call-1",
-      { path: filePath, oldText: "delete me", newText: "" },
+      { path: filePath, edits: [{ oldText: "delete me", newText: "" }] },
       undefined,
     );
 
@@ -235,7 +242,7 @@ describe("edit tool recovery hardening", () => {
     });
     const result = await tool.execute(
       "call-1",
-      { path: filePath, oldText: "old text", newText: "new text" },
+      { path: filePath, edits: [{ oldText: "old text", newText: "new text" }] },
       undefined,
     );
 

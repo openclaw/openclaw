@@ -25,8 +25,9 @@ type TelegramHealthAccount = {
 };
 
 async function loadFreshHealthModulesForTest() {
-  vi.doMock("../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../config/config.js")>();
+  vi.doMock("../config/config.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
     return {
       ...actual,
       loadConfig: () => testConfig,
@@ -41,7 +42,7 @@ async function loadFreshHealthModulesForTest() {
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
     updateLastRoute: vi.fn().mockResolvedValue(undefined),
   }));
-  vi.doMock("../plugins/runtime/runtime-web-channel-boundary.js", () => ({
+  vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
     webAuthExists: vi.fn(async () => true),
     getWebAuthAgeMs: vi.fn(() => 1234),
     readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),

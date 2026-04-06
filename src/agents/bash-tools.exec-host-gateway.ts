@@ -16,9 +16,7 @@ import {
   describeInterpreterInlineEval,
   detectInterpreterInlineEvalArgv,
 } from "../infra/exec-inline-eval.js";
-import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
-import { logInfo } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -80,6 +78,19 @@ export type ProcessGatewayAllowlistResult = {
   pendingResult?: AgentToolResult<ExecToolDetails>;
 };
 
+function hasGatewayAllowlistMiss(params: {
+  hostSecurity: ExecSecurity;
+  analysisOk: boolean;
+  allowlistSatisfied: boolean;
+  durableApprovalSatisfied: boolean;
+}): boolean {
+  return (
+    params.hostSecurity === "allowlist" &&
+    (!params.analysisOk || !params.allowlistSatisfied) &&
+    !params.durableApprovalSatisfied
+  );
+}
+
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
@@ -138,11 +149,6 @@ export async function processGatewayAllowlist(
       enforcedCommand = enforced.command;
     }
   }
-  const obfuscation = detectCommandObfuscation(params.command);
-  if (obfuscation.detected) {
-    logInfo(`exec: obfuscation detected (gateway): ${obfuscation.reasons.join(", ")}`);
-    params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
-  }
   const recordMatchedAllowlistUse = (resolvedPath?: string) =>
     recordAllowlistMatchesUse({
       approvals: approvals.file,
@@ -173,8 +179,7 @@ export async function processGatewayAllowlist(
     }) ||
     requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||
-    requiresInlineEvalApproval ||
-    obfuscation.detected;
+    requiresInlineEvalApproval;
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",
@@ -236,7 +241,6 @@ export async function processGatewayAllowlist(
       const { approvedByAsk, deniedReason } = createExecApprovalDecisionState({
         decision: preResolvedDecision,
         askFallback,
-        obfuscationDetected: obfuscation.detected,
       });
 
       if (deniedReason || !approvedByAsk) {
@@ -298,7 +302,6 @@ export async function processGatewayAllowlist(
       } = createExecApprovalDecisionState({
         decision,
         askFallback,
-        obfuscationDetected: obfuscation.detected,
       });
       let approvedByAsk = initialApprovedByAsk;
       let deniedReason = initialDeniedReason;
@@ -330,10 +333,13 @@ export async function processGatewayAllowlist(
       }
 
       if (
-        hostSecurity === "allowlist" &&
-        (!analysisOk || !allowlistSatisfied) &&
         !approvedByAsk &&
-        !durableApprovalSatisfied
+        hasGatewayAllowlistMiss({
+          hostSecurity,
+          analysisOk,
+          allowlistSatisfied,
+          durableApprovalSatisfied,
+        })
       ) {
         deniedReason = deniedReason ?? "allowlist-miss";
       }
@@ -405,7 +411,14 @@ export async function processGatewayAllowlist(
     };
   }
 
-  if (hostSecurity === "allowlist" && (!analysisOk || !allowlistSatisfied)) {
+  if (
+    hasGatewayAllowlistMiss({
+      hostSecurity,
+      analysisOk,
+      allowlistSatisfied,
+      durableApprovalSatisfied,
+    })
+  ) {
     throw new Error("exec denied: allowlist miss");
   }
 

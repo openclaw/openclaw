@@ -103,13 +103,11 @@ prepare_gates() {
       echo "Docs-only change detected with high confidence; skipping pnpm test."
     else
       gates_mode="full"
-      local prepare_unit_fast_batch_target_ms
-      prepare_unit_fast_batch_target_ms="${OPENCLAW_PREPARE_TEST_UNIT_FAST_BATCH_TARGET_MS:-5000}"
-      echo "Running pnpm test with OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS=$prepare_unit_fast_batch_target_ms for shorter-lived unit-fast workers."
+      echo "Running pnpm test with OPENCLAW_VITEST_MAX_WORKERS=${OPENCLAW_VITEST_MAX_WORKERS:-4}."
       run_quiet_logged \
         "pnpm test" \
         ".local/gates-test.log" \
-        env OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS="$prepare_unit_fast_batch_target_ms" pnpm test
+        env OPENCLAW_VITEST_MAX_WORKERS="${OPENCLAW_VITEST_MAX_WORKERS:-4}" pnpm test
       previous_full_gates_head="$current_head"
     fi
   fi

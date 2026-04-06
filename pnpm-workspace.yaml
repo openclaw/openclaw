@@ -7,7 +7,10 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
+  - "acpx"
   - "openclaw"
+  - "@buape/carbon"
+  - "@cloudflare/workers-types"
   - "@mariozechner/*"
   - "@typescript/native-preview*"
   - "@oxlint/*"

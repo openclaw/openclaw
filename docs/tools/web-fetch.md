@@ -61,6 +61,7 @@ await web_fetch({ url: "https://example.com/article" });
     web: {
       fetch: {
         enabled: true, // default: true
+        provider: "firecrawl", // optional; omit for auto-detect
         maxChars: 50000, // max output chars
         maxCharsCap: 50000, // hard cap for maxChars param
         maxResponseBytes: 2000000, // max download size before truncation
@@ -82,6 +83,13 @@ If Readability extraction fails, `web_fetch` can fall back to
 
 ```json5
 {
+  tools: {
+    web: {
+      fetch: {
+        provider: "firecrawl", // optional; omit for auto-detect from available credentials
+      },
+    },
+  },
   plugins: {
     entries: {
       firecrawl: {
@@ -109,6 +117,19 @@ Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor
   `FIRECRAWL_API_KEY` env fallback, gateway startup fails fast.
 </Note>
 
+<Note>
+  Firecrawl `baseUrl` overrides are locked down: they must use `https://` and
+  the official Firecrawl host (`api.firecrawl.dev`).
+</Note>
+
+Current runtime behavior:
+
+- `tools.web.fetch.provider` selects the fetch fallback provider explicitly.
+- If `provider` is omitted, OpenClaw auto-detects the first ready web-fetch
+  provider from available credentials. Today the bundled provider is Firecrawl.
+- If Readability is disabled, `web_fetch` skips straight to the selected
+  provider fallback. If no provider is available, it fails closed.
+
 ## Limits and safety
 
 - `maxChars` is clamped to `tools.web.fetch.maxCharsCap`
@@ -126,7 +147,7 @@ If you use tool profiles or allowlists, add `web_fetch` or `group:web`:
 {
   tools: {
     allow: ["web_fetch"],
-    // or: allow: ["group:web"]  (includes both web_fetch and web_search)
+    // or: allow: ["group:web"]  (includes web_fetch, web_search, and x_search)
   },
 }
 ```

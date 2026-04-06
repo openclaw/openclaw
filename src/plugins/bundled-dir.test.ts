@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -11,9 +11,7 @@ const originalVitest = process.env.VITEST;
 const originalArgv1 = process.argv[1];
 
 function makeRepoRoot(prefix: string): string {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(repoRoot);
-  return repoRoot;
+  return makeTrackedTempDir(prefix, tempDirs);
 }
 
 function createOpenClawRoot(params: {
@@ -140,9 +138,7 @@ afterEach(() => {
     process.env.VITEST = originalVitest;
   }
   process.argv[1] = originalArgv1;
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("resolveBundledPluginsDir", () => {
@@ -169,6 +165,20 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
+      "prefers built dist/extensions in a git checkout outside vitest",
+      {
+        prefix: "openclaw-bundled-dir-git-built-",
+        hasExtensions: true,
+        hasSrc: true,
+        hasDistRuntimeExtensions: true,
+        hasDistExtensions: true,
+        hasGitCheckout: true,
+      },
+      {
+        expectedRelativeDir: path.join("dist-runtime", "extensions"),
+      },
+    ],
+    [
       "prefers source extensions under vitest to avoid stale staged plugins",
       {
         prefix: "openclaw-bundled-dir-vitest-",
@@ -182,13 +192,11 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "prefers source extensions in a git checkout even without vitest env",
+      "falls back to source extensions in a git checkout when built trees are missing",
       {
         prefix: "openclaw-bundled-dir-git-",
         hasExtensions: true,
         hasSrc: true,
-        hasDistRuntimeExtensions: true,
-        hasDistExtensions: true,
         hasGitCheckout: true,
       },
       {

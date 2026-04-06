@@ -1,16 +1,14 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../test-helpers/fs-fixtures.js";
 import { loadSiblingRuntimeModuleSync } from "./local-runtime-module.js";
 
-const tempDirs = new Set<string>();
+const tempDirs: string[] = [];
 
 function createTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-runtime-module-"));
-  tempDirs.add(dir);
-  return dir;
+  return makeTrackedTempDir("openclaw-local-runtime-module", tempDirs);
 }
 
 function writeFile(filePath: string, content: string): void {
@@ -19,27 +17,24 @@ function writeFile(filePath: string, content: string): void {
 }
 
 afterEach(() => {
-  for (const dir of tempDirs) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  tempDirs.clear();
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("loadSiblingRuntimeModuleSync", () => {
   it("loads a sibling runtime module from the caller directory", () => {
     const root = createTempDir();
     const moduleUrl = pathToFileURL(
-      path.join(root, "src", "plugins", "runtime", "runtime-line.js"),
+      path.join(root, "src", "plugins", "runtime", "runtime.js"),
     ).href;
 
     writeFile(
-      path.join(root, "src", "plugins", "runtime", "runtime-line.contract.js"),
+      path.join(root, "src", "plugins", "runtime", "runtime.contract.js"),
       "module.exports = { runtimeLine: { source: 'sibling' } };",
     );
 
     const loaded = loadSiblingRuntimeModuleSync<{ runtimeLine: { source: string } }>({
       moduleUrl,
-      relativeBase: "./runtime-line.contract",
+      relativeBase: "./runtime.contract",
     });
 
     expect(loaded.runtimeLine.source).toBe("sibling");
@@ -50,13 +45,13 @@ describe("loadSiblingRuntimeModuleSync", () => {
     const moduleUrl = pathToFileURL(path.join(root, "dist", "runtime-9DLN_Ai5.js")).href;
 
     writeFile(
-      path.join(root, "dist", "plugins", "runtime", "runtime-line.contract.js"),
+      path.join(root, "dist", "plugins", "runtime", "runtime.contract.js"),
       "module.exports = { runtimeLine: { source: 'dist-runtime' } };",
     );
 
     const loaded = loadSiblingRuntimeModuleSync<{ runtimeLine: { source: string } }>({
       moduleUrl,
-      relativeBase: "./runtime-line.contract",
+      relativeBase: "./runtime.contract",
     });
 
     expect(loaded.runtimeLine.source).toBe("dist-runtime");
@@ -69,8 +64,8 @@ describe("loadSiblingRuntimeModuleSync", () => {
     expect(() =>
       loadSiblingRuntimeModuleSync({
         moduleUrl,
-        relativeBase: "./runtime-line.contract",
+        relativeBase: "./runtime.contract",
       }),
-    ).toThrow("Unable to resolve runtime module ./runtime-line.contract");
+    ).toThrow("Unable to resolve runtime module ./runtime.contract");
   });
 });

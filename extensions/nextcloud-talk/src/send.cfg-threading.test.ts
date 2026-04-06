@@ -11,6 +11,7 @@ const hoisted = vi.hoisted(() => ({
   convertMarkdownTables: vi.fn((text: string) => text),
   record: vi.fn(),
   resolveNextcloudTalkAccount: vi.fn(),
+  ssrfPolicyFromPrivateNetworkOptIn: vi.fn(() => undefined),
   generateNextcloudTalkSignature: vi.fn(() => ({
     random: "r",
     signature: "s",
@@ -18,69 +19,27 @@ const hoisted = vi.hoisted(() => ({
   mockFetchGuard: vi.fn(),
 }));
 
-vi.mock("./runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime.js")>();
+vi.mock("./send.runtime.js", () => {
   return {
-    ...actual,
-    getNextcloudTalkRuntime: () => createSendCfgThreadingRuntime(hoisted),
-  };
-});
-
-vi.mock("./accounts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./accounts.js")>();
-  return {
-    ...actual,
-    resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
-  };
-});
-
-vi.mock("./signature.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./signature.js")>();
-  return {
-    ...actual,
-    generateNextcloudTalkSignature: hoisted.generateNextcloudTalkSignature,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...original,
-    fetchWithSsrFGuard: hoisted.mockFetchGuard,
-  };
-});
-
-vi.mock("../../../src/infra/net/fetch-guard.js", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...original,
-    fetchWithSsrFGuard: hoisted.mockFetchGuard,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...original,
-    resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...original,
     convertMarkdownTables: hoisted.convertMarkdownTables,
+    fetchWithSsrFGuard: hoisted.mockFetchGuard,
+    generateNextcloudTalkSignature: hoisted.generateNextcloudTalkSignature,
+    getNextcloudTalkRuntime: () => createSendCfgThreadingRuntime(hoisted),
+    resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
+    resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
+    ssrfPolicyFromPrivateNetworkOptIn: hoisted.ssrfPolicyFromPrivateNetworkOptIn,
   };
 });
-
-const accountsActual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
-hoisted.resolveNextcloudTalkAccount.mockImplementation(accountsActual.resolveNextcloudTalkAccount);
 
 const { sendMessageNextcloudTalk, sendReactionNextcloudTalk } = await import("./send.js");
 
 describe("nextcloud-talk send cfg threading", () => {
   const fetchMock = vi.fn<typeof fetch>();
+  const defaultAccount = {
+    accountId: "default",
+    baseUrl: "https://nextcloud.example.com",
+    secret: "secret-value",
+  };
 
   beforeEach(() => {
     vi.stubGlobal("fetch", fetchMock);
@@ -89,9 +48,14 @@ describe("nextcloud-talk send cfg threading", () => {
       const response = await globalThis.fetch(p.url, p.init);
       return { response, release: async () => {}, finalUrl: p.url };
     });
-    hoisted.resolveNextcloudTalkAccount.mockImplementation(
-      accountsActual.resolveNextcloudTalkAccount,
-    );
+    hoisted.loadConfig.mockReset();
+    hoisted.resolveMarkdownTableMode.mockClear();
+    hoisted.convertMarkdownTables.mockClear();
+    hoisted.record.mockReset();
+    hoisted.ssrfPolicyFromPrivateNetworkOptIn.mockClear();
+    hoisted.generateNextcloudTalkSignature.mockClear();
+    hoisted.resolveNextcloudTalkAccount.mockReset();
+    hoisted.resolveNextcloudTalkAccount.mockReturnValue(defaultAccount);
   });
 
   afterEach(() => {
@@ -102,11 +66,6 @@ describe("nextcloud-talk send cfg threading", () => {
 
   it("uses provided cfg for sendMessage and skips runtime loadConfig", async () => {
     const cfg = { source: "provided" } as const;
-    hoisted.resolveNextcloudTalkAccount.mockReturnValue({
-      accountId: "default",
-      baseUrl: "https://nextcloud.example.com",
-      secret: "secret-value", // pragma: allowlist secret
-    });
     fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -148,11 +107,6 @@ describe("nextcloud-talk send cfg threading", () => {
 
   it("sends with provided cfg even when the runtime store is not initialized", async () => {
     const cfg = { source: "provided" } as const;
-    hoisted.resolveNextcloudTalkAccount.mockReturnValue({
-      accountId: "default",
-      baseUrl: "https://nextcloud.example.com",
-      secret: "secret-value",
-    });
     hoisted.record.mockImplementation(() => {
       throw new Error("Nextcloud Talk runtime not initialized");
     });
@@ -192,11 +146,6 @@ describe("nextcloud-talk send cfg threading", () => {
   it("falls back to runtime cfg for sendReaction when cfg is omitted", async () => {
     const runtimeCfg = { source: "runtime" } as const;
     hoisted.loadConfig.mockReturnValueOnce(runtimeCfg);
-    hoisted.resolveNextcloudTalkAccount.mockReturnValue({
-      accountId: "default",
-      baseUrl: "https://nextcloud.example.com",
-      secret: "secret-value", // pragma: allowlist secret
-    });
     fetchMock.mockResolvedValueOnce(new Response("{}", { status: 200 }));
 
     const result = await sendReactionNextcloudTalk("room:ops", "m-1", "👍", {

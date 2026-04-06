@@ -22,8 +22,9 @@ const loadConfigMock = vi.fn<() => SessionsToolTestConfig>(() => ({
   tools: { agentToAgent: { enabled: false } },
 }));
 
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
     loadConfig: () => loadConfigMock() as never,
@@ -216,6 +217,25 @@ describe("extractAssistantText", () => {
       content: [{ type: "text", text: "Handle payment required errors in your API." }],
     };
     expect(extractAssistantText(message)).toBe("Handle payment required errors in your API.");
+  });
+
+  it("prefers final_answer text when phased assistant history is present", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "internal reasoning",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+    };
+    expect(extractAssistantText(message)).toBe("Done.");
   });
 });
 

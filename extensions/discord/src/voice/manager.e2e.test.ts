@@ -9,6 +9,7 @@ const {
   resolveAgentRouteMock,
   agentCommandMock,
   transcribeAudioFileMock,
+  textToSpeechMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -66,6 +67,7 @@ const {
     resolveAgentRouteMock: vi.fn(() => ({ agentId: "agent-1", sessionKey: "discord:g1:c1" })),
     agentCommandMock: vi.fn(async (_opts?: unknown, _runtime?: unknown) => ({ payloads: [] })),
     transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
+    textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
   };
 });
 
@@ -87,24 +89,35 @@ vi.mock("./sdk-runtime.js", () => ({
   }),
 }));
 
-vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
+vi.mock("openclaw/plugin-sdk/routing", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/routing")>(
+    "openclaw/plugin-sdk/routing",
+  );
   return {
     ...actual,
     resolveAgentRoute: resolveAgentRouteMock,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
+    "openclaw/plugin-sdk/agent-runtime",
+  );
   return {
     ...actual,
     agentCommandFromIngress: agentCommandMock,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
-  transcribeAudioFile: transcribeAudioFileMock,
+vi.mock("../runtime.js", () => ({
+  getDiscordRuntime: () => ({
+    mediaUnderstanding: {
+      transcribeAudioFile: transcribeAudioFileMock,
+    },
+    tts: {
+      textToSpeech: textToSpeechMock,
+    },
+  }),
 }));
 
 let managerModule: typeof import("./manager.js");
@@ -153,6 +166,8 @@ describe("DiscordVoiceManager", () => {
     agentCommandMock.mockResolvedValue({ payloads: [] });
     transcribeAudioFileMock.mockReset();
     transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
+    textToSpeechMock.mockReset();
+    textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
   });
 
   const createManager = (
@@ -290,6 +305,16 @@ describe("DiscordVoiceManager", () => {
         decryptionFailureTolerance: 8,
       }),
     );
+  });
+
+  it("keeps the shorter timeout for initial voice connection readiness", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 15_000);
   });
 
   it("stores guild metadata on joined voice sessions", async () => {
@@ -532,5 +557,16 @@ describe("DiscordVoiceManager", () => {
 
     expect(client.fetchGuild).toHaveBeenCalledWith("g1");
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("DiscordVoiceReadyListener: propagates autoJoin errors fire-and-forget without throwing", async () => {
+    const manager = createManager();
+    vi.spyOn(manager, "autoJoin").mockRejectedValue(new Error("autoJoin rejected"));
+
+    const { DiscordVoiceReadyListener } = managerModule;
+    const listener = new DiscordVoiceReadyListener(manager);
+
+    await expect(listener.handle(undefined, undefined as never)).resolves.not.toThrow();
+    expect(manager.autoJoin).toHaveBeenCalledTimes(1);
   });
 });

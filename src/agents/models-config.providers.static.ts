@@ -1,9 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  listBundledPluginMetadata,
-  resolveBundledPluginPublicSurfacePath,
-} from "../plugins/bundled-plugin-metadata.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import { resolveBundledPluginPublicSurfacePath } from "../plugins/public-surface-runtime.js";
 
 const PROVIDER_CATALOG_ARTIFACT_BASENAME = "provider-catalog.js";
 const DEFAULT_PROVIDER_CATALOG_ROOT = path.resolve(import.meta.dirname, "../..");

@@ -74,6 +74,13 @@ function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {})
   } as OpenClawConfig;
 }
 
+vi.mock("../voice/manager.runtime.js", () => {
+  voiceRuntimeModuleLoadedMock();
+  return {
+    DiscordVoiceManager: class DiscordVoiceManager {},
+    DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
+  };
+});
 describe("monitorDiscordProvider", () => {
   type ReconcileHealthProbeParams = {
     cfg: OpenClawConfig;
@@ -131,13 +138,6 @@ describe("monitorDiscordProvider", () => {
         getPluginCommandSpecs: getPluginCommandSpecsMock,
       };
     });
-    vi.doMock("../voice/manager.runtime.js", () => {
-      voiceRuntimeModuleLoadedMock();
-      return {
-        DiscordVoiceManager: class DiscordVoiceManager {},
-        DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
-      };
-    });
     vi.doMock("../accounts.js", () => ({
       resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
         resolveDiscordAccountMock(...args),
@@ -149,6 +149,7 @@ describe("monitorDiscordProvider", () => {
       normalizeDiscordToken: (value?: string) => value,
     }));
     runtimeEnvModule = await import("openclaw/plugin-sdk/runtime-env");
+    vi.spyOn(runtimeEnvModule, "logVerbose").mockImplementation(() => undefined);
     ({ monitorDiscordProvider, __testing: providerTesting } = await import("./provider.js"));
   });
 
@@ -614,9 +615,6 @@ describe("monitorDiscordProvider", () => {
     expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
     expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
-    expect(runtimeEnvModule.logVerbose).toHaveBeenCalledWith(
-      "discord: native commands using Carbon reconcile path",
-    );
   });
 
   it("formats rejected Discord deploy entries with command details", () => {

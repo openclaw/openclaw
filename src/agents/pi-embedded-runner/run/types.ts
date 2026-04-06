@@ -20,6 +20,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
   contextTokenBudget?: number;
+  /** Resolved API key for this run when runtime auth did not replace it. */
+  resolvedApiKey?: string;
   /** Auth profile resolved for this attempt's provider/model call. */
   authProfileId?: string;
   /** Source for the resolved auth profile (user-locked or automatic). */
@@ -61,4 +63,13 @@ export type EmbeddedRunAttemptResult = {
   clientToolCall?: { name: string; params: Record<string, unknown> };
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
+  replayMetadata: {
+    hadPotentialSideEffects: boolean;
+    replaySafe: boolean;
+  };
+  itemLifecycle: {
+    startedCount: number;
+    completedCount: number;
+    activeCount: number;
+  };
 };

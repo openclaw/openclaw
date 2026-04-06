@@ -196,12 +196,14 @@ export async function resolveConnectAuthDecision(params: {
     return { authResult, authOk, authMethod };
   }
 
+  let deviceTokenRateLimited = false;
   if (params.rateLimiter) {
     const deviceRateCheck = params.rateLimiter.check(
       params.clientIp,
       AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
     );
     if (!deviceRateCheck.allowed) {
+      deviceTokenRateLimited = true;
       authResult = {
         ok: false,
         reason: "rate_limited",
@@ -210,7 +212,7 @@ export async function resolveConnectAuthDecision(params: {
       };
     }
   }
-  if (!authResult.rateLimited) {
+  if (!deviceTokenRateLimited) {
     const tokenCheck = await params.verifyDeviceToken({
       deviceId: params.deviceId,
       token: deviceTokenCandidate,

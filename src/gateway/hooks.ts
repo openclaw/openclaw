@@ -222,7 +222,7 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
 
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
-export type HookMessageChannel = ChannelId | "last";
+export type HookMessageChannel = ChannelId;
 
 const getHookChannelSet = () => new Set<string>(listHookChannelValues());
 export const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;

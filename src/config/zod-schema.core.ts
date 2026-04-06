@@ -288,13 +288,7 @@ const ConfiguredProviderRequestSchema = z
   .strict()
   .optional();
 
-const ConfiguredModelProviderRequestSchema = z
-  .object({
-    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
-    auth: ConfiguredProviderRequestAuthSchema,
-  })
-  .strict()
-  .optional();
+const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
 
 export const ModelDefinitionSchema = z
   .object({
@@ -313,6 +307,7 @@ export const ModelDefinitionSchema = z
       .strict()
       .optional(),
     contextWindow: z.number().positive().optional(),
+    contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
@@ -351,7 +346,6 @@ export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: z.record(z.string(), ModelProviderSchema).optional(),
-    bedrockDiscovery: BedrockDiscoverySchema,
   })
   .strict()
   .optional();
@@ -394,7 +388,12 @@ export const QueueDropSchema = z.union([
   z.literal("new"),
   z.literal("summarize"),
 ]);
-export const ReplyToModeSchema = z.union([z.literal("off"), z.literal("first"), z.literal("all")]);
+export const ReplyToModeSchema = z.union([
+  z.literal("off"),
+  z.literal("first"),
+  z.literal("all"),
+  z.literal("batched"),
+]);
 export const TypingModeSchema = z.union([
   z.literal("never"),
   z.literal("instant"),

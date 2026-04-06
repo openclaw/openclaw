@@ -42,8 +42,8 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
 import { isDiscordExecApprovalClientEnabled } from "../exec-approvals.js";
-import { resolveDiscordProxyFetchForAccount } from "../client.js";
 import { fetchDiscordApplicationId } from "../probe.js";
+import { resolveDiscordProxyFetchForAccount } from "../proxy-fetch.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
 import {
@@ -93,6 +93,8 @@ export type MonitorDiscordOpts = {
   replyToMode?: ReplyToMode;
   setStatus?: DiscordMonitorStatusSink;
 };
+
+const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
 type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
 
@@ -613,7 +615,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     log: (message) => runtime.log?.(warn(message)),
   });
   let allowFrom = discordCfg.allowFrom ?? dmConfig?.allowFrom;
-  const mediaMaxBytes = (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? 8) * 1024 * 1024;
+  const mediaMaxBytes =
+    (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? DEFAULT_DISCORD_MEDIA_MAX_MB) * 1024 * 1024;
   const textLimit = resolveTextChunkLimit(cfg, "discord", account.accountId, {
     fallbackLimit: 2000,
   });
@@ -1061,6 +1064,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       messageHandler,
       trackInboundEvent,
       eventQueueListenerTimeoutMs: eventQueueOpts.listenerTimeout,
+    });
+
+    logDiscordStartupPhase({
+      runtime,
+      accountId: account.accountId,
+      phase: "client-start",
+      startAt: startupStartedAt,
+      gateway: lifecycleGateway,
     });
 
     const botIdentity =

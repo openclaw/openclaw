@@ -15,12 +15,18 @@ export const DEFAULT_RESTART_HEALTH_DELAY_MS = 500;
 export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
   DEFAULT_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS,
 );
+const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
+const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 25_000;
+
+export type GatewayRestartWaitOutcome = "healthy" | "stale-pids" | "stopped-free" | "timeout";
 
 export type GatewayRestartSnapshot = {
   runtime: GatewayServiceRuntime;
   portUsage: PortUsage;
   healthy: boolean;
   staleGatewayPids: number[];
+  waitOutcome?: GatewayRestartWaitOutcome;
+  elapsedMs?: number;
 };
 
 export type GatewayPortHealthSnapshot = {
@@ -201,6 +207,32 @@ export async function inspectGatewayRestart(params: {
   };
 }
 
+function shouldEarlyExitStoppedFree(
+  snapshot: GatewayRestartSnapshot,
+  attempt: number,
+  minAttempt: number,
+): boolean {
+  return (
+    attempt >= minAttempt &&
+    snapshot.runtime.status === "stopped" &&
+    snapshot.portUsage.status === "free"
+  );
+}
+
+function stoppedFreeEarlyExitGraceMs(): number {
+  return process.platform === "win32"
+    ? WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS
+    : STOPPED_FREE_EARLY_EXIT_GRACE_MS;
+}
+
+function withWaitContext(
+  snapshot: GatewayRestartSnapshot,
+  waitOutcome: GatewayRestartWaitOutcome,
+  elapsedMs: number,
+): GatewayRestartSnapshot {
+  return { ...snapshot, waitOutcome, elapsedMs };
+}
+
 export async function waitForGatewayHealthyRestart(params: {
   service: GatewayService;
   port: number;
@@ -219,12 +251,27 @@ export async function waitForGatewayHealthyRestart(params: {
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
   });
 
+  let consecutiveStoppedFreeCount = 0;
+  const STOPPED_FREE_THRESHOLD = 6;
+  const minAttemptForEarlyExit = Math.min(
+    Math.ceil(stoppedFreeEarlyExitGraceMs() / delayMs),
+    Math.floor(attempts / 2),
+  );
+
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (snapshot.healthy) {
-      return snapshot;
+      return withWaitContext(snapshot, "healthy", attempt * delayMs);
     }
     if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
-      return snapshot;
+      return withWaitContext(snapshot, "stale-pids", attempt * delayMs);
+    }
+    if (shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)) {
+      consecutiveStoppedFreeCount += 1;
+      if (consecutiveStoppedFreeCount >= STOPPED_FREE_THRESHOLD) {
+        return withWaitContext(snapshot, "stopped-free", attempt * delayMs);
+      }
+    } else if (snapshot.runtime.status !== "stopped" || snapshot.portUsage.status !== "free") {
+      consecutiveStoppedFreeCount = 0;
     }
     await sleep(delayMs);
     snapshot = await inspectGatewayRestart({
@@ -235,7 +282,7 @@ export async function waitForGatewayHealthyRestart(params: {
     });
   }
 
-  return snapshot;
+  return withWaitContext(snapshot, "timeout", attempts * delayMs);
 }
 
 export async function waitForGatewayHealthyListener(params: {
