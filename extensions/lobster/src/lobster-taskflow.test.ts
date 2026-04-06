@@ -1,56 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi } from "../runtime-api.js";
 import type { LobsterRunner } from "./lobster-runner.js";
 import { resumeManagedLobsterFlow, runManagedLobsterFlow } from "./lobster-taskflow.js";
+import { createFakeTaskFlow } from "./taskflow-test-helpers.js";
 
-type BoundTaskFlow = ReturnType<
-  NonNullable<OpenClawPluginApi["runtime"]>["taskFlow"]["bindSession"]
->;
-
-function createFakeTaskFlow(overrides?: Partial<BoundTaskFlow>) {
-  const baseFlow = {
-    flowId: "flow-1",
-    revision: 1,
-    syncMode: "managed" as const,
-    controllerId: "tests/lobster",
-    ownerKey: "agent:main:main",
-    status: "running" as const,
-    goal: "Run Lobster workflow",
-  };
-
-  const taskFlow: BoundTaskFlow = {
-    sessionKey: "agent:main:main",
-    createManaged: vi.fn().mockReturnValue(baseFlow),
-    get: vi.fn(),
-    list: vi.fn().mockReturnValue([]),
-    findLatest: vi.fn(),
-    resolve: vi.fn(),
-    getTaskSummary: vi.fn(),
-    setWaiting: vi.fn().mockImplementation((input) => ({
-      applied: true,
-      flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "waiting" as const },
-    })),
-    resume: vi.fn().mockImplementation((input) => ({
-      applied: true,
-      flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "running" as const },
-    })),
-    finish: vi.fn().mockImplementation((input) => ({
-      applied: true,
-      flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "completed" as const },
-    })),
-    fail: vi.fn().mockImplementation((input) => ({
-      applied: true,
-      flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "failed" as const },
-    })),
-    requestCancel: vi.fn(),
-    cancel: vi.fn(),
-    runTask: vi.fn(),
-    ...overrides,
-  };
-
-  return taskFlow;
+function expectManagedFlowFailure(
+  result: Awaited<ReturnType<typeof runManagedLobsterFlow | typeof resumeManagedLobsterFlow>>,
+) {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("Expected managed Lobster flow to fail");
+  }
+  return result;
 }
-
 function createRunner(result: Awaited<ReturnType<LobsterRunner["run"]>>): LobsterRunner {
   return {
     run: vi.fn().mockResolvedValue(result),
