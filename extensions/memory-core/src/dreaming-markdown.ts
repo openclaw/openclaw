@@ -182,10 +182,12 @@ export async function writeDeepDreamingReport(params: {
 }): Promise<string | undefined> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
-  await writeInlineDeepDreamingBlock({
-    workspaceDir: params.workspaceDir,
-    body,
-  });
+  if (shouldWriteInline(params.storage)) {
+    await writeInlineDeepDreamingBlock({
+      workspaceDir: params.workspaceDir,
+      body,
+    });
+  }
 
   if (!shouldWriteSeparate(params.storage)) {
     return undefined;

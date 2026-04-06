@@ -81,13 +81,14 @@ describe("dreaming markdown storage", () => {
       },
     });
 
-    expect(result.inlinePath).toBe(lowercasePath);
+    expect(result.inlinePath).toBeTruthy();
+    expect(await fs.realpath(result.inlinePath!)).toBe(await fs.realpath(lowercasePath));
     const content = await fs.readFile(lowercasePath, "utf-8");
     expect(content).toContain("## REM Sleep");
     expect(content).toContain("- Theme: `glacier` kept surfacing.");
   });
 
-  it("still writes deep reports to the per-phase report directory", async () => {
+  it("writes deep reports to the per-phase report directory without inline output in separate mode", async () => {
     const workspaceDir = await createTempWorkspace();
 
     const reportPath = await writeDeepDreamingReport({
@@ -107,7 +108,29 @@ describe("dreaming markdown storage", () => {
     expect(content).toContain("- Promoted: durable preference");
 
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    const dreamsContent = await fs.readFile(dreamsPath, "utf-8");
+    const dreamsExists = await fs
+      .access(dreamsPath)
+      .then(() => true)
+      .catch(() => false);
+    expect(dreamsExists).toBe(false);
+  });
+
+  it("writes deep reports inline and separately in both mode", async () => {
+    const workspaceDir = await createTempWorkspace();
+
+    const reportPath = await writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- Promoted: durable preference"],
+      storage: {
+        mode: "both",
+        separateReports: false,
+      },
+      nowMs: Date.parse("2026-04-05T10:00:00Z"),
+      timezone: "UTC",
+    });
+
+    expect(reportPath).toBe(path.join(workspaceDir, "memory", "dreaming", "deep", "2026-04-05.md"));
+    const dreamsContent = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreamsContent).toContain("## Deep Sleep");
     expect(dreamsContent).toContain("- Promoted: durable preference");
   });
