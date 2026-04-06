@@ -3,7 +3,8 @@ import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
-import { getMediaDir, resolveMediaBufferPath } from "../../../media/store.js";
+import { resolveMediaBufferPath } from "../../../media/store.js";
+import { detectMime } from "../../../media/mime.js";
 import { loadWebMedia } from "../../../media/web-media.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
@@ -373,24 +374,36 @@ export async function loadImageFromRef(
    const mediaId = uriMatch[1];
    try {
     const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
-    const media = await loadWebMedia(physicalPath, {
-    maxBytes: options?.maxBytes,
-    localRoots: [getMediaDir()],
-   });
+    const buffer = await fs.readFile(physicalPath);
 
-   if (media.kind !== "image") {
+    if (options?.maxBytes !== undefined && buffer.byteLength > options.maxBytes) {
+      log.debug(`Native image: media-uri file exceeds maxBytes, skipping: ${mediaId}`);
+      return null;
+    }
+
+    const ext = path.extname(physicalPath).toLowerCase();
+    let mimeType = MEDIA_EXT_TO_MIME[ext];
+
+    if (!mimeType) {
+      const detected = await detectMime({ buffer, filePath: physicalPath });
+      if (detected?.startsWith("image/")) {
+        mimeType = detected;
+      }
+    }
+
+    if (!mimeType) {
       log.debug(`Native image: media store entry is not an image: ${mediaId}`);
       return null;
-   }
-   log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
-   const mimeType = media.contentType ?? "image/jpeg";
-   return { type: "image", data: media.buffer.toString("base64"), mimeType };
+    }
+
+    log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
+    return { type: "image", data: buffer.toString("base64"), mimeType };
       } catch (err) {
         log.debug(
           `Native image: failed to load media-uri ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
         );
         return null;
-        }
+      }
   }
 
   try {
