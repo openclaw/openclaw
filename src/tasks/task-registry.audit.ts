@@ -1,3 +1,4 @@
+import { resolveTaskLifecycleStatusReason } from "./task-lifecycle-status.js";
 import {
   createEmptyTaskAuditSummary,
   type LifecycleStatusReason,
@@ -31,10 +32,12 @@ function createLifecycleStatusReason(
   task: TaskRecord,
   code: TaskAuditCode,
   evidence: string,
+  summary?: string,
 ): LifecycleStatusReason {
   return {
     code,
     evidence,
+    ...(summary?.trim() ? { summary: summary.trim() } : {}),
     backing: {
       kind: "task",
       taskId: task.taskId,
@@ -50,6 +53,7 @@ function createFinding(params: {
   code: TaskAuditCode;
   task: TaskRecord;
   detail: string;
+  lifecycleSummary?: string;
   ageMs?: number;
 }): TaskAuditFinding {
   return {
@@ -57,7 +61,12 @@ function createFinding(params: {
     code: params.code,
     task: params.task,
     detail: params.detail,
-    lifecycleReason: createLifecycleStatusReason(params.task, params.code, params.detail),
+    lifecycleReason: createLifecycleStatusReason(
+      params.task,
+      params.code,
+      params.detail,
+      params.lifecycleSummary,
+    ),
     ...(typeof params.ageMs === "number" ? { ageMs: params.ageMs } : {}),
   };
 }
@@ -108,6 +117,30 @@ function compareFindings(left: TaskAuditFinding, right: TaskAuditFinding): numbe
   return left.task.createdAt - right.task.createdAt;
 }
 
+function resolveStaleRunningDiagnostic(task: TaskRecord): {
+  detail: string;
+  lifecycleSummary?: string;
+} {
+  const reason = resolveTaskLifecycleStatusReason(task);
+  switch (reason.code) {
+    case "waiting_on_backing_session":
+      return {
+        detail: "Backing session is still running; task has not advanced recently.",
+        lifecycleSummary: reason.summary,
+      };
+    case "blocked_on_backing_session_state":
+    case "missing_backing_session":
+      return {
+        detail: reason.summary,
+        lifecycleSummary: reason.summary,
+      };
+    default:
+      return {
+        detail: "running task appears stuck",
+      };
+  }
+}
+
 export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAuditFinding[] {
   const tasks = options.tasks ?? reconcileInspectableTasks();
   const now = options.now ?? Date.now();
@@ -132,13 +165,15 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
     }
 
     if (task.status === "running" && ageMs >= staleRunningMs) {
+      const staleRunningDiagnostic = resolveStaleRunningDiagnostic(task);
       findings.push(
         createFinding({
           severity: "error",
           code: "stale_running",
           task,
           ageMs,
-          detail: "running task appears stuck",
+          detail: staleRunningDiagnostic.detail,
+          lifecycleSummary: staleRunningDiagnostic.lifecycleSummary,
         }),
       );
     }

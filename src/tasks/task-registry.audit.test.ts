@@ -1,11 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  clearSessionStoreCacheForTest,
+  resolveStorePath,
+  saveSessionStore,
+  type SessionEntry,
+} from "../config/sessions.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 function createTask(partial: Partial<TaskRecord>): TaskRecord {
   return {
     taskId: partial.taskId ?? "task-1",
-    runtime: partial.runtime ?? "acp",
+    runtime: partial.runtime ?? "subagent",
     requesterSessionKey: partial.requesterSessionKey ?? partial.ownerKey ?? "agent:main:main",
     ownerKey: partial.ownerKey ?? partial.requesterSessionKey ?? "agent:main:main",
     scopeKind: partial.scopeKind ?? "session",
@@ -18,54 +25,134 @@ function createTask(partial: Partial<TaskRecord>): TaskRecord {
   };
 }
 
-describe("task-registry audit", () => {
-  it("flags stale running, lost, and missing cleanup tasks", () => {
-    const now = Date.parse("2026-03-30T01:00:00.000Z");
-    const findings = listTaskAuditFindings({
-      now,
-      tasks: [
-        createTask({
-          taskId: "stale-running",
-          status: "running",
-          runId: "run-stale-running",
-          childSessionKey: "agent:codex:acp:child",
-          parentFlowId: "flow-stale-running",
-          startedAt: now - 40 * 60_000,
-          lastEventAt: now - 40 * 60_000,
-        }),
-        createTask({
-          taskId: "lost-task",
-          status: "lost",
-          error: "backing session missing",
-          endedAt: now - 5 * 60_000,
-        }),
-        createTask({
-          taskId: "missing-cleanup",
-          status: "failed",
-          endedAt: now - 60_000,
-          cleanupAfter: undefined,
-        }),
-      ],
-    });
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
-    expect(findings.map((finding) => [finding.code, finding.task.taskId])).toEqual([
-      ["lost", "lost-task"],
-      ["stale_running", "stale-running"],
-      ["missing_cleanup", "missing-cleanup"],
-    ]);
-    expect(findings.find((finding) => finding.task.taskId === "stale-running")).toMatchObject({
-      lifecycleReason: {
-        code: "stale_running",
-        evidence: "running task appears stuck",
-        backing: {
-          kind: "task",
-          taskId: "stale-running",
-          runId: "run-stale-running",
-          childSessionKey: "agent:codex:acp:child",
-          parentFlowId: "flow-stale-running",
+async function withBackingSessionStore(
+  entries: Record<string, SessionEntry>,
+  run: () => Promise<void> | void,
+): Promise<void> {
+  await withTempDir({ prefix: "openclaw-task-audit-" }, async (root) => {
+    process.env.OPENCLAW_STATE_DIR = root;
+    clearSessionStoreCacheForTest();
+    const storePath = resolveStorePath(undefined, { agentId: "main" });
+    await saveSessionStore(storePath, entries);
+    try {
+      await run();
+    } finally {
+      clearSessionStoreCacheForTest();
+    }
+  });
+}
+
+afterEach(() => {
+  clearSessionStoreCacheForTest();
+  if (ORIGINAL_STATE_DIR === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+  }
+});
+
+describe("task-registry audit", () => {
+  it("flags stale running, lost, and missing cleanup tasks", async () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    await withBackingSessionStore(
+      {
+        "agent:main:subagent:child-failed": {
+          sessionId: "session-child-failed",
+          updatedAt: now - 60_000,
+          status: "failed",
         },
       },
-    });
+      () => {
+        const findings = listTaskAuditFindings({
+          now,
+          tasks: [
+            createTask({
+              taskId: "stale-running",
+              status: "running",
+              runId: "run-stale-running",
+              childSessionKey: "agent:main:subagent:child-failed",
+              parentFlowId: "flow-stale-running",
+              startedAt: now - 40 * 60_000,
+              lastEventAt: now - 40 * 60_000,
+            }),
+            createTask({
+              taskId: "lost-task",
+              status: "lost",
+              error: "backing session missing",
+              endedAt: now - 5 * 60_000,
+            }),
+            createTask({
+              taskId: "missing-cleanup",
+              status: "failed",
+              endedAt: now - 60_000,
+              cleanupAfter: undefined,
+            }),
+          ],
+        });
+
+        expect(findings.map((finding) => [finding.code, finding.task.taskId])).toEqual([
+          ["lost", "lost-task"],
+          ["stale_running", "stale-running"],
+          ["missing_cleanup", "missing-cleanup"],
+        ]);
+        expect(findings.find((finding) => finding.task.taskId === "stale-running")).toMatchObject({
+          detail: "Backing session failed; task has not reconciled yet.",
+          lifecycleReason: {
+            code: "stale_running",
+            evidence: "Backing session failed; task has not reconciled yet.",
+            summary: "Backing session failed; task has not reconciled yet.",
+            backing: {
+              kind: "task",
+              taskId: "stale-running",
+              runId: "run-stale-running",
+              childSessionKey: "agent:main:subagent:child-failed",
+              parentFlowId: "flow-stale-running",
+            },
+          },
+        });
+      },
+    );
+  });
+
+  it("distinguishes backing sessions that are still running from generic stale tasks", async () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    await withBackingSessionStore(
+      {
+        "agent:main:subagent:child-live": {
+          sessionId: "session-child-live",
+          updatedAt: now - 30_000,
+          status: "running",
+        },
+      },
+      () => {
+        const findings = listTaskAuditFindings({
+          now,
+          tasks: [
+            createTask({
+              taskId: "stale-running-live",
+              status: "running",
+              childSessionKey: "agent:main:subagent:child-live",
+              startedAt: now - 40 * 60_000,
+              lastEventAt: now - 40 * 60_000,
+            }),
+          ],
+        });
+
+        expect(findings).toMatchObject([
+          {
+            code: "stale_running",
+            detail: "Backing session is still running; task has not advanced recently.",
+            lifecycleReason: {
+              code: "stale_running",
+              evidence: "Backing session is still running; task has not advanced recently.",
+              summary: "Backing session is running.",
+            },
+          },
+        ]);
+      },
+    );
   });
 
   it("summarizes findings by severity and code", () => {

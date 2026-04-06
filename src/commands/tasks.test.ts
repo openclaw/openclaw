@@ -79,8 +79,18 @@ describe("tasks commands", () => {
         scopeKind: "session",
         runId: "task-stale-queued",
         task: "Inspect issue backlog",
+        childSessionKey: "agent:main:subagent:audit-stale-child",
       });
       vi.setSystemTime(now);
+      const storePath = resolveStorePath(undefined, { agentId: "main" });
+      await saveSessionStore(storePath, {
+        "agent:main:subagent:audit-stale-child": {
+          sessionId: "session-audit-stale-child",
+          updatedAt: now - 60_000,
+          status: "running",
+        },
+      });
+      clearSessionStoreCacheForTest();
       createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/tasks-command",
@@ -125,7 +135,8 @@ describe("tasks commands", () => {
         token: expect.any(String),
         lifecycleReason: {
           code: "stale_running",
-          evidence: "running task appears stuck",
+          evidence: "Backing session is still running; task has not advanced recently.",
+          summary: "Backing session is running.",
           backing: {
             kind: "task",
             taskId: expect.any(String),

@@ -20,6 +20,7 @@ export type LifecycleStatusBackingLink = {
 export type LifecycleStatusReason = {
   code: TaskAuditCode;
   evidence: string;
+  summary?: string;
   backing: LifecycleStatusBackingLink;
 };
 
