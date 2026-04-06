@@ -318,6 +318,33 @@ def normalize_error_stage(
     return 'NONE'
 
 
+def derive_recovery_hint(
+    error_code: str | None,
+    error_detail_code: str | None,
+    error_stage: str | None,
+) -> str:
+    detail = str(error_detail_code or '')
+    stage = str(error_stage or '')
+    code = str(error_code or '')
+    if detail == 'AUTH_401':
+        return 'check_token'
+    if stage == 'TASK_SUBMIT':
+        return 'check_runtime_submit_path'
+    if stage == 'TASK_POLL':
+        return 'check_runtime_poll_path'
+    if stage == 'EXECUTOR_GATE':
+        return 'check_executor_gate'
+    if stage == 'BRIDGE':
+        return 'check_bridge_mapping'
+    if stage == 'DISPATCH':
+        return 'check_dispatch_input'
+    if stage == 'TRIAGE':
+        return 'check_triage_input'
+    if code == 'NONE':
+        return 'no_action_needed'
+    return 'check_dispatch_input'
+
+
 def build_layer_statuses(entry_result: dict | None, bridge_result: dict | None, dispatch_result: dict | None) -> dict:
     entry_status = 'completed' if isinstance(entry_result, dict) else None
     bridge_status = None
@@ -440,6 +467,7 @@ def build_feedback_memory(entry_result: dict, dispatch_result: dict, feedback_su
         'last_error_detail_code': manager_handoff.get('error_detail_code'),
         'last_error_source_layer': manager_handoff.get('error_source_layer'),
         'last_error_stage': manager_handoff.get('error_stage'),
+        'last_recovery_hint': manager_handoff.get('recovery_hint'),
     }
 
 
@@ -504,6 +532,10 @@ def main() -> int:
         path_summary = build_path_summary(args, entry_result, bridge_result or {}, dispatch_result)
         path_tags = build_path_tags(args, entry_result, bridge_result, dispatch_result, runtime_entry_state)
         layer_statuses = build_layer_statuses(entry_result, bridge_result, dispatch_result)
+        error_code = normalize_error_code(runtime_entry_state, None)
+        error_detail_code = normalize_error_detail_code(runtime_entry_state, None, dispatch_result)
+        error_source_layer = normalize_error_source_layer(runtime_entry_state, None, dispatch_result)
+        error_stage = normalize_error_stage(runtime_entry_state, None, dispatch_result)
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_trace_span_id': entry_trace_span_id,
@@ -517,10 +549,11 @@ def main() -> int:
             'path_taken': path_summary.get('path_taken'),
             'path_tags': path_tags,
             'path_codes': build_path_codes(path_tags),
-            'error_code': normalize_error_code(runtime_entry_state, None),
-            'error_detail_code': normalize_error_detail_code(runtime_entry_state, None, dispatch_result),
-            'error_source_layer': normalize_error_source_layer(runtime_entry_state, None, dispatch_result),
-            'error_stage': normalize_error_stage(runtime_entry_state, None, dispatch_result),
+            'error_code': error_code,
+            'error_detail_code': error_detail_code,
+            'error_source_layer': error_source_layer,
+            'error_stage': error_stage,
+            'recovery_hint': derive_recovery_hint(error_code, error_detail_code, error_stage),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),
@@ -559,6 +592,10 @@ def main() -> int:
         if layer_statuses.get('entry_status') is None:
             layer_statuses['entry_status'] = 'failed'
         error_text = str(exc)
+        error_code = normalize_error_code(runtime_entry_state, error_text)
+        error_detail_code = normalize_error_detail_code(runtime_entry_state, error_text, dispatch_result)
+        error_source_layer = normalize_error_source_layer(runtime_entry_state, error_text, dispatch_result)
+        error_stage = normalize_error_stage(runtime_entry_state, error_text, dispatch_result)
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_trace_span_id': entry_trace_span_id,
@@ -572,10 +609,11 @@ def main() -> int:
             'path_taken': path_summary.get('path_taken'),
             'path_tags': path_tags,
             'path_codes': build_path_codes(path_tags),
-            'error_code': normalize_error_code(runtime_entry_state, error_text),
-            'error_detail_code': normalize_error_detail_code(runtime_entry_state, error_text, dispatch_result),
-            'error_source_layer': normalize_error_source_layer(runtime_entry_state, error_text, dispatch_result),
-            'error_stage': normalize_error_stage(runtime_entry_state, error_text, dispatch_result),
+            'error_code': error_code,
+            'error_detail_code': error_detail_code,
+            'error_source_layer': error_source_layer,
+            'error_stage': error_stage,
+            'recovery_hint': derive_recovery_hint(error_code, error_detail_code, error_stage),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),

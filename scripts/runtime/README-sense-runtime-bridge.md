@@ -858,6 +858,8 @@ Additional top-level observability fields are also included:
   - normalized failure source such as `ENTRY`, `DISPATCH`, `EXECUTOR`, `RUNTIME_BRIDGE`, or `NONE`
 - `error_stage`
   - finer-grained failure stage such as `TRIAGE`, `BRIDGE`, `DISPATCH`, `REMEDIATION`, `TASK_SUBMIT`, `TASK_POLL`, `POST_TASK_FOLLOWUP`, `EXECUTOR_GATE`, or `NONE`
+- `recovery_hint`
+  - short operational hint such as `check_token`, `check_runtime_submit_path`, `check_runtime_poll_path`, `check_executor_gate`, `check_bridge_mapping`, `check_dispatch_input`, `check_triage_input`, or `no_action_needed`
 - `summary_counters`
   - compact counters such as `warning_count`, `remaining_issue_count`, `secondary_action_count`, `followup_executed_count`, and `path_depth`
 - `entry_status`
@@ -871,7 +873,7 @@ Additional top-level observability fields are also included:
 
 These fields are for observability and aggregation only. They do not change runtime behavior.
 
-The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id` plus parent span linkage for a lightweight trace tree. `manager_handoff` and `feedback_memory` also carry compact `path_codes`, `error_code`, `error_detail_code`, `error_source_layer`, and `error_stage` for lightweight aggregation.
+The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id` plus parent span linkage for a lightweight trace tree. `manager_handoff` and `feedback_memory` also carry compact `path_codes`, `error_code`, `error_detail_code`, `error_source_layer`, `error_stage`, and `recovery_hint` for lightweight aggregation and faster operational triage.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 

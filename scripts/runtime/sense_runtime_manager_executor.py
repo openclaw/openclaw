@@ -180,11 +180,43 @@ def normalize_executor_error_stage(output: dict) -> str:
     return 'REMEDIATION'
 
 
+def derive_recovery_hint(
+    error_code: str | None,
+    error_detail_code: str | None,
+    error_stage: str | None,
+) -> str:
+    detail = str(error_detail_code or '')
+    stage = str(error_stage or '')
+    code = str(error_code or '')
+    if detail == 'AUTH_401':
+        return 'check_token'
+    if stage == 'TASK_SUBMIT':
+        return 'check_runtime_submit_path'
+    if stage == 'TASK_POLL':
+        return 'check_runtime_poll_path'
+    if stage == 'EXECUTOR_GATE':
+        return 'check_executor_gate'
+    if stage == 'BRIDGE':
+        return 'check_bridge_mapping'
+    if stage == 'DISPATCH':
+        return 'check_dispatch_input'
+    if stage == 'TRIAGE':
+        return 'check_triage_input'
+    if code == 'NONE':
+        return 'no_action_needed'
+    return 'check_dispatch_input'
+
+
 def finalize_output(output: dict) -> dict:
     output['error_code'] = normalize_executor_error_code(output)
     output['error_detail_code'] = normalize_executor_error_detail_code(output)
     output['error_source_layer'] = normalize_executor_error_source_layer(output)
     output['error_stage'] = normalize_executor_error_stage(output)
+    output['recovery_hint'] = derive_recovery_hint(
+        output.get('error_code'),
+        output.get('error_detail_code'),
+        output.get('error_stage'),
+    )
     output['manager_handoff'] = build_manager_handoff(output)
     return output
 
@@ -641,6 +673,7 @@ def build_manager_handoff(report: dict) -> dict:
         'error_detail_code': report.get('error_detail_code'),
         'error_source_layer': report.get('error_source_layer'),
         'error_stage': report.get('error_stage'),
+        'recovery_hint': report.get('recovery_hint'),
         'loop_convergence_state': convergence.get('state'),
         'primary_remaining_issue': summary.get('primary_remaining_issue'),
         'secondary_remaining_issues': summary.get('secondary_remaining_issues', []),
