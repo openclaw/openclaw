@@ -7,16 +7,6 @@ type BoundTaskFlow = ReturnType<
   NonNullable<OpenClawPluginApi["runtime"]>["taskFlow"]["bindSession"]
 >;
 
-function expectManagedFlowFailure(
-  result: Awaited<ReturnType<typeof runManagedLobsterFlow | typeof resumeManagedLobsterFlow>>,
-) {
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error("Expected managed Lobster flow to fail");
-  }
-  return result;
-}
-
 function createFakeTaskFlow(overrides?: Partial<BoundTaskFlow>) {
   const baseFlow = {
     flowId: "flow-1",
@@ -170,8 +160,11 @@ describe("runManagedLobsterFlow", () => {
       goal: "Run Lobster workflow",
     });
 
-    const failure = expectManagedFlowFailure(result);
-    expect(failure.error.message).toBe("boom");
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected managed Lobster flow to fail");
+    }
+    expect(result.error.message).toBe("boom");
     expect(taskFlow.fail).toHaveBeenCalledWith({
       flowId: "flow-1",
       expectedRevision: 1,
@@ -198,8 +191,11 @@ describe("runManagedLobsterFlow", () => {
       goal: "Run Lobster workflow",
     });
 
-    const failure = expectManagedFlowFailure(result);
-    expect(failure.error.message).toBe("crashed");
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected managed Lobster flow to fail");
+    }
+    expect(result.error.message).toBe("crashed");
     expect(taskFlow.fail).toHaveBeenCalledWith({
       flowId: "flow-1",
       expectedRevision: 1,
@@ -274,8 +270,11 @@ describe("resumeManagedLobsterFlow", () => {
       },
     });
 
-    const failure = expectManagedFlowFailure(result);
-    expect(failure.error.message).toMatch(/revision_conflict/);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected resumed Lobster flow to fail");
+    }
+    expect(result.error.message).toMatch(/revision_conflict/);
     expect(runner.run).not.toHaveBeenCalled();
   });
 
