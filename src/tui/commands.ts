@@ -116,6 +116,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       getArgumentCompletions: activationCompletions,
     },
     { name: "abort", description: "Abort active run" },
+    { name: "upload", description: "Browse and attach files as context" },
     { name: "new", description: "Reset the session" },
     { name: "reset", description: "Reset the session" },
     { name: "settings", description: "Open settings" },
@@ -162,6 +163,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/activation <mention|always>",
     "/new or /reset",
     "/abort",
+    "/upload",
     "/settings",
     "/exit",
   ].join("\n");

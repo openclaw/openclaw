@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { basename, relative } from "node:path";
 import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -12,6 +14,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
+  createFileBrowserSelectList,
   createFilterableSelectList,
   createSearchableSelectList,
   createSettingsList,
@@ -82,6 +85,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     state.currentAgentId = normalizeAgentId(id);
     await setSession("");
   };
+
+  let pendingFileContext: string | null = null;
 
   const closeOverlayAndRender = () => {
     closeOverlay();
@@ -238,6 +243,47 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       },
     );
     openOverlay(settings);
+    tui.requestRender();
+  };
+
+  const openFileBrowser = () => {
+    const browser = createFileBrowserSelectList(process.cwd(), 12);
+    browser.onConfirm = (paths: string[]) => {
+      closeOverlay();
+      const blocks: string[] = [];
+      const attachedNames: string[] = [];
+      for (const filePath of paths) {
+        try {
+          const raw = readFileSync(filePath);
+          // Detect binary files: if >10% of the first 8KB are non-text bytes, skip
+          const sample = raw.subarray(0, 8192);
+          let nonText = 0;
+          for (const byte of sample) {
+            if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d && byte !== 0x0c) {
+              nonText++;
+            }
+          }
+          const relPath = relative(process.cwd(), filePath) || basename(filePath);
+          if (sample.length > 0 && nonText / sample.length > 0.1) {
+            chatLog.addSystem(`skipped binary file: ${relPath}`);
+            continue;
+          }
+          const content = raw.toString("utf-8").split("\x00").join("");
+          attachedNames.push(relPath);
+          blocks.push(`--- ${relPath} ---\n${content}\n--- end ${relPath} ---`);
+        } catch (err) {
+          chatLog.addSystem(`failed to read ${filePath}: ${String(err)}`);
+        }
+      }
+      if (blocks.length > 0) {
+        pendingFileContext = blocks.join("\n\n");
+        chatLog.addSystem(`${attachedNames.length} file(s) attached: ${attachedNames.join(", ")}`);
+        chatLog.addSystem("files will be included with your next message");
+      }
+      tui.requestRender();
+    };
+    browser.onCancel = closeOverlayAndRender;
+    openOverlay(browser as Component);
     tui.requestRender();
   };
 
@@ -458,6 +504,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "new":
+        pendingFileContext = null;
         try {
           // Clear token counts immediately to avoid stale display (#1523)
           state.sessionInfo.inputTokens = null;
@@ -476,6 +523,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "reset":
+        pendingFileContext = null;
         try {
           // Clear token counts immediately to avoid stale display (#1523)
           state.sessionInfo.inputTokens = null;
@@ -489,6 +537,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         } catch (err) {
           chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
         }
+        break;
+      case "upload":
+        openFileBrowser();
         break;
       case "abort":
         await abortActive();
@@ -514,6 +565,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       return;
     }
+    // Prepend pending file context if present
+    let messageToSend = text;
+    if (pendingFileContext) {
+      messageToSend = `[Attached files for context]\n\n${pendingFileContext}\n\n[User message]\n${text}`;
+      pendingFileContext = null;
+    }
     const isBtw = isBtwCommand(text);
     const runId = randomUUID();
     try {
@@ -527,7 +584,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
-        message: text,
+        message: messageToSend,
         thinking: opts.thinking,
         deliver: deliverDefault,
         timeoutMs: opts.timeoutMs,

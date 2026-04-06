@@ -6,6 +6,7 @@ import type {
 } from "@mariozechner/pi-tui";
 import chalk from "chalk";
 import { highlight, supportsLanguage } from "cli-highlight";
+import type { FileBrowserTheme } from "../components/file-browser-select-list.js";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
 import { createSyntaxTheme } from "./syntax-theme.js";
 
@@ -228,4 +229,15 @@ export const searchableSelectListTheme: SearchableSelectListTheme = {
   searchPrompt: (text) => fg(palette.accentSoft)(text),
   searchInput: (text) => fg(palette.text)(text),
   matchHighlight: (text) => chalk.bold(fg(palette.accent)(text)),
+};
+
+export const fileBrowserTheme: FileBrowserTheme = {
+  ...baseSelectListTheme,
+  searchPrompt: (text) => fg(palette.accentSoft)(text),
+  searchInput: (text) => fg(palette.text)(text),
+  checked: (text) => fg(palette.success)(text),
+  unchecked: (text) => fg(palette.dim)(text),
+  dirIcon: (text) => fg(palette.accentSoft)(text),
+  fileIcon: (text) => fg(palette.dim)(text),
+  breadcrumb: (text) => chalk.bold(fg(palette.accent)(text)),
 };
