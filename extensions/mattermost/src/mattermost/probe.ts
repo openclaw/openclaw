@@ -1,3 +1,7 @@
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromPrivateNetworkOptIn,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
 import type { BaseProbeResult } from "./runtime-api.js";
 
@@ -11,6 +15,7 @@ export async function probeMattermost(
   baseUrl: string,
   botToken: string,
   timeoutMs = 2500,
+  allowPrivateNetwork = false,
 ): Promise<MattermostProbe> {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
@@ -24,27 +29,36 @@ export async function probeMattermost(
     timer = setTimeout(() => controller.abort(), timeoutMs);
   }
   try {
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${botToken}` },
-      signal: controller?.signal,
+    const { response: res, release } = await fetchWithSsrFGuard({
+      url,
+      init: {
+        headers: { Authorization: `Bearer ${botToken}` },
+        signal: controller?.signal,
+      },
+      auditContext: "mattermost-probe",
+      policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
     });
-    const elapsedMs = Date.now() - start;
-    if (!res.ok) {
-      const detail = await readMattermostError(res);
+    try {
+      const elapsedMs = Date.now() - start;
+      if (!res.ok) {
+        const detail = await readMattermostError(res);
+        return {
+          ok: false,
+          status: res.status,
+          error: detail || res.statusText,
+          elapsedMs,
+        };
+      }
+      const bot = (await res.json()) as MattermostUser;
       return {
-        ok: false,
+        ok: true,
         status: res.status,
-        error: detail || res.statusText,
         elapsedMs,
+        bot,
       };
+    } finally {
+      await release();
     }
-    const bot = (await res.json()) as MattermostUser;
-    return {
-      ok: true,
-      status: res.status,
-      elapsedMs,
-      bot,
-    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {

@@ -2,8 +2,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createSandboxTestContext } from "openclaw/plugin-sdk/testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSandboxTestContext } from "../../../src/agents/sandbox/test-fixtures.js";
 import type { OpenShellSandboxBackend } from "./backend.js";
 import {
   buildExecRemoteCommand,
@@ -12,60 +12,13 @@ import {
   setBundledOpenShellCommandResolverForTest,
   shellEscape,
 } from "./cli.js";
-import { createOpenShellPluginConfigSchema, resolveOpenShellPluginConfig } from "./config.js";
+import { resolveOpenShellPluginConfig } from "./config.js";
 
 const cliMocks = vi.hoisted(() => ({
   runOpenShellCli: vi.fn(),
 }));
 
 let createOpenShellSandboxBackendManager: typeof import("./backend.js").createOpenShellSandboxBackendManager;
-
-describe("openshell plugin config", () => {
-  it("applies defaults", () => {
-    expect(resolveOpenShellPluginConfig(undefined)).toEqual({
-      mode: "mirror",
-      command: "openshell",
-      gateway: undefined,
-      gatewayEndpoint: undefined,
-      from: "openclaw",
-      policy: undefined,
-      providers: [],
-      gpu: false,
-      autoProviders: true,
-      remoteWorkspaceDir: "/sandbox",
-      remoteAgentWorkspaceDir: "/agent",
-      timeoutMs: 120_000,
-    });
-  });
-
-  it("accepts remote mode", () => {
-    expect(resolveOpenShellPluginConfig({ mode: "remote" }).mode).toBe("remote");
-  });
-
-  it("rejects relative remote paths", () => {
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        remoteWorkspaceDir: "sandbox",
-      }),
-    ).toThrow("OpenShell remote path must be absolute");
-  });
-
-  it("rejects unknown mode", () => {
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        mode: "bogus",
-      }),
-    ).toThrow("mode must be one of mirror, remote");
-  });
-
-  it("keeps the runtime json schema in sync with the manifest config schema", () => {
-    const manifest = JSON.parse(
-      fsSync.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
-    ) as { configSchema?: unknown };
-
-    expect(createOpenShellPluginConfigSchema().jsonSchema).toEqual(manifest.configSchema);
-  });
-});
 
 describe("openshell cli helpers", () => {
   afterEach(() => {
@@ -121,9 +74,8 @@ describe("openshell cli helpers", () => {
 
 describe("openshell backend manager", () => {
   beforeAll(async () => {
-    vi.resetModules();
-    vi.doMock("./cli.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("./cli.js")>();
+    vi.doMock("./cli.js", async () => {
+      const actual = await vi.importActual<typeof import("./cli.js")>("./cli.js");
       return {
         ...actual,
         runOpenShellCli: cliMocks.runOpenShellCli,

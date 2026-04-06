@@ -276,7 +276,6 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
 
     const scope = resolveSandboxScope({
       scope: agentSandbox.scope ?? globalSandbox?.scope,
-      perSession: agentSandbox.perSession ?? globalSandbox?.perSession,
     });
 
     if (scope !== "shared") {

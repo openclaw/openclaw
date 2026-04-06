@@ -103,7 +103,7 @@ describe("edit tool recovery hardening", () => {
     await expect(
       tool.execute(
         "call-1",
-        { path: filePath, oldText: "missing", newText: "replacement" },
+        { path: filePath, edits: [{ oldText: "missing", newText: "replacement" }] },
         undefined,
       ),
     ).rejects.toThrow(/Current file contents:\nactual current content/);
@@ -126,8 +126,12 @@ describe("edit tool recovery hardening", () => {
       "call-1",
       {
         path: filePath,
-        oldText: 'const value = "foo";\n',
-        newText: 'const value = "foobar";\n',
+        edits: [
+          {
+            oldText: 'const value = "foo";\n',
+            newText: 'const value = "foobar";\n',
+          },
+        ],
       },
       undefined,
     );
@@ -154,7 +158,10 @@ describe("edit tool recovery hardening", () => {
     await expect(
       tool.execute(
         "call-1",
-        { path: filePath, oldText: "missing", newText: "replacement already present" },
+        {
+          path: filePath,
+          edits: [{ oldText: "missing", newText: "replacement already present" }],
+        },
         undefined,
       ),
     ).rejects.toThrow("Simulated post-write failure");
@@ -175,7 +182,7 @@ describe("edit tool recovery hardening", () => {
     });
     const result = await tool.execute(
       "call-1",
-      { path: filePath, oldText: "delete me", newText: "" },
+      { path: filePath, edits: [{ oldText: "delete me", newText: "" }] },
       undefined,
     );
 
@@ -183,6 +190,38 @@ describe("edit tool recovery hardening", () => {
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: `Successfully replaced text in ${filePath}.`,
+    });
+  });
+
+  it("recovers multi-edit payloads after a post-write throw", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    await fs.writeFile(filePath, "alpha beta gamma delta\n", "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        await fs.writeFile(filePath, "ALPHA beta gamma DELTA\n", "utf-8");
+        throw new Error("Simulated post-write failure (e.g. generateDiffString)");
+      },
+    });
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [
+          { oldText: "alpha", newText: "ALPHA" },
+          { oldText: "delta", newText: "DELTA" },
+        ],
+      },
+      undefined,
+    );
+
+    expect(result).toMatchObject({ isError: false });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: `Successfully replaced 2 block(s) in ${filePath}.`,
     });
   });
 
@@ -203,7 +242,7 @@ describe("edit tool recovery hardening", () => {
     });
     const result = await tool.execute(
       "call-1",
-      { path: filePath, oldText: "old text", newText: "new text" },
+      { path: filePath, edits: [{ oldText: "old text", newText: "new text" }] },
       undefined,
     );
 

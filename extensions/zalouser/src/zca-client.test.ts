@@ -1,12 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 describe("zca-client runtime loading", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.clearAllMocks();
-  });
-
   it("does not import zca-js until a session is created", async () => {
+    vi.clearAllMocks();
     const runtimeFactory = vi.fn(() => ({
       Zalo: class MockZalo {
         constructor(public readonly options?: { logging?: boolean; selfListen?: boolean }) {}

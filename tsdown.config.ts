@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
-import { listBundledPluginBuildEntries } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import {
+  listBundledPluginBuildEntries,
+  listBundledPluginRuntimeDependencies,
+} from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -81,6 +84,7 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
 }
 
 const bundledPluginBuildEntries = listBundledPluginBuildEntries();
+const bundledPluginRuntimeDependencies = listBundledPluginRuntimeDependencies();
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -121,10 +125,12 @@ function buildCoreDistEntries(): Record<string, string> {
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
+    "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
+    "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
+    "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
-    "plugins/runtime/runtime-line.contract": "src/plugins/runtime/runtime-line.contract.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
     "telegram/audit": bundledPluginFile("telegram", "src/audit.ts"),
@@ -160,7 +166,12 @@ export default defineConfig([
     // and bundled hooks in one graph so runtime singletons are emitted once.
     entry: buildUnifiedDistEntries(),
     deps: {
-      neverBundle: ["@lancedb/lancedb", "@matrix-org/matrix-sdk-crypto-nodejs", "matrix-js-sdk"],
+      neverBundle: [
+        "@lancedb/lancedb",
+        "@matrix-org/matrix-sdk-crypto-nodejs",
+        "matrix-js-sdk",
+        ...bundledPluginRuntimeDependencies,
+      ],
     },
   }),
 ]);

@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { captureEnv } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../../../test/helpers/plugins/env.js";
 import {
   handleTelegramAction,
   readTelegramButtons,
@@ -866,6 +866,28 @@ describe("readTelegramButtons", () => {
         buttons: [[{ text: "Option A", callback_data: "cmd:a", style: "secondary" }]],
       }),
     ).toThrow(/style must be one of danger, success, primary/i);
+  });
+
+  it("rejects callback_data over Telegram's 64-byte limit", () => {
+    expect(() =>
+      readTelegramButtons({
+        buttons: [[{ text: "Option A", callback_data: "x".repeat(65) }]],
+      }),
+    ).toThrow(/callback_data too long/i);
+  });
+
+  it("accepts multibyte callback_data at 64 bytes and rejects 68 bytes", () => {
+    expect(
+      readTelegramButtons({
+        buttons: [[{ text: "Option A", callback_data: "😀".repeat(16) }]],
+      }),
+    ).toEqual([[{ text: "Option A", callback_data: "😀".repeat(16) }]]);
+
+    expect(() =>
+      readTelegramButtons({
+        buttons: [[{ text: "Option A", callback_data: "😀".repeat(17) }]],
+      }),
+    ).toThrow(/callback_data too long/i);
   });
 });
 

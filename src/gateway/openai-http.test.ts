@@ -47,6 +47,15 @@ async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?:
   });
 }
 
+async function startTokenServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
+  return await startGatewayServer(port, {
+    host: "127.0.0.1",
+    auth: { mode: "token", token: "secret" },
+    controlUiEnabled: false,
+    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled ?? true,
+  });
+}
+
 async function writeGatewayConfig(config: Record<string, unknown>) {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (!configPath) {
@@ -184,6 +193,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
+        mockAgentOnce([{ text: "hello" }]);
         const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
           method: "POST",
           headers: {
@@ -191,7 +201,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           },
           body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
         });
-        expect(res.status).toBe(403);
+        expect(res.status).toBe(200);
+        expect(agentCommand).toHaveBeenCalledTimes(1);
         await res.text();
       }
 
@@ -838,6 +849,37 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
     } finally {
       // shared server
+    }
+  });
+
+  it("treats shared-secret bearer callers as owner operators", async () => {
+    const port = await getFreePort();
+    const server = await startTokenServer(port);
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+      const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+          "x-openclaw-scopes": "operator.approvals",
+        },
+        body: JSON.stringify({
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const firstCall = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { senderIsOwner?: boolean }
+        | undefined;
+      expect(firstCall?.senderIsOwner).toBe(true);
+      await res.text();
+    } finally {
+      await server.close({ reason: "openai token auth owner test done" });
     }
   });
 });

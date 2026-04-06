@@ -61,6 +61,7 @@ export type ZaloSendOptions = {
   caption?: string;
   isGroup?: boolean;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   textMode?: "markdown" | "plain";
   textChunkMode?: "length" | "newline";
   textChunkLimit?: number;
@@ -87,7 +88,6 @@ export type ZaloAuthStatus = {
 export type ZalouserToolConfig = { allow?: string[]; deny?: string[] };
 
 export type ZalouserGroupConfig = {
-  allow?: boolean;
   enabled?: boolean;
   requireMention?: boolean;
   tools?: ZalouserToolConfig;

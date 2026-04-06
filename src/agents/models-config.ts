@@ -8,13 +8,10 @@ import {
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { MODELS_JSON_STATE } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 
-const MODELS_JSON_WRITE_LOCKS = new Map<string, Promise<void>>();
-const MODELS_JSON_READY_CACHE = new Map<
-  string,
-  Promise<{ fingerprint: string; result: { agentDir: string; wrote: boolean } }>
->();
+export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 
 async function readFileMtimeMs(pathname: string): Promise<number | null> {
   try {
@@ -117,20 +114,20 @@ function resolveModelsConfigInput(config?: OpenClawConfig): {
 }
 
 async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise<T>): Promise<T> {
-  const prior = MODELS_JSON_WRITE_LOCKS.get(targetPath) ?? Promise.resolve();
+  const prior = MODELS_JSON_STATE.writeLocks.get(targetPath) ?? Promise.resolve();
   let release: () => void = () => {};
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
   const pending = prior.then(() => gate);
-  MODELS_JSON_WRITE_LOCKS.set(targetPath, pending);
+  MODELS_JSON_STATE.writeLocks.set(targetPath, pending);
   try {
     await prior;
     return await run();
   } finally {
     release();
-    if (MODELS_JSON_WRITE_LOCKS.get(targetPath) === pending) {
-      MODELS_JSON_WRITE_LOCKS.delete(targetPath);
+    if (MODELS_JSON_STATE.writeLocks.get(targetPath) === pending) {
+      MODELS_JSON_STATE.writeLocks.delete(targetPath);
     }
   }
 }
@@ -148,7 +145,7 @@ export async function ensureOpenClawModelsJson(
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,
   });
-  const cached = MODELS_JSON_READY_CACHE.get(targetPath);
+  const cached = MODELS_JSON_STATE.readyCache.get(targetPath);
   if (cached) {
     const settled = await cached;
     if (settled.fingerprint === fingerprint) {
@@ -185,18 +182,14 @@ export async function ensureOpenClawModelsJson(
     await ensureModelsFileMode(targetPath);
     return { fingerprint, result: { agentDir, wrote: true } };
   });
-  MODELS_JSON_READY_CACHE.set(targetPath, pending);
+  MODELS_JSON_STATE.readyCache.set(targetPath, pending);
   try {
     const settled = await pending;
     return settled.result;
   } catch (error) {
-    if (MODELS_JSON_READY_CACHE.get(targetPath) === pending) {
-      MODELS_JSON_READY_CACHE.delete(targetPath);
+    if (MODELS_JSON_STATE.readyCache.get(targetPath) === pending) {
+      MODELS_JSON_STATE.readyCache.delete(targetPath);
     }
     throw error;
   }
-}
-
-export function resetModelsJsonReadyCacheForTest(): void {
-  MODELS_JSON_READY_CACHE.clear();
 }

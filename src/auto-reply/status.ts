@@ -16,6 +16,7 @@ import { normalizeToolName } from "../agents/tool-policy-shared.js";
 import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -88,6 +89,7 @@ type StatusArgs = {
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
+  taskLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -239,6 +241,8 @@ const readUsageFromSessionLog = (
   | {
       input: number;
       output: number;
+      cacheRead: number;
+      cacheWrite: number;
       promptTokens: number;
       total: number;
       model?: string;
@@ -319,7 +323,15 @@ const readUsageFromSessionLog = (
     if (promptTokens === 0 && total === 0) {
       return undefined;
     }
-    return { input, output, promptTokens, total, model };
+    return {
+      input,
+      output,
+      cacheRead: lastUsage.cacheRead ?? 0,
+      cacheWrite: lastUsage.cacheWrite ?? 0,
+      promptTokens,
+      total,
+      model,
+    };
   } catch {
     return undefined;
   }
@@ -552,6 +564,12 @@ export function buildStatusMessage(args: StatusArgs): string {
       if (!outputTokens || outputTokens === 0) {
         outputTokens = logUsage.output;
       }
+      if (typeof cacheRead !== "number" || cacheRead <= 0) {
+        cacheRead = logUsage.cacheRead;
+      }
+      if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
+        cacheWrite = logUsage.cacheWrite;
+      }
     }
   }
 
@@ -762,6 +780,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       cfg: args.config,
       channel: entry.channel ?? entry.origin?.provider,
       groupId: entry.groupId,
+      groupChatType: entry.chatType ?? entry.origin?.chatType,
       groupChannel: entry.groupChannel,
       groupSubject: entry.subject,
       parentSessionKey: args.parentSessionKey,
@@ -821,6 +840,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.usageLine,
     `🧵 ${sessionLine}`,
     args.subagentsLine,
+    args.taskLine,
     `⚙️ ${optionsLine}`,
     voiceLine,
     activationLine,
@@ -884,7 +904,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("");
 
   lines.push("Status");
-  lines.push("  /status  |  /whoami  |  /context");
+  lines.push("  /status  |  /tasks  |  /whoami  |  /context");
   lines.push("");
 
   lines.push("Skills");
@@ -901,6 +921,7 @@ const COMMANDS_PER_PAGE = 8;
 export type CommandsMessageOptions = {
   page?: number;
   surface?: string;
+  forcePaginatedList?: boolean;
 };
 
 export type CommandsMessageResult = {
@@ -1086,7 +1107,9 @@ export function buildCommandsMessagePaginated(
 ): CommandsMessageResult {
   const page = Math.max(1, options?.page ?? 1);
   const surface = options?.surface?.toLowerCase();
-  const isTelegram = surface === "telegram";
+  const prefersPaginatedList =
+    options?.forcePaginatedList === true ||
+    Boolean(surface && getChannelPlugin(surface)?.commands?.buildCommandsListChannelData);
 
   const commands = cfg
     ? listChatCommandsForConfig(cfg, { skillCommands })
@@ -1094,7 +1117,7 @@ export function buildCommandsMessagePaginated(
   const pluginCommands = listPluginCommands();
   const items = buildCommandItems(commands, pluginCommands);
 
-  if (!isTelegram) {
+  if (!prefersPaginatedList) {
     const lines = ["ℹ️ Slash commands", ""];
     lines.push(formatCommandList(items));
     lines.push("", "More: /tools for available capabilities");

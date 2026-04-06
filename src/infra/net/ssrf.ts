@@ -21,6 +21,8 @@ type LookupCallback = (
   family?: number,
 ) => void;
 
+type LookupResult = LookupAddress | readonly LookupAddress[];
+
 export class SsrFBlockedError extends Error {
   constructor(message: string) {
     super(message);
@@ -200,6 +202,10 @@ function assertAllowedResolvedAddressesOrThrow(
   }
 }
 
+function normalizeLookupResults(results: LookupResult): readonly LookupAddress[] {
+  return Array.isArray(results) ? results : [results];
+}
+
 export function createPinnedLookup(params: {
   hostname: string;
   addresses: string[];
@@ -286,6 +292,7 @@ export type PinnedDispatcherPolicy =
   | {
       mode: "explicit-proxy";
       proxyUrl: string;
+      allowPrivateProxy?: boolean;
       proxyTls?: Record<string, unknown>;
       pinnedHostname?: PinnedHostnameOverride;
     };
@@ -330,7 +337,9 @@ export async function resolvePinnedHostnameWithPolicy(
   }
 
   const lookupFn = params.lookupFn ?? dnsLookup;
-  const results = await lookupFn(normalized, { all: true });
+  const results = normalizeLookupResults(
+    (await lookupFn(normalized, { all: true })) as LookupResult,
+  );
   if (results.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }

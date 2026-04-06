@@ -1,6 +1,7 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { splitMediaFromOutput } from "../media/parse.js";
+import { pluginRegistrationContractRegistry } from "../plugins/contracts/registry.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
@@ -146,6 +147,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "memory_get",
   "memory_search",
   "message",
+  "music_generate",
   "nodes",
   "process",
   "read",
@@ -156,11 +158,15 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "sessions_spawn",
   "subagents",
   "tts",
+  "video_generate",
   "web_fetch",
   "web_search",
   "x_search",
   "write",
 ]);
+const TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS = new Set(
+  pluginRegistrationContractRegistry.flatMap((entry) => entry.toolNames),
+);
 const HTTP_URL_RE = /^https?:\/\//i;
 
 function readToolResultDetails(result: unknown): Record<string, unknown> | undefined {
@@ -171,6 +177,11 @@ function readToolResultDetails(result: unknown): Record<string, unknown> | undef
   return record.details && typeof record.details === "object" && !Array.isArray(record.details)
     ? (record.details as Record<string, unknown>)
     : undefined;
+}
+
+function readToolResultStatus(result: unknown): string | undefined {
+  const status = readToolResultDetails(result)?.status;
+  return typeof status === "string" ? status.trim().toLowerCase() : undefined;
 }
 
 function isExternalToolResult(result: unknown): boolean {
@@ -186,7 +197,9 @@ export function isToolResultMediaTrusted(toolName?: string, result?: unknown): b
     return false;
   }
   const normalized = normalizeToolName(toolName);
-  return TRUSTED_TOOL_RESULT_MEDIA.has(normalized);
+  return (
+    TRUSTED_TOOL_RESULT_MEDIA.has(normalized) || TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS.has(normalized)
+  );
 }
 
 export function filterToolResultMediaUrls(
@@ -314,20 +327,19 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
 }
 
 export function isToolResultError(result: unknown): boolean {
-  if (!result || typeof result !== "object") {
+  const normalized = readToolResultStatus(result);
+  if (!normalized) {
     return false;
   }
-  const record = result as { details?: unknown };
-  const details = record.details;
-  if (!details || typeof details !== "object") {
-    return false;
-  }
-  const status = (details as { status?: unknown }).status;
-  if (typeof status !== "string") {
-    return false;
-  }
-  const normalized = status.trim().toLowerCase();
   return normalized === "error" || normalized === "timeout";
+}
+
+export function isToolResultTimedOut(result: unknown): boolean {
+  const normalizedStatus = readToolResultStatus(result);
+  if (normalizedStatus === "timeout") {
+    return true;
+  }
+  return readToolResultDetails(result)?.timedOut === true;
 }
 
 export function extractToolErrorMessage(result: unknown): string | undefined {

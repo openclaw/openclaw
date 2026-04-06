@@ -5,7 +5,9 @@ import type {
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { logDebug, logError } from "../logger.js";
+import { redactToolDetail } from "../logging/redact.js";
 import { isPlainObject } from "../utils.js";
+import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
 import {
@@ -35,6 +37,7 @@ type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => u
   ? P
   : ToolExecuteArgsCurrent;
 type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
+const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
 
 function isAbortSignal(value: unknown): value is AbortSignal {
   return typeof value === "object" && value !== null && "aborted" in value;
@@ -58,6 +61,58 @@ function describeToolExecutionError(err: unknown): {
     return { message, stack: err.stack };
   }
   return { message: String(err) };
+}
+
+function serializeToolParams(value: unknown): string {
+  if (value === undefined) {
+    return "<undefined>";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (
+    value === null ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized === "string") {
+      return serialized;
+    }
+  } catch {
+    // Fall through to String(value).
+  }
+  if (typeof value === "function") {
+    return value.name ? `[Function ${value.name}]` : "[Function anonymous]";
+  }
+  if (typeof value === "symbol") {
+    return value.description ? `Symbol(${value.description})` : "Symbol()";
+  }
+  return Object.prototype.toString.call(value);
+}
+
+function formatToolParamPreview(label: string, value: unknown): string {
+  const serialized = serializeToolParams(value);
+  const redacted = redactToolDetail(serialized);
+  const preview = sanitizeForConsole(redacted, TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS) ?? "<empty>";
+  return `${label}=${preview}`;
+}
+
+function describeToolFailureInputs(params: {
+  rawParams: unknown;
+  effectiveParams: unknown;
+}): string {
+  const parts = [formatToolParamPreview("raw_params", params.rawParams)];
+  const rawSerialized = serializeToolParams(params.rawParams);
+  const effectiveSerialized = serializeToolParams(params.effectiveParams);
+  if (effectiveSerialized !== rawSerialized) {
+    parts.push(formatToolParamPreview("effective_params", params.effectiveParams));
+  }
+  return parts.join(" ");
 }
 
 function normalizeToolExecutionResult(params: {
@@ -160,7 +215,11 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
-          logError(`[tools] ${normalizedName} failed: ${described.message}`);
+          const inputPreview = describeToolFailureInputs({
+            rawParams: params,
+            effectiveParams: executeParams,
+          });
+          logError(`[tools] ${normalizedName} failed: ${described.message} ${inputPreview}`);
 
           return buildToolExecutionErrorResult({
             toolName: normalizedName,

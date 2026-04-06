@@ -2,7 +2,9 @@
   "id": "openai",
   "enabledByDefault": true,
   "providers": ["openai", "openai-codex"],
-  "cliBackends": ["codex-cli"],
+  "modelSupport": {
+    "modelPrefixes": ["gpt-", "o1", "o3", "o4"]
+  },
   "providerAuthEnvVars": {
     "openai": ["OPENAI_API_KEY"]
   },
@@ -34,12 +36,22 @@
   ],
   "contracts": {
     "speechProviders": ["openai"],
+    "realtimeTranscriptionProviders": ["openai"],
+    "realtimeVoiceProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
-    "imageGenerationProviders": ["openai"]
+    "imageGenerationProviders": ["openai"],
+    "videoGenerationProviders": ["openai"]
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "personality": {
+        "type": "string",
+        "enum": ["friendly", "off"],
+        "default": "friendly",
+        "description": "Controls the default OpenAI-specific personality used for OpenAI and OpenAI Codex runs."
+      }
+    }
   }
 }

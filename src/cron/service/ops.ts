@@ -6,12 +6,13 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
-import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
   applyJobPatch,
+  assertSupportedJobSpec,
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
+  isJobEnabled,
   isJobDue,
   nextWakeAtMs,
   recomputeNextRuns,
@@ -101,7 +102,8 @@ export async function start(state: CronServiceState) {
     return;
   }
 
-  const startupInterruptedJobIds = new Set<string>();
+  const interruptedOneShotIds = new Set<string>();
+  let clearedAnyRunningMarker = false;
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     const jobs = state.store?.jobs ?? [];
@@ -112,15 +114,23 @@ export async function start(state: CronServiceState) {
           "cron: clearing stale running marker on startup",
         );
         job.state.runningAtMs = undefined;
-        startupInterruptedJobIds.add(job.id);
+        clearedAnyRunningMarker = true;
+        // One-shot jobs are not retried after interruption; recurring jobs
+        // (cron/every) are eligible for startup catch-up so they don't
+        // require a second restart to recover (#60495).
+        if (job.schedule.kind === "at") {
+          interruptedOneShotIds.add(job.id);
+        }
       }
     }
-    if (startupInterruptedJobIds.size > 0) {
+    if (clearedAnyRunningMarker) {
       await persist(state);
     }
   });
 
-  await runMissedJobs(state, { skipJobIds: startupInterruptedJobIds });
+  await runMissedJobs(state, {
+    skipJobIds: interruptedOneShotIds.size > 0 ? interruptedOneShotIds : undefined,
+  });
 
   await locked(state, async () => {
     // Startup catch-up already persisted the latest in-memory store state, and
@@ -163,7 +173,7 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
-    const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
+    const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || isJobEnabled(j));
     return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
   });
 }
@@ -216,10 +226,10 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const sortDir = opts?.sortDir ?? "asc";
     const source = state.store?.jobs ?? [];
     const filtered = source.filter((job) => {
-      if (enabledFilter === "enabled" && !job.enabled) {
+      if (enabledFilter === "enabled" && !isJobEnabled(job)) {
         return false;
       }
-      if (enabledFilter === "disabled" && job.enabled) {
+      if (enabledFilter === "disabled" && isJobEnabled(job)) {
         return false;
       }
       if (!query) {
@@ -250,8 +260,7 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
-    const normalizedInput = normalizeCronCreateDeliveryInput(input);
-    const job = createJob(state, normalizedInput);
+    const job = createJob(state, input);
     state.store?.jobs.push(job);
 
     // Defensive: recompute all next-run times to ensure consistency
@@ -309,13 +318,13 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
 
     job.updatedAtMs = now;
     if (scheduleChanged || enabledChanged) {
-      if (job.enabled) {
+      if (isJobEnabled(job)) {
         job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
       } else {
         job.state.nextRunAtMs = undefined;
         job.state.runningAtMs = undefined;
       }
-    } else if (job.enabled) {
+    } else if (isJobEnabled(job)) {
       // Non-schedule edits should not mutate other jobs, but still repair a
       // missing/corrupt nextRunAtMs for the updated job.
       const nextRun = job.state.nextRunAtMs;
@@ -400,7 +409,8 @@ function tryCreateManualTaskRun(params: {
     createRunningTaskRun({
       runtime: "cron",
       sourceId: params.job.id,
-      requesterSessionKey: "",
+      ownerKey: "",
+      scopeKind: "system",
       childSessionKey: params.job.sessionKey,
       agentId: params.job.agentId,
       runId,
@@ -436,6 +446,7 @@ function tryFinishManualTaskRun(
     if (params.coreResult.status === "ok" || params.coreResult.status === "skipped") {
       completeTaskRunByRunId({
         runId: params.taskRunId,
+        runtime: "cron",
         endedAt: params.endedAt,
         lastEventAt: params.endedAt,
         terminalSummary: params.coreResult.summary ?? undefined,
@@ -444,6 +455,7 @@ function tryFinishManualTaskRun(
     }
     failTaskRunByRunId({
       runId: params.taskRunId,
+      runtime: "cron",
       status:
         normalizeCronRunErrorText(params.coreResult.error) === "cron: job execution timed out"
           ? "timed_out"
@@ -477,6 +489,7 @@ async function inspectManualRunPreflight(
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
     recomputeNextRunsForMaintenance(state);
     const job = findJobOrThrow(state, id);
+    assertSupportedJobSpec(job);
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }

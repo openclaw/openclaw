@@ -1,6 +1,8 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import {
+  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveGatewayRequestContext,
   resolveHttpSenderIsOwner,
   resolveTrustedHttpOperatorScopes,
@@ -120,5 +122,66 @@ describe("resolveHttpSenderIsOwner", () => {
         tokenAuth,
       ),
     ).toBe(false);
+  });
+});
+
+describe("resolveOpenAiCompatibleHttpOperatorScopes", () => {
+  it("restores default operator scopes for shared-secret bearer auth", () => {
+    const scopes = resolveOpenAiCompatibleHttpOperatorScopes(
+      createReq({
+        authorization: "Bearer secret",
+        "x-openclaw-scopes": "operator.approvals",
+      }),
+      { authMethod: "token", trustDeclaredOperatorScopes: false },
+    );
+
+    expect(scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
+  });
+
+  it("keeps declared scopes for trusted HTTP identity-bearing requests", () => {
+    const scopes = resolveOpenAiCompatibleHttpOperatorScopes(
+      createReq({
+        "x-openclaw-scopes": "operator.write",
+      }),
+      { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
+    );
+
+    expect(scopes).toEqual(["operator.write"]);
+  });
+});
+
+describe("resolveOpenAiCompatibleHttpSenderIsOwner", () => {
+  it("treats shared-secret bearer auth as owner on the compat surface", () => {
+    expect(
+      resolveOpenAiCompatibleHttpSenderIsOwner(
+        createReq({
+          authorization: "Bearer secret",
+          "x-openclaw-scopes": "operator.approvals",
+        }),
+        { authMethod: "token", trustDeclaredOperatorScopes: false },
+      ),
+    ).toBe(true);
+  });
+
+  it("still requires operator.admin for trusted scope-bearing requests", () => {
+    expect(
+      resolveOpenAiCompatibleHttpSenderIsOwner(
+        createReq({ "x-openclaw-scopes": "operator.write" }),
+        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
+      ),
+    ).toBe(false);
+    expect(
+      resolveOpenAiCompatibleHttpSenderIsOwner(
+        createReq({ "x-openclaw-scopes": "operator.admin" }),
+        { authMethod: "trusted-proxy", trustDeclaredOperatorScopes: true },
+      ),
+    ).toBe(true);
   });
 });

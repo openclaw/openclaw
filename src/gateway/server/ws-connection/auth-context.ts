@@ -170,13 +170,7 @@ export async function resolveConnectAuthDecision(params: {
   let authMethod = params.state.authMethod;
 
   const bootstrapTokenCandidate = params.state.bootstrapTokenCandidate;
-  if (
-    params.hasDeviceIdentity &&
-    params.deviceId &&
-    params.publicKey &&
-    !authOk &&
-    bootstrapTokenCandidate
-  ) {
+  if (params.hasDeviceIdentity && params.deviceId && params.publicKey && bootstrapTokenCandidate) {
     const tokenCheck = await params.verifyBootstrapToken({
       deviceId: params.deviceId,
       publicKey: params.publicKey,
@@ -185,9 +179,14 @@ export async function resolveConnectAuthDecision(params: {
       scopes: params.scopes,
     });
     if (tokenCheck.ok) {
+      // Prefer an explicit valid bootstrap token even when another auth path
+      // (for example tailscale serve header auth) already succeeded. QR pairing
+      // relies on the server classifying the handshake as bootstrap-token so the
+      // initial node pairing can be silently auto-approved and the bootstrap
+      // token can be revoked after approval.
       authOk = true;
       authMethod = "bootstrap-token";
-    } else {
+    } else if (!authOk) {
       authResult = { ok: false, reason: tokenCheck.reason ?? "bootstrap_token_invalid" };
     }
   }
@@ -197,12 +196,14 @@ export async function resolveConnectAuthDecision(params: {
     return { authResult, authOk, authMethod };
   }
 
+  let deviceTokenRateLimited = false;
   if (params.rateLimiter) {
     const deviceRateCheck = params.rateLimiter.check(
       params.clientIp,
       AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
     );
     if (!deviceRateCheck.allowed) {
+      deviceTokenRateLimited = true;
       authResult = {
         ok: false,
         reason: "rate_limited",
@@ -211,7 +212,7 @@ export async function resolveConnectAuthDecision(params: {
       };
     }
   }
-  if (!authResult.rateLimited) {
+  if (!deviceTokenRateLimited) {
     const tokenCheck = await params.verifyDeviceToken({
       deviceId: params.deviceId,
       token: deviceTokenCandidate,

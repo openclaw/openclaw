@@ -5,7 +5,7 @@ import { createSettingsManager, type TlonSettingsStore } from "../settings.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";
 import { resolveTlonAccount } from "../types.js";
 import { authenticate } from "../urbit/auth.js";
-import { ssrfPolicyFromAllowPrivateNetwork } from "../urbit/context.js";
+import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "../urbit/context.js";
 import type { Foreigns, DmInvite } from "../urbit/foreigns.js";
 import { sendDm, sendGroupMessage } from "../urbit/send.js";
 import { UrbitSSEClient } from "../urbit/sse-client.js";
@@ -27,6 +27,7 @@ import {
   applyTlonSettingsOverrides,
   buildTlonSettingsMigrations,
   mergeUniqueStrings,
+  shouldMigrateTlonSetting,
 } from "./settings-helpers.js";
 import {
   extractMessageText,
@@ -72,7 +73,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   const botShipName = normalizeShip(account.ship);
   runtime.log?.(`[tlon] Starting monitor for ${botShipName}`);
 
-  const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(account.allowPrivateNetwork);
+  const ssrfPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(
+    account.dangerouslyAllowPrivateNetwork,
+  );
 
   // Store validated values for use in closures (TypeScript narrowing doesn't propagate)
   const accountUrl = account.url;
@@ -180,13 +183,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     const migrations = buildTlonSettingsMigrations(account, currentSettings);
 
     for (const { key, fileValue, settingsValue } of migrations) {
-      // Only migrate if file has a value and settings store doesn't
-      const hasFileValue = Array.isArray(fileValue) ? fileValue.length > 0 : fileValue != null;
-      const hasSettingsValue = Array.isArray(settingsValue)
-        ? settingsValue.length > 0
-        : settingsValue != null;
-
-      if (hasFileValue && !hasSettingsValue) {
+      if (shouldMigrateTlonSetting(fileValue, settingsValue)) {
         try {
           await api!.poke({
             app: "settings",
