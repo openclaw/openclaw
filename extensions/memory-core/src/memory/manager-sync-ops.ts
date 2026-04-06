@@ -55,6 +55,7 @@ import {
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
+import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
 import {
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
@@ -753,20 +754,20 @@ export abstract class MemoryManagerSyncOps {
     const files = targetSessionFiles
       ? Array.from(targetSessionFiles)
       : await listSessionFilesForAgent(this.agentId);
-    const activePaths = targetSessionFiles
-      ? null
-      : new Set(files.map((file) => sessionPathForFile(file)));
-    const existingRows =
-      activePaths === null
+    const sessionPlan = resolveMemorySessionSyncPlan({
+      needsFullReindex: params.needsFullReindex,
+      files,
+      targetSessionFiles,
+      sessionsDirtyFiles: this.sessionsDirtyFiles,
+      existingRows: targetSessionFiles
         ? null
         : loadMemorySourceFileState({
             db: this.db,
             source: "sessions",
-          }).rows;
-    const existingHashes =
-      existingRows === null ? null : new Map(existingRows.map((row) => [row.path, row.hash]));
-    const indexAll =
-      params.needsFullReindex || Boolean(targetSessionFiles) || this.sessionsDirtyFiles.size === 0;
+          }).rows,
+      sessionPathForFile,
+    });
+    const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
     log.debug("memory sync: indexing session files", {
       files: files.length,
       indexAll,

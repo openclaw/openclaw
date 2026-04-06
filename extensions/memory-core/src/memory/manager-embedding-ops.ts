@@ -506,12 +506,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(pathname, source);
   }
 
-  private isStructuredInputTooLargeError(message: string): boolean {
-    return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
-      message,
-    );
-  }
-
   /**
    * Write chunks (and optional embeddings) for a file into the index.
    * Handles both the chunks table, the vector table, and the FTS table.
@@ -646,7 +640,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if (
         "kind" in entry &&
         entry.kind === "multimodal" &&
-        this.isStructuredInputTooLargeError(message)
+        /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
+          message,
+        )
       ) {
         log.warn("memory embeddings: skipping multimodal file rejected as too large", {
           path: entry.path,
