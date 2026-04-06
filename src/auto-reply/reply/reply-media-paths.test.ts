@@ -84,6 +84,28 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(saveMediaSource).not.toHaveBeenCalled();
   });
 
+  it("drops relative sandbox escapes when tools.fs.workspaceOnly is enabled", async () => {
+    ensureSandboxWorkspaceForSession.mockResolvedValue({
+      workspaceDir: "/tmp/sandboxes/session-1",
+      containerWorkdir: "/workspace",
+    });
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: { tools: { fs: { workspaceOnly: true } } },
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["../sandboxes/session-1/screens/final.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+    expect(saveMediaSource).not.toHaveBeenCalled();
+  });
+
   it("keeps managed generated media under the shared media root", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
     ensureSandboxWorkspaceForSession.mockResolvedValue({
