@@ -25,21 +25,28 @@ function replacementPreservesWordBoundary(source: string, offset: number, length
   return before && after && !/\s/u.test(before) && !/\s/u.test(after) ? " " : "";
 }
 
-// Unicode private-use sentinel that cannot appear in normal markdown text.
-// Used to bracket code-block placeholders during whitespace normalization.
-const BLOCK_SENTINEL = "\uE000";
-const BLOCK_PLACEHOLDER_RE = new RegExp(`${BLOCK_SENTINEL}(\\d+)${BLOCK_SENTINEL}`, "g");
+const BLOCK_SENTINEL_SEED = "\uE000";
+
+function createBlockSentinel(text: string): string {
+  let sentinel = BLOCK_SENTINEL_SEED;
+  while (text.includes(sentinel)) {
+    sentinel += BLOCK_SENTINEL_SEED;
+  }
+  return sentinel;
+}
 
 function normalizeDirectiveWhitespace(text: string): string {
   // Extract → normalize prose → restore:
   // Stash every code block (fenced ``` / ~~~ and indent-code 4-space/tab)
   // under a sentinel-delimited placeholder so the prose regexes never touch them.
+  const blockSentinel = createBlockSentinel(text);
+  const blockPlaceholderRe = new RegExp(`${blockSentinel}(\\d+)${blockSentinel}`, "g");
   const blocks: string[] = [];
   const masked = text.replace(
     /(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[^\n]*|(?:(?:^|\n)(?:    |\t)[^\n]*)+/gm,
     (block) => {
       blocks.push(block);
-      return `${BLOCK_SENTINEL}${blocks.length - 1}${BLOCK_SENTINEL}`;
+      return `${blockSentinel}${blocks.length - 1}${blockSentinel}`;
     },
   );
 
@@ -52,7 +59,7 @@ function normalizeDirectiveWhitespace(text: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
 
-  return normalized.replace(BLOCK_PLACEHOLDER_RE, (_, i) => blocks[Number(i)]);
+  return normalized.replace(blockPlaceholderRe, (_, i) => blocks[Number(i)]);
 }
 
 type StripInlineDirectiveTagsResult = {
