@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
+// NOTE: The production call-site uses session-system-events.ts (imported by
+// get-reply-run.ts).  session-updates.ts is a test-facing re-export of the
+// same implementation.  Both files received identical isHeartbeat/
+// isEventDrivenHeartbeat changes.  We import from session-updates here because
+// session-system-events has heavier transitive dependencies that make
+// standalone test setup impractical.  If the two ever diverge, the build will
+// catch it via the shared types.
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
