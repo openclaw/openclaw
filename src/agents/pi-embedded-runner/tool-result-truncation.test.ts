@@ -199,7 +199,7 @@ describe("calculateMaxToolResultChars", () => {
   });
 
   it("exports the live cap through both constant names", () => {
-    expect(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS).toBe(120_000);
+    expect(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS).toBe(40_000);
     expect(HARD_MAX_TOOL_RESULT_CHARS).toBe(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
   });
 
@@ -211,20 +211,6 @@ describe("calculateMaxToolResultChars", () => {
   it("caps 128K contexts at the live tool-result ceiling", () => {
     const result = calculateMaxToolResultChars(128_000);
     expect(result).toBe(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
-  });
-
-  it("keeps moderately large reads intact on 128K contexts", () => {
-    const messages: AgentMessage[] = [
-      makeUserMessage("hello"),
-      makeAssistantMessage("reading changelog"),
-      makeToolResult("x".repeat(60_000)),
-    ];
-    const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
-      messages,
-      128_000,
-    );
-    expect(truncatedCount).toBe(0);
-    expect(result).toEqual(messages);
   });
 });
 
