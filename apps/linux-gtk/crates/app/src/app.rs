@@ -72,8 +72,19 @@ impl OpenClawApplication {
 
             rt.block_on(async move {
                 let config = GatewayConfig::resolve();
-                let identity = DeviceIdentity::load_or_create()
-                    .expect("device identity");
+                let identity = match DeviceIdentity::load_or_create() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!("device identity failed: {e} — regenerating");
+                        // Delete corrupt file and retry once
+                        let path = dirs::home_dir()
+                            .unwrap_or_default()
+                            .join(".openclaw/gtk-identity/device.json");
+                        let _ = std::fs::remove_file(&path);
+                        DeviceIdentity::load_or_create()
+                            .expect("device identity regeneration failed")
+                    }
+                };
                 let instance_id = uuid::Uuid::new_v4().to_string();
 
                 info!("gateway URL: {}", config.url);

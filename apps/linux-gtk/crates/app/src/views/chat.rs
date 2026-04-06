@@ -434,15 +434,17 @@ impl ChatView {
                 }
             }
 
-            // Drain finalized assistant messages.
-            let finalized = state4.drain_assistant_messages();
+            // Drain finalized assistant messages for the CURRENT session only.
+            // Messages for other sessions stay queued until that session is active.
+            let active_session = state4.selected_session().unwrap_or_default();
+            let finalized = state4.drain_assistant_messages(&active_session);
             if !finalized.is_empty() {
                 if let Some(first) = mb3.first_child()
                     && first.css_classes().iter().any(|c| c == "chat-welcome")
                 {
                     mb3.remove(&first);
                 }
-                for (_run_id, body) in finalized {
+                for (_sk, _run_id, body) in finalized {
                     let markup = markdown::to_pango(&body);
                     let bubble = ChatBubble::new_assistant(&markup, None);
                     mb3.append(&bubble);

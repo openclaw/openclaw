@@ -232,6 +232,11 @@ impl EventBridge {
             .get("runId")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let session_key = payload
+            .get("sessionKey")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let data = payload.get("data");
 
         match stream {
@@ -266,7 +271,7 @@ impl EventBridge {
                         let text = state.stream_text();
                         if !text.is_empty() {
                             let rid = run_id.unwrap_or_default();
-                            state.push_assistant_message(rid, text);
+                            state.push_assistant_message(session_key.clone(), rid, text);
                         }
                         state.set_stream_text(String::new());
                         state.set_stream_run_id(None);
@@ -314,7 +319,11 @@ impl EventBridge {
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| state.stream_text());
                 if !text.is_empty() {
-                    state.push_assistant_message(chat.run_id, text);
+                    state.push_assistant_message(
+                        chat.session_key.clone(),
+                        chat.run_id,
+                        text,
+                    );
                 }
                 state.set_stream_text(String::new());
                 state.set_stream_run_id(None);

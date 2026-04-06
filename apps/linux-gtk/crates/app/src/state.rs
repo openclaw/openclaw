@@ -23,7 +23,9 @@ mod imp {
         pub sessions: RefCell<Vec<serde_json::Value>>,
         pub channels: RefCell<Vec<serde_json::Value>>,
         pub models: RefCell<Vec<serde_json::Value>>,
-        pub pending_assistant: RefCell<Vec<(String, String)>>,
+        /// (session_key, run_id, text) — session-scoped so replies render
+        /// in the correct chat even if the user switches tabs mid-flight.
+        pub pending_assistant: RefCell<Vec<(String, String, String)>>,
         pub show_thinking: Cell<bool>,
         pub show_tools: Cell<bool>,
         pub current_view: RefCell<String>,
@@ -138,14 +140,20 @@ impl AppState {
         *self.imp().models.borrow_mut() = models;
     }
 
-    /// Append a finalized assistant message; chat view will drain it.
-    pub fn push_assistant_message(&self, run_id: String, text: String) {
-        self.imp().pending_assistant.borrow_mut().push((run_id, text));
+    /// Append a finalized assistant message scoped to a session key.
+    pub fn push_assistant_message(&self, session_key: String, run_id: String, text: String) {
+        self.imp().pending_assistant.borrow_mut().push((session_key, run_id, text));
     }
 
-    /// Drain all pending assistant messages (called by chat view each tick).
-    pub fn drain_assistant_messages(&self) -> Vec<(String, String)> {
-        std::mem::take(&mut *self.imp().pending_assistant.borrow_mut())
+    /// Drain pending assistant messages for a specific session only.
+    /// Messages for other sessions stay in the queue.
+    pub fn drain_assistant_messages(&self, for_session: &str) -> Vec<(String, String, String)> {
+        let mut pending = self.imp().pending_assistant.borrow_mut();
+        let (matching, remaining): (Vec<_>, Vec<_>) = pending
+            .drain(..)
+            .partition(|(sk, _, _)| sk == for_session);
+        *pending = remaining;
+        matching
     }
 
     pub fn current_view(&self) -> String {
