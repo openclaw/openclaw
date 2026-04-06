@@ -32,11 +32,27 @@ BUCKET_LABELS = {
     'none': 'No issue',
     'unknown': 'Unknown issue',
 }
+BUCKET_SHORT_LABELS = {
+    'auth': 'Auth failure',
+    'runtime_submit': 'Runtime submit',
+    'runtime_poll': 'Runtime poll',
+    'control_plane': 'Control-plane',
+    'executor_gate': 'Executor gate',
+    'config_mapping': 'Config mapping',
+    'none': 'No issue',
+    'unknown': 'Unknown',
+}
 PATH_LABELS = {
     'NO_HANDOFF>FULL_EVAL>FAILED': 'full-eval path',
     'NO_HANDOFF>FULL_EVAL>EXECUTOR': 'full-eval executor path',
     'HANDOFF>TRIAGE_HINT>FULL_EVAL>EXECUTOR': 'full-eval executor path',
     'HANDOFF>TRIAGE_USE>SHORTCUT>BRIDGE>EXECUTOR': 'shortcut bridge path',
+}
+PATH_SHORT_LABELS = {
+    'NO_HANDOFF>FULL_EVAL>FAILED': 'full-eval',
+    'NO_HANDOFF>FULL_EVAL>EXECUTOR': 'full-eval',
+    'HANDOFF>TRIAGE_HINT>FULL_EVAL>EXECUTOR': 'full-eval',
+    'HANDOFF>TRIAGE_USE>SHORTCUT>BRIDGE>EXECUTOR': 'shortcut',
 }
 
 
@@ -102,6 +118,13 @@ def derive_notification_title(route_signature: str, bucket: str) -> str:
     bucket_label = BUCKET_LABELS.get(bucket, bucket or 'unknown')
     path_label = PATH_LABELS.get(path_signature, path_signature)
     return f'{bucket_label} on {path_label}'
+
+
+def derive_notification_title_short(route_signature: str, bucket: str) -> str:
+    path_signature = derive_path_signature(route_signature)
+    bucket_label = BUCKET_SHORT_LABELS.get(bucket, bucket or 'unknown')
+    path_label = PATH_SHORT_LABELS.get(path_signature, PATH_LABELS.get(path_signature, path_signature))
+    return f'{bucket_label} / {path_label}'
 
 
 def load_records(raw_input: str) -> list[dict]:
@@ -353,6 +376,10 @@ def main() -> int:
                 f"{derive_path_signature(str(item.get('route_signature') or ''))}"
             ),
             'notification_title': derive_notification_title(
+                str(item.get('route_signature') or ''),
+                derive_recovery_bucket_from_route_signature(str(item.get('route_signature') or '')),
+            ),
+            'notification_title_short': derive_notification_title_short(
                 str(item.get('route_signature') or ''),
                 derive_recovery_bucket_from_route_signature(str(item.get('route_signature') or '')),
             ),
