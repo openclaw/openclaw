@@ -9,6 +9,11 @@ const mocks = vi.hoisted(() => ({
   readFile: vi.fn().mockResolvedValue(Buffer.from("fake-image")),
 }));
 
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentDir: () => "/mock/agent/dir",
+  resolveDefaultAgentId: () => "default",
+}));
+
 vi.mock("../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
 }));
@@ -118,12 +123,23 @@ describe("videoGenerateCommand", () => {
     expect(mocks.generateVideo).not.toHaveBeenCalled();
   });
 
-  it("validates aspect ratio", async () => {
+  it("validates aspect ratio format", async () => {
     const runtime = createMockRuntime();
-    await videoGenerateCommand({ prompt: "test", aspectRatio: "7:3" }, runtime);
+    await videoGenerateCommand({ prompt: "test", aspectRatio: "wide" }, runtime);
 
     expect(runtime.exitCode).toBe(1);
-    expect(runtime.output.some((line) => line.includes("Invalid aspect ratio"))).toBe(true);
+    expect(runtime.output.some((line) => line.includes("Invalid aspect ratio format"))).toBe(true);
+  });
+
+  it("accepts provider-specific aspect ratios like 4:7", async () => {
+    mocks.generateVideo.mockResolvedValue(makeSuccessResult());
+
+    const runtime = createMockRuntime();
+    await videoGenerateCommand({ prompt: "test", aspectRatio: "4:7" }, runtime);
+
+    expect(mocks.generateVideo).toHaveBeenCalledWith(
+      expect.objectContaining({ aspectRatio: "4:7" }),
+    );
   });
 
   it("validates resolution", async () => {

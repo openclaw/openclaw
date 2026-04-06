@@ -68,6 +68,7 @@ describe("video cli", () => {
         resolution: "1080P",
         duration: 8,
         audio: true,
+        watermark: undefined,
         output: "./out.mp4",
         json: true,
       }),

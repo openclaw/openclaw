@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
 import { generateVideo } from "../video-generation/runtime.js";
@@ -21,19 +22,6 @@ export type VideoGenerateOpts = {
   output?: string;
   json?: boolean;
 };
-
-const VALID_ASPECT_RATIOS = new Set([
-  "1:1",
-  "2:3",
-  "3:2",
-  "3:4",
-  "4:3",
-  "4:5",
-  "5:4",
-  "9:16",
-  "16:9",
-  "21:9",
-]);
 
 const VALID_RESOLUTIONS = new Set<string>(["480P", "720P", "1080P"]);
 
@@ -87,8 +75,8 @@ function validateOpts(opts: VideoGenerateOpts): string | null {
   if (opts.video && opts.video.length > MAX_INPUT_VIDEOS) {
     return `Too many reference videos: ${opts.video.length} (max ${MAX_INPUT_VIDEOS})`;
   }
-  if (opts.aspectRatio && !VALID_ASPECT_RATIOS.has(opts.aspectRatio)) {
-    return `Invalid aspect ratio "${opts.aspectRatio}". Valid: ${[...VALID_ASPECT_RATIOS].join(", ")}`;
+  if (opts.aspectRatio && !/^\d+:\d+$/.test(opts.aspectRatio)) {
+    return `Invalid aspect ratio format "${opts.aspectRatio}". Expected format: W:H (e.g. 16:9)`;
   }
   if (opts.resolution && !VALID_RESOLUTIONS.has(opts.resolution)) {
     return `Invalid resolution "${opts.resolution}". Valid: ${[...VALID_RESOLUTIONS].join(", ")}`;
@@ -124,6 +112,7 @@ export async function videoGenerateCommand(
   }
 
   const cfg = loadConfig();
+  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
 
   const inputImages = opts.image ? await loadAssets(opts.image) : undefined;
   const inputVideos = opts.video ? await loadAssets(opts.video) : undefined;
@@ -132,6 +121,7 @@ export async function videoGenerateCommand(
 
   const result = await generateVideo({
     cfg,
+    agentDir,
     prompt: opts.prompt,
     modelOverride: opts.model,
     aspectRatio: opts.aspectRatio,
