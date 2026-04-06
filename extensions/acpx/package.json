@@ -4,7 +4,7 @@
   "description": "OpenClaw ACP runtime backend",
   "type": "module",
   "dependencies": {
-    "acpx": "0.5.1"
+    "acpx": "0.5.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
