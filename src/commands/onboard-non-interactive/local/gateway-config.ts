@@ -31,8 +31,8 @@ export function applyNonInteractiveGatewayConfig(params: {
   const port = hasGatewayPort ? (opts.gatewayPort as number) : params.defaultPort;
   let bind = opts.gatewayBind ?? "loopback";
   const authModeRaw = opts.gatewayAuth ?? "token";
-  if (authModeRaw !== "token" && authModeRaw !== "password") {
-    runtime.error("Invalid --gateway-auth (use token|password).");
+  if (authModeRaw !== "token" && authModeRaw !== "password" && authModeRaw !== "trusted-proxy") {
+    runtime.error("Invalid --gateway-auth (use token|password|trusted-proxy).");
     runtime.exit(1);
     return null;
   }
@@ -130,6 +130,142 @@ export function applyNonInteractiveGatewayConfig(params: {
         },
       },
     };
+  }
+
+  if (authMode === "trusted-proxy") {
+    // Parse trusted proxy inputs from opts. Accept comma-separated or array.
+    const rawTrusted = opts.gatewayTrustedProxies ?? [];
+    const trustedProxiesArr: string[] = [];
+    if (Array.isArray(rawTrusted)) {
+      for (const v of rawTrusted) {
+        if (typeof v === "string") {
+          trustedProxiesArr.push(
+            ...v
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+          );
+        }
+      }
+    } else if (typeof rawTrusted === "string") {
+      trustedProxiesArr.push(
+        ...rawTrusted
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      );
+    }
+    if (trustedProxiesArr.length === 0) {
+      runtime.error(
+        "Missing --gateway-trusted-proxies for trusted-proxy auth (provide one or more IPs).",
+      );
+      runtime.exit(1);
+      return null;
+    }
+
+    const userHeaderRaw = opts.gatewayTrustedProxyUserHeader ?? "x-forwarded-user";
+    const userHeader = String(userHeaderRaw).trim();
+    if (!userHeader) {
+      runtime.error("Invalid --gateway-trusted-proxy-user-header (must be a header name).");
+      runtime.exit(1);
+      return null;
+    }
+
+    const rawRequired = opts.gatewayTrustedProxyRequiredHeaders ?? [];
+    const requiredHeaders: string[] = [];
+    if (Array.isArray(rawRequired)) {
+      for (const v of rawRequired) {
+        if (typeof v === "string") {
+          requiredHeaders.push(
+            ...v
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+          );
+        }
+      }
+    } else if (typeof rawRequired === "string") {
+      requiredHeaders.push(
+        ...rawRequired
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      );
+    }
+
+    const rawAllowUsers = opts.gatewayTrustedProxyAllowUsers ?? [];
+    const allowUsers: string[] = [];
+    if (Array.isArray(rawAllowUsers)) {
+      for (const v of rawAllowUsers) {
+        if (typeof v === "string") {
+          allowUsers.push(
+            ...v
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+          );
+        }
+      }
+    } else if (typeof rawAllowUsers === "string") {
+      allowUsers.push(
+        ...rawAllowUsers
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      );
+    }
+
+    nextConfig = {
+      ...nextConfig,
+      gateway: {
+        ...nextConfig.gateway,
+        auth: {
+          ...nextConfig.gateway?.auth,
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader,
+            ...(requiredHeaders.length > 0 ? { requiredHeaders } : {}),
+            ...(allowUsers.length > 0 ? { allowUsers } : {}),
+          },
+        },
+        trustedProxies: trustedProxiesArr,
+      },
+    };
+    // Apply Control UI allowed origins if provided
+    const rawAllowedOrigins =
+      opts.gatewayControlUiAllowedOrigins ?? opts.gatewayControlUiAllowedOrigins;
+    const allowedOriginsArr: string[] = [];
+    if (Array.isArray(rawAllowedOrigins)) {
+      for (const v of rawAllowedOrigins) {
+        if (typeof v === "string") {
+          allowedOriginsArr.push(
+            ...v
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+          );
+        }
+      }
+    } else if (typeof rawAllowedOrigins === "string") {
+      allowedOriginsArr.push(
+        ...rawAllowedOrigins
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      );
+    }
+    if (allowedOriginsArr.length > 0) {
+      nextConfig = {
+        ...nextConfig,
+        gateway: {
+          ...nextConfig.gateway,
+          controlUi: {
+            ...nextConfig.gateway?.controlUi,
+            allowedOrigins: allowedOriginsArr,
+          },
+        },
+      };
+    }
   }
 
   nextConfig = {

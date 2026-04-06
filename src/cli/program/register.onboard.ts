@@ -117,6 +117,26 @@ export function registerOnboardCommand(program: Command) {
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
+    .option(
+      "--gateway-trusted-proxies <list>",
+      "Trusted proxy IPs (comma-separated) for trusted-proxy auth",
+    )
+    .option(
+      "--gateway-trusted-proxy-user-header <header>",
+      "Header name containing user identity for trusted-proxy auth",
+    )
+    .option(
+      "--gateway-trusted-proxy-required-headers <list>",
+      "Required headers (comma-separated) that proxy must provide",
+    )
+    .option(
+      "--gateway-trusted-proxy-allow-users <list>",
+      "Comma-separated list of allowed user identities for trusted-proxy auth",
+    )
+    .option(
+      "--gateway-controlui-allowed-origins <list>",
+      "Comma-separated list of allowed origins for the Control UI",
+    )
     .option("--gateway-token <token>", "Gateway token (token auth)")
     .option(
       "--gateway-token-ref-env <name>",
@@ -179,6 +199,20 @@ export function registerOnboardCommand(program: Command) {
           gatewayToken: opts.gatewayToken as string | undefined,
           gatewayTokenRefEnv: opts.gatewayTokenRefEnv as string | undefined,
           gatewayPassword: opts.gatewayPassword as string | undefined,
+          gatewayTrustedProxies: opts.gatewayTrustedProxies as string | string[] | undefined,
+          gatewayTrustedProxyUserHeader: opts.gatewayTrustedProxyUserHeader as string | undefined,
+          gatewayTrustedProxyRequiredHeaders: opts.gatewayTrustedProxyRequiredHeaders as
+            | string
+            | string[]
+            | undefined,
+          gatewayTrustedProxyAllowUsers: opts.gatewayTrustedProxyAllowUsers as
+            | string
+            | string[]
+            | undefined,
+          gatewayControlUiAllowedOrigins: opts.gatewayControlUiAllowedOrigins as
+            | string
+            | string[]
+            | undefined,
           remoteUrl: opts.remoteUrl as string | undefined,
           remoteToken: opts.remoteToken as string | undefined,
           tailscale: opts.tailscale as TailscaleMode | undefined,
