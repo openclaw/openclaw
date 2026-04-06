@@ -1,0 +1,69 @@
+{
+  "id": "mrscraper",
+  "skills": ["./skills"],
+  "providerAuthEnvVars": {
+    "mrscraper": ["MRSCRAPER_API_TOKEN"]
+  },
+  "uiHints": {
+    "apiToken": {
+      "label": "MrScraper API Token",
+      "help": "MrScraper API token for unblocker and scraper APIs (fallback: MRSCRAPER_API_TOKEN env var).",
+      "sensitive": true,
+      "placeholder": "mrs_..."
+    },
+    "webFetch.baseUrl": {
+      "label": "MrScraper Unblocker Base URL",
+      "help": "MrScraper unblocker base URL override."
+    },
+    "platform.baseUrl": {
+      "label": "MrScraper Platform Base URL",
+      "help": "MrScraper platform API base URL override."
+    }
+  },
+  "contracts": {
+    "webFetchProviders": ["mrscraper"],
+    "tools": ["mrscraper_fetch_html", "mrscraper_scrape"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiToken": {
+        "type": ["string", "object"]
+      },
+      "webFetch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "type": "string"
+          },
+          "timeoutSeconds": {
+            "type": "number"
+          },
+          "geoCode": {
+            "type": "string"
+          },
+          "blockResources": {
+            "type": "boolean"
+          }
+        }
+      },
+      "platform": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "baseUrl": {
+            "type": "string"
+          },
+          "timeoutSeconds": {
+            "type": "number"
+          },
+          "proxyCountry": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

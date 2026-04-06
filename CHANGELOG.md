@@ -51,6 +51,10 @@ Docs: https://docs.openclaw.ai
 - Hooks/wake: queue direct and mapped wake-hook payloads as untrusted system events so external wake content no longer enters the main session as trusted input. (#62003)
 - Slack/thread mentions: add `channels.slack.thread.requireExplicitMention` so Slack channels that already require mentions can also require explicit `@bot` mentions inside bot-participated threads. (#58276) Thanks @praktika-engineer.
 
+### Changes
+
+- Web tools/MrScraper: add a bundled `mrscraper` plugin with `web_fetch` provider fallback via the unblocker plus explicit `mrscraper_fetch_html` and `mrscraper_scrape` tools, using plugin-owned config under `plugins.entries.mrscraper.config.*`.
+
 ## 2026.4.5
 
 ### Breaking
