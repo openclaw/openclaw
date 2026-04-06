@@ -857,7 +857,7 @@ describe("resolveModel", () => {
       maxTokens: 8192,
     });
 
-    const result = resolveModel("openrouter", "anthropic/claude-sonnet-4-5", "/tmp/agent");
+    const result = resolveModelForTest("openrouter", "anthropic/claude-sonnet-4-5", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
@@ -881,7 +881,7 @@ describe("resolveModel", () => {
       maxTokens: 8192,
     });
 
-    const result = resolveModel("openrouter", "deepseek/deepseek-chat", "/tmp/agent");
+    const result = resolveModelForTest("openrouter", "deepseek/deepseek-chat", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
@@ -922,7 +922,7 @@ describe("resolveModel", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const result = resolveModel("openrouter", "anthropic/claude-3-haiku", "/tmp/agent", cfg);
+    const result = resolveModelForTest("openrouter", "anthropic/claude-3-haiku", "/tmp/agent", cfg);
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
@@ -963,7 +963,7 @@ describe("resolveModel", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const result = resolveModel("openrouter", "custom/my-vision-model", "/tmp/agent", cfg);
+    const result = resolveModelForTest("openrouter", "custom/my-vision-model", "/tmp/agent", cfg);
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
@@ -988,7 +988,7 @@ describe("resolveModel", () => {
       maxTokens: 16384,
     });
 
-    const result = resolveModel("openrouter", "openai/gpt-4o", "/tmp/agent");
+    const result = resolveModelForTest("openrouter", "openai/gpt-4o", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
@@ -1013,7 +1013,7 @@ describe("resolveModel", () => {
       maxTokens: 8192,
     });
 
-    const result = resolveModel("anthropic", "claude-sonnet-4-5", "/tmp/agent");
+    const result = resolveModelForTest("anthropic", "claude-sonnet-4-5", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
