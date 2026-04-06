@@ -1138,6 +1138,8 @@ export const FIELD_HELP: Record<string, string> = {
     "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
   "agents.defaults.compaction.notifyUser":
     "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
+  "agents.defaults.compaction.triggerRatio":
+    "Context usage ratio that triggers auto-compaction (0.1-1.0). E.g., 0.8 means compaction triggers when context reaches 80% of the window. Lower values trigger earlier, higher values maximize context usage. Default: 0.8.",
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":

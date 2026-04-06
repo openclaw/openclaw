@@ -191,9 +191,12 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
 }): SettingsManager {
   const settingsManager = createEmbeddedPiSettingsManager(params);
 
-  // 根据 model.contextWindow 动态计算 50% 压缩触发阈值
+  // 根据 model.contextWindow 动态计算压缩触发阈值
+  // 触发条件: contextTokens > contextWindow - reserveTokens
+  // triggerRatio=0.8 表示 80% 触发 = reserveTokens = 20% × contextWindow
   if (params.model?.contextWindow) {
-    const dynamicReserveTokens = Math.floor(params.model.contextWindow * 0.5);
+    const triggerRatio = params.cfg?.agents?.defaults?.compaction?.triggerRatio ?? 0.8;
+    const dynamicReserveTokens = Math.floor(params.model.contextWindow * (1 - triggerRatio));
     settingsManager.applyOverrides({
       compaction: { reserveTokens: dynamicReserveTokens },
     });

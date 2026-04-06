@@ -4101,6 +4101,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
                   },
+                  triggerRatio: {
+                    type: "number",
+                    minimum: 0.1,
+                    maximum: 1,
+                    title: "Compaction Trigger Ratio",
+                    description:
+                      "Context usage ratio that triggers auto-compaction (0.1-1.0). E.g., 0.8 means compaction triggers at 80% context usage. Default: 0.8.",
+                  },
                 },
                 additionalProperties: false,
                 title: "Compaction",

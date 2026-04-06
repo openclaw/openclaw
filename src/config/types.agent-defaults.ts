@@ -292,6 +292,12 @@ export type AgentCompactionConfig = {
    * Default: false (silent by default).
    */
   notifyUser?: boolean;
+  /**
+   * Context usage ratio that triggers auto-compaction (0.0-1.0).
+   * E.g., 0.8 means compaction triggers at 80% context usage.
+   * Default: 0.8 (trigger at 80% of context window).
+   */
+  triggerRatio?: number;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
