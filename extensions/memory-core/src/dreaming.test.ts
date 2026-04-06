@@ -544,7 +544,7 @@ describe("short-term dreaming cron reconciliation", () => {
       logger,
     });
 
-    expect(result.status).toBe("noop");
+    expect(result.status).toBe("updated");
     expect(result.removed).toBe(2);
     expect(harness.removeCalls).toEqual(["job-light", "job-rem"]);
   });
