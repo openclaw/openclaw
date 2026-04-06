@@ -26,6 +26,21 @@ function makeResult(
 }
 
 describe("inferUpdateFailureHints", () => {
+  it("returns a package-manager bootstrap hint for required manager failures", () => {
+    const result = {
+      status: "error",
+      mode: "git",
+      reason: "required-manager-unavailable",
+      steps: [],
+      durationMs: 1,
+    } satisfies UpdateRunResult;
+
+    const hints = inferUpdateFailureHints(result);
+
+    expect(hints.join("\n")).toContain("requires its declared package manager");
+    expect(hints.join("\n")).toContain("Install the missing package manager manually");
+  });
+
   it("returns EACCES hint for global update permission failures", () => {
     const result = makeResult(
       "global update",
