@@ -2938,6 +2938,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           defaults: {
             type: "object",
             properties: {
+              params: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {},
+              },
               model: {
                 anyOf: [
                   {
@@ -3146,6 +3153,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Workspace",
                 description:
                   "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
+              },
+              skills: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+                title: "Skills",
+                description:
+                  "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
               },
               repoRoot: {
                 type: "string",
@@ -4169,6 +4185,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: false,
               },
+              llm: {
+                type: "object",
+                properties: {
+                  idleTimeoutSeconds: {
+                    description:
+                      "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
               compaction: {
                 type: "object",
                 properties: {
@@ -4357,6 +4386,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Compaction Memory Flush",
                     description:
                       "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
+                  },
+                  notifyUser: {
+                    type: "boolean",
+                    title: "Compaction Notify User",
+                    description:
+                      "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
                   },
                 },
                 additionalProperties: false,
@@ -4701,16 +4736,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               subagents: {
                 type: "object",
                 properties: {
-                  maxConcurrent: {
-                    type: "integer",
-                    exclusiveMinimum: 0,
-                    maximum: 9007199254740991,
-                  },
                   allowAgents: {
                     type: "array",
                     items: {
                       type: "string",
                     },
+                  },
+                  maxConcurrent: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
                   },
                   maxSpawnDepth: {
                     description:
@@ -4756,30 +4791,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   thinking: {
                     type: "string",
                   },
-                  startupWaitTimeoutMs: {
-                    description:
-                      "Requester-side wait budget in milliseconds for the primary sub-agent startup RPC (default: 60000).",
-                    type: "integer",
-                    exclusiveMinimum: 0,
-                    maximum: 9007199254740991,
-                  },
                   runTimeoutSeconds: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
                   },
+                  startupWaitTimeoutMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
                   completionAnnounceTimeoutMs: {
-                    description:
-                      "Preferred gateway timeout in milliseconds for sub-agent completion announce delivery calls (default: 90000).",
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
                   },
                   announceTimeoutMs: {
-                    description: "Backward-compatible alias for completionAnnounceTimeoutMs.",
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                  },
+                  requireAgentId: {
+                    type: "boolean",
                   },
                 },
                 additionalProperties: false,

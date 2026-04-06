@@ -16,6 +16,8 @@ import {
 
 export const AgentDefaultsSchema = z
   .object({
+    /** Global default provider params applied to all models before per-model and per-agent overrides. */
+    params: z.record(z.string(), z.unknown()).optional(),
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
     imageGenerationModel: AgentModelSchema.optional(),
@@ -39,6 +41,7 @@ export const AgentDefaultsSchema = z
       )
       .optional(),
     workspace: z.string().optional(),
+    skills: z.array(z.string()).optional(),
     repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
@@ -88,6 +91,19 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    llm: z
+      .object({
+        idleTimeoutSeconds: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe(
+            "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 60 seconds.",
+          ),
+      })
+      .strict()
+      .optional(),
     compaction: z
       .object({
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
@@ -129,6 +145,7 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        notifyUser: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -169,8 +186,8 @@ export const AgentDefaultsSchema = z
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
-        maxConcurrent: z.number().int().positive().optional(),
         allowAgents: z.array(z.string()).optional(),
+        maxConcurrent: z.number().int().positive().optional(),
         maxSpawnDepth: z
           .number()
           .int()
@@ -192,29 +209,11 @@ export const AgentDefaultsSchema = z
         archiveAfterMinutes: z.number().int().min(0).optional(),
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
-        startupWaitTimeoutMs: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe(
-            "Requester-side wait budget in milliseconds for the primary sub-agent startup RPC (default: 60000).",
-          ),
         runTimeoutSeconds: z.number().int().min(0).optional(),
-        completionAnnounceTimeoutMs: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe(
-            "Preferred gateway timeout in milliseconds for sub-agent completion announce delivery calls (default: 90000).",
-          ),
-        announceTimeoutMs: z
-          .number()
-          .int()
-          .positive()
-          .optional()
-          .describe("Backward-compatible alias for completionAnnounceTimeoutMs."),
+        startupWaitTimeoutMs: z.number().int().positive().optional(),
+        completionAnnounceTimeoutMs: z.number().int().positive().optional(),
+        announceTimeoutMs: z.number().int().positive().optional(),
+        requireAgentId: z.boolean().optional(),
       })
       .strict()
       .optional(),

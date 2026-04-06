@@ -120,12 +120,18 @@ export type CliBackendConfig = {
 };
 
 export type AgentDefaultsConfig = {
+  /** Global default provider params applied to all models before per-model and per-agent overrides. */
+  params?: Record<string, unknown>;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentModelConfig;
   /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageGenerationModel?: AgentModelConfig;
+  /** Optional video-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
+  videoGenerationModel?: AgentModelConfig;
+  /** Optional music-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
+  musicGenerationModel?: AgentModelConfig;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   pdfModel?: AgentModelConfig;
   /** Maximum PDF file size in megabytes (default: 10). */
@@ -136,6 +142,8 @@ export type AgentDefaultsConfig = {
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
+  /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
+  skills?: string[];
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
@@ -181,6 +189,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** LLM timeout configuration. */
+  llm?: AgentLlmConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
@@ -247,7 +257,7 @@ export type AgentDefaultsConfig = {
     /** Session key for heartbeat runs ("main" or explicit session key). */
     session?: string;
     /** Delivery target ("last", "none", or a channel id). */
-    target?: "last" | "none" | ChannelId;
+    target?: ChannelId;
     /** Direct/DM delivery policy. Default: "allow". */
     directPolicy?: "allow" | "block";
     /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). Supports :topic:NNN suffix for Telegram topics. */
@@ -284,6 +294,8 @@ export type AgentDefaultsConfig = {
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
+    /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any. */
+    allowAgents?: string[];
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
     maxConcurrent?: number;
     /** Maximum depth allowed for sessions_spawn chains. Default behavior: 1 (no nested spawns). */
@@ -296,14 +308,16 @@ export type AgentDefaultsConfig = {
     model?: AgentModelConfig;
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
-    /** Requester-side wait budget in ms for the primary sub-agent startup request (default: 60000). */
-    startupWaitTimeoutMs?: number;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
-    /** Preferred gateway timeout in ms for sub-agent completion announce delivery calls (default: 90000). */
+    /** Gateway timeout in ms for sub-agent startup/setup RPCs before launch is considered failed (default: 60000). */
+    startupWaitTimeoutMs?: number;
+    /** Preferred gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     completionAnnounceTimeoutMs?: number;
-    /** Backward-compatible alias for completionAnnounceTimeoutMs. */
+    /** Legacy alias for completionAnnounceTimeoutMs. */
     announceTimeoutMs?: number;
+    /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
+    requireAgentId?: boolean;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
@@ -350,7 +364,7 @@ export type AgentCompactionConfig = {
    * Set to [] to disable post-compaction context injection entirely.
    */
   postCompactionSections?: string[];
-  /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-5").
+  /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-6").
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
@@ -362,6 +376,11 @@ export type AgentCompactionConfig = {
    * Default: false (existing behavior preserved).
    */
   truncateAfterCompaction?: boolean;
+  /**
+   * Send a "🧹 Compacting context..." notice to the user when compaction starts.
+   * Default: false (silent by default).
+   */
+  notifyUser?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
@@ -378,4 +397,17 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+};
+
+/**
+ * LLM timeout configuration.
+ */
+export type AgentLlmConfig = {
+  /**
+   * Idle timeout for LLM streaming responses in seconds.
+   * If no token is received within this time, the request is aborted.
+   * Set to 0 to disable (never timeout).
+   * Default: 60 seconds.
+   */
+  idleTimeoutSeconds?: number;
 };
