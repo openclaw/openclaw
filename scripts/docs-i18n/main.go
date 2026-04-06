@@ -20,6 +20,7 @@ type docJob struct {
 type docResult struct {
 	index    int
 	rel      string
+	output   string
 	duration time.Duration
 	skipped  bool
 	err      error
@@ -91,6 +92,7 @@ func main() {
 	start := time.Now()
 	processed := 0
 	skipped := 0
+	localizedFiles := []string{}
 	var runErr error
 
 	if *parallel < 1 {
@@ -101,16 +103,18 @@ func main() {
 	switch *mode {
 	case "doc":
 		if *parallel > 1 {
-			proc, skip, err := runDocParallel(context.Background(), ordered, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite, *parallel, glossary, *thinking)
+			proc, skip, outputs, err := runDocParallel(context.Background(), ordered, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite, *parallel, glossary, *thinking)
 			processed += proc
 			skipped += skip
+			localizedFiles = append(localizedFiles, outputs...)
 			if err != nil {
 				runErr = err
 			}
 		} else {
-			proc, skip, err := runDocSequential(context.Background(), ordered, translator, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite)
+			proc, skip, outputs, err := runDocSequential(context.Background(), ordered, translator, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite)
 			processed += proc
 			skipped += skip
+			localizedFiles = append(localizedFiles, outputs...)
 			if err != nil {
 				runErr = err
 			}
@@ -119,8 +123,9 @@ func main() {
 		if *parallel > 1 {
 			fatal(fmt.Errorf("parallel processing is only supported in doc mode"))
 		}
-		proc, err := runSegmentSequential(context.Background(), ordered, translator, tm, resolvedDocsRoot, *sourceLang, *targetLang)
+		proc, outputs, err := runSegmentSequential(context.Background(), ordered, translator, tm, resolvedDocsRoot, *sourceLang, *targetLang)
 		processed += proc
+		localizedFiles = append(localizedFiles, outputs...)
 		if err != nil {
 			runErr = err
 		}
@@ -131,7 +136,7 @@ func main() {
 	if err := tm.Save(); err != nil && runErr == nil {
 		runErr = err
 	}
-	if err := postprocessLocalizedDocs(resolvedDocsRoot, *targetLang); err != nil && runErr == nil {
+	if err := postprocessLocalizedDocs(resolvedDocsRoot, *targetLang, localizedFiles); err != nil && runErr == nil {
 		runErr = err
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
@@ -141,29 +146,31 @@ func main() {
 	}
 }
 
-func runDocSequential(ctx context.Context, ordered []string, translator *PiTranslator, docsRoot, srcLang, tgtLang string, overwrite bool) (int, int, error) {
+func runDocSequential(ctx context.Context, ordered []string, translator *PiTranslator, docsRoot, srcLang, tgtLang string, overwrite bool) (int, int, []string, error) {
 	processed := 0
 	skipped := 0
+	outputs := []string{}
 	for index, file := range ordered {
 		relPath := resolveRelPath(docsRoot, file)
 		log.Printf("docs-i18n: [%d/%d] start %s", index+1, len(ordered), relPath)
 		start := time.Now()
-		skip, err := processFileDoc(ctx, translator, docsRoot, file, srcLang, tgtLang, overwrite)
+		skip, outputPath, err := processFileDoc(ctx, translator, docsRoot, file, srcLang, tgtLang, overwrite)
 		if err != nil {
-			return processed, skipped, err
+			return processed, skipped, outputs, err
 		}
 		if skip {
 			skipped++
 			log.Printf("docs-i18n: [%d/%d] skipped %s (%s)", index+1, len(ordered), relPath, time.Since(start).Round(time.Millisecond))
 		} else {
 			processed++
+			outputs = append(outputs, outputPath)
 			log.Printf("docs-i18n: [%d/%d] done %s (%s)", index+1, len(ordered), relPath, time.Since(start).Round(time.Millisecond))
 		}
 	}
-	return processed, skipped, nil
+	return processed, skipped, outputs, nil
 }
 
-func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tgtLang string, overwrite bool, parallel int, glossary []GlossaryEntry, thinking string) (int, int, error) {
+func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tgtLang string, overwrite bool, parallel int, glossary []GlossaryEntry, thinking string) (int, int, []string, error) {
 	jobs := make(chan docJob)
 	results := make(chan docResult, len(ordered))
 	ctx, cancel := context.WithCancel(ctx)
@@ -186,10 +193,11 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 				}
 				log.Printf("docs-i18n: [w%d %d/%d] start %s", workerID, job.index, len(ordered), job.rel)
 				start := time.Now()
-				skip, err := processFileDoc(ctx, translator, docsRoot, job.path, srcLang, tgtLang, overwrite)
+				skip, outputPath, err := processFileDoc(ctx, translator, docsRoot, job.path, srcLang, tgtLang, overwrite)
 				results <- docResult{
 					index:    job.index,
 					rel:      job.rel,
+					output:   outputPath,
 					duration: time.Since(start),
 					skipped:  skip,
 					err:      err,
@@ -211,37 +219,42 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 
 	processed := 0
 	skipped := 0
+	outputs := []string{}
 	for i := 0; i < len(ordered); i++ {
 		result := <-results
 		if result.err != nil {
 			wg.Wait()
-			return processed, skipped, result.err
+			return processed, skipped, outputs, result.err
 		}
 		if result.skipped {
 			skipped++
 			log.Printf("docs-i18n: [w* %d/%d] skipped %s (%s)", result.index, len(ordered), result.rel, result.duration.Round(time.Millisecond))
 		} else {
 			processed++
+			outputs = append(outputs, result.output)
 			log.Printf("docs-i18n: [w* %d/%d] done %s (%s)", result.index, len(ordered), result.rel, result.duration.Round(time.Millisecond))
 		}
 	}
 	wg.Wait()
-	return processed, skipped, nil
+	return processed, skipped, outputs, nil
 }
 
-func runSegmentSequential(ctx context.Context, ordered []string, translator *PiTranslator, tm *TranslationMemory, docsRoot, srcLang, tgtLang string) (int, error) {
+func runSegmentSequential(ctx context.Context, ordered []string, translator *PiTranslator, tm *TranslationMemory, docsRoot, srcLang, tgtLang string) (int, []string, error) {
 	processed := 0
+	outputs := []string{}
 	for index, file := range ordered {
 		relPath := resolveRelPath(docsRoot, file)
 		log.Printf("docs-i18n: [%d/%d] start %s", index+1, len(ordered), relPath)
 		start := time.Now()
-		if _, err := processFile(ctx, translator, tm, docsRoot, file, srcLang, tgtLang); err != nil {
-			return processed, err
+		_, outputPath, err := processFile(ctx, translator, tm, docsRoot, file, srcLang, tgtLang)
+		if err != nil {
+			return processed, outputs, err
 		}
 		processed++
+		outputs = append(outputs, outputPath)
 		log.Printf("docs-i18n: [%d/%d] done %s (%s)", index+1, len(ordered), relPath, time.Since(start).Round(time.Millisecond))
 	}
-	return processed, nil
+	return processed, outputs, nil
 }
 
 func resolveRelPath(docsRoot, file string) string {

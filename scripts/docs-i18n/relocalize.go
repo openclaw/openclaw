@@ -2,11 +2,10 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 )
 
-func postprocessLocalizedDocs(docsRoot, targetLang string) error {
-	if targetLang == "" || targetLang == "en" {
+func postprocessLocalizedDocs(docsRoot, targetLang string, localizedFiles []string) error {
+	if targetLang == "" || targetLang == "en" || len(localizedFiles) == 0 {
 		return nil
 	}
 
@@ -15,22 +14,7 @@ func postprocessLocalizedDocs(docsRoot, targetLang string) error {
 		return err
 	}
 
-	localeRoot := filepath.Join(docsRoot, targetLang)
-	if _, err := os.Stat(localeRoot); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	return filepath.WalkDir(localeRoot, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || !isMarkdownFile(path) {
-			return nil
-		}
-
+	for _, path := range localizedFiles {
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -47,6 +31,10 @@ func postprocessLocalizedDocs(docsRoot, targetLang string) error {
 			output = "---\n" + frontMatter + "\n---\n\n" + rewrittenBody
 		}
 
-		return os.WriteFile(path, []byte(output), 0o644)
-	})
+		if err := os.WriteFile(path, []byte(output), 0o644); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

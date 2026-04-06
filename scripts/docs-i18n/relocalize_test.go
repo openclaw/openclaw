@@ -33,7 +33,10 @@ func TestPostprocessLocalizedDocsFixesStaleLinksAfterLaterPagesExist(t *testing.
 		"# 故障排除",
 	))
 
-	if err := postprocessLocalizedDocs(docsRoot, "zh-CN"); err != nil {
+	if err := postprocessLocalizedDocs(docsRoot, "zh-CN", []string{
+		filepath.Join(docsRoot, "zh-CN", "gateway", "index.md"),
+		filepath.Join(docsRoot, "zh-CN", "gateway", "troubleshooting.md"),
+	}); err != nil {
 		t.Fatalf("postprocessLocalizedDocs failed: %v", err)
 	}
 
@@ -44,6 +47,48 @@ func TestPostprocessLocalizedDocsFixesStaleLinksAfterLaterPagesExist(t *testing.
 	want := "See [Troubleshooting](/zh-CN/gateway/troubleshooting)."
 	if !containsLine(got, want) {
 		t.Fatalf("expected rewritten localized link %q in output:\n%s", want, got)
+	}
+}
+
+func TestPostprocessLocalizedDocsOnlyTouchesScopedFiles(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
+	writeFile(t, filepath.Join(docsRoot, "gateway", "troubleshooting.md"), "# Troubleshooting\n")
+	writeFile(t, filepath.Join(docsRoot, "zh-CN", "gateway", "troubleshooting.md"), "# 故障排除\n")
+
+	scopedPath := filepath.Join(docsRoot, "zh-CN", "gateway", "index.md")
+	unscopedPath := filepath.Join(docsRoot, "zh-CN", "help", "index.md")
+
+	writeFile(t, scopedPath, stringsJoin(
+		"---",
+		"title: 网关",
+		"---",
+		"",
+		"See [Troubleshooting](/gateway/troubleshooting).",
+	))
+	writeFile(t, unscopedPath, stringsJoin(
+		"---",
+		"title: 帮助",
+		"---",
+		"",
+		"See [Troubleshooting](/gateway/troubleshooting).",
+	))
+
+	beforeUnscoped := mustReadFile(t, unscopedPath)
+	if err := postprocessLocalizedDocs(docsRoot, "zh-CN", []string{scopedPath}); err != nil {
+		t.Fatalf("postprocessLocalizedDocs failed: %v", err)
+	}
+
+	gotScoped := mustReadFile(t, scopedPath)
+	if !containsLine(gotScoped, "See [Troubleshooting](/zh-CN/gateway/troubleshooting).") {
+		t.Fatalf("expected scoped file rewrite, got:\n%s", gotScoped)
+	}
+
+	afterUnscoped := mustReadFile(t, unscopedPath)
+	if afterUnscoped != beforeUnscoped {
+		t.Fatalf("expected unscoped file to remain unchanged\nbefore:\n%s\nafter:\n%s", beforeUnscoped, afterUnscoped)
 	}
 }
 
