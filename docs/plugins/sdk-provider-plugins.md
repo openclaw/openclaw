@@ -592,9 +592,20 @@ API key auth, and dynamic model resolution.
         id: "acme-ai",
         label: "Acme Video",
         capabilities: {
-          maxVideos: 1,
-          maxDurationSeconds: 10,
-          supportsResolution: true,
+          generate: {
+            maxVideos: 1,
+            maxDurationSeconds: 10,
+            supportsResolution: true,
+          },
+          imageToVideo: {
+            enabled: true,
+            maxVideos: 1,
+            maxInputImages: 1,
+            maxDurationSeconds: 5,
+          },
+          videoToVideo: {
+            enabled: false,
+          },
         },
         generateVideo: async (req) => ({ videos: [] }),
       });
@@ -630,6 +641,12 @@ API key auth, and dynamic model resolution.
     OpenClaw classifies this as a **hybrid-capability** plugin. This is the
     recommended pattern for company plugins (one plugin per vendor). See
     [Internals: Capability Ownership](/plugins/architecture#capability-ownership-model).
+
+    For video generation, prefer the mode-aware capability shape shown above:
+    `generate`, `imageToVideo`, and `videoToVideo`. The older flat fields such
+    as `maxInputImages`, `maxInputVideos`, and `maxDurationSeconds` still work
+    as aggregate fallback caps, but they cannot describe per-mode limits or
+    disabled transform modes as cleanly.
 
   </Step>
 

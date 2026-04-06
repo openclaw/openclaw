@@ -15,6 +15,15 @@ OpenClaw agents can generate videos from text prompts, reference images, or exis
 The `video_generate` tool only appears when at least one video-generation provider is available. If you do not see it in your agent tools, set a provider API key or configure `agents.defaults.videoGenerationModel`.
 </Note>
 
+OpenClaw treats video generation as three runtime modes:
+
+- `generate` for text-to-video requests with no reference media
+- `imageToVideo` when the request includes one or more reference images
+- `videoToVideo` when the request includes one or more reference videos
+
+Providers can support any subset of those modes. The tool validates the active
+mode before submission and reports supported modes in `action=list`.
+
 ## Quick start
 
 1. Set an API key for any supported provider:
@@ -67,7 +76,8 @@ Outside of session-backed agent runs (for example, direct tool invocations), the
 
 Some providers accept additional or alternate API key env vars. See individual [provider pages](#related) for details.
 
-Run `video_generate action=list` to inspect available providers and models at runtime.
+Run `video_generate action=list` to inspect available providers, models, and
+runtime modes at runtime.
 
 ## Tool parameters
 
@@ -106,6 +116,15 @@ Run `video_generate action=list` to inspect available providers and models at ru
 | `filename` | string | Output filename hint                            |
 
 Not all providers support all parameters. Unsupported overrides are ignored on a best-effort basis and reported as warnings in the tool result. Hard capability limits (such as too many reference inputs) fail before submission.
+
+Reference inputs also select the runtime mode:
+
+- No reference media: `generate`
+- Any image reference: `imageToVideo`
+- Any video reference: `videoToVideo`
+
+Mixed image and video references are not a stable shared capability surface.
+Prefer one reference type per request.
 
 ## Actions
 
@@ -153,6 +172,38 @@ If a provider fails, the next candidate is tried automatically. If all candidate
 | Together | Single image reference only.                                                                                                                                |
 | Vydra    | Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping redirects. `veo3` is bundled as text-to-video only; `kling` requires a remote image URL. |
 | xAI      | Supports text-to-video, image-to-video, and remote video edit/extend flows.                                                                                 |
+
+## Provider capability modes
+
+The shared video-generation contract now lets providers declare mode-specific
+capabilities instead of only flat aggregate limits. New provider
+implementations should prefer explicit mode blocks:
+
+```typescript
+capabilities: {
+  generate: {
+    maxVideos: 1,
+    maxDurationSeconds: 10,
+    supportsResolution: true,
+  },
+  imageToVideo: {
+    enabled: true,
+    maxVideos: 1,
+    maxInputImages: 1,
+    maxDurationSeconds: 5,
+  },
+  videoToVideo: {
+    enabled: true,
+    maxVideos: 1,
+    maxInputVideos: 1,
+    maxDurationSeconds: 5,
+  },
+}
+```
+
+Legacy flat fields such as `maxInputImages` and `maxInputVideos` still work as
+backward-compatible aggregate caps, but they cannot express per-mode limits as
+precisely.
 
 ## Configuration
 
