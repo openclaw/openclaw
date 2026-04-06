@@ -15,11 +15,10 @@ import {
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
   applyCompactionLightTrim,
+  buildCompactionStageTelemetry,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
-  planCompactionStage,
-  planCompactionStages,
   pruneHistoryForContextShare,
   resolveContextWindowTokens,
   summarizeInStages,
@@ -558,68 +557,6 @@ async function readWorkspaceContextForSummary(): Promise<string> {
   } catch {
     return "";
   }
-}
-
-function buildCompactionStageTelemetry(params: {
-  boundaryOnly?: boolean;
-  lightTrimRequested?: boolean;
-  lightTrimmedMessages?: number;
-  lightTrimmedToolResults?: number;
-  historyPruned?: boolean;
-  historySummaryRequested?: boolean;
-  splitTurnSummaryRequested?: boolean;
-  qualityGuardEnabled?: boolean;
-  qualityRetriesPlanned?: number;
-  qualityRetriesUsed?: number;
-  recentTurnsPreserve: number;
-  droppedChunks?: number;
-  droppedMessages?: number;
-  droppedSummaryUsed?: boolean;
-}) {
-  const qualityRetriesUsed = Math.max(0, params.qualityRetriesUsed ?? 0);
-  const entryDecision = planCompactionStage({
-    boundaryOnly: params.boundaryOnly,
-    lightTrimRequested: params.lightTrimRequested,
-    historyPruned: params.historyPruned,
-    historySummaryRequested: params.historySummaryRequested,
-    splitTurnSummaryRequested: params.splitTurnSummaryRequested,
-    qualityRetryRequested: false,
-  });
-  const outcomeDecision = planCompactionStage({
-    boundaryOnly: params.boundaryOnly,
-    lightTrimRequested: params.lightTrimRequested,
-    historyPruned: params.historyPruned,
-    historySummaryRequested: params.historySummaryRequested,
-    splitTurnSummaryRequested: params.splitTurnSummaryRequested,
-    qualityRetryRequested: qualityRetriesUsed > 0,
-  });
-
-  return {
-    entryStage: entryDecision.stage,
-    entryReason: entryDecision.reason,
-    outcomeStage: outcomeDecision.stage,
-    outcomeReason: outcomeDecision.reason,
-    plan: planCompactionStages({
-      boundaryOnly: params.boundaryOnly,
-      lightTrimRequested: params.lightTrimRequested,
-      historyPruned: params.historyPruned,
-      historySummaryRequested: params.historySummaryRequested,
-      splitTurnSummaryRequested: params.splitTurnSummaryRequested,
-      qualityGuardEnabled: params.qualityGuardEnabled,
-    }),
-    lightTrimApplied: params.lightTrimRequested === true,
-    lightTrimmedMessages: Math.max(0, params.lightTrimmedMessages ?? 0),
-    lightTrimmedToolResults: Math.max(0, params.lightTrimmedToolResults ?? 0),
-    historyPruned: params.historyPruned === true,
-    splitTurn: params.splitTurnSummaryRequested === true,
-    recentTurnsPreserve: resolveRecentTurnsPreserve(params.recentTurnsPreserve),
-    qualityGuardEnabled: params.qualityGuardEnabled === true,
-    qualityRetriesPlanned: Math.max(0, params.qualityRetriesPlanned ?? 0),
-    qualityRetriesUsed,
-    droppedChunks: Math.max(0, params.droppedChunks ?? 0),
-    droppedMessages: Math.max(0, params.droppedMessages ?? 0),
-    droppedSummaryUsed: params.droppedSummaryUsed === true,
-  };
 }
 
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {

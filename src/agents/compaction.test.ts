@@ -3,6 +3,7 @@ import type { AssistantMessage, ToolResultMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   applyCompactionLightTrim,
+  buildCompactionStageTelemetry,
   estimateMessagesTokens,
   extractCompactionStageTelemetry,
   planCompactionStage,
@@ -141,25 +142,52 @@ describe("planCompactionStage", () => {
     });
   });
 
+  it("builds shared stage telemetry with clamped counters", () => {
+    expect(
+      buildCompactionStageTelemetry({
+        lightTrimRequested: true,
+        lightTrimmedMessages: -1,
+        lightTrimmedToolResults: 2,
+        historyPruned: true,
+        historySummaryRequested: true,
+        qualityGuardEnabled: true,
+        qualityRetriesPlanned: -2,
+        qualityRetriesUsed: 1,
+        recentTurnsPreserve: 99,
+        droppedChunks: -1,
+        droppedMessages: 3,
+        droppedSummaryUsed: true,
+      }),
+    ).toMatchObject({
+      entryStage: "prune_history",
+      outcomeStage: "quality_retry",
+      lightTrimApplied: true,
+      lightTrimmedMessages: 0,
+      lightTrimmedToolResults: 2,
+      recentTurnsPreserve: 12,
+      qualityGuardEnabled: true,
+      qualityRetriesPlanned: 0,
+      qualityRetriesUsed: 1,
+      droppedChunks: 0,
+      droppedMessages: 3,
+      droppedSummaryUsed: true,
+    });
+  });
+
   it("extracts stage telemetry from compaction result details", () => {
     expect(
       extractCompactionStageTelemetry({
-        stageTelemetry: {
-          entryStage: "prune_history",
-          entryReason: "new_content_exceeds_history_budget",
-          outcomeStage: "quality_retry",
-          outcomeReason: "quality_feedback_requested",
-          plan: [{ stage: "finalize", reason: "summary_ready" }],
+        stageTelemetry: buildCompactionStageTelemetry({
           historyPruned: true,
-          splitTurn: false,
-          recentTurnsPreserve: 3,
+          historySummaryRequested: true,
           qualityGuardEnabled: true,
           qualityRetriesPlanned: 1,
           qualityRetriesUsed: 1,
+          recentTurnsPreserve: 3,
           droppedChunks: 1,
           droppedMessages: 2,
           droppedSummaryUsed: true,
-        },
+        }),
       }),
     ).toMatchObject({
       entryStage: "prune_history",

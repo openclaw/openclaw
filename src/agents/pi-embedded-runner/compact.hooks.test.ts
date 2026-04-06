@@ -284,8 +284,16 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
 
     expect(sessionHook("compact:after")?.context).toMatchObject({
+      compactionEntryStage: "prune_history",
+      compactionEntryReason: "new_content_exceeds_history_budget",
       compactionStage: "quality_retry",
       compactionReason: "quality_feedback_requested",
+      compactionStageTelemetry: {
+        entryStage: "prune_history",
+        outcomeStage: "quality_retry",
+        qualityRetriesUsed: 1,
+        droppedChunks: 1,
+      },
     });
   });
 

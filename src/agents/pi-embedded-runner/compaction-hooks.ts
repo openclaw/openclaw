@@ -5,26 +5,9 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import { extractCompactionStageTelemetry } from "../compaction.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import { log } from "./logger.js";
-
-function extractCompactionStageTelemetry(
-  details: unknown,
-): { outcomeStage?: string; outcomeReason?: string } | undefined {
-  if (!details || typeof details !== "object") {
-    return undefined;
-  }
-  const telemetry = (details as { stageTelemetry?: unknown }).stageTelemetry;
-  if (!telemetry || typeof telemetry !== "object") {
-    return undefined;
-  }
-  const candidate = telemetry as { outcomeStage?: unknown; outcomeReason?: unknown };
-  return {
-    outcomeStage: typeof candidate.outcomeStage === "string" ? candidate.outcomeStage : undefined,
-    outcomeReason:
-      typeof candidate.outcomeReason === "string" ? candidate.outcomeReason : undefined,
-  };
-}
 
 function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
   const mode = config?.agents?.defaults?.compaction?.postIndexSync;
@@ -292,8 +275,11 @@ export async function runAfterCompactionHooks(params: {
       tokensBefore: params.tokensBefore,
       tokensAfter: params.tokensAfter,
       firstKeptEntryId: params.firstKeptEntryId,
+      compactionEntryStage: stageTelemetry?.entryStage,
+      compactionEntryReason: stageTelemetry?.entryReason,
       compactionStage: stageTelemetry?.outcomeStage,
       compactionReason: stageTelemetry?.outcomeReason,
+      compactionStageTelemetry: stageTelemetry,
     });
     await triggerInternalHook(hookEvent);
   } catch (err) {

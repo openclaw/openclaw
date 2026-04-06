@@ -106,6 +106,23 @@ export type CompactionStageTelemetry = {
   droppedSummaryUsed: boolean;
 };
 
+export type CompactionStageTelemetryParams = {
+  boundaryOnly?: boolean;
+  lightTrimRequested?: boolean;
+  lightTrimmedMessages?: number;
+  lightTrimmedToolResults?: number;
+  historyPruned?: boolean;
+  historySummaryRequested?: boolean;
+  splitTurnSummaryRequested?: boolean;
+  qualityGuardEnabled?: boolean;
+  qualityRetriesPlanned?: number;
+  qualityRetriesUsed?: number;
+  recentTurnsPreserve: number;
+  droppedChunks?: number;
+  droppedMessages?: number;
+  droppedSummaryUsed?: boolean;
+};
+
 type GenerateSummaryCompat = {
   (
     currentMessages: AgentMessage[],
@@ -688,6 +705,67 @@ export function planCompactionStages(
   }
   plan.push({ stage: "finalize", reason: "summary_ready" });
   return plan;
+}
+
+function clampCompactionStageTelemetryCount(value: unknown, fallback = 0): number {
+  const normalized = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.max(0, Math.floor(normalized));
+}
+
+function resolveCompactionStageTelemetryRecentTurnsPreserve(value: unknown): number {
+  const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 3;
+  return Math.min(12, Math.max(0, parsed));
+}
+
+export function buildCompactionStageTelemetry(
+  params: CompactionStageTelemetryParams,
+): CompactionStageTelemetry {
+  const qualityRetriesUsed = clampCompactionStageTelemetryCount(params.qualityRetriesUsed);
+  const entryDecision = planCompactionStage({
+    boundaryOnly: params.boundaryOnly,
+    lightTrimRequested: params.lightTrimRequested,
+    historyPruned: params.historyPruned,
+    historySummaryRequested: params.historySummaryRequested,
+    splitTurnSummaryRequested: params.splitTurnSummaryRequested,
+    qualityRetryRequested: false,
+  });
+  const outcomeDecision = planCompactionStage({
+    boundaryOnly: params.boundaryOnly,
+    lightTrimRequested: params.lightTrimRequested,
+    historyPruned: params.historyPruned,
+    historySummaryRequested: params.historySummaryRequested,
+    splitTurnSummaryRequested: params.splitTurnSummaryRequested,
+    qualityRetryRequested: qualityRetriesUsed > 0,
+  });
+
+  return {
+    entryStage: entryDecision.stage,
+    entryReason: entryDecision.reason,
+    outcomeStage: outcomeDecision.stage,
+    outcomeReason: outcomeDecision.reason,
+    plan: planCompactionStages({
+      boundaryOnly: params.boundaryOnly,
+      lightTrimRequested: params.lightTrimRequested,
+      historyPruned: params.historyPruned,
+      historySummaryRequested: params.historySummaryRequested,
+      splitTurnSummaryRequested: params.splitTurnSummaryRequested,
+      qualityGuardEnabled: params.qualityGuardEnabled,
+    }),
+    lightTrimApplied: params.lightTrimRequested === true,
+    lightTrimmedMessages: clampCompactionStageTelemetryCount(params.lightTrimmedMessages),
+    lightTrimmedToolResults: clampCompactionStageTelemetryCount(params.lightTrimmedToolResults),
+    historyPruned: params.historyPruned === true,
+    splitTurn: params.splitTurnSummaryRequested === true,
+    recentTurnsPreserve: resolveCompactionStageTelemetryRecentTurnsPreserve(
+      params.recentTurnsPreserve,
+    ),
+    qualityGuardEnabled: params.qualityGuardEnabled === true,
+    qualityRetriesPlanned: clampCompactionStageTelemetryCount(params.qualityRetriesPlanned),
+    qualityRetriesUsed,
+    droppedChunks: clampCompactionStageTelemetryCount(params.droppedChunks),
+    droppedMessages: clampCompactionStageTelemetryCount(params.droppedMessages),
+    droppedSummaryUsed: params.droppedSummaryUsed === true,
+  };
 }
 
 export function extractCompactionStageTelemetry(
