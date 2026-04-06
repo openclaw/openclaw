@@ -4,6 +4,6 @@ export default defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
   plugin: {
     specifier: "./channel-plugin-api.js",
-    exportName: "mattermostPlugin",
+    exportName: "mattermostSetupPlugin",
   },
 });
