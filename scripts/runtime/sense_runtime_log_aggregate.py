@@ -42,6 +42,16 @@ BUCKET_SHORT_LABELS = {
     'none': 'No issue',
     'unknown': 'Unknown',
 }
+BUCKET_DIGEST_LABELS = {
+    'auth': 'Auth failures',
+    'runtime_submit': 'Runtime submit issues',
+    'runtime_poll': 'Runtime poll issues',
+    'control_plane': 'Control-plane issues',
+    'executor_gate': 'Executor gate stops',
+    'config_mapping': 'Config mapping issues',
+    'none': 'No issues',
+    'unknown': 'Unknown issues',
+}
 PATH_LABELS = {
     'NO_HANDOFF>FULL_EVAL>FAILED': 'full-eval path',
     'NO_HANDOFF>FULL_EVAL>EXECUTOR': 'full-eval executor path',
@@ -125,6 +135,12 @@ def derive_notification_title_short(route_signature: str, bucket: str) -> str:
     bucket_label = BUCKET_SHORT_LABELS.get(bucket, bucket or 'unknown')
     path_label = PATH_SHORT_LABELS.get(path_signature, PATH_LABELS.get(path_signature, path_signature))
     return f'{bucket_label} / {path_label}'
+
+
+def derive_digest_title(bucket: str, band: str) -> str:
+    bucket_label = BUCKET_DIGEST_LABELS.get(bucket, bucket or 'unknown')
+    normalized_band = band if band in PRIORITY_LEVEL else 'none'
+    return f'{bucket_label} ({normalized_band})'
 
 
 def derive_path_group(route_signature: str) -> str:
@@ -457,6 +473,10 @@ def main() -> int:
         notification_digest_summary.append(
             {
                 'notification_group_key': aggregate['notification_group_key'],
+                'digest_title': derive_digest_title(
+                    str(aggregate['notification_group_key']).split('.', 1)[0],
+                    str(aggregate['band'] or 'none'),
+                ),
                 'notification_title': aggregate['notification_title'],
                 'notification_title_short': aggregate['notification_title_short'],
                 'count': aggregate['count'],
