@@ -55,13 +55,6 @@ function writeTempOxlintConfig(repoRoot, configPath) {
 
   delete config.$schema;
 
-  if (Array.isArray(config.ignorePatterns)) {
-    config.ignorePatterns = config.ignorePatterns.filter((pattern) => pattern !== "extensions/");
-    if (config.ignorePatterns.length === 0) {
-      delete config.ignorePatterns;
-    }
-  }
-
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
