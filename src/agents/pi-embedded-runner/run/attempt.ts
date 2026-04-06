@@ -21,12 +21,6 @@ import {
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
-import {
-  isOllamaCompatProvider,
-  resolveOllamaCompatNumCtxEnabled,
-  shouldInjectOllamaCompatNumCtx,
-  wrapOllamaCompatNumCtx,
-} from "../../../plugin-sdk/ollama-runtime.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { resolveProviderSystemPromptContribution } from "../../../plugins/provider-runtime.js";

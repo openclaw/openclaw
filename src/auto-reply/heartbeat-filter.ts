@@ -47,6 +47,7 @@ function stripMarkup(text: string): string {
     text
       .replace(/<[^>]*>/g, " ")
       .replace(/&nbsp;/gi, " ")
+      .trim()
       // Strip leading/trailing markdown wrappers
       .replace(/^[*`~_]+/, "")
       .replace(/[*`~_]+$/, "")
