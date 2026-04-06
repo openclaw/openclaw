@@ -55,6 +55,8 @@ export type AgentDefaultsConfig = {
   imageGenerationModel?: AgentModelConfig;
   /** Optional video-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   videoGenerationModel?: AgentModelConfig;
+  /** Optional music-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
+  musicGenerationModel?: AgentModelConfig;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   pdfModel?: AgentModelConfig;
   /** Maximum PDF file size in megabytes (default: 10). */

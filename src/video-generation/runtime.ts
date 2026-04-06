@@ -2,12 +2,12 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import {
+  buildNoCapabilityModelConfiguredMessage,
+  resolveCapabilityModelCandidates,
+  throwCapabilityGenerationFailure,
+} from "../media-generation/runtime-shared.js";
 import {
   normalizeVideoGenerationDuration,
   resolveVideoGenerationSupportedDurations,
@@ -49,76 +49,12 @@ export type GenerateVideoRuntimeResult = {
   ignoredOverrides: VideoGenerationIgnoredOverride[];
 };
 
-function resolveVideoGenerationCandidates(params: {
-  cfg: OpenClawConfig;
-  modelOverride?: string;
-}): Array<{ provider: string; model: string }> {
-  const candidates: Array<{ provider: string; model: string }> = [];
-  const seen = new Set<string>();
-  const add = (raw: string | undefined) => {
-    const parsed = parseVideoGenerationModelRef(raw);
-    if (!parsed) {
-      return;
-    }
-    const key = `${parsed.provider}/${parsed.model}`;
-    if (seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    candidates.push(parsed);
-  };
-
-  add(params.modelOverride);
-  add(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.videoGenerationModel));
-  for (const fallback of resolveAgentModelFallbackValues(
-    params.cfg.agents?.defaults?.videoGenerationModel,
-  )) {
-    add(fallback);
-  }
-  return candidates;
-}
-
-function throwVideoGenerationFailure(params: {
-  attempts: FallbackAttempt[];
-  lastError: unknown;
-}): never {
-  if (params.attempts.length <= 1 && params.lastError) {
-    throw params.lastError;
-  }
-  const summary =
-    params.attempts.length > 0
-      ? params.attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
-      : "unknown";
-  throw new Error(`All video generation models failed (${params.attempts.length}): ${summary}`, {
-    cause: params.lastError instanceof Error ? params.lastError : undefined,
-  });
-}
-
 function buildNoVideoGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
-  const providers = listVideoGenerationProviders(cfg);
-  const sampleModel = providers.find(
-    (provider) => provider.id.trim().length > 0 && provider.defaultModel?.trim(),
-  );
-  const sampleRef = sampleModel
-    ? `${sampleModel.id}/${sampleModel.defaultModel}`
-    : "<provider>/<model>";
-  const authHints = providers
-    .flatMap((provider) => {
-      const envVars = getProviderEnvVars(provider.id);
-      if (envVars.length === 0) {
-        return [];
-      }
-      return [`${provider.id}: ${envVars.join(" / ")}`];
-    })
-    .slice(0, 3);
-  return [
-    `No video-generation model configured. Set agents.defaults.videoGenerationModel.primary to a provider/model like "${sampleRef}".`,
-    authHints.length > 0
-      ? `If you want a specific provider, also configure that provider's auth/API key first (${authHints.join("; ")}).`
-      : "If you want a specific provider, also configure that provider's auth/API key first.",
-  ].join(" ");
+  return buildNoCapabilityModelConfiguredMessage({
+    capabilityLabel: "video-generation",
+    modelConfigKey: "videoGenerationModel",
+    providers: listVideoGenerationProviders(cfg),
+  });
 }
 
 export function listRuntimeVideoGenerationProviders(params?: { config?: OpenClawConfig }) {
@@ -179,9 +115,11 @@ function resolveProviderVideoGenerationOverrides(params: {
 export async function generateVideo(
   params: GenerateVideoParams,
 ): Promise<GenerateVideoRuntimeResult> {
-  const candidates = resolveVideoGenerationCandidates({
+  const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
+    modelConfig: params.cfg.agents?.defaults?.videoGenerationModel,
     modelOverride: params.modelOverride,
+    parseModelRef: parseVideoGenerationModelRef,
   });
   if (candidates.length === 0) {
     throw new Error(buildNoVideoGenerationModelConfiguredMessage(params.cfg));
@@ -277,5 +215,9 @@ export async function generateVideo(
     }
   }
 
-  throwVideoGenerationFailure({ attempts, lastError });
+  throwCapabilityGenerationFailure({
+    capabilityLabel: "video generation",
+    attempts,
+    lastError,
+  });
 }

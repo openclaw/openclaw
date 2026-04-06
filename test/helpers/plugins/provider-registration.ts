@@ -1,6 +1,7 @@
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  MusicGenerationProviderPlugin,
   ProviderPlugin,
   SpeechProviderPlugin,
   VideoGenerationProviderPlugin,
@@ -12,6 +13,7 @@ type RegisteredProviderCollections = {
   speechProviders: SpeechProviderPlugin[];
   mediaProviders: MediaUnderstandingProviderPlugin[];
   imageProviders: ImageGenerationProviderPlugin[];
+  musicProviders: MusicGenerationProviderPlugin[];
   videoProviders: VideoGenerationProviderPlugin[];
 };
 
@@ -28,6 +30,7 @@ export async function registerProviderPlugin(params: {
   const speechProviders: SpeechProviderPlugin[] = [];
   const mediaProviders: MediaUnderstandingProviderPlugin[] = [];
   const imageProviders: ImageGenerationProviderPlugin[] = [];
+  const musicProviders: MusicGenerationProviderPlugin[] = [];
   const videoProviders: VideoGenerationProviderPlugin[] = [];
 
   await params.plugin.register(
@@ -49,13 +52,23 @@ export async function registerProviderPlugin(params: {
       registerImageGenerationProvider: (provider) => {
         imageProviders.push(provider);
       },
+      registerMusicGenerationProvider: (provider) => {
+        musicProviders.push(provider);
+      },
       registerVideoGenerationProvider: (provider) => {
         videoProviders.push(provider);
       },
     }),
   );
 
-  return { providers, speechProviders, mediaProviders, imageProviders, videoProviders };
+  return {
+    providers,
+    speechProviders,
+    mediaProviders,
+    imageProviders,
+    musicProviders,
+    videoProviders,
+  };
 }
 
 export function requireRegisteredProvider<T extends { id: string }>(

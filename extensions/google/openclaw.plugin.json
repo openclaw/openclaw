@@ -46,6 +46,7 @@
   "contracts": {
     "mediaUnderstandingProviders": ["google"],
     "imageGenerationProviders": ["google"],
+    "musicGenerationProviders": ["google"],
     "videoGenerationProviders": ["google"],
     "webSearchProviders": ["gemini"]
   },

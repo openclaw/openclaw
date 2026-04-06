@@ -6,6 +6,7 @@ import type {
   AnyAgentTool,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  MusicGenerationProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
@@ -34,6 +35,7 @@ export type CapturedPluginRegistration = {
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
   videoGenerationProviders: VideoGenerationProviderPlugin[];
+  musicGenerationProviders: MusicGenerationProviderPlugin[];
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
   memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
@@ -52,6 +54,7 @@ export function createCapturedPluginRegistration(params?: {
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
   const videoGenerationProviders: VideoGenerationProviderPlugin[] = [];
+  const musicGenerationProviders: MusicGenerationProviderPlugin[] = [];
   const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
   const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
@@ -72,6 +75,7 @@ export function createCapturedPluginRegistration(params?: {
     mediaUnderstandingProviders,
     imageGenerationProviders,
     videoGenerationProviders,
+    musicGenerationProviders,
     webFetchProviders,
     webSearchProviders,
     memoryEmbeddingProviders,
@@ -129,6 +133,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerVideoGenerationProvider(provider: VideoGenerationProviderPlugin) {
           videoGenerationProviders.push(provider);
+        },
+        registerMusicGenerationProvider(provider: MusicGenerationProviderPlugin) {
+          musicGenerationProviders.push(provider);
         },
         registerWebFetchProvider(provider: WebFetchProviderPlugin) {
           webFetchProviders.push(provider);

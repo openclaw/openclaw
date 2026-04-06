@@ -596,6 +596,7 @@ function createPluginRecord(params: {
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
     videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
     memoryEmbeddingProviderIds: [],
