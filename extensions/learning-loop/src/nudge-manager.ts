@@ -178,11 +178,11 @@ export class NudgeManager {
     messages: unknown[],
   ): Promise<void> {
     if (action === "memory_review" || action === "both") {
-      await this.runMemoryReview(snippet);
+      await this.runReviewStep("memory", () => this.runMemoryReview(snippet));
     }
 
     if (this.evolutionService.isEnabled() && (action === "skill_review" || action === "both")) {
-      await this.runSkillReview(snippet, messages);
+      await this.runReviewStep("skill", () => this.runSkillReview(snippet, messages));
     }
   }
 
@@ -274,6 +274,14 @@ export class NudgeManager {
       return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
+    }
+  }
+
+  private async runReviewStep(step: "memory" | "skill", run: () => Promise<void>): Promise<void> {
+    try {
+      await run();
+    } catch (err) {
+      this.logger.warn(`learning-loop: ${step} review failed: ${String(err)}`);
     }
   }
 

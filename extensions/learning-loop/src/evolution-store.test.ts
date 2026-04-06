@@ -1,7 +1,8 @@
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import os from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEvolutionEntry } from "./evolution-schema.js";
 import { buildAtomicTempPath, EvolutionStore } from "./evolution-store.js";
 
@@ -17,6 +18,7 @@ function createStore() {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -157,6 +159,54 @@ describe("EvolutionStore", () => {
     await expect(store.solidify(skillName)).resolves.toBe(1);
     expect(store.formatDescriptionExperiences(skillName)).toContain("Keep final replies terse.");
     expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toBe("# reply-style\n");
+  });
+
+  it("seeds missing workspace SKILL.md from project .agents skills before solidifying", async () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "learning-loop-workspace-"));
+    tempDirs.push(workspaceDir);
+    const store = new EvolutionStore(join(workspaceDir, "skills"));
+    const skillName = "search-skill";
+    const projectSkillDir = join(workspaceDir, ".agents", "skills", skillName);
+    mkdirSync(projectSkillDir, { recursive: true });
+    writeFileSync(
+      join(projectSkillDir, "SKILL.md"),
+      "# search-skill\n\n## Instructions\n\nProject agents version.\n",
+      "utf-8",
+    );
+
+    const bodyEntry = createEvolutionEntry("execution_failure", "body", {
+      section: "Instructions",
+      action: "append",
+      content: "Add the learned workspace rule.",
+      target: "body",
+    });
+
+    await store.appendEntry(skillName, bodyEntry);
+    await expect(store.solidify(skillName)).resolves.toBe(1);
+
+    const skillMd = readFileSync(join(workspaceDir, "skills", skillName, "SKILL.md"), "utf-8");
+    expect(skillMd).toContain("Project agents version.");
+    expect(skillMd).toContain("Add the learned workspace rule.");
+  });
+
+  it("loads fallback SKILL.md content from personal .agents skills", () => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "learning-loop-workspace-"));
+    tempDirs.push(workspaceDir);
+    const fakeHome = mkdtempSync(join(tmpdir(), "learning-loop-home-"));
+    tempDirs.push(fakeHome);
+    vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+
+    const skillName = "reply-style";
+    const personalSkillDir = join(fakeHome, ".agents", "skills", skillName);
+    mkdirSync(personalSkillDir, { recursive: true });
+    writeFileSync(
+      join(personalSkillDir, "SKILL.md"),
+      "# reply-style\n\nPersonal agents version.\n",
+    );
+
+    const store = new EvolutionStore(join(workspaceDir, "skills"));
+
+    expect(store.loadSkillMarkdown(skillName)).toContain("Personal agents version.");
   });
 
   it("filters injection-like description entries from prompt context", async () => {

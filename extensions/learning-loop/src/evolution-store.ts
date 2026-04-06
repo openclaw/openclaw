@@ -8,6 +8,7 @@
 
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import { join, resolve, sep } from "node:path";
 import {
   createEmptyEvolutionFile,
@@ -139,7 +140,7 @@ export class EvolutionStore {
     try {
       return fs.readFileSync(this.skillMdPath(skillName), "utf-8");
     } catch {
-      return undefined;
+      return this.loadFallbackSkillMarkdown(skillName);
     }
   }
 
@@ -167,8 +168,7 @@ export class EvolutionStore {
         try {
           skillContent = fs.readFileSync(skillMdPath, "utf-8");
         } catch {
-          // Create minimal SKILL.md if it doesn't exist
-          skillContent = `# ${skillName}\n`;
+          skillContent = this.loadFallbackSkillMarkdown(skillName) ?? `# ${skillName}\n`;
         }
 
         // Inject each pending body entry into the appropriate section.
@@ -280,6 +280,25 @@ export class EvolutionStore {
 
   private createTempPath(filePath: string): string {
     return buildAtomicTempPath(filePath);
+  }
+
+  private loadFallbackSkillMarkdown(skillName: string): string | undefined {
+    for (const candidate of this.resolveFallbackSkillMdPaths(skillName)) {
+      try {
+        return fs.readFileSync(candidate, "utf-8");
+      } catch {
+        // Try the next fallback source.
+      }
+    }
+    return undefined;
+  }
+
+  private resolveFallbackSkillMdPaths(skillName: string): string[] {
+    const workspaceDir = resolve(this.skillsBaseDir, "..");
+    return [
+      join(workspaceDir, ".agents", "skills", skillName, "SKILL.md"),
+      join(os.homedir(), ".agents", "skills", skillName, "SKILL.md"),
+    ];
   }
 
   private async withSkillWriteLock<T>(skillName: string, task: () => T | Promise<T>): Promise<T> {

@@ -167,6 +167,42 @@ describe("NudgeManager", () => {
     expect(callLlm).toHaveBeenCalledTimes(2);
   });
 
+  it("still runs skill review when memory review fails in both mode", async () => {
+    const addObservation = vi.fn(async () => "stored");
+    const evolveSkill = vi.fn<(skillName: string, messages: unknown[]) => Promise<null>>(
+      async () => null,
+    );
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const callLlm = vi.fn(async (systemPrompt: string) => {
+      if (systemPrompt.includes("long-term memory")) {
+        throw new Error("memory review failed");
+      }
+      return '[{"skill_name":"graphiti-debug","action":"update","content":"Document the localhost Graphiti workflow.","section":"Troubleshooting","reason":"The setup keeps recurring."}]';
+    });
+    const manager = new NudgeManager(
+      { addObservation } as unknown as GraphitiClient,
+      { evolveSkill, isEnabled: () => true } as unknown as EvolutionService,
+      callLlm,
+      {
+        enabled: true,
+        memoryInterval: 1,
+        skillInterval: 1,
+      },
+      logger,
+    );
+
+    const messages = [{ role: "user", content: "Graphiti is running on localhost." }];
+
+    expect(manager.checkNudge(messages)).toBe("both");
+    await waitForReview(manager);
+
+    expect(addObservation).not.toHaveBeenCalled();
+    expect(evolveSkill).toHaveBeenCalledWith("graphiti-debug", messages);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "learning-loop: memory review failed: Error: memory review failed",
+    );
+  });
+
   it("preserves due nudges while a background review is still running", async () => {
     const addObservation = vi.fn(async () => "stored");
     const evolveSkill = vi.fn<(skillName: string, messages: unknown[]) => Promise<null>>(
