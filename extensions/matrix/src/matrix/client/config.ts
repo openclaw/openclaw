@@ -964,6 +964,18 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     return undefined;
   }
 
+  const repairedStorageMeta = repairCurrentTokenStorageMetaDeviceId({
+    homeserver: params.auth.homeserver,
+    userId: params.auth.userId,
+    accessToken: params.auth.accessToken,
+    accountId: params.auth.accountId,
+    deviceId,
+    env: params.env,
+  });
+  if (!repairedStorageMeta) {
+    throw new Error("Matrix deviceId backfill failed to repair current-token storage metadata");
+  }
+
   const credentialsWriter = await import("../credentials-write.runtime.js");
   await credentialsWriter.saveMatrixCredentials(
     {
@@ -975,18 +987,5 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     params.env ?? process.env,
     params.auth.accountId,
   );
-  const repairedStorageMeta = repairCurrentTokenStorageMetaDeviceId({
-    homeserver: params.auth.homeserver,
-    userId: params.auth.userId,
-    accessToken: params.auth.accessToken,
-    accountId: params.auth.accountId,
-    deviceId,
-    env: params.env,
-  });
-  if (!repairedStorageMeta) {
-    throw new Error(
-      "Matrix deviceId backfill saved credentials but failed to repair current-token storage metadata",
-    );
-  }
   return deviceId;
 }
