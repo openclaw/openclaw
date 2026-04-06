@@ -140,7 +140,6 @@ function createSlackReplyReferencePlanner(params: {
 }) {
   // Only force threading for genuine user thread replies. Slack auto-populates
   // thread_ts on top-level messages; respect the configured replyToMode there.
-  // See: openclaw/openclaw#23839
   const effectiveMode = params.isThreadReply ? "all" : params.replyToMode;
   return createReplyReferencePlanner({
     replyToMode: effectiveMode,
