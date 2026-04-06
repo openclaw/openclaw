@@ -1964,7 +1964,11 @@ describe("createOpenAIWebSocketStreamFn", () => {
     ]);
   });
 
-  it("flushes text deltas immediately when item mapping arrives without a phase", async () => {
+  it("buffers text deltas until next non-added event when item mapping arrives without a phase", async () => {
+    // When output_item.added arrives without a phase, requireKnownPhase keeps
+    // text buffered. The buffered text flushes on the next text_delta (which
+    // does not set requireKnownPhase), combining the prior + new text into a
+    // single emission.
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phase-late-map");
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
@@ -2030,20 +2034,14 @@ describe("createOpenAIWebSocketStreamFn", () => {
 
     await done;
 
+    // requireKnownPhase on output_item.added prevents immediate flush when
+    // phase is undefined, so all buffered text flushes as a single delta on the
+    // next text_delta event.
     const deltas = events.filter((event) => event.type === "text_delta");
-    expect(deltas).toHaveLength(2);
-    expect(deltas[0]).toMatchObject({ delta: "Working" });
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]).toMatchObject({ delta: "Working..." });
     expect(deltas[0]?.partial?.phase).toBeUndefined();
     expect(deltas[0]?.partial?.content).toEqual([
-      {
-        type: "text",
-        text: "Working",
-        textSignature: JSON.stringify({ v: 1, id: "item_late" }),
-      },
-    ]);
-    expect(deltas[1]).toMatchObject({ delta: "..." });
-    expect(deltas[1]?.partial?.phase).toBeUndefined();
-    expect(deltas[1]?.partial?.content).toEqual([
       {
         type: "text",
         text: "Working...",
