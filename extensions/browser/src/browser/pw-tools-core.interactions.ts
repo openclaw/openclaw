@@ -72,8 +72,6 @@ function observeDelayedInteractionNavigation(
   if (typeof page.on !== "function" || typeof page.off !== "function") {
     return Promise.resolve(false);
   }
-  const addFrameNavigatedListener = page.on;
-  const removeFrameNavigatedListener = page.off;
 
   return new Promise<boolean>((resolve) => {
     const onFrameNavigated = (_frame: Frame) => {
@@ -89,10 +87,14 @@ function observeDelayedInteractionNavigation(
     }, INTERACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);
-      removeFrameNavigatedListener("framenavigated", onFrameNavigated);
+      // Call off directly on page (not via a cached reference) to preserve
+      // Playwright's EventEmitter `this` binding.
+      page.off!("framenavigated", onFrameNavigated);
     };
 
-    addFrameNavigatedListener("framenavigated", onFrameNavigated);
+    // Call on directly on page (not via a cached reference) to preserve
+    // Playwright's EventEmitter `this` binding.
+    page.on!("framenavigated", onFrameNavigated);
   });
 }
 
@@ -104,16 +106,40 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   ssrfPolicy?: SsrFPolicy;
   targetId?: string;
 }): Promise<T> {
-  const navigationObserved = observeDelayedInteractionNavigation(opts.page, opts.previousUrl);
+  // Phase 1: keep a framenavigated listener alive for the entire duration of the
+  // action so navigations triggered mid-click or mid-evaluate are not missed.
+  // Using a fixed pre-action timer would expire before the action finishes for
+  // slow interactions, silently bypassing the SSRF guard.
+  const navPage = opts.page as unknown as NavigationObservablePage;
+  let navigatedDuringAction = false;
+  const onFrameNavigated = (_frame: Frame) => {
+    if (didPageUrlChange(opts.page, opts.previousUrl)) {
+      navigatedDuringAction = true;
+    }
+  };
+  if (typeof navPage.on === "function") {
+    navPage.on("framenavigated", onFrameNavigated);
+  }
+
   let result: T | undefined;
   let actionError: unknown = null;
   try {
     result = await opts.action();
   } catch (err) {
     actionError = err;
+  } finally {
+    if (typeof navPage.off === "function") {
+      navPage.off("framenavigated", onFrameNavigated);
+    }
   }
 
-  if (await navigationObserved) {
+  // Phase 2: after the action completes, apply a brief grace window so navigations
+  // that are delayed slightly past action resolution are still caught.
+  const navigationObserved =
+    navigatedDuringAction ||
+    (await observeDelayedInteractionNavigation(opts.page, opts.previousUrl));
+
+  if (navigationObserved) {
     await assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
       page: opts.page,
