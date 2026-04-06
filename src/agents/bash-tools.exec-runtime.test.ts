@@ -1,8 +1,15 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../infra/heartbeat-wake.js", () => ({
+  requestHeartbeatNow: requestHeartbeatNowMock,
+}));
+
+vi.mock("../infra/system-events.js", () => ({
+  enqueueSystemEvent: enqueueSystemEventMock,
+}));
 
 let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
@@ -10,11 +17,17 @@ let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecS
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 
-describe("detectCursorKeyMode", () => {
-  beforeAll(async () => {
-    ({ detectCursorKeyMode } = await import("./bash-tools.exec-runtime.js"));
-  });
+beforeAll(async () => {
+  ({
+    buildExecExitOutcome,
+    detectCursorKeyMode,
+    emitExecSystemEvent,
+    formatExecFailureReason,
+    resolveExecTarget,
+  } = await import("./bash-tools.exec-runtime.js"));
+});
 
+describe("detectCursorKeyMode", () => {
   it("returns null when no toggle found", () => {
     expect(detectCursorKeyMode("hello world")).toBe(null);
     expect(detectCursorKeyMode("")).toBe(null);
@@ -43,11 +56,37 @@ describe("detectCursorKeyMode", () => {
 });
 
 describe("resolveExecTarget", () => {
-  beforeAll(async () => {
-    ({ resolveExecTarget } = await import("./bash-tools.exec-runtime.js"));
+  it("keeps implicit auto on sandbox when a sandbox runtime is available", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: null,
+      selectedTarget: "auto",
+      effectiveHost: "sandbox",
+    });
   });
 
-  it("treats auto as a default strategy rather than a host allowlist", () => {
+  it("keeps implicit auto on gateway when no sandbox runtime is available", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: null,
+      selectedTarget: "auto",
+      effectiveHost: "gateway",
+    });
+  });
+
+  it("allows per-call host=node override when configured host is auto", () => {
     expect(
       resolveExecTarget({
         configuredTarget: "auto",
@@ -57,6 +96,173 @@ describe("resolveExecTarget", () => {
       }),
     ).toMatchObject({
       configuredTarget: "auto",
+      requestedTarget: "node",
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
+  });
+
+  it("allows per-call host=gateway override when configured host is auto and no sandbox", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "gateway",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "gateway",
+      selectedTarget: "gateway",
+      effectiveHost: "gateway",
+    });
+  });
+
+  it("rejects per-call host=gateway override from auto when sandbox is available", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "gateway",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toThrow(
+      "exec host not allowed (requested gateway; configured host is auto; set tools.exec.host=gateway or auto to allow this override).",
+    );
+  });
+
+  it("allows per-call host=sandbox override when configured host is auto", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "sandbox",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "sandbox",
+      selectedTarget: "sandbox",
+      effectiveHost: "sandbox",
+    });
+  });
+
+  it("rejects cross-host override when configured target is a concrete host", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "node",
+        requestedTarget: "gateway",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
+    ).toThrow(
+      "exec host not allowed (requested gateway; configured host is node; set tools.exec.host=gateway or auto to allow this override).",
+    );
+  });
+
+  it("allows explicit auto request when configured host is auto", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "auto",
+      selectedTarget: "auto",
+      effectiveHost: "sandbox",
+    });
+  });
+
+  it("requires an exact match for non-auto configured targets", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "gateway",
+        requestedTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toThrow(
+      "exec host not allowed (requested auto; configured host is gateway; set tools.exec.host=auto to allow this override).",
+    );
+  });
+
+  it("allows exact node matches", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "node",
+        requestedTarget: "node",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "node",
+      requestedTarget: "node",
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
+  });
+
+  it("forces elevated requests onto the gateway host when configured target is auto", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "sandbox",
+        elevatedRequested: true,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "sandbox",
+      selectedTarget: "gateway",
+      effectiveHost: "gateway",
+    });
+  });
+
+  it("honours node target for elevated requests when configured target is node", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "node",
+        requestedTarget: "node",
+        elevatedRequested: true,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "node",
+      requestedTarget: "node",
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
+  });
+
+  it("routes to node for elevated when configured=node and no per-call override", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "node",
+        elevatedRequested: true,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "node",
+      requestedTarget: null,
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
+  });
+
+  it("silently discards mismatched requestedTarget under elevated+node", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "node",
+        requestedTarget: "gateway",
+        elevatedRequested: true,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "node",
+      requestedTarget: "gateway",
       selectedTarget: "node",
       effectiveHost: "node",
     });
@@ -64,25 +270,9 @@ describe("resolveExecTarget", () => {
 });
 
 describe("emitExecSystemEvent", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     requestHeartbeatNowMock.mockClear();
     enqueueSystemEventMock.mockClear();
-    vi.doMock("../infra/heartbeat-wake.js", async () => {
-      return await mergeMockedModule(
-        await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-          "../infra/heartbeat-wake.js",
-        ),
-        () => ({
-          requestHeartbeatNow: requestHeartbeatNowMock,
-        }),
-      );
-    });
-    vi.doMock("../infra/system-events.js", () => ({
-      enqueueSystemEvent: enqueueSystemEventMock,
-    }));
-    ({ buildExecExitOutcome, emitExecSystemEvent, formatExecFailureReason } =
-      await import("./bash-tools.exec-runtime.js"));
   });
 
   it("scopes heartbeat wake to the event session key", () => {

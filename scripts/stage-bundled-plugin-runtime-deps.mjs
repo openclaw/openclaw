@@ -62,6 +62,12 @@ function dependencyVersionSatisfied(spec, installedVersion) {
   return semverSatisfies(installedVersion, spec, { includePrerelease: false });
 }
 
+const stagedRuntimeDepPruneRules = new Map([
+  // Type declarations only; runtime resolves through lib/es entrypoints.
+  ["@larksuiteoapi/node-sdk", ["types"]],
+]);
+const runtimeDepsStagingVersion = 2;
+
 function collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs) {
   const packageCache = new Map();
   const closure = new Set();
@@ -94,6 +100,23 @@ function collectInstalledRuntimeClosure(rootNodeModulesDir, dependencySpecs) {
   }
 
   return [...closure];
+}
+
+function pruneStagedInstalledDependencyCargo(nodeModulesDir, depName) {
+  const prunePaths = stagedRuntimeDepPruneRules.get(depName);
+  if (!prunePaths) {
+    return;
+  }
+  const depRoot = dependencyNodeModulesPath(nodeModulesDir, depName);
+  for (const relativePath of prunePaths) {
+    removePathIfExists(path.join(depRoot, relativePath));
+  }
+}
+
+function pruneStagedRuntimeDependencyCargo(nodeModulesDir) {
+  for (const depName of stagedRuntimeDepPruneRules.keys()) {
+    pruneStagedInstalledDependencyCargo(nodeModulesDir, depName);
+  }
 }
 
 function listBundledPluginRuntimeDirs(repoRoot) {
@@ -170,7 +193,15 @@ function resolveRuntimeDepsStampPath(pluginDir) {
 }
 
 function createRuntimeDepsFingerprint(packageJson) {
-  return createHash("sha256").update(JSON.stringify(packageJson)).digest("hex");
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        packageJson,
+        pruneRules: [...stagedRuntimeDepPruneRules.entries()],
+        version: runtimeDepsStagingVersion,
+      }),
+    )
+    .digest("hex");
 }
 
 function readRuntimeDepsStamp(stampPath) {
@@ -217,6 +248,7 @@ function stageInstalledRootRuntimeDeps(params) {
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
       fs.cpSync(sourcePath, targetPath, { recursive: true, force: true, dereference: true });
     }
+    pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir);
 
     replaceDir(nodeModulesDir, stagedNodeModulesDir);
     writeJson(stampPath, {
@@ -276,6 +308,8 @@ function installPluginRuntimeDeps(params) {
         `failed to stage bundled runtime deps for ${pluginId}: npm install produced no node_modules directory`,
       );
     }
+
+    pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir);
 
     replaceDir(nodeModulesDir, stagedNodeModulesDir);
     writeJson(stampPath, {

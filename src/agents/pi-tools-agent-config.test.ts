@@ -75,7 +75,7 @@ describe("Agent-specific tool filtering", () => {
         workspaceDir,
         agentDir: "/tmp/agent",
         modelProvider: "openai",
-        modelId: "gpt-5.2",
+        modelId: "gpt-5.4",
       });
 
       const applyPatchTool = tools.find((t) => t.name === "apply_patch");
@@ -204,7 +204,7 @@ describe("Agent-specific tool filtering", () => {
       workspaceDir: "/tmp/test",
       agentDir: "/tmp/agent",
       modelProvider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
     });
 
     const toolNames = tools.map((t) => t.name);
@@ -229,7 +229,7 @@ describe("Agent-specific tool filtering", () => {
       workspaceDir: "/tmp/test",
       agentDir: "/tmp/agent",
       modelProvider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
     });
 
     const toolNames = tools.map((t) => t.name);
@@ -727,7 +727,7 @@ describe("Agent-specific tool filtering", () => {
         command: "echo done",
         host: "sandbox",
       }),
-    ).rejects.toThrow("requires a sandbox runtime");
+    ).rejects.toThrow(/requires a sandbox runtime/);
   });
 
   it("should apply agent-specific exec host defaults over global defaults", async () => {
@@ -777,7 +777,7 @@ describe("Agent-specific tool filtering", () => {
         host: "sandbox",
         yieldMs: 1000,
       }),
-    ).rejects.toThrow("requires a sandbox runtime");
+    ).rejects.toThrow(/requires a sandbox runtime/);
   });
 
   it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {

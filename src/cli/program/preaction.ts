@@ -27,8 +27,9 @@ function setProcessTitleForCommand(actionCommand: Command) {
   process.title = `${cliName}-${name}`;
 }
 
-// Commands that need channel plugins loaded
+// Commands that need plugins loaded before execution.
 const PLUGIN_REQUIRED_COMMANDS = new Set([
+  "agent",
   "message",
   "channels",
   "directory",
@@ -91,7 +92,7 @@ function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: 
         commandPath,
         argv: process.argv,
       }),
-    ) === "recover-matrix-only"
+    ) === "allow-bundled-recovery"
   );
 }
 

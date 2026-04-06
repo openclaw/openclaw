@@ -1,5 +1,7 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/testing";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -9,28 +11,37 @@ let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 const probeDiscordMock = vi.hoisted(() => vi.fn());
 const monitorDiscordProviderMock = vi.hoisted(() => vi.fn());
 const auditDiscordChannelPermissionsMock = vi.hoisted(() => vi.fn());
+const collectDiscordAuditChannelIdsMock = vi.hoisted(() =>
+  vi.fn(() => ({ channelIds: [], unresolvedChannels: 0 })),
+);
+const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("./probe.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./probe.js")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
   return {
     ...actual,
+    sleepWithAbort: sleepWithAbortMock,
+  };
+});
+
+vi.mock("./probe.js", () => {
+  return {
     probeDiscord: probeDiscordMock,
   };
 });
 
-vi.mock("./monitor/provider.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./monitor/provider.runtime.js")>();
+vi.mock("./monitor/provider.runtime.js", () => {
   return {
-    ...actual,
     monitorDiscordProvider: monitorDiscordProviderMock,
   };
 });
 
-vi.mock("./audit.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./audit.js")>();
+vi.mock("./audit.js", () => {
   return {
-    ...actual,
     auditDiscordChannelPermissions: auditDiscordChannelPermissionsMock,
+    collectDiscordAuditChannelIds: collectDiscordAuditChannelIdsMock,
   };
 });
 
@@ -45,14 +56,14 @@ function createCfg(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function resolveAccount(cfg: OpenClawConfig): ResolvedDiscordAccount {
-  return discordPlugin.config.resolveAccount(cfg, "default") as ResolvedDiscordAccount;
+function resolveAccount(cfg: OpenClawConfig, accountId = "default"): ResolvedDiscordAccount {
+  return discordPlugin.config.resolveAccount(cfg, accountId) as ResolvedDiscordAccount;
 }
 
-function startDiscordAccount(cfg: OpenClawConfig) {
+function startDiscordAccount(cfg: OpenClawConfig, accountId = "default") {
   return discordPlugin.gateway!.startAccount!(
     createStartAccountContext({
-      account: resolveAccount(cfg),
+      account: resolveAccount(cfg, accountId),
       cfg,
     }),
   );
@@ -73,6 +84,13 @@ afterEach(() => {
   probeDiscordMock.mockReset();
   monitorDiscordProviderMock.mockReset();
   auditDiscordChannelPermissionsMock.mockReset();
+  collectDiscordAuditChannelIdsMock.mockReset();
+  collectDiscordAuditChannelIdsMock.mockReturnValue({
+    channelIds: [],
+    unresolvedChannels: 0,
+  });
+  sleepWithAbortMock.mockReset();
+  sleepWithAbortMock.mockResolvedValue(undefined);
 });
 
 beforeEach(async () => {
@@ -86,11 +104,43 @@ beforeAll(async () => {
 });
 
 describe("discordPlugin outbound", () => {
-  it("forwards mediaLocalRoots to sendMessageDiscord", async () => {
+  it("avoids local require calls for bundled-only sibling modules", async () => {
+    const source = await readFile(
+      resolve(process.cwd(), "extensions/discord/src/channel.ts"),
+      "utf8",
+    );
+    expect(source).not.toContain('require("./ui.js")');
+    expect(source).not.toContain('require("./channel-actions.js")');
+  });
+
+  it("honors per-account replyToMode overrides", () => {
+    const resolveReplyToMode = discordPlugin.threading?.resolveReplyToMode;
+    if (!resolveReplyToMode) {
+      throw new Error("Expected discordPlugin.threading.resolveReplyToMode to be defined");
+    }
+
+    const cfg = {
+      channels: {
+        discord: {
+          replyToMode: "all",
+          token: "discord-token",
+          accounts: {
+            work: {
+              token: "discord-token-work",
+              replyToMode: "first",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveReplyToMode({ cfg, accountId: "work" })).toBe("first");
+    expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("all");
+  });
+
+  it("forwards full media send context to sendMessageDiscord", async () => {
     const sendMessageDiscord = vi.fn(async () => ({ messageId: "m1" }));
-    installDiscordRuntime({
-      sendMessageDiscord,
-    });
+    const mediaReadFile = vi.fn(async () => Buffer.from("media"));
 
     const result = await discordPlugin.outbound!.sendMedia!({
       cfg: {} as OpenClawConfig,
@@ -98,18 +148,100 @@ describe("discordPlugin outbound", () => {
       text: "hi",
       mediaUrl: "/tmp/image.png",
       mediaLocalRoots: ["/tmp/agent-root"],
+      mediaReadFile,
       accountId: "work",
+      threadId: "thread-123",
+      replyToId: "reply-123",
+      deps: {
+        discord: sendMessageDiscord,
+      },
     });
 
     expect(sendMessageDiscord).toHaveBeenCalledWith(
-      "channel:123",
+      "channel:thread-123",
       "hi",
       expect.objectContaining({
         mediaUrl: "/tmp/image.png",
         mediaLocalRoots: ["/tmp/agent-root"],
+        mediaReadFile,
+        replyTo: "reply-123",
       }),
     );
     expect(result).toMatchObject({ channel: "discord", messageId: "m1" });
+  });
+
+  it("splits text and video into separate sends for attached outbound delivery", async () => {
+    const sendMessageDiscord = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "text-1" })
+      .mockResolvedValueOnce({ messageId: "video-1" });
+
+    const result = await discordPlugin.outbound!.sendMedia!({
+      cfg: {} as OpenClawConfig,
+      to: "channel:123",
+      text: "done - tiny cyber-lobster clip incoming",
+      mediaUrl: "/tmp/molty.mp4",
+      accountId: "work",
+      replyToId: "reply-123",
+      threadId: "thread-123",
+      deps: {
+        discord: sendMessageDiscord,
+      },
+    });
+
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(2);
+    expect(sendMessageDiscord).toHaveBeenNthCalledWith(
+      1,
+      "channel:thread-123",
+      "done - tiny cyber-lobster clip incoming",
+      expect.objectContaining({
+        replyTo: "reply-123",
+      }),
+    );
+    expect(sendMessageDiscord).toHaveBeenNthCalledWith(
+      2,
+      "channel:thread-123",
+      "",
+      expect.objectContaining({
+        mediaUrl: "/tmp/molty.mp4",
+      }),
+    );
+    expect(result).toMatchObject({ channel: "discord", messageId: "video-1" });
+  });
+
+  it("threads poll sends through the thread target", async () => {
+    const sendPollDiscord = vi.fn(async () => ({
+      channelId: "channel:thread-123",
+      messageId: "poll-1",
+    }));
+    const sendModule = await import("./send.js");
+    const sendPollSpy = vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(sendPollDiscord);
+    try {
+      const result = await discordPlugin.outbound!.sendPoll!({
+        cfg: {} as OpenClawConfig,
+        to: "channel:123",
+        poll: {
+          question: "Best shell?",
+          options: ["molty", "molter"],
+        },
+        accountId: "work",
+        threadId: "thread-123",
+      });
+
+      expect(sendPollDiscord).toHaveBeenCalledWith(
+        "channel:thread-123",
+        {
+          question: "Best shell?",
+          options: ["molty", "molter"],
+        },
+        expect.objectContaining({
+          accountId: "work",
+        }),
+      );
+      expect(result).toMatchObject({ channel: "discord", messageId: "poll-1" });
+    } finally {
+      sendPollSpy.mockRestore();
+    }
   });
 
   it("uses direct Discord probe helpers for status probes", async () => {
@@ -184,8 +316,45 @@ describe("discordPlugin outbound", () => {
         accountId: "default",
       }),
     );
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
     expect(runtimeProbeDiscord).not.toHaveBeenCalled();
     expect(runtimeMonitorDiscordProvider).not.toHaveBeenCalled();
+  });
+
+  it("stagger starts later accounts in multi-bot setups", async () => {
+    probeDiscordMock.mockResolvedValue({
+      ok: true,
+      bot: { username: "Cherry" },
+      application: {
+        intents: {
+          messageContent: "limited",
+          guildMembers: "disabled",
+          presence: "disabled",
+        },
+      },
+      elapsedMs: 1,
+    });
+    monitorDiscordProviderMock.mockResolvedValue(undefined);
+
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            // "alpha" sorts before "zeta" so alpha is index 0, zeta is index 1
+            alpha: { token: "Bot alpha-token", enabled: true },
+            zeta: { token: "Bot zeta-token", enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    // First account (index 0) — no delay
+    await startDiscordAccount(cfg, "alpha");
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+
+    // Second account (index 1) — 10s delay
+    await startDiscordAccount(cfg, "zeta");
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(10_000, expect.any(Object));
   });
 });
 

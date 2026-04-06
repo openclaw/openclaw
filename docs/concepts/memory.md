@@ -14,12 +14,14 @@ hidden state.
 
 ## How it works
 
-Your agent has two places to store memories:
+Your agent has three memory-related files:
 
 - **`MEMORY.md`** -- long-term memory. Durable facts, preferences, and
   decisions. Loaded at the start of every DM session.
 - **`memory/YYYY-MM-DD.md`** -- daily notes. Running context and observations.
   Today and yesterday's notes are loaded automatically.
+- **`DREAMS.md`** (experimental, optional) -- Dream Diary and dreaming sweep
+  summaries for human review.
 
 These files live in the agent workspace (default `~/.openclaw/workspace`).
 
@@ -83,6 +85,25 @@ important facts in the conversation that are not yet written to a file, they
 will be saved automatically before the summary happens.
 </Tip>
 
+## Dreaming (experimental)
+
+Dreaming is an optional background consolidation pass for memory. It collects
+short-term signals, scores candidates, and promotes only qualified items into
+long-term memory (`MEMORY.md`).
+
+It is designed to keep long-term memory high signal:
+
+- **Opt-in**: disabled by default.
+- **Scheduled**: when enabled, `memory-core` auto-manages one recurring cron job
+  for a full dreaming sweep.
+- **Thresholded**: promotions must pass score, recall frequency, and query
+  diversity gates.
+- **Reviewable**: phase summaries and diary entries are written to `DREAMS.md`
+  for human review.
+
+For phase behavior, scoring signals, and Dream Diary details, see
+[Dreaming (experimental)](/concepts/dreaming).
+
 ## CLI
 
 ```bash
@@ -98,5 +119,7 @@ openclaw memory index --force   # Rebuild the index
 - [Honcho Memory](/concepts/memory-honcho) -- AI-native cross-session memory
 - [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
   tuning
+- [Dreaming (experimental)](/concepts/dreaming) -- background promotion
+  from short-term recall to long-term memory
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
 - [Compaction](/concepts/compaction) -- how compaction interacts with memory

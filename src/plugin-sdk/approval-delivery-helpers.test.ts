@@ -106,7 +106,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
         accountId: "disabled",
         action: "approve",
       }),
-    ).toEqual({ kind: "disabled" });
+    ).toEqual({ kind: "enabled" });
     expect(hasConfiguredDmRoute.hasConfiguredDmRoute({ cfg: {} as never })).toBe(true);
     expect(nativeCapabilities).toEqual({
       enabled: true,
@@ -115,6 +115,30 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       supportsApproverDmSurface: true,
       notifyOriginWhenDmOnly: false,
     });
+  });
+
+  it("reports enabled when approvers exist even if native delivery is off (#59620)", () => {
+    const adapter = createApproverRestrictedNativeApprovalAdapter({
+      channel: "telegram",
+      channelLabel: "Telegram",
+      listAccountIds: () => ["default"],
+      hasApprovers: () => true,
+      isExecAuthorizedSender: () => true,
+      isNativeDeliveryEnabled: () => false,
+      resolveNativeDeliveryMode: () => "both",
+    });
+    const getActionAvailabilityState = adapter.auth.getActionAvailabilityState;
+    if (!getActionAvailabilityState) {
+      throw new Error("approval availability helper unavailable");
+    }
+
+    expect(
+      getActionAvailabilityState({
+        cfg: {} as never,
+        accountId: "default",
+        action: "approve",
+      }),
+    ).toEqual({ kind: "enabled" });
   });
 
   it("suppresses forwarding fallback only for matching native-delivery surfaces", () => {
@@ -141,6 +165,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     expect(
       shouldSuppressForwardingFallback({
         cfg: {} as never,
+        approvalKind: "exec",
         target: { channel: "telegram", to: "target-1" },
         request: {
           request: {
@@ -155,6 +180,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     expect(
       shouldSuppressForwardingFallback({
         cfg: {} as never,
+        approvalKind: "exec",
         target: { channel: "telegram", to: "target-1" },
         request: {
           request: {
@@ -169,6 +195,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     expect(
       shouldSuppressForwardingFallback({
         cfg: {} as never,
+        approvalKind: "exec",
         target: { channel: "slack", to: "target-1" },
         request: {
           request: {
@@ -184,14 +211,41 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       cfg: {} as never,
       accountId: "topic-1",
     });
+
+    expect(
+      shouldSuppressForwardingFallback({
+        cfg: {} as never,
+        approvalKind: "plugin",
+        target: { channel: "telegram", to: "target-1" },
+        request: {
+          request: {
+            command: "pwd",
+            turnSourceChannel: "telegram",
+            turnSourceAccountId: "topic-1",
+          },
+        } as never,
+      }),
+    ).toBe(true);
   });
 });
 
 describe("createApproverRestrictedNativeApprovalCapability", () => {
   it("builds the canonical approval capability and preserves legacy split compatibility", () => {
+    const describeExecApprovalSetup = vi.fn(
+      ({
+        channel,
+        channelLabel,
+        accountId,
+      }: {
+        channel: string;
+        channelLabel: string;
+        accountId?: string;
+      }) => `${channelLabel}:${channel}:${accountId ?? "default"}:setup`,
+    );
     const capability = createApproverRestrictedNativeApprovalCapability({
       channel: "matrix",
       channelLabel: "Matrix",
+      describeExecApprovalSetup,
       listAccountIds: () => ["work"],
       hasApprovers: () => true,
       isExecAuthorizedSender: ({ senderId }) => senderId === "@owner:example.com",
@@ -210,6 +264,13 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       }),
     ).toEqual({ authorized: true });
     expect(capability.delivery?.hasConfiguredDmRoute?.({ cfg: {} as never })).toBe(true);
+    expect(
+      capability.describeExecApprovalSetup?.({
+        channel: "matrix",
+        channelLabel: "Matrix",
+        accountId: "ops",
+      }),
+    ).toBe("Matrix:matrix:ops:setup");
     expect(
       capability.native?.describeDeliveryCapabilities({
         cfg: {} as never,
@@ -234,6 +295,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     const legacy = createApproverRestrictedNativeApprovalAdapter({
       channel: "matrix",
       channelLabel: "Matrix",
+      describeExecApprovalSetup,
       listAccountIds: () => ["work"],
       hasApprovers: () => true,
       isExecAuthorizedSender: ({ senderId }) => senderId === "@owner:example.com",
@@ -286,5 +348,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
         approvalKind: "exec",
       }),
     );
+    expect(split.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
+    expect(legacy.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
   });
 });

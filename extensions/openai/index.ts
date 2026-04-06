@@ -1,5 +1,4 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { buildOpenAICodexCliBackend } from "./cli-backend.js";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import {
   openaiCodexMediaUnderstandingProvider,
@@ -7,19 +6,44 @@ import {
 } from "./media-understanding-provider.js";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
+import {
+  resolveOpenAIPromptOverlayMode,
+  resolveOpenAISystemPromptContribution,
+} from "./prompt-overlay.js";
+import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
+import { buildOpenAIVideoGenerationProvider } from "./video-generation-provider.js";
 
 export default definePluginEntry({
   id: "openai",
   name: "OpenAI Provider",
   description: "Bundled OpenAI provider plugins",
   register(api) {
-    api.registerCliBackend(buildOpenAICodexCliBackend());
-    api.registerProvider(buildOpenAIProvider());
-    api.registerProvider(buildOpenAICodexProviderPlugin());
+    const promptOverlayMode = resolveOpenAIPromptOverlayMode(api.pluginConfig);
+    const buildProviderWithPromptContribution = <
+      T extends
+        | ReturnType<typeof buildOpenAIProvider>
+        | ReturnType<typeof buildOpenAICodexProviderPlugin>,
+    >(
+      provider: T,
+    ): T => ({
+      ...provider,
+      resolveSystemPromptContribution: (ctx) =>
+        resolveOpenAISystemPromptContribution({
+          mode: promptOverlayMode,
+          modelProviderId: provider.id,
+          modelId: ctx.modelId,
+        }),
+    });
+    api.registerProvider(buildProviderWithPromptContribution(buildOpenAIProvider()));
+    api.registerProvider(buildProviderWithPromptContribution(buildOpenAICodexProviderPlugin()));
+    api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider());
+    api.registerRealtimeTranscriptionProvider(buildOpenAIRealtimeTranscriptionProvider());
+    api.registerRealtimeVoiceProvider(buildOpenAIRealtimeVoiceProvider());
     api.registerSpeechProvider(buildOpenAISpeechProvider());
     api.registerMediaUnderstandingProvider(openaiMediaUnderstandingProvider);
     api.registerMediaUnderstandingProvider(openaiCodexMediaUnderstandingProvider);
-    api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider());
+    api.registerVideoGenerationProvider(buildOpenAIVideoGenerationProvider());
   },
 });

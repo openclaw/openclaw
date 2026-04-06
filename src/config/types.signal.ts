@@ -6,6 +6,8 @@ export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
 
 export type SignalGroupConfig = {
   requireMention?: boolean;
+  /** Emit internal message hooks for mention-skipped group messages. */
+  ingest?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };

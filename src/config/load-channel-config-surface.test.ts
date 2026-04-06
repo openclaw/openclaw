@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadChannelConfigSurfaceModule } from "../../scripts/load-channel-config-surface.ts";
+import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 
 const tempDirs: string[] = [];
 
@@ -13,7 +14,6 @@ function makeTempRoot(prefix: string): string {
 }
 
 async function importLoaderWithMissingBun() {
-  vi.resetModules();
   const spawnSync = vi.fn(() => ({
     error: Object.assign(new Error("bun not found"), { code: "ENOENT" }),
     status: null,
@@ -23,11 +23,12 @@ async function importLoaderWithMissingBun() {
   vi.doMock("node:child_process", () => ({ spawnSync }));
 
   try {
-    const imported = await import("../../scripts/load-channel-config-surface.ts");
+    const imported = await importFreshModule<
+      typeof import("../../scripts/load-channel-config-surface.ts")
+    >(import.meta.url, "../../scripts/load-channel-config-surface.ts?scope=missing-bun");
     return { loadChannelConfigSurfaceModule: imported.loadChannelConfigSurfaceModule, spawnSync };
   } finally {
     vi.doUnmock("node:child_process");
-    vi.resetModules();
   }
 }
 
