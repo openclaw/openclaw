@@ -200,6 +200,7 @@ export async function handleSessionHistoryHttpRequest(
     maxChars: effectiveMaxChars,
     limit,
     cursor,
+    initialRawMessages: rawSnapshot,
   });
   sentHistory = sseState.snapshot();
   setSseHeaders(res);
