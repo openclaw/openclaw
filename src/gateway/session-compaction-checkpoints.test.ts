@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, test } from "vitest";
 import {
@@ -21,11 +22,36 @@ describe("session-compaction-checkpoints", () => {
     tempDirs.push(dir);
 
     const session = SessionManager.create(dir, dir);
-    session.appendMessage({ role: "user", content: "before compaction" });
-    session.appendMessage({
+    const userMessage: UserMessage = {
+      role: "user",
+      content: "before compaction",
+      timestamp: Date.now(),
+    };
+    const assistantMessage: AssistantMessage = {
       role: "assistant",
       content: [{ type: "text", text: "working on it" }],
-    });
+      api: "responses",
+      provider: "openai",
+      model: "gpt-test",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    session.appendMessage(userMessage);
+    session.appendMessage(assistantMessage);
 
     const sessionFile = session.getSessionFile();
     const leafId = session.getLeafId();

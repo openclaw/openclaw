@@ -9,6 +9,7 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded-runner/runs.js";
 import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
+import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -1464,7 +1465,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
     respond(true, { messages }, undefined);
   },
-  "sessions.compact": async ({ params, respond, context }) => {
+  "sessions.compact": async ({ req, params, respond, context, client, isWebchatConnect }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
       return;
     }
@@ -1523,10 +1524,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     if (maxLines === undefined) {
       const interruptResult = await interruptSessionRunIfActive({
-        req: undefined,
+        req,
         context,
-        client: null,
-        isWebchatConnect: () => false,
+        client,
+        isWebchatConnect,
         requestedKey: key,
         canonicalKey: target.canonicalKey,
         sessionId,
@@ -1548,8 +1549,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         config: cfg,
         provider: resolvedModel.provider,
         model: resolvedModel.model,
-        thinkLevel: entry?.thinkingLevel,
-        reasoningLevel: entry?.reasoningLevel,
+        thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
+        reasoningLevel: normalizeReasoningLevel(entry?.reasoningLevel),
         bashElevated: {
           enabled: false,
           allowed: false,
