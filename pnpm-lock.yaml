@@ -301,6 +301,8 @@ importers:
 
   extensions/cloudflare-ai-gateway: {}
 
+  extensions/comfy: {}
+
   extensions/copilot-proxy: {}
 
   extensions/deepgram: {}
@@ -524,6 +526,16 @@ importers:
         specifier: ^6.33.0
         version: 6.33.0(ws@8.20.0)(zod@4.3.6)
 
+  extensions/memory-wiki:
+    dependencies:
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/microsoft:
     dependencies:
       node-edge-tts:
@@ -724,6 +736,8 @@ importers:
         version: link:../..
 
   extensions/volcengine: {}
+
+  extensions/vydra: {}
 
   extensions/whatsapp:
     dependencies:
