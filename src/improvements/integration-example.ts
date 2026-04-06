@@ -291,7 +291,7 @@ function estimateSimpleTokens(messages: OpenClawMessage[]): number {
  * 
  * 展示如何在 OpenClaw 的主循环中使用改进功能
  */
-export async function: OpenClawRuntimeWithImprovements {
+export async function OpenClawRuntimeWithImprovements() {
   // 模拟输入
   const toolCalls: ToolCall[] = [
     { name: 'read', path: '/file1.txt' },
