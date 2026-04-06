@@ -3,7 +3,12 @@ import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
-import { logVerbose, processMessage, processReaction } from "./monitor-processing.js";
+import {
+  _resetBlueBubblesInboundDedupStateForTest,
+  logVerbose,
+  processMessage,
+  processReaction,
+} from "./monitor-processing.js";
 import {
   _resetBlueBubblesShortIdState,
   resolveBlueBubblesMessageId,
@@ -366,4 +371,9 @@ export async function monitorBlueBubblesProvider(
   });
 }
 
-export { _resetBlueBubblesShortIdState, resolveBlueBubblesMessageId, resolveWebhookPathFromConfig };
+export {
+  _resetBlueBubblesInboundDedupStateForTest,
+  _resetBlueBubblesShortIdState,
+  resolveBlueBubblesMessageId,
+  resolveWebhookPathFromConfig,
+};

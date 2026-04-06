@@ -82,6 +82,10 @@ const DEDUP_GUID_CACHE_MAX = 5000;
 const DEDUP_GUID_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const _dedupGuidCache = new Map<string, number>();
 
+export function _resetBlueBubblesInboundDedupStateForTest(): void {
+  _dedupGuidCache.clear();
+}
+
 function _isStaleMessage(timestamp: number | undefined): boolean {
   if (typeof timestamp !== "number" || timestamp <= 0) return false;
   const age = Date.now() - timestamp;

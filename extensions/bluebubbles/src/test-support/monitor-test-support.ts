@@ -2,6 +2,7 @@ import type { HistoryEntry, PluginRuntime } from "openclaw/plugin-sdk/bluebubble
 import { vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
 import {
+  _resetBlueBubblesInboundDedupStateForTest,
   _resetBlueBubblesShortIdState,
   clearBlueBubblesWebhookSecurityStateForTest,
 } from "../monitor.js";
@@ -117,6 +118,7 @@ export function resetBlueBubblesMonitorTestState(params: {
   extraReset?: () => void;
 }) {
   vi.clearAllMocks();
+  _resetBlueBubblesInboundDedupStateForTest();
   _resetBlueBubblesShortIdState();
   clearBlueBubblesWebhookSecurityStateForTest();
   params.extraReset?.();
