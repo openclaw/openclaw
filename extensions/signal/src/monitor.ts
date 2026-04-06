@@ -62,6 +62,37 @@ export type MonitorSignalOpts = {
   waitForTransportReady?: typeof waitForTransportReady;
 };
 
+function estimateBase64DecodedBytes(base64: string): number {
+  let effectiveLen = 0;
+  for (let i = 0; i < base64.length; i += 1) {
+    if (base64.charCodeAt(i) <= 0x20) {
+      continue;
+    }
+    effectiveLen += 1;
+  }
+  if (effectiveLen === 0) {
+    return 0;
+  }
+
+  let padding = 0;
+  let end = base64.length - 1;
+  while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
+    end -= 1;
+  }
+  if (end >= 0 && base64[end] === "=") {
+    padding = 1;
+    end -= 1;
+    while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
+      end -= 1;
+    }
+    if (end >= 0 && base64[end] === "=") {
+      padding = 2;
+    }
+  }
+
+  return Math.max(0, Math.floor((effectiveLen * 3) / 4) - padding);
+}
+
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
   return opts.runtime ?? createNonExitingRuntime();
 }
@@ -257,7 +288,7 @@ async function fetchAttachment(params: {
   if (!attachment?.id) {
     return null;
   }
-  if (attachment.size && attachment.size > params.maxBytes) {
+  if (typeof attachment.size === "number" && attachment.size > params.maxBytes) {
     throw new Error(
       `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
     );
@@ -281,6 +312,11 @@ async function fetchAttachment(params: {
   });
   if (!result?.data) {
     return null;
+  }
+  if (estimateBase64DecodedBytes(result.data) > params.maxBytes) {
+    throw new Error(
+      `Signal attachment ${attachment.id} exceeds ${(params.maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
+    );
   }
   const buffer = Buffer.from(result.data, "base64");
   const saved = await saveMediaBuffer(

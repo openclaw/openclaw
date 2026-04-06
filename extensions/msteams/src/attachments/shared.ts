@@ -210,7 +210,7 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
   return text;
 }
 
-function estimateBase64DecodedBytes(value: string): number {
+export function estimateBase64DecodedBytes(value: string): number {
   const normalized = value.replace(/\s+/g, "");
   if (!normalized) {
     return 0;

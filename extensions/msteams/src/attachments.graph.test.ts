@@ -324,4 +324,29 @@ describe("msteams graph attachments", () => {
     expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(true);
     expect(calledUrls).not.toContain(escapedUrl);
   });
+
+  it("skips inline hosted content when estimated decoded bytes exceed maxBytes", async () => {
+    const oversizedBase64 = "A".repeat(16);
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
+
+    try {
+      const { media } = await downloadGraphMediaWithMockOptions(
+        {
+          hostedContents: [
+            {
+              id: "hosted-oversized",
+              contentType: CONTENT_TYPE_IMAGE_PNG,
+              contentBytes: oversizedBase64,
+            },
+          ],
+        },
+        { maxBytes: 4 },
+      );
+
+      expect(media.media).toEqual([]);
+      expect(bufferFromSpy).not.toHaveBeenCalledWith(oversizedBase64, "base64");
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
+  });
 });

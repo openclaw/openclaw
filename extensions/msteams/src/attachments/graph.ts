@@ -10,6 +10,7 @@ import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   applyAuthorizationHeaderForUrl,
   GRAPH_ROOT,
+  estimateBase64DecodedBytes,
   inferPlaceholder,
   readNestedString,
   isUrlAllowed,
@@ -190,6 +191,9 @@ async function downloadGraphHostedContent(params: {
     const contentBytes = typeof item.contentBytes === "string" ? item.contentBytes : "";
     let buffer: Buffer;
     if (contentBytes) {
+      if (estimateBase64DecodedBytes(contentBytes) > params.maxBytes) {
+        continue;
+      }
       try {
         buffer = Buffer.from(contentBytes, "base64");
       } catch {

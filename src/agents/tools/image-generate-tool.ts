@@ -421,7 +421,7 @@ async function loadReferenceImages(params: {
     );
 
     const media = isDataUrl
-      ? decodeDataUrl(resolvedImage)
+      ? decodeDataUrl(resolvedImage, { maxBytes: params.maxBytes })
       : params.sandboxConfig
         ? await loadWebMedia(resolvedPath ?? resolvedImage, {
             maxBytes: params.maxBytes,
