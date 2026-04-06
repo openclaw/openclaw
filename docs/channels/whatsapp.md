@@ -84,6 +84,9 @@ openclaw gateway
 openclaw pairing list whatsapp
 openclaw pairing approve whatsapp <CODE>
 ```
+  </Step>
+
+  <Step title="Message yourself on whatsapp to talk to openclaw">
 
     Pairing requests expire after 1 hour. Pending requests are capped at 3 per channel.
 
