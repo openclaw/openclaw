@@ -419,8 +419,6 @@ async function checkMessageFirewall(params: {
   );
 }
 
-/** Exported for unit tests only — do not use in production code. */
-export const checkMessageFirewallForTest = checkMessageFirewall;
 
 function resolveGateway(input: RunMessageActionParams): MessageActionRunnerGateway | undefined {
   if (!input.gateway) {
@@ -882,6 +880,44 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+
+  // Firewall check: applies to all outbound send-like actions that deliver new
+  // content to a recipient. Runs before media normalisation so a missing/invalid
+  // file path cannot cause the check to be skipped. CLI sends are excluded —
+  // the human is already at the keyboard.
+  const OUTBOUND_SEND_ACTIONS = new Set<ChannelMessageActionName>([
+    "send",
+    "sendWithEffect",
+    "sendAttachment",
+    "reply",
+    "thread-reply",
+    "sticker",
+    "poll",
+    "upload-file",
+  ]);
+  if (OUTBOUND_SEND_ACTIONS.has(action) && !dryRun && input.gateway?.mode !== "cli") {
+    // Some actions (e.g. upload-file) use "target" rather than "to" as the
+    // recipient field after param normalisation — fall back so every explicit-
+    // recipient path is covered.
+    const to = readStringParam(params, "to") ?? readStringParam(params, "target") ?? "";
+    const message = readStringParam(params, "message", { allowEmpty: true }) ?? "";
+    await checkMessageFirewall({
+      cfg,
+      channel,
+      to,
+      messagePreview: message,
+      agentId: resolvedAgentId,
+      sessionKey: input.sessionKey,
+      abortSignal: input.abortSignal,
+      gatewayUrl: input.gateway?.url,
+      gatewayToken: input.gateway?.token,
+      turnSourceChannel: input.toolContext?.currentChannelProvider,
+      turnSourceTo: readStringParam(params, "turnSourceTo") ?? undefined,
+      turnSourceAccountId: readStringParam(params, "turnSourceAccountId") ?? undefined,
+      turnSourceThreadId: input.toolContext?.currentThreadTs ?? undefined,
+    });
+  }
+
   const normalizationPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
@@ -933,38 +969,6 @@ export async function runMessageAction(
   }
 
   const gateway = resolveGateway(input);
-
-  // Firewall check: applies to all outbound send-like actions that deliver new
-  // content to a recipient. Runs before action routing so no send path can bypass it.
-  // CLI sends (openclaw message send ...) are excluded — the human is at the keyboard.
-  const OUTBOUND_SEND_ACTIONS = new Set<ChannelMessageActionName>([
-    "send",
-    "sendWithEffect",
-    "sendAttachment",
-    "reply",
-    "thread-reply",
-    "sticker",
-    "poll",
-  ]);
-  if (OUTBOUND_SEND_ACTIONS.has(action) && !dryRun && input.gateway?.mode !== "cli") {
-    const to = readStringParam(params, "to") ?? "";
-    const message = readStringParam(params, "message", { allowEmpty: true }) ?? "";
-    await checkMessageFirewall({
-      cfg,
-      channel,
-      to,
-      messagePreview: message,
-      agentId: resolvedAgentId,
-      sessionKey: input.sessionKey,
-      abortSignal: input.abortSignal,
-      gatewayUrl: gateway?.url,
-      gatewayToken: gateway?.token,
-      turnSourceChannel: input.toolContext?.currentChannelProvider,
-      turnSourceTo: readStringParam(params, "turnSourceTo") ?? undefined,
-      turnSourceAccountId: readStringParam(params, "turnSourceAccountId") ?? undefined,
-      turnSourceThreadId: input.toolContext?.currentThreadTs ?? undefined,
-    });
-  }
 
   if (action === "send") {
     return handleSendAction({

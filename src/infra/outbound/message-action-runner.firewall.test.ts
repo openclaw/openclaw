@@ -5,7 +5,7 @@
  * real integration point without needing to export the private helper.
  * callGatewayTool is mocked to isolate approval-gateway I/O.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const mocks = vi.hoisted(() => ({
@@ -18,10 +18,15 @@ vi.mock("../../agents/tools/gateway.js", () => ({
 
 let runMessageAction: typeof import("./message-action-runner.js").runMessageAction;
 
-beforeEach(async () => {
-  vi.resetAllMocks();
-  vi.resetModules();
+// Import once — message-action-runner has no module-level mutable state, so a
+// single load with a stable vi.mock() hoist is sufficient. vi.resetAllMocks()
+// in beforeEach resets call tracking and implementations between tests.
+beforeAll(async () => {
   ({ runMessageAction } = await import("./message-action-runner.js"));
+});
+
+beforeEach(() => {
+  vi.resetAllMocks();
 });
 
 function makeFirewallCfg(
@@ -148,8 +153,8 @@ describe("messaging firewall — checkMessageFirewall", () => {
     mocks.callGatewayTool
       .mockResolvedValueOnce({ id: "approval-2" })
       .mockResolvedValueOnce({ decision: "allow-once" });
-    const err = await runMessageAction(makeInput("@target", cfg)).catch((e: unknown) => e);
-    expect(err instanceof Error && err.message).not.toMatch(/not approved/);
+    // Should resolve without throwing — approval accepted
+    await expect(runMessageAction(makeInput("@target", cfg))).resolves.not.toThrow();
   });
 
   it("resolves when decision is allow-always", async () => {
@@ -157,8 +162,8 @@ describe("messaging firewall — checkMessageFirewall", () => {
     mocks.callGatewayTool
       .mockResolvedValueOnce({ id: "approval-3" })
       .mockResolvedValueOnce({ decision: "allow-always" });
-    const err = await runMessageAction(makeInput("@target", cfg)).catch((e: unknown) => e);
-    expect(err instanceof Error && err.message).not.toMatch(/not approved/);
+    // Should resolve without throwing — approval accepted
+    await expect(runMessageAction(makeInput("@target", cfg))).resolves.not.toThrow();
   });
 
   it("throws when decision is deny", async () => {
@@ -175,5 +180,20 @@ describe("messaging firewall — checkMessageFirewall", () => {
     await expect(runMessageAction(makeInput("@target", cfg))).rejects.toThrow(
       /approval unavailable/,
     );
+  });
+
+  it("applies firewall to upload-file action (not only send)", async () => {
+    // upload-file is an explicit-target outbound action; it must be subject to the
+    // same firewall gate as send, sendWithEffect, sendAttachment, etc.
+    // Without this, an agent could bypass human approval by using upload-file
+    // instead of send to deliver content to a non-self target.
+    const cfg = makeFirewallCfg();
+    mocks.callGatewayTool.mockResolvedValueOnce({}); // no id → approval unavailable
+    const input = {
+      ...makeInput("@stranger", cfg, { agentId: "test-agent" }),
+      action: "upload-file" as const,
+      params: { to: "@stranger", target: "@stranger", channel: "telegram", filePath: "/tmp/doc.pdf" },
+    };
+    await expect(runMessageAction(input)).rejects.toThrow(/approval unavailable/);
   });
 });
