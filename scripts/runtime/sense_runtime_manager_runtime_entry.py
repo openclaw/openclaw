@@ -345,6 +345,27 @@ def derive_recovery_hint(
     return 'check_dispatch_input'
 
 
+def derive_recovery_priority(
+    error_code: str | None,
+    error_detail_code: str | None,
+    error_stage: str | None,
+) -> str:
+    detail = str(error_detail_code or '')
+    stage = str(error_stage or '')
+    code = str(error_code or '')
+    if detail == 'AUTH_401':
+        return 'immediate'
+    if stage in {'TASK_SUBMIT', 'TASK_POLL'}:
+        return 'high'
+    if stage in {'EXECUTOR_GATE', 'BRIDGE', 'DISPATCH'}:
+        return 'medium'
+    if stage == 'TRIAGE':
+        return 'low'
+    if code == 'NONE':
+        return 'none'
+    return 'medium'
+
+
 def build_layer_statuses(entry_result: dict | None, bridge_result: dict | None, dispatch_result: dict | None) -> dict:
     entry_status = 'completed' if isinstance(entry_result, dict) else None
     bridge_status = None
@@ -468,6 +489,7 @@ def build_feedback_memory(entry_result: dict, dispatch_result: dict, feedback_su
         'last_error_source_layer': manager_handoff.get('error_source_layer'),
         'last_error_stage': manager_handoff.get('error_stage'),
         'last_recovery_hint': manager_handoff.get('recovery_hint'),
+        'last_recovery_priority': manager_handoff.get('recovery_priority'),
     }
 
 
@@ -554,6 +576,7 @@ def main() -> int:
             'error_source_layer': error_source_layer,
             'error_stage': error_stage,
             'recovery_hint': derive_recovery_hint(error_code, error_detail_code, error_stage),
+            'recovery_priority': derive_recovery_priority(error_code, error_detail_code, error_stage),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),
@@ -614,6 +637,7 @@ def main() -> int:
             'error_source_layer': error_source_layer,
             'error_stage': error_stage,
             'recovery_hint': derive_recovery_hint(error_code, error_detail_code, error_stage),
+            'recovery_priority': derive_recovery_priority(error_code, error_detail_code, error_stage),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),

@@ -207,12 +207,38 @@ def derive_recovery_hint(
     return 'check_dispatch_input'
 
 
+def derive_recovery_priority(
+    error_code: str | None,
+    error_detail_code: str | None,
+    error_stage: str | None,
+) -> str:
+    detail = str(error_detail_code or '')
+    stage = str(error_stage or '')
+    code = str(error_code or '')
+    if detail == 'AUTH_401':
+        return 'immediate'
+    if stage in {'TASK_SUBMIT', 'TASK_POLL'}:
+        return 'high'
+    if stage in {'EXECUTOR_GATE', 'BRIDGE', 'DISPATCH'}:
+        return 'medium'
+    if stage == 'TRIAGE':
+        return 'low'
+    if code == 'NONE':
+        return 'none'
+    return 'medium'
+
+
 def finalize_output(output: dict) -> dict:
     output['error_code'] = normalize_executor_error_code(output)
     output['error_detail_code'] = normalize_executor_error_detail_code(output)
     output['error_source_layer'] = normalize_executor_error_source_layer(output)
     output['error_stage'] = normalize_executor_error_stage(output)
     output['recovery_hint'] = derive_recovery_hint(
+        output.get('error_code'),
+        output.get('error_detail_code'),
+        output.get('error_stage'),
+    )
+    output['recovery_priority'] = derive_recovery_priority(
         output.get('error_code'),
         output.get('error_detail_code'),
         output.get('error_stage'),
@@ -674,6 +700,7 @@ def build_manager_handoff(report: dict) -> dict:
         'error_source_layer': report.get('error_source_layer'),
         'error_stage': report.get('error_stage'),
         'recovery_hint': report.get('recovery_hint'),
+        'recovery_priority': report.get('recovery_priority'),
         'loop_convergence_state': convergence.get('state'),
         'primary_remaining_issue': summary.get('primary_remaining_issue'),
         'secondary_remaining_issues': summary.get('secondary_remaining_issues', []),
