@@ -55,22 +55,4 @@ export function registerVideoCli(program: Command) {
         await videoListCommand({ json: Boolean(opts.json) }, defaultRuntime);
       });
     });
-
-  video
-    .command("status")
-    .description("Check status of a video generation task")
-    .requiredOption("--task-id <id>", "Task ID to check")
-    .option("--json", "Output as JSON")
-    .action(async (opts) => {
-      await runVideoCommand(async () => {
-        const { videoStatusCommand } = await import("../commands/video-status.js");
-        await videoStatusCommand(
-          {
-            taskId: opts.taskId as string,
-            json: Boolean(opts.json),
-          },
-          defaultRuntime,
-        );
-      });
-    });
 }

@@ -20,6 +20,7 @@ vi.mock("../video-generation/runtime.js", () => ({
 vi.mock("node:fs/promises", () => ({
   readFile: mocks.readFile,
   writeFile: mocks.writeFile,
+  access: vi.fn().mockRejectedValue(new Error("ENOENT")),
 }));
 
 function createMockRuntime(): OutputRuntimeEnv & {

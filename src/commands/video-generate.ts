@@ -65,9 +65,13 @@ async function loadLocalAsset(filePath: string): Promise<VideoGenerationSourceAs
     ".mov": "video/quicktime",
   };
 
+  const mimeType = mimeMap[ext];
+  if (!mimeType) {
+    throw new Error(`Unsupported file type "${ext}" for asset: ${filePath}`);
+  }
   return {
     buffer,
-    mimeType: mimeMap[ext],
+    mimeType,
     fileName: path.basename(absolute),
   };
 }
@@ -92,21 +96,20 @@ function validateOpts(opts: VideoGenerateOpts): string | null {
   return null;
 }
 
-function resolveOutputPath(opts: VideoGenerateOpts, mimeType: string): string {
+async function resolveOutputPath(opts: VideoGenerateOpts, mimeType: string): Promise<string> {
   if (opts.output) {
     return path.resolve(opts.output);
   }
   const ext = mimeType === "video/webm" ? ".webm" : ".mp4";
-  let idx = 1;
-  let candidate = path.resolve(`video-${idx}${ext}`);
-  // Simple collision avoidance for auto-naming
-  while (idx < 1000) {
-    candidate = path.resolve(`video-${idx}${ext}`);
-    idx++;
-    // We'll just use the first candidate — fs.writeFile will overwrite
-    break;
+  for (let idx = 1; idx < 1000; idx++) {
+    const candidate = path.resolve(`video-${idx}${ext}`);
+    try {
+      await fs.access(candidate);
+    } catch {
+      return candidate;
+    }
   }
-  return candidate;
+  return path.resolve(`video-${Date.now()}${ext}`);
 }
 
 export async function videoGenerateCommand(
@@ -153,8 +156,8 @@ export async function videoGenerateCommand(
     const video = result.videos[i];
     const outputPath =
       result.videos.length === 1
-        ? resolveOutputPath(opts, video.mimeType)
-        : resolveOutputPath({ ...opts, output: undefined }, video.mimeType).replace(
+        ? await resolveOutputPath(opts, video.mimeType)
+        : (await resolveOutputPath({ ...opts, output: undefined }, video.mimeType)).replace(
             /(\.\w+)$/,
             `-${i + 1}$1`,
           );

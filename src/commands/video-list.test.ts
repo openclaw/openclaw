@@ -5,6 +5,7 @@ import { videoListCommand } from "./video-list.js";
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn().mockReturnValue({}),
   listVideoGenerationProviders: vi.fn().mockReturnValue([]),
+  renderTable: vi.fn().mockReturnValue("rendered-table"),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -13,6 +14,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../video-generation/provider-registry.js", () => ({
   listVideoGenerationProviders: mocks.listVideoGenerationProviders,
+}));
+
+vi.mock("../terminal/table.js", () => ({
+  renderTable: mocks.renderTable,
 }));
 
 function createMockRuntime(): OutputRuntimeEnv & { output: string[]; jsonOutput: unknown[] } {
@@ -42,7 +47,7 @@ describe("videoListCommand", () => {
     vi.clearAllMocks();
   });
 
-  it("lists providers in table format", async () => {
+  it("renders table via renderTable for providers", async () => {
     mocks.listVideoGenerationProviders.mockReturnValue([
       {
         id: "google",
@@ -57,29 +62,18 @@ describe("videoListCommand", () => {
         },
         isConfigured: () => true,
       },
-      {
-        id: "openai",
-        label: "OpenAI Sora",
-        defaultModel: "sora-2",
-        models: ["sora-2"],
-        capabilities: {
-          supportsAudio: false,
-          supportsAspectRatio: true,
-          supportsResolution: true,
-          maxDurationSeconds: 12,
-        },
-        isConfigured: () => false,
-      },
     ]);
 
     const runtime = createMockRuntime();
     await videoListCommand({}, runtime);
 
-    const tableOutput = runtime.output.join("\n");
-    expect(tableOutput).toContain("google");
-    expect(tableOutput).toContain("openai");
-    expect(tableOutput).toContain("veo-3");
-    expect(tableOutput).toContain("sora-2");
+    expect(mocks.renderTable).toHaveBeenCalledTimes(1);
+    expect(mocks.renderTable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        columns: expect.arrayContaining([expect.objectContaining({ key: "provider" })]),
+        rows: expect.arrayContaining([expect.objectContaining({ provider: "google" })]),
+      }),
+    );
   });
 
   it("outputs JSON when --json flag is set", async () => {
@@ -110,6 +104,7 @@ describe("videoListCommand", () => {
 
     const tableOutput = runtime.output.join("\n");
     expect(tableOutput).toContain("No video generation providers available");
+    expect(mocks.renderTable).not.toHaveBeenCalled();
   });
 
   it("sorts providers alphabetically", async () => {

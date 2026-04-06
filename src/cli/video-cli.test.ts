@@ -6,7 +6,6 @@ import { registerVideoCli } from "./video-cli.js";
 const mocks = vi.hoisted(() => ({
   videoGenerateCommand: vi.fn().mockResolvedValue(undefined),
   videoListCommand: vi.fn().mockResolvedValue(undefined),
-  videoStatusCommand: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../commands/video-generate.js", () => ({
@@ -15,10 +14,6 @@ vi.mock("../commands/video-generate.js", () => ({
 
 vi.mock("../commands/video-list.js", () => ({
   videoListCommand: mocks.videoListCommand,
-}));
-
-vi.mock("../commands/video-status.js", () => ({
-  videoStatusCommand: mocks.videoStatusCommand,
 }));
 
 describe("video cli", () => {
@@ -32,14 +27,13 @@ describe("video cli", () => {
     return program;
   }
 
-  it("registers video command with generate, list, and status subcommands", () => {
+  it("registers video command with generate and list subcommands", () => {
     const program = createProgram();
     const video = program.commands.find((c) => c.name() === "video");
     expect(video).toBeDefined();
     const subNames = video!.commands.map((c) => c.name());
     expect(subNames).toContain("generate");
     expect(subNames).toContain("list");
-    expect(subNames).toContain("status");
   });
 
   it("passes generate options through to videoGenerateCommand", async () => {
@@ -90,19 +84,6 @@ describe("video cli", () => {
     expect(mocks.videoListCommand).toHaveBeenCalledTimes(1);
     expect(mocks.videoListCommand).toHaveBeenCalledWith(
       expect.objectContaining({ json: true }),
-      expect.any(Object),
-    );
-  });
-
-  it("passes status --task-id and --json through to videoStatusCommand", async () => {
-    await runRegisteredCli({
-      register: registerVideoCli as (program: Command) => void,
-      argv: ["video", "status", "--task-id", "abc-123", "--json"],
-    });
-
-    expect(mocks.videoStatusCommand).toHaveBeenCalledTimes(1);
-    expect(mocks.videoStatusCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ taskId: "abc-123", json: true }),
       expect.any(Object),
     );
   });

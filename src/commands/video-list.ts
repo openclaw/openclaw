@@ -1,5 +1,6 @@
 import { loadConfig } from "../config/config.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
+import { renderTable } from "../terminal/table.js";
 import { listVideoGenerationProviders } from "../video-generation/provider-registry.js";
 
 export type VideoListOpts = {
@@ -30,7 +31,8 @@ function buildProviderSummaries(cfg: ReturnType<typeof loadConfig>): ProviderSum
       label: p.label,
       defaultModel: p.defaultModel,
       models: p.models ?? [],
-      configured: typeof p.isConfigured === "function" ? p.isConfigured({ cfg }) : false,
+      configured:
+        typeof p.isConfigured === "function" ? p.isConfigured({ cfg, agentDir: undefined }) : false,
       capabilities: {
         audio: p.capabilities.supportsAudio ?? false,
         aspectRatio: p.capabilities.supportsAspectRatio ?? false,
@@ -41,31 +43,6 @@ function buildProviderSummaries(cfg: ReturnType<typeof loadConfig>): ProviderSum
       },
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
-}
-
-function formatTable(summaries: ProviderSummary[]): string {
-  if (summaries.length === 0) {
-    return "No video generation providers available.\nInstall and configure a provider plugin to get started.";
-  }
-
-  const header = ["Provider", "Default Model", "Models", "Configured", "Audio", "Max Duration"];
-  const rows = summaries.map((s) => [
-    s.id,
-    s.defaultModel ?? "-",
-    String(s.models.length),
-    s.configured ? "yes" : "no",
-    s.capabilities.audio ? "yes" : "no",
-    s.capabilities.maxDurationSeconds ? `${s.capabilities.maxDurationSeconds}s` : "-",
-  ]);
-
-  const widths = header.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i]?.length ?? 0)));
-
-  const pad = (val: string, width: number) => val.padEnd(width);
-  const headerLine = header.map((h, i) => pad(h, widths[i])).join("  ");
-  const separator = widths.map((w) => "─".repeat(w)).join("  ");
-  const body = rows.map((row) => row.map((cell, i) => pad(cell, widths[i])).join("  ")).join("\n");
-
-  return `${headerLine}\n${separator}\n${body}`;
 }
 
 export async function videoListCommand(
@@ -80,5 +57,33 @@ export async function videoListCommand(
     return;
   }
 
-  runtime.log(formatTable(summaries));
+  if (summaries.length === 0) {
+    runtime.log(
+      "No video generation providers available.\nInstall and configure a provider plugin to get started.",
+    );
+    return;
+  }
+
+  const table = renderTable({
+    columns: [
+      { key: "provider", header: "Provider" },
+      { key: "defaultModel", header: "Default Model", flex: true },
+      { key: "models", header: "Models" },
+      { key: "configured", header: "Configured" },
+      { key: "audio", header: "Audio" },
+      { key: "maxDuration", header: "Max Duration" },
+    ],
+    rows: summaries.map((s) => ({
+      provider: s.id,
+      defaultModel: s.defaultModel ?? "-",
+      models: String(s.models.length),
+      configured: s.configured ? "yes" : "no",
+      audio: s.capabilities.audio ? "yes" : "no",
+      maxDuration: s.capabilities.maxDurationSeconds
+        ? `${s.capabilities.maxDurationSeconds}s`
+        : "-",
+    })),
+  });
+
+  runtime.log(table);
 }
