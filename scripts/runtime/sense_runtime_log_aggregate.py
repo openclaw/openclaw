@@ -127,6 +127,11 @@ def derive_notification_title_short(route_signature: str, bucket: str) -> str:
     return f'{bucket_label} / {path_label}'
 
 
+def derive_path_group(route_signature: str) -> str:
+    path_signature = derive_path_signature(route_signature)
+    return PATH_SHORT_LABELS.get(path_signature, 'other')
+
+
 def load_records(raw_input: str) -> list[dict]:
     stripped = raw_input.strip()
     if not stripped:
@@ -374,6 +379,11 @@ def main() -> int:
                 f"{derive_recovery_bucket_from_route_signature(str(item.get('route_signature') or ''))}."
                 f"{item.get('strongest_priority_band', 'none')}."
                 f"{derive_path_signature(str(item.get('route_signature') or ''))}"
+            ),
+            'notification_group_key': (
+                f"{derive_recovery_bucket_from_route_signature(str(item.get('route_signature') or ''))}."
+                f"{item.get('strongest_priority_band', 'none')}."
+                f"{derive_path_group(str(item.get('route_signature') or ''))}"
             ),
             'notification_title': derive_notification_title(
                 str(item.get('route_signature') or ''),
