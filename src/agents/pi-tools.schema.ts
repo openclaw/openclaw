@@ -147,7 +147,8 @@ export function normalizeToolParameterSchema(
   // Normalize once here so callers can always pass `tools` through unchanged.
   const isGeminiProvider =
     options?.modelProvider?.toLowerCase().includes("google") ||
-    options?.modelProvider?.toLowerCase().includes("gemini");
+    options?.modelProvider?.toLowerCase().includes("gemini") ||
+    options?.modelId?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
 

@@ -19,6 +19,61 @@ describe("normalizeToolParameterSchema", () => {
     expect(normalizeToolParameterSchema(schema)).toEqual(schema);
   });
 
+  it("applies Gemini schema cleaning when modelId contains 'gemini' regardless of provider name", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        action: { const: "run" },
+      },
+    };
+
+    const result = normalizeToolParameterSchema(schema, {
+      modelProvider: "custom-newapi-dditapp-com",
+      modelId: "gemini-3.1-pro-preview",
+    }) as Record<string, unknown>;
+
+    const props = result.properties as Record<string, Record<string, unknown>>;
+    // cleanSchemaForGemini converts `const` to `enum`
+    expect(props.action.const).toBeUndefined();
+    expect(props.action.enum).toEqual(["run"]);
+  });
+
+  it("strips patternProperties for Gemini model behind a proxy provider", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+      },
+      patternProperties: {
+        "^x-": { type: "string" },
+      },
+    };
+
+    const result = normalizeToolParameterSchema(schema, {
+      modelProvider: "custom-my-proxy",
+      modelId: "gemini-2.5-pro",
+    }) as Record<string, unknown>;
+
+    expect(result.patternProperties).toBeUndefined();
+  });
+
+  it("does not apply Gemini cleaning for non-Gemini models on custom providers", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        action: { const: "run" },
+      },
+    };
+
+    const result = normalizeToolParameterSchema(schema, {
+      modelProvider: "custom-newapi-dditapp-com",
+      modelId: "gpt-4o",
+    }) as Record<string, unknown>;
+
+    const props = result.properties as Record<string, Record<string, unknown>>;
+    expect(props.action.const).toBe("run");
+  });
+
   it("adds missing top-level type for raw object-ish schemas", () => {
     expect(
       normalizeToolParameterSchema({
