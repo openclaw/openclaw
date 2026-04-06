@@ -324,6 +324,71 @@ describe("feishu websocket cleanup", () => {
     vi.useRealTimers();
   });
 
+  it("does not confirm connection during nonce delay (P2 regression — readyState gate)", async () => {
+    // Scenario: initial connect attempt fires (lastConnectTime advances once),
+    // then the SDK enters its reconnect nonce delay (up to 30 s). During that
+    // window lastConnectTime is stable and non-zero, but the socket is not OPEN
+    // (readyState = 0 CONNECTING). onConfirmedConnect must NOT fire, so
+    // hadSuccessfulConnect stays false and supervisorAttempt increments on stall.
+    vi.useFakeTimers();
+
+    const accountId = "alpha";
+
+    let connectTime = 0;
+    // readyState starts at 0 (CONNECTING) — simulates the SDK in nonce delay.
+    const mockWsInstance = { readyState: 0 /* CONNECTING */ };
+    const firstClient: MockWsClient = {
+      start: vi.fn(),
+      close: vi.fn(),
+      getReconnectInfo: vi.fn(() => ({ lastConnectTime: connectTime })),
+      wsConfig: { getWSInstance: vi.fn(() => mockWsInstance) },
+    };
+
+    const abortController = new AbortController();
+    const secondClient = createWsClient();
+    secondClient.getReconnectInfo.mockReturnValue({ lastConnectTime: 0 });
+
+    createFeishuWSClientMock.mockReturnValueOnce(firstClient).mockReturnValueOnce(secondClient);
+
+    const monitorPromise = monitorWebSocket({
+      account: createAccount(accountId),
+      accountId,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+    });
+
+    // Tick 0: lastConnectTime = 0, no-op.
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    // Initial connect attempt fires — lastConnectTime advances.
+    connectTime = Date.now();
+    await vi.advanceTimersByTimeAsync(10_000); // connectChangeCount = 1, stable = 0
+
+    // Nonce delay: lastConnectTime stable for 2 ticks, but readyState = CONNECTING.
+    await vi.advanceTimersByTimeAsync(10_000); // stable = 1
+    await vi.advanceTimersByTimeAsync(10_000); // stable = 2 → readyState CONNECTING → no confirm
+
+    // Nonce expires; SDK fires reconnect attempt.
+    connectTime = Date.now() + 1;
+    await vi.advanceTimersByTimeAsync(10_000); // connectChangeCount = 2, staleSinceMs set
+
+    // Freeze — no more attempts. Advance 90 s to trip the stall.
+    await vi.advanceTimersByTimeAsync(90_000);
+
+    // onConfirmedConnect did not fire (readyState was CONNECTING, not OPEN),
+    // so hadSuccessfulConnect = false and supervisorAttempt incremented.
+    expect(computeBackoffMock).toHaveBeenCalled();
+    const firstCall = computeBackoffMock.mock.calls[0] as unknown as [unknown, number] | undefined;
+    expect(firstCall?.[1] ?? 0).toBeGreaterThanOrEqual(1);
+
+    abortController.abort();
+    await vi.runAllTimersAsync();
+    await monitorPromise;
+
+    vi.useRealTimers();
+  });
+
   it("clears stall clock after successful reconnect — no false eviction (P1 regression)", async () => {
     // Scenario: initial connect → reconnect attempt (stall clock starts) →
     // reconnect succeeds (WS readyState OPEN + lastConnectTime stable for ≥2 ticks)

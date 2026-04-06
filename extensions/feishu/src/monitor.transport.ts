@@ -201,6 +201,20 @@ function runFeishuWSClientUntilDead(params: {
 }): Promise<"aborted" | "stalled"> {
   const { wsClient, eventDispatcher, accountId, log, abortSignal, onConfirmedConnect } = params;
 
+  // Read the underlying WebSocket's readyState via the SDK's private wsConfig
+  // shape. Returns the numeric state (0–3) when available, or null when the
+  // accessor is absent (e.g. in tests without a full mock, or after a future
+  // SDK refactor). Callers treat null as "unknown — fall back to stable ticks."
+  function getWsReadyState(): number | null {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const wsInstance = (wsClient as any).wsConfig?.getWSInstance?.();
+      return wsInstance != null ? (wsInstance.readyState as number) : null;
+    } catch {
+      return null;
+    }
+  }
+
   return new Promise<"aborted" | "stalled">((resolve) => {
     if (abortSignal?.aborted) {
       resolve("aborted");
@@ -257,14 +271,25 @@ function runFeishuWSClientUntilDead(params: {
 
       // lastConnectTime is unchanged this tick.
 
-      // Accumulate stable ticks only when the SDK has actually recorded a
-      // connect attempt (lastConnectTime non-zero) and the stall clock has not
-      // yet fired (connection looks healthy on the initial connect path).
+      // Accumulate stable ticks on the initial-connect path (staleSinceMs null).
+      // Fire onConfirmedConnect once we have enough stable evidence AND the
+      // WebSocket is actually open.
+      //
+      // The readyState gate prevents a false positive during the SDK's reconnect
+      // nonce delay (up to 30 s): after a failed initial connect, lastConnectTime
+      // is already non-zero and stable during the nonce wait, but the socket is
+      // not OPEN yet. If readyState is not observable (null), we fall back to
+      // stable-tick-only confirmation to preserve backward compatibility.
       if (!confirmedConnectFired && lastConnectTime !== 0 && staleSinceMs === null) {
         connectedAndStableCount += 1;
         if (connectedAndStableCount >= FEISHU_WS_STABLE_TICKS_REQUIRED) {
-          confirmedConnectFired = true;
-          onConfirmedConnect?.();
+          const readyState = getWsReadyState();
+          if (readyState === null || readyState === 1 /* WebSocket.OPEN */) {
+            confirmedConnectFired = true;
+            onConfirmedConnect?.();
+          }
+          // readyState is known but not OPEN (e.g. CONNECTING during nonce wait) —
+          // do not fire; check again next tick without resetting the counter.
         }
       }
 
@@ -274,38 +299,29 @@ function runFeishuWSClientUntilDead(params: {
       }
 
       // A reconnect attempt was recorded (staleSinceMs set). Before declaring
-      // a stall, check whether the underlying WebSocket is actually open — this
-      // is the only signal that reliably distinguishes a fast successful
-      // reconnect (readyState === OPEN → clear stall clock) from SDK retry
-      // exhaustion (CLOSED/CONNECTING → keep the clock).
+      // a stall, check whether the underlying WebSocket is actually open — the
+      // only signal that reliably distinguishes a fast successful reconnect
+      // (readyState OPEN → clear stall clock) from SDK retry exhaustion
+      // (CLOSED/CONNECTING → keep the clock running).
       //
       // We wait for FEISHU_WS_STABLE_TICKS_REQUIRED consecutive stable ticks
-      // before checking, to avoid a false positive while the SDK is still
-      // mid-handshake after the reconnect attempt.
-      //
-      // wsConfig is accessed via the SDK's runtime shape (not the public type).
-      // The whole block is guarded so that any future SDK refactor degrades
-      // gracefully to the existing stall-detection behaviour instead of throwing.
+      // before checking, to avoid clearing prematurely while a handshake is
+      // still in progress. If readyState is not observable we leave the stall
+      // clock running (conservative: prefer a false restart over a silent death).
       if (lastConnectTime !== 0) {
         connectedAndStableCount += 1;
         if (connectedAndStableCount >= FEISHU_WS_STABLE_TICKS_REQUIRED) {
-          try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const wsInstance = (wsClient as any).wsConfig?.getWSInstance?.();
-            if (wsInstance != null && wsInstance.readyState === 1 /* WebSocket.OPEN */) {
-              // WebSocket is open — reconnect confirmed. Clear the stall clock
-              // so a healthy recovered session is not falsely evicted after 90 s.
-              log(
-                `feishu[${accountId}]: WebSocket reconnect confirmed (readyState OPEN); ` +
-                  `clearing stall clock`,
-              );
-              staleSinceMs = null;
-              connectedAndStableCount = 0;
-              return;
-            }
-          } catch {
-            // wsConfig private API unavailable; fall through to normal stall check.
+          const readyState = getWsReadyState();
+          if (readyState === 1 /* WebSocket.OPEN */) {
+            log(
+              `feishu[${accountId}]: WebSocket reconnect confirmed (readyState OPEN); ` +
+                `clearing stall clock`,
+            );
+            staleSinceMs = null;
+            connectedAndStableCount = 0;
+            return;
           }
+          // readyState is CLOSED/CONNECTING/null — stall clock continues.
         }
       }
 
