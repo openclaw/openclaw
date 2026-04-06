@@ -54,6 +54,24 @@ describe("isHeartbeatUserMessage", () => {
       }),
     ).toBe(false);
   });
+
+  it("returns false for normal conversation that quotes the token", () => {
+    expect(
+      isHeartbeatUserMessage({
+        role: "user",
+        content: "What does HEARTBEAT_OK mean? I keep seeing it in logs.",
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true for respond-style heartbeat prompt", () => {
+    expect(
+      isHeartbeatUserMessage({
+        role: "user",
+        content: "Check on things and respond with HEARTBEAT_OK if all clear.",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("isHeartbeatOkResponse", () => {
@@ -109,6 +127,33 @@ describe("isHeartbeatOkResponse", () => {
         content: "",
       }),
     ).toBe(false);
+  });
+
+  it("returns true for HEARTBEAT_OK with responsePrefix", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: "Nex HEARTBEAT_OK",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true for HEARTBEAT_OK with emoji suffix", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: "HEARTBEAT_OK 👍",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true for HEARTBEAT_OK with HTML wrapper", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: "<b>HEARTBEAT_OK</b>",
+      }),
+    ).toBe(true);
   });
 });
 

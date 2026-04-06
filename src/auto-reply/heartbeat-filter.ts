@@ -25,17 +25,25 @@ function extractMessageText(content: unknown): string {
 }
 
 /**
- * Check if a user message looks like a heartbeat prompt.
+ * Check if a user message looks like a system-generated heartbeat prompt.
+ *
  * Heartbeat prompts instruct the model to "reply HEARTBEAT_OK" when nothing
- * needs attention — this pattern is present in all heartbeat prompt variants
- * (default, task-based, custom).
+ * needs attention.  To avoid false positives on normal conversation turns
+ * that merely quote or discuss the token (e.g. debugging heartbeat behaviour),
+ * we require the instruction phrase pattern — not just the bare token.
  */
 export function isHeartbeatUserMessage(message: { role: string; content?: unknown }): boolean {
   if (message.role !== "user") {
     return false;
   }
   const text = extractMessageText(message.content);
-  return text.includes(HEARTBEAT_TOKEN);
+  // All heartbeat prompt variants (default, task-based, custom) use one of
+  // these instruction phrases.  A plain mention of "HEARTBEAT_OK" in normal
+  // conversation (e.g. "what does HEARTBEAT_OK mean?") won't match.
+  return (
+    text.includes(HEARTBEAT_TOKEN) &&
+    (/reply\s+HEARTBEAT_OK/i.test(text) || /respond.*HEARTBEAT_OK/i.test(text))
+  );
 }
 
 /**
@@ -59,8 +67,12 @@ function stripMarkup(text: string): string {
  * Check if an assistant message is effectively a HEARTBEAT_OK response
  * (no actionable content beyond the token itself).
  *
- * Only matches responses that are purely the HEARTBEAT_OK token, possibly
- * wrapped in markup. Responses with additional real content are preserved.
+ * Matches responses that are purely the HEARTBEAT_OK token — possibly
+ * wrapped in markup, preceded by a responsePrefix, or followed by
+ * lightweight suffixes (emoji, punctuation) that don't carry real content.
+ * This mirrors the detection logic in heartbeat-events-filter.ts.
+ *
+ * Responses with additional real content are preserved.
  */
 export function isHeartbeatOkResponse(message: { role: string; content?: unknown }): boolean {
   if (message.role !== "assistant") {
@@ -71,8 +83,30 @@ export function isHeartbeatOkResponse(message: { role: string; content?: unknown
     return false;
   }
   const normalized = stripMarkup(text);
-  // Match only when the entire response (after normalizing markup) is just the token
-  return normalized === HEARTBEAT_TOKEN;
+  if (!normalized.includes(HEARTBEAT_TOKEN)) {
+    return false;
+  }
+
+  // Strip the HEARTBEAT_OK token and check if only lightweight noise remains.
+  // Handles: "HEARTBEAT_OK", "Nex HEARTBEAT_OK", "HEARTBEAT_OK 👍",
+  //          "**HEARTBEAT_OK**", responsePrefix + token, etc.
+  const tokenIdx = normalized.indexOf(HEARTBEAT_TOKEN);
+  const before = normalized.slice(0, tokenIdx).trim();
+  const after = normalized.slice(tokenIdx + HEARTBEAT_TOKEN.length).trim();
+
+  // Content before the token must be empty or a short prefix (responsePrefix
+  // is typically just the agent name — a single word).
+  if (before && before.split(/\s+/).length > 2) {
+    return false;
+  }
+
+  // Content after the token must be empty or non-alphanumeric noise (emoji,
+  // punctuation).  Any word character after the token means real content.
+  if (after && /[a-zA-Z0-9]/.test(after)) {
+    return false;
+  }
+
+  return true;
 }
 
 /**
