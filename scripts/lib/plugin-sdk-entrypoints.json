@@ -126,6 +126,7 @@
   "directory-runtime",
   "googlechat",
   "googlechat-runtime-shared",
+  "media-generation-runtime-shared",
   "image-generation",
   "image-generation-core",
   "music-generation",

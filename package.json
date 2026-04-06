@@ -547,6 +547,10 @@
       "types": "./dist/plugin-sdk/googlechat-runtime-shared.d.ts",
       "default": "./dist/plugin-sdk/googlechat-runtime-shared.js"
     },
+    "./plugin-sdk/media-generation-runtime-shared": {
+      "types": "./dist/plugin-sdk/media-generation-runtime-shared.d.ts",
+      "default": "./dist/plugin-sdk/media-generation-runtime-shared.js"
+    },
     "./plugin-sdk/image-generation": {
       "types": "./dist/plugin-sdk/image-generation.d.ts",
       "default": "./dist/plugin-sdk/image-generation.js"
