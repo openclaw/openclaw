@@ -194,9 +194,42 @@ export interface TTSConfig {
   speed?: number;
 }
 
+type QQBotTtsProviderConfig = {
+  baseUrl?: string;
+  apiKey?: string;
+  authStyle?: string;
+  queryParams?: Record<string, string>;
+};
+
+type QQBotTtsBlock = QQBotTtsProviderConfig & {
+  model?: string;
+  voice?: string;
+  speed?: number;
+};
+
+type QQBotMessagesTtsConfig = {
+  auto?: string;
+  enabled?: boolean;
+  provider?: string;
+} & Record<string, unknown>;
+
+type QQBotTtsConfigRoot = {
+  channels?: {
+    qqbot?: {
+      tts?: QQBotTtsBlock & { enabled?: boolean; provider?: string };
+    };
+  };
+  models?: {
+    providers?: Record<string, QQBotTtsProviderConfig>;
+  };
+  messages?: {
+    tts?: QQBotMessagesTtsConfig;
+  };
+};
+
 function resolveTTSFromBlock(
-  block: Record<string, unknown>,
-  providerCfg: Record<string, unknown> | undefined,
+  block: QQBotTtsBlock,
+  providerCfg: QQBotTtsProviderConfig | undefined,
 ): TTSConfig | null {
   const baseUrl: string | undefined = block?.baseUrl || providerCfg?.baseUrl;
   const apiKey: string | undefined = block?.apiKey || providerCfg?.apiKey;
@@ -228,7 +261,7 @@ function resolveTTSFromBlock(
 }
 
 export function resolveTTSConfig(cfg: Record<string, unknown>): TTSConfig | null {
-  const c = cfg as unknown;
+  const c = cfg as QQBotTtsConfigRoot;
 
   // Prefer plugin-specific TTS config first.
   const channelTts = c?.channels?.qqbot?.tts;
@@ -245,7 +278,7 @@ export function resolveTTSConfig(cfg: Record<string, unknown>): TTSConfig | null
   const msgTts = c?.messages?.tts;
   if (msgTts && msgTts.auto !== "off" && msgTts.auto !== "disabled") {
     const providerId: string = msgTts?.provider || "openai";
-    const providerBlock = msgTts?.[providerId];
+    const providerBlock = msgTts?.[providerId] as QQBotTtsBlock | undefined;
     const providerCfg = c?.models?.providers?.[providerId];
     const result = resolveTTSFromBlock(providerBlock ?? {}, providerCfg);
     if (result) {

@@ -44,6 +44,10 @@ let _log:
   | { info: (msg: string) => void; error: (msg: string) => void; debug?: (msg: string) => void }
   | undefined;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function fetchJson(url: string, timeoutMs: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const req = https.get(
@@ -80,12 +84,18 @@ async function fetchDistTags(): Promise<Record<string, string>> {
   for (const url of REGISTRIES) {
     try {
       const json = await fetchJson(url, 10_000);
-      const tags = json["dist-tags"];
-      if (tags && typeof tags === "object") {
-        return tags;
+      const tags = isRecord(json) ? json["dist-tags"] : undefined;
+      if (isRecord(tags)) {
+        return Object.fromEntries(
+          Object.entries(tags).filter((entry): entry is [string, string] => {
+            return typeof entry[1] === "string";
+          }),
+        );
       }
     } catch (e: unknown) {
-      _log?.debug?.(`[qqbot:update-checker] ${url} failed: ${e.message}`);
+      _log?.debug?.(
+        `[qqbot:update-checker] ${url} failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
   }
   throw new Error("all registries failed");
@@ -141,7 +151,8 @@ export async function getUpdateInfo(): Promise<UpdateInfo> {
     const tags = await fetchDistTags();
     return buildUpdateInfo(tags);
   } catch (err: unknown) {
-    _log?.debug?.(`[qqbot:update-checker] check failed: ${err.message}`);
+    const message = err instanceof Error ? err.message : String(err);
+    _log?.debug?.(`[qqbot:update-checker] check failed: ${message}`);
     return {
       current: CURRENT_VERSION,
       latest: null,
@@ -149,7 +160,7 @@ export async function getUpdateInfo(): Promise<UpdateInfo> {
       alpha: null,
       hasUpdate: false,
       checkedAt: Date.now(),
-      error: err.message,
+      error: message,
     };
   }
 }
@@ -162,7 +173,7 @@ export async function checkVersionExists(version: string): Promise<boolean> {
     try {
       const url = `${baseUrl}/${version}`;
       const json = await fetchJson(url, 10_000);
-      if (json && json.version === version) {
+      if (isRecord(json) && json.version === version) {
         return true;
       }
     } catch {

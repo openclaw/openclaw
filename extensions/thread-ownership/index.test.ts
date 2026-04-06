@@ -1,3 +1,4 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
 import register from "./index.js";
