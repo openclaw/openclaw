@@ -1,4 +1,4 @@
-import { listBootstrapChannelPlugins } from "../../../channels/plugins/bootstrap-registry.js";
+import { iterateBootstrapChannelPlugins } from "../../../channels/plugins/bootstrap-registry.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 
 export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, unknown>): {
@@ -7,7 +7,7 @@ export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, un
 } {
   let nextCfg = cfg as OpenClawConfig & Record<string, unknown>;
   const changes: string[] = [];
-  for (const plugin of listBootstrapChannelPlugins()) {
+  for (const plugin of iterateBootstrapChannelPlugins()) {
     const mutation = plugin.doctor?.normalizeCompatibilityConfig?.({ cfg: nextCfg });
     if (!mutation || mutation.changes.length === 0) {
       continue;

@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { CompactionEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  isHeartbeatOkResponse,
+  isHeartbeatUserMessage,
+} from "../../auto-reply/heartbeat-filter.js";
 import { log } from "./logger.js";
 
 /**
@@ -34,6 +38,8 @@ export async function truncateSessionAfterCompaction(params: {
   sessionFile: string;
   /** Optional path to archive the pre-truncation file. */
   archivePath?: string;
+  ackMaxChars?: number;
+  heartbeatPrompt?: string;
 }): Promise<TruncationResult> {
   const { sessionFile } = params;
 
@@ -108,6 +114,25 @@ export async function truncateSessionAfterCompaction(params: {
   for (const entry of allEntries) {
     if (summarizedBranchIds.has(entry.id) && entry.type === "message") {
       removedIds.add(entry.id);
+    }
+  }
+
+  for (let i = 0; i < branch.length - 1; i++) {
+    const userEntry = branch[i];
+    const assistantEntry = branch[i + 1];
+    if (
+      userEntry.type === "message" &&
+      assistantEntry.type === "message" &&
+      summarizedBranchIds.has(userEntry.id) &&
+      summarizedBranchIds.has(assistantEntry.id) &&
+      !removedIds.has(userEntry.id) &&
+      !removedIds.has(assistantEntry.id) &&
+      isHeartbeatUserMessage(userEntry.message, params.heartbeatPrompt) &&
+      isHeartbeatOkResponse(assistantEntry.message, params.ackMaxChars)
+    ) {
+      removedIds.add(userEntry.id);
+      removedIds.add(assistantEntry.id);
+      i++;
     }
   }
 

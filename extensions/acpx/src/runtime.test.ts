@@ -1,121 +1,150 @@
-import { describe, expect, it, vi } from "vitest";
+import type { AcpRuntimeHandle, AcpRuntimeOptions, AcpSessionStore } from "acpx/runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { AcpRuntimeErrorMock } = vi.hoisted(() => ({
-  AcpRuntimeErrorMock: class AcpRuntimeError extends Error {
-    code: string;
+const mocks = vi.hoisted(() => {
+  const state = {
+    capturedStore: undefined as AcpSessionStore | undefined,
+  };
 
-    constructor(code: string, message: string) {
-      super(message);
-      this.name = "AcpRuntimeError";
-      this.code = code;
+  class MockAcpxRuntime {
+    constructor(options: AcpRuntimeOptions) {
+      state.capturedStore = options.sessionStore;
     }
-  },
+
+    isHealthy() {
+      return true;
+    }
+
+    async probeAvailability() {}
+
+    async doctor() {
+      return { ok: true, message: "ok" };
+    }
+
+    async ensureSession() {
+      return {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      } satisfies AcpRuntimeHandle;
+    }
+
+    async *runTurn() {}
+
+    getCapabilities() {
+      return { controls: [] };
+    }
+
+    async getStatus() {
+      return {};
+    }
+
+    async setMode() {}
+
+    async setConfigOption() {}
+
+    async cancel() {}
+
+    async close() {}
+  }
+
+  return {
+    state,
+    MockAcpxRuntime,
+  };
+});
+
+vi.mock("acpx/runtime", () => ({
+  ACPX_BACKEND_ID: "acpx",
+  AcpxRuntime: mocks.MockAcpxRuntime,
+  createAcpRuntime: vi.fn(),
+  createAgentRegistry: vi.fn(),
+  createFileSessionStore: vi.fn(),
+  decodeAcpxRuntimeHandleState: vi.fn(),
+  encodeAcpxRuntimeHandleState: vi.fn(),
 }));
 
-vi.mock("../runtime-api.js", () => ({
-  AcpRuntimeError: AcpRuntimeErrorMock,
-}));
+import { AcpxRuntime } from "./runtime.js";
 
-import {
-  AcpxRuntime,
-  decodeAcpxRuntimeHandleState,
-  encodeAcpxRuntimeHandleState,
-} from "./runtime.js";
+describe("AcpxRuntime fresh reset wrapper", () => {
+  beforeEach(() => {
+    mocks.state.capturedStore = undefined;
+  });
 
-describe("AcpxRuntime", () => {
-  it("delegates session lifecycle to the native manager", async () => {
-    const encoded = encodeAcpxRuntimeHandleState({
-      name: "agent:codex:acp:test",
-      agent: "codex",
-      cwd: "/tmp/acpx",
-      mode: "persistent",
-      acpxRecordId: "agent:codex:acp:test",
-      backendSessionId: "sid-1",
-      agentSessionId: "inner-1",
-    });
-    expect(decodeAcpxRuntimeHandleState(encoded)).toEqual({
-      name: "agent:codex:acp:test",
-      agent: "codex",
-      cwd: "/tmp/acpx",
-      mode: "persistent",
-      acpxRecordId: "agent:codex:acp:test",
-      backendSessionId: "sid-1",
-      agentSessionId: "inner-1",
-    });
-
-    const manager = {
-      ensureSession: vi.fn(async () => ({
-        acpxRecordId: "agent:codex:acp:test",
-        acpSessionId: "sid-1",
-        agentSessionId: "inner-1",
-        cwd: "/tmp/acpx",
-      })),
-      runTurn: vi.fn(async function* () {
-        yield { type: "text_delta", text: "hello", stream: "output" };
-        yield { type: "done", stopReason: "end_turn" };
-      }),
-      getStatus: vi.fn(async () => ({
-        summary: "status=ok",
-        acpxRecordId: "agent:codex:acp:test",
-      })),
-      setMode: vi.fn(async () => {}),
-      setConfigOption: vi.fn(async () => {}),
-      cancel: vi.fn(async () => {}),
-      close: vi.fn(async () => {}),
+  it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
+    const baseStore: AcpSessionStore = {
+      load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
+      save: vi.fn(async () => {}),
     };
-    const runtime = new AcpxRuntime(
-      {
-        cwd: "/tmp/acpx",
-        stateDir: "/tmp/acpx/state",
-        permissionMode: "approve-reads",
-        nonInteractivePermissions: "fail",
-        pluginToolsMcpBridge: false,
-        strictWindowsCmdWrapper: true,
-        queueOwnerTtlSeconds: 0.1,
-        mcpServers: {},
-        agents: {},
-      },
-      {
-        managerFactory: () => manager as never,
-      },
-    );
 
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:test",
-      agent: "codex",
-      mode: "persistent",
+    const runtime = new AcpxRuntime({
+      cwd: "/tmp",
+      sessionStore: baseStore,
+      agentRegistry: {
+        resolve: () => "codex",
+        list: () => ["codex"],
+      },
+      permissionMode: "approve-reads",
     });
-    expect(handle.acpxRecordId).toBe("agent:codex:acp:test");
-    expect(handle.backendSessionId).toBe("sid-1");
-    expect(handle.agentSessionId).toBe("inner-1");
 
-    const events = [];
-    for await (const event of runtime.runTurn({
-      handle,
-      text: "hello",
-      mode: "prompt",
-      requestId: "req-1",
-    })) {
-      events.push(event);
-    }
+    const wrappedStore = mocks.state.capturedStore;
+    expect(wrappedStore).toBeDefined();
 
-    expect(events).toEqual([
-      { type: "text_delta", text: "hello", stream: "output" },
-      { type: "done", stopReason: "end_turn" },
-    ]);
+    expect(await wrappedStore?.load("agent:codex:acp:binding:test")).toEqual({
+      acpxRecordId: "stale",
+    });
+    expect(baseStore.load).toHaveBeenCalledTimes(1);
 
-    await runtime.getStatus({ handle });
-    await runtime.setMode({ handle, mode: "architect" });
-    await runtime.setConfigOption({ handle, key: "approval", value: "manual" });
-    await runtime.cancel({ handle });
-    await runtime.close({ handle, reason: "test" });
+    await runtime.prepareFreshSession({
+      sessionKey: "agent:codex:acp:binding:test",
+    });
 
-    expect(manager.ensureSession).toHaveBeenCalledOnce();
-    expect(manager.runTurn).toHaveBeenCalledOnce();
-    expect(manager.getStatus).toHaveBeenCalledOnce();
-    expect(manager.setMode).toHaveBeenCalledOnce();
-    expect(manager.setConfigOption).toHaveBeenCalledOnce();
-    expect(manager.cancel).toHaveBeenCalledOnce();
-    expect(manager.close).toHaveBeenCalledOnce();
+    expect(await wrappedStore?.load("agent:codex:acp:binding:test")).toBeUndefined();
+    expect(baseStore.load).toHaveBeenCalledTimes(1);
+    expect(await wrappedStore?.load("agent:codex:acp:binding:test")).toBeUndefined();
+    expect(baseStore.load).toHaveBeenCalledTimes(1);
+
+    await wrappedStore?.save({
+      acpxRecordId: "fresh-record",
+      name: "agent:codex:acp:binding:test",
+    } as never);
+
+    expect(await wrappedStore?.load("agent:codex:acp:binding:test")).toEqual({
+      acpxRecordId: "stale",
+    });
+    expect(baseStore.load).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the session fresh after discardPersistentState close", async () => {
+    const baseStore: AcpSessionStore = {
+      load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
+      save: vi.fn(async () => {}),
+    };
+
+    const runtime = new AcpxRuntime({
+      cwd: "/tmp",
+      sessionStore: baseStore,
+      agentRegistry: {
+        resolve: () => "codex",
+        list: () => ["codex"],
+      },
+      permissionMode: "approve-reads",
+    });
+
+    const wrappedStore = mocks.state.capturedStore;
+    expect(wrappedStore).toBeDefined();
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "new-in-place-reset",
+      discardPersistentState: true,
+    });
+
+    expect(await wrappedStore?.load("agent:codex:acp:binding:test")).toBeUndefined();
+    expect(baseStore.load).not.toHaveBeenCalled();
   });
 });

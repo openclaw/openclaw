@@ -270,11 +270,22 @@ function createGatewayPlugin(params: {
     }
 
     override createWebSocket(url: string) {
-      if (!params.wsAgent) {
-        return super.createWebSocket(url);
+      if (!url) {
+        throw new Error("Gateway URL is required");
       }
+      // Avoid Node's undici-backed global WebSocket here. We have seen late
+      // close-path crashes during Discord gateway teardown; the ws transport is
+      // already our proxy path and behaves predictably for lifecycle cleanup.
       const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
-      return new WebSocketCtor(url, { agent: params.wsAgent });
+      const socket = new WebSocketCtor(url, params.wsAgent ? { agent: params.wsAgent } : undefined);
+      if ("binaryType" in socket) {
+        try {
+          socket.binaryType = "arraybuffer";
+        } catch {
+          // Ignore runtimes that expose a readonly binaryType.
+        }
+      }
+      return socket;
     }
   }
 

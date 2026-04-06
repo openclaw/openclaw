@@ -69,5 +69,4 @@ Wan video generation. Use:
 
 - [Video Generation](/tools/video-generation)
 - [Qwen](/providers/qwen)
-- [Qwen / Model Studio](/providers/qwen_modelstudio)
 - [Configuration Reference](/gateway/configuration-reference#agent-defaults)

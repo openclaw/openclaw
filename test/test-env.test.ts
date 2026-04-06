@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "./helpers/import-fresh.js";
+import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
 
 const ORIGINAL_ENV = { ...process.env };
@@ -31,9 +31,7 @@ function writeFile(targetPath: string, content: string): void {
 }
 
 function createTempHome(): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-env-real-home-"));
-  tempDirs.add(tempDir);
-  return tempDir;
+  return makeTempDir(tempDirs, "openclaw-test-env-real-home-");
 }
 
 afterEach(() => {
@@ -41,10 +39,7 @@ afterEach(() => {
     cleanupFns.pop()?.();
   }
   restoreProcessEnv();
-  for (const tempDir of tempDirs) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-  tempDirs.clear();
+  cleanupTempDirs(tempDirs);
 });
 
 describe("installTestEnv", () => {

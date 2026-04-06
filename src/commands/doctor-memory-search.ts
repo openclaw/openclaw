@@ -218,7 +218,7 @@ export async function noteMemorySearchHealth(
           qmdCheck.error ? `Probe error: ${qmdCheck.error}` : null,
           "",
           "Fix (pick one):",
-          "- Install the supported QMD package: npm install -g @tobilu/qmd",
+          "- Install the supported QMD package: npm install -g @tobilu/qmd (or bun install -g @tobilu/qmd)",
           `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
           `- Or switch back to builtin memory: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
           "",

@@ -89,6 +89,9 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
       const file = typeof record.file === "string" ? record.file : undefined;
       const snippet = typeof record.snippet === "string" ? record.snippet : undefined;
       const body = typeof record.body === "string" ? record.body : undefined;
+      const line = parseQmdLineNumber(record.line);
+      const startLine = parseQmdLineNumber(record.start_line ?? record.startLine) ?? line;
+      const endLine = parseQmdLineNumber(record.end_line ?? record.endLine) ?? line;
       return {
         docid,
         score,
@@ -96,8 +99,8 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
         file,
         snippet,
         body,
-        startLine: parseQmdLineNumber(record.start_line ?? record.startLine),
-        endLine: parseQmdLineNumber(record.end_line ?? record.endLine),
+        startLine,
+        endLine,
       } as QmdQueryResult;
     });
   } catch {

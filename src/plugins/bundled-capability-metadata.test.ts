@@ -36,6 +36,7 @@ describe("bundled capability metadata", () => {
         ),
         imageGenerationProviderIds: uniqueStrings(manifest.contracts?.imageGenerationProviders),
         videoGenerationProviderIds: uniqueStrings(manifest.contracts?.videoGenerationProviders),
+        musicGenerationProviderIds: uniqueStrings(manifest.contracts?.musicGenerationProviders),
         webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders),
         webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders),
         toolNames: uniqueStrings(manifest.contracts?.tools),
@@ -49,6 +50,7 @@ describe("bundled capability metadata", () => {
           entry.mediaUnderstandingProviderIds.length > 0 ||
           entry.imageGenerationProviderIds.length > 0 ||
           entry.videoGenerationProviderIds.length > 0 ||
+          entry.musicGenerationProviderIds.length > 0 ||
           entry.webFetchProviderIds.length > 0 ||
           entry.webSearchProviderIds.length > 0 ||
           entry.toolNames.length > 0,

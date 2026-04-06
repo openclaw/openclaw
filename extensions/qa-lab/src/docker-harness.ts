@@ -117,6 +117,7 @@ ${imageBlock}    pull_policy: never
     environment:
       OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json
       OPENCLAW_STATE_DIR: /tmp/openclaw/state
+      OPENCLAW_NO_RESPAWN: "1"
       OPENCLAW_SKIP_GMAIL_WATCHER: "1"
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1"
       OPENCLAW_SKIP_CANVAS_HOST: "1"
@@ -202,6 +203,8 @@ Gateway:
 - Mock OpenAI: internal \`http://qa-mock-openai:44080/v1\`
 
 This scaffold uses localhost Control UI insecure-auth compatibility for QA only.
+The gateway runs with in-process restarts inside Docker so restart actions do not
+kill the container by detaching a replacement child.
 `;
 }
 

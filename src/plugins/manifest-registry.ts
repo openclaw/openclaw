@@ -12,6 +12,7 @@ import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import {
   loadPluginManifest,
   type OpenClawPackageManifest,
+  type PluginManifestConfigContracts,
   type PluginManifest,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
@@ -36,6 +37,7 @@ type PluginManifestContractListKey =
   | "realtimeTranscriptionProviders"
   | "imageGenerationProviders"
   | "videoGenerationProviders"
+  | "musicGenerationProviders"
   | "memoryEmbeddingProviders"
   | "webFetchProviders"
   | "webSearchProviders";
@@ -69,6 +71,7 @@ export type PluginManifestRecord = {
   channels: string[];
   providers: string[];
   modelSupport?: PluginManifestModelSupport;
+  cliBackends: string[];
   providerAuthEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   skills: string[];
@@ -85,6 +88,7 @@ export type PluginManifestRecord = {
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
   contracts?: PluginManifestContracts;
+  configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   channelCatalogMeta?: {
     id: string;
@@ -286,6 +290,7 @@ function buildRecord(params: {
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
     modelSupport: params.manifest.modelSupport,
+    cliBackends: params.manifest.cliBackends ?? [],
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
     skills: params.manifest.skills ?? [],
@@ -304,6 +309,7 @@ function buildRecord(params: {
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
     contracts: params.manifest.contracts,
+    configContracts: params.manifest.configContracts,
     channelConfigs,
     ...(params.candidate.packageManifest?.channel?.id
       ? {
@@ -348,6 +354,7 @@ function buildBundleRecord(params: {
     bundleCapabilities: params.manifest.capabilities,
     channels: [],
     providers: [],
+    cliBackends: [],
     skills: params.manifest.skills ?? [],
     settingsFiles: params.manifest.settingsFiles ?? [],
     hooks: params.manifest.hooks ?? [],
@@ -359,6 +366,7 @@ function buildBundleRecord(params: {
     schemaCacheKey: undefined,
     configSchema: undefined,
     configUiHints: undefined,
+    configContracts: undefined,
     channelConfigs: undefined,
   };
 }

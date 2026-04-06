@@ -85,6 +85,13 @@ function loadTtsRuntime() {
   return ttsRuntimePromise;
 }
 
+async function maybeApplyTtsToReplyPayload(
+  params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
+) {
+  const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+  return maybeApplyTtsToPayload(params);
+}
+
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
@@ -183,6 +190,8 @@ export async function dispatchReplyFromConfig(params: {
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./get-reply-from-config.runtime.js").getReplyFromConfig;
+  fastAbortResolver?: typeof import("./abort.runtime.js").tryFastAbortFromMessage;
+  formatAbortReplyTextResolver?: typeof import("./abort.runtime.js").formatAbortReplyText;
   /** Optional config override passed to getReplyFromConfig (e.g. per-sender timezone). */
   configOverride?: OpenClawConfig;
 }): Promise<DispatchFromConfigResult> {
@@ -491,11 +500,17 @@ export async function dispatchReplyFromConfig(params: {
   markProcessing();
 
   try {
-    const abortRuntime = await loadAbortRuntime();
-    const fastAbort = await abortRuntime.tryFastAbortFromMessage({ ctx, cfg });
+    const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
+    const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
+    const formatAbortReplyTextResolver =
+      params.formatAbortReplyTextResolver ?? abortRuntime?.formatAbortReplyText;
+    if (!fastAbortResolver || !formatAbortReplyTextResolver) {
+      throw new Error("abort runtime unavailable");
+    }
+    const fastAbort = await fastAbortResolver({ ctx, cfg });
     if (fastAbort.handled) {
       const payload = {
-        text: abortRuntime.formatAbortReplyText(fastAbort.stoppedSubagents),
+        text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents),
       } satisfies ReplyPayload;
       let queuedFinal = false;
       let routedFinalCount = 0;
@@ -543,13 +558,12 @@ export async function dispatchReplyFromConfig(params: {
       chatType: sessionStoreEntry.entry?.chatType,
     });
 
-    const { maybeApplyTtsToPayload } = await loadTtsRuntime();
     const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
     const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
-      const ttsPayload = await maybeApplyTtsToPayload({
+      const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
         cfg,
         channel: ttsChannel,
@@ -803,7 +817,7 @@ export async function dispatchReplyFromConfig(params: {
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
-            const ttsPayload = await maybeApplyTtsToPayload({
+            const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
               cfg,
               channel: ttsChannel,
@@ -879,7 +893,7 @@ export async function dispatchReplyFromConfig(params: {
                   }
                 : context;
             await params.replyOptions?.onBlockReplyQueued?.(payload, queuedContext);
-            const ttsPayload = await maybeApplyTtsToPayload({
+            const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
               cfg,
               channel: ttsChannel,
@@ -963,7 +977,7 @@ export async function dispatchReplyFromConfig(params: {
       accumulatedBlockText.trim()
     ) {
       try {
-        const ttsSyntheticReply = await maybeApplyTtsToPayload({
+        const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
           payload: { text: accumulatedBlockText },
           cfg,
           channel: ttsChannel,

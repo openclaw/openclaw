@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
   loadSanitizeSessionHistoryWithCleanMocks,
@@ -252,11 +252,16 @@ describe("sanitizeSessionHistory", () => {
       | undefined;
   };
 
-  beforeEach(async () => {
-    testTimestamp = 1;
+  beforeAll(async () => {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
     sanitizeSessionHistory = harness.sanitizeSessionHistory;
     mockedHelpers = harness.mockedHelpers;
+  });
+
+  beforeEach(() => {
+    testTimestamp = 1;
+    vi.clearAllMocks();
+    vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
     mockSessionManager = makeMockSessionManager();
   });
 

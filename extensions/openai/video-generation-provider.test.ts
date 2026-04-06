@@ -3,12 +3,14 @@ import { buildOpenAIVideoGenerationProvider } from "./video-generation-provider.
 
 const {
   resolveApiKeyForProviderMock,
+  postJsonRequestMock,
   postTranscriptionRequestMock,
   fetchWithTimeoutMock,
   assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openai-key" })),
+  postJsonRequestMock: vi.fn(),
   postTranscriptionRequestMock: vi.fn(),
   fetchWithTimeoutMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
@@ -27,6 +29,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   fetchWithTimeout: fetchWithTimeoutMock,
+  postJsonRequest: postJsonRequestMock,
   postTranscriptionRequest: postTranscriptionRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
@@ -34,14 +37,15 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
 describe("openai video generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
+    postJsonRequestMock.mockReset();
     postTranscriptionRequestMock.mockReset();
     fetchWithTimeoutMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
   });
 
-  it("creates, polls, and downloads a Sora video", async () => {
-    postTranscriptionRequestMock.mockResolvedValue({
+  it("uses JSON for text-only Sora requests", async () => {
+    postJsonRequestMock.mockResolvedValue({
       response: {
         json: async () => ({
           id: "vid_123",
@@ -75,11 +79,12 @@ describe("openai video generation provider", () => {
       durationSeconds: 4,
     });
 
-    expect(postTranscriptionRequestMock).toHaveBeenCalledWith(
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://api.openai.com/v1/videos",
       }),
     );
+    expect(postTranscriptionRequestMock).not.toHaveBeenCalled();
     expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
       1,
       "https://api.openai.com/v1/videos/vid_123",
@@ -93,6 +98,48 @@ describe("openai video generation provider", () => {
       expect.objectContaining({
         videoId: "vid_123",
         status: "completed",
+      }),
+    );
+  });
+
+  it("uses multipart when a reference asset is present", async () => {
+    postTranscriptionRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          id: "vid_456",
+          model: "sora-2",
+          status: "queued",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "vid_456",
+          model: "sora-2",
+          status: "completed",
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "openai",
+      model: "sora-2",
+      prompt: "Animate this frame",
+      cfg: {},
+      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+    });
+
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+    expect(postTranscriptionRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/videos",
+        body: expect.any(FormData),
       }),
     );
   });

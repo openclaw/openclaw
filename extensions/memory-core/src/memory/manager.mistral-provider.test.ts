@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings.js";
 import type {
   EmbeddingProvider,
@@ -77,9 +77,12 @@ describe("memory manager mistral provider wiring", () => {
   let indexPath = "";
   let manager: MemoryIndexManager | null = null;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
+  });
+
+  beforeEach(async () => {
     vi.clearAllMocks();
     createEmbeddingProviderMock.mockReset();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-mistral-"));
@@ -99,6 +102,10 @@ describe("memory manager mistral provider wiring", () => {
       workspaceDir = "";
       indexPath = "";
     }
+  });
+
+  afterAll(() => {
+    vi.resetModules();
   });
 
   it("stores mistral client when mistral provider is selected", async () => {

@@ -1,4 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { bluebubblesPlugin } from "../../../extensions/bluebubbles/api.js";
+import {
+  discordPlugin,
+  discordThreadBindingTesting,
+} from "../../../extensions/discord/test-api.js";
+import { feishuPlugin, feishuThreadBindingTesting } from "../../../extensions/feishu/api.js";
+import { imessagePlugin } from "../../../extensions/imessage/api.js";
+import { matrixPlugin, setMatrixRuntime } from "../../../extensions/matrix/test-api.js";
+import {
+  telegramPlugin,
+  resetTelegramThreadBindingsForTests,
+} from "../../../extensions/telegram/test-api.js";
 import { getSessionBindingContractRegistry } from "../../../src/channels/plugins/contracts/registry-session-binding.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import {
@@ -13,10 +25,6 @@ import {
 import { resetPluginRuntimeStateForTest } from "../../../src/plugins/runtime.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/index.js";
-import {
-  loadBundledPluginPublicSurfaceSync,
-  loadBundledPluginTestApiSync,
-} from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
 
 type DiscordThreadBindingTesting = {
@@ -25,109 +33,49 @@ type DiscordThreadBindingTesting = {
 
 type ResetTelegramThreadBindingsForTests = () => Promise<void>;
 
-let discordThreadBindingTestingCache: DiscordThreadBindingTesting | undefined;
-let resetTelegramThreadBindingsForTestsCache: ResetTelegramThreadBindingsForTests | undefined;
-let feishuApiPromise: Promise<typeof import("../../../extensions/feishu/api.js")> | undefined;
-let matrixApiPromise: Promise<typeof import("../../../extensions/matrix/api.js")> | undefined;
-let bluebubblesPluginCache: ChannelPlugin | undefined;
-let discordPluginCache: ChannelPlugin | undefined;
-let feishuPluginCache: ChannelPlugin | undefined;
-let imessagePluginCache: ChannelPlugin | undefined;
-let matrixPluginCache: ChannelPlugin | undefined;
-let setMatrixRuntimeCache: ((runtime: PluginRuntime) => void) | undefined;
-let telegramPluginCache: ChannelPlugin | undefined;
-
 function getBluebubblesPlugin(): ChannelPlugin {
-  if (!bluebubblesPluginCache) {
-    ({ bluebubblesPlugin: bluebubblesPluginCache } = loadBundledPluginPublicSurfaceSync<{
-      bluebubblesPlugin: ChannelPlugin;
-    }>({ pluginId: "bluebubbles", artifactBasename: "index.js" }));
-  }
-  return bluebubblesPluginCache;
+  return bluebubblesPlugin as unknown as ChannelPlugin;
 }
 
 function getDiscordPlugin(): ChannelPlugin {
-  if (!discordPluginCache) {
-    ({ discordPlugin: discordPluginCache } = loadBundledPluginTestApiSync<{
-      discordPlugin: ChannelPlugin;
-    }>("discord"));
-  }
-  return discordPluginCache;
+  return discordPlugin as unknown as ChannelPlugin;
 }
 
 function getFeishuPlugin(): ChannelPlugin {
-  if (!feishuPluginCache) {
-    ({ feishuPlugin: feishuPluginCache } = loadBundledPluginPublicSurfaceSync<{
-      feishuPlugin: ChannelPlugin;
-    }>({ pluginId: "feishu", artifactBasename: "api.js" }));
-  }
-  return feishuPluginCache;
+  return feishuPlugin as unknown as ChannelPlugin;
 }
 
 function getIMessagePlugin(): ChannelPlugin {
-  if (!imessagePluginCache) {
-    ({ imessagePlugin: imessagePluginCache } = loadBundledPluginPublicSurfaceSync<{
-      imessagePlugin: ChannelPlugin;
-    }>({ pluginId: "imessage", artifactBasename: "api.js" }));
-  }
-  return imessagePluginCache;
+  return imessagePlugin as unknown as ChannelPlugin;
 }
 
 function getMatrixPlugin(): ChannelPlugin {
-  if (!matrixPluginCache) {
-    ({ matrixPlugin: matrixPluginCache, setMatrixRuntime: setMatrixRuntimeCache } =
-      loadBundledPluginTestApiSync<{
-        matrixPlugin: ChannelPlugin;
-        setMatrixRuntime: (runtime: PluginRuntime) => void;
-      }>("matrix"));
-  }
-  return matrixPluginCache;
+  return matrixPlugin as unknown as ChannelPlugin;
 }
 
 function getSetMatrixRuntime(): (runtime: PluginRuntime) => void {
-  if (!setMatrixRuntimeCache) {
-    void getMatrixPlugin();
-  }
-  return setMatrixRuntimeCache!;
+  return setMatrixRuntime;
 }
 
 function getTelegramPlugin(): ChannelPlugin {
-  if (!telegramPluginCache) {
-    ({ telegramPlugin: telegramPluginCache } = loadBundledPluginTestApiSync<{
-      telegramPlugin: ChannelPlugin;
-    }>("telegram"));
-  }
-  return telegramPluginCache;
+  return telegramPlugin as unknown as ChannelPlugin;
 }
 
 function getDiscordThreadBindingTesting(): DiscordThreadBindingTesting {
-  if (!discordThreadBindingTestingCache) {
-    ({ discordThreadBindingTesting: discordThreadBindingTestingCache } =
-      loadBundledPluginTestApiSync<{
-        discordThreadBindingTesting: DiscordThreadBindingTesting;
-      }>("discord"));
-  }
-  return discordThreadBindingTestingCache;
+  return discordThreadBindingTesting;
 }
 
 function getResetTelegramThreadBindingsForTests(): ResetTelegramThreadBindingsForTests {
-  if (!resetTelegramThreadBindingsForTestsCache) {
-    ({ resetTelegramThreadBindingsForTests: resetTelegramThreadBindingsForTestsCache } =
-      loadBundledPluginTestApiSync<{
-        resetTelegramThreadBindingsForTests: ResetTelegramThreadBindingsForTests;
-      }>("telegram"));
-  }
-  return resetTelegramThreadBindingsForTestsCache;
+  return resetTelegramThreadBindingsForTests;
 }
 
 async function getFeishuThreadBindingTesting() {
-  feishuApiPromise ??= import("../../../extensions/feishu/api.js");
-  return (await feishuApiPromise).feishuThreadBindingTesting;
+  return feishuThreadBindingTesting;
 }
 
 async function getResetMatrixThreadBindingsForTests() {
-  matrixApiPromise ??= import("../../../extensions/matrix/api.js");
-  return (await matrixApiPromise).resetMatrixThreadBindingsForTests;
+  const matrixApi = await import("../../../extensions/matrix/api.js");
+  return matrixApi.resetMatrixThreadBindingsForTests;
 }
 
 function resolveSessionBindingContractRuntimeConfig(id: string) {

@@ -262,6 +262,32 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
+  it("preserves thinking blocks for newer Claude models in unowned Anthropic transport fallback", () => {
+    // Opus 4.6 via custom proxy: should NOT drop thinking blocks
+    const opus46 = resolveTranscriptPolicy({
+      provider: "custom-anthropic-proxy",
+      modelId: "claude-opus-4-6",
+      modelApi: "anthropic-messages",
+    });
+    expect(opus46.dropThinkingBlocks).toBe(false);
+
+    // Sonnet 4.5 via custom proxy: should NOT drop
+    const sonnet45 = resolveTranscriptPolicy({
+      provider: "custom-anthropic-proxy",
+      modelId: "claude-sonnet-4-5-20250929",
+      modelApi: "anthropic-messages",
+    });
+    expect(sonnet45.dropThinkingBlocks).toBe(false);
+
+    // Legacy Sonnet 3.7 via custom proxy: SHOULD drop
+    const sonnet37 = resolveTranscriptPolicy({
+      provider: "custom-anthropic-proxy",
+      modelId: "claude-3-7-sonnet-20250219",
+      modelApi: "anthropic-messages",
+    });
+    expect(sonnet37.dropThinkingBlocks).toBe(true);
+  });
+
   it("preserves transport defaults when a runtime plugin has not adopted replay hooks", () => {
     const policy = resolveTranscriptPolicy({
       provider: "vllm",

@@ -73,7 +73,9 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 
 ## Language support
 
-The Control UI can localize itself on first load based on your browser locale, and you can override it later from the language picker in the Access card.
+The Control UI can localize itself on first load based on your browser locale.
+To override it later, open **Overview -> Gateway Access -> Language**. The
+locale picker lives in the Gateway Access card, not under Appearance.
 
 - Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `tr`, `uk`, `id`, `pl`
 - Non-English translations are lazy-loaded in the browser.
@@ -87,6 +89,7 @@ The Control UI can localize itself on first load based on your browser locale, a
 - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
 - Sessions: list + per-session model/thinking/fast/verbose/reasoning overrides (`sessions.list`, `sessions.patch`)
+- Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`)
 - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)

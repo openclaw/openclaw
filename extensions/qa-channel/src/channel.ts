@@ -1,8 +1,8 @@
 import {
   buildChannelOutboundSessionRoute,
   createChatChannelPlugin,
-  getChatChannelMeta,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/channel-core";
+import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   DEFAULT_ACCOUNT_ID,
   listQaChannelAccountIds,

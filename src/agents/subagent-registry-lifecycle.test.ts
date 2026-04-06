@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
+import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const taskExecutorMocks = vi.hoisted(() => ({
@@ -11,6 +12,11 @@ const taskExecutorMocks = vi.hoisted(() => ({
 const helperMocks = vi.hoisted(() => ({
   persistSubagentSessionTiming: vi.fn(async () => {}),
   safeRemoveAttachmentsDir: vi.fn(async () => {}),
+  logAnnounceGiveUp: vi.fn(),
+}));
+
+const runtimeMocks = vi.hoisted(() => ({
+  log: vi.fn(),
 }));
 
 const lifecycleEventMocks = vi.hoisted(() => ({
@@ -36,16 +42,43 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
 }));
 
-vi.mock("./subagent-registry-helpers.js", async () => {
-  const actual = await vi.importActual<typeof import("./subagent-registry-helpers.js")>(
-    "./subagent-registry-helpers.js",
-  );
-  return {
-    ...actual,
-    persistSubagentSessionTiming: helperMocks.persistSubagentSessionTiming,
-    safeRemoveAttachmentsDir: helperMocks.safeRemoveAttachmentsDir,
-  };
-});
+vi.mock("../runtime.js", () => ({
+  defaultRuntime: {
+    log: runtimeMocks.log,
+  },
+}));
+
+vi.mock("../utils/delivery-context.js", () => ({
+  normalizeDeliveryContext: (origin: unknown) => origin ?? "agent",
+}));
+
+vi.mock("./subagent-announce.js", () => ({
+  captureSubagentCompletionReply: vi.fn(async () => undefined),
+  runSubagentAnnounceFlow: vi.fn(async () => false),
+}));
+
+vi.mock("./subagent-registry-cleanup.js", () => ({
+  resolveCleanupCompletionReason: () => SUBAGENT_ENDED_REASON_COMPLETE,
+  resolveDeferredCleanupDecision: () => ({ kind: "give-up", reason: "retry-limit" }),
+}));
+
+vi.mock("./subagent-registry-completion.js", () => ({
+  runOutcomesEqual: (left: unknown, right: unknown) =>
+    JSON.stringify(left) === JSON.stringify(right),
+}));
+
+vi.mock("./subagent-registry-helpers.js", () => ({
+  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS: 30 * 60_000,
+  ANNOUNCE_EXPIRY_MS: 5 * 60_000,
+  MAX_ANNOUNCE_RETRY_COUNT: 3,
+  MIN_ANNOUNCE_RETRY_DELAY_MS: 1_000,
+  capFrozenResultText: (text: string) => text.trim(),
+  logAnnounceGiveUp: helperMocks.logAnnounceGiveUp,
+  persistSubagentSessionTiming: helperMocks.persistSubagentSessionTiming,
+  resolveAnnounceRetryDelayMs: (retryCount: number) =>
+    Math.min(1_000 * 2 ** Math.max(0, retryCount - 1), 8_000),
+  safeRemoveAttachmentsDir: helperMocks.safeRemoveAttachmentsDir,
+}));
 
 function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
@@ -62,13 +95,9 @@ function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRun
 }
 
 describe("subagent registry lifecycle hardening", () => {
-  let mod: typeof import("./subagent-registry-lifecycle.js");
-
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.clearAllMocks();
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockClear();
-    mod = await import("./subagent-registry-lifecycle.js");
   });
 
   it("does not reject completion when task finalization throws", async () => {
@@ -80,7 +109,7 @@ describe("subagent registry lifecycle hardening", () => {
       throw new Error("task store boom");
     });
 
-    const controller = mod.createSubagentRegistryLifecycleController({
+    const controller = createSubagentRegistryLifecycleController({
       runs,
       resumedRuns: new Set(),
       subagentAnnounceTimeoutMs: 1_000,
@@ -137,7 +166,7 @@ describe("subagent registry lifecycle hardening", () => {
       throw new Error("delivery state boom");
     });
 
-    const controller = mod.createSubagentRegistryLifecycleController({
+    const controller = createSubagentRegistryLifecycleController({
       runs: new Map([[entry.runId, entry]]),
       resumedRuns: new Set(),
       subagentAnnounceTimeoutMs: 1_000,
@@ -182,7 +211,7 @@ describe("subagent registry lifecycle hardening", () => {
     });
     const runSubagentAnnounceFlow = vi.fn(async () => true);
 
-    const controller = mod.createSubagentRegistryLifecycleController({
+    const controller = createSubagentRegistryLifecycleController({
       runs: new Map([[entry.runId, entry]]),
       resumedRuns: new Set(),
       subagentAnnounceTimeoutMs: 1_000,
@@ -228,7 +257,7 @@ describe("subagent registry lifecycle hardening", () => {
     });
     const captureSubagentCompletionReply = vi.fn(async () => undefined);
 
-    const controller = mod.createSubagentRegistryLifecycleController({
+    const controller = createSubagentRegistryLifecycleController({
       runs: new Map([[entry.runId, entry]]),
       resumedRuns: new Set(),
       subagentAnnounceTimeoutMs: 1_000,
@@ -266,7 +295,7 @@ describe("subagent registry lifecycle hardening", () => {
     });
     const runSubagentAnnounceFlow = vi.fn(async () => true);
 
-    const controller = mod.createSubagentRegistryLifecycleController({
+    const controller = createSubagentRegistryLifecycleController({
       runs: new Map([[entry.runId, entry]]),
       resumedRuns: new Set(),
       subagentAnnounceTimeoutMs: 1_000,

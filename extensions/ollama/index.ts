@@ -23,6 +23,7 @@ import { resolveOllamaApiBase } from "./src/provider-models.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
+  resolveConfiguredOllamaProviderConfig,
 } from "./src/stream.js";
 import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 
@@ -183,10 +184,11 @@ export default definePluginEntry({
         }
         await ensureOllamaModelPulled({ config, model, prompter });
       },
-      createStreamFn: ({ config, model }) => {
+      createStreamFn: ({ config, model, provider }) => {
         return createConfiguredOllamaStreamFn({
           model,
-          providerBaseUrl: config?.models?.providers?.ollama?.baseUrl,
+          providerBaseUrl: resolveConfiguredOllamaProviderConfig({ config, providerId: provider })
+            ?.baseUrl,
         });
       },
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,

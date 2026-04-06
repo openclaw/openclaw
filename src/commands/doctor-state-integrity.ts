@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { listBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
+import { listBundledChannelPluginIds } from "../channels/plugins/bundled-ids.js";
+import { hasBundledChannelPersistedAuthState } from "../channels/plugins/persisted-auth-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
@@ -463,8 +464,8 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if (!isRecord(channels)) {
     return false;
   }
-  for (const plugin of listBootstrapChannelPlugins()) {
-    if (plugin.config.hasPersistedAuthState?.({ cfg, env })) {
+  for (const channelId of listBundledChannelPluginIds()) {
+    if (hasBundledChannelPersistedAuthState({ channelId, cfg, env })) {
       return true;
     }
   }

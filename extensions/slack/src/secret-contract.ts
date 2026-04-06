@@ -156,3 +156,8 @@ export function collectRuntimeConfigAssignments(params: {
     accountInactiveReason: "Slack account is disabled or not running in HTTP mode.",
   });
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

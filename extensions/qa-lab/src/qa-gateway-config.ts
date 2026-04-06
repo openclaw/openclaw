@@ -1,15 +1,140 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+
+const DISABLED_BUNDLED_CHANNELS = Object.freeze({
+  bluebubbles: { enabled: false },
+  discord: { enabled: false },
+  feishu: { enabled: false },
+  googlechat: { enabled: false },
+  imessage: { enabled: false },
+  irc: { enabled: false },
+  line: { enabled: false },
+  mattermost: { enabled: false },
+  matrix: { enabled: false },
+  msteams: { enabled: false },
+  qqbot: { enabled: false },
+  signal: { enabled: false },
+  slack: { enabled: false },
+  "synology-chat": { enabled: false },
+  telegram: { enabled: false },
+  tlon: { enabled: false },
+  whatsapp: { enabled: false },
+  zalo: { enabled: false },
+  zalouser: { enabled: false },
+} satisfies Record<string, { enabled: false }>);
 
 export function buildQaGatewayConfig(params: {
   bind: "loopback" | "lan";
   gatewayPort: number;
   gatewayToken: string;
-  providerBaseUrl: string;
+  providerBaseUrl?: string;
   qaBusBaseUrl: string;
   workspaceDir: string;
   controlUiRoot?: string;
   controlUiAllowedOrigins?: string[];
+  controlUiEnabled?: boolean;
+  providerMode?: "mock-openai" | "live-openai";
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
 }): OpenClawConfig {
+  const splitModelRef = (ref: string) => {
+    const slash = ref.indexOf("/");
+    if (slash <= 0 || slash === ref.length - 1) {
+      return null;
+    }
+    return {
+      provider: ref.slice(0, slash),
+      model: ref.slice(slash + 1),
+    };
+  };
+  const mockProviderBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
+  const mockOpenAiProvider: ModelProviderConfig = {
+    baseUrl: mockProviderBaseUrl,
+    apiKey: "test",
+    api: "openai-responses",
+    models: [
+      {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        api: "openai-responses",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 128_000,
+        maxTokens: 4096,
+      },
+      {
+        id: "gpt-5.4-alt",
+        name: "gpt-5.4-alt",
+        api: "openai-responses",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 128_000,
+        maxTokens: 4096,
+      },
+      {
+        id: "gpt-image-1",
+        name: "gpt-image-1",
+        api: "openai-responses",
+        reasoning: false,
+        input: ["text"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 128_000,
+        maxTokens: 4096,
+      },
+    ],
+  };
+  const providerMode = params.providerMode ?? "mock-openai";
+  const primaryModel =
+    params.primaryModel ??
+    (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4");
+  const alternateModel =
+    params.alternateModel ??
+    (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4-alt");
+  const imageGenerationModelRef =
+    providerMode === "live-openai" ? "openai/gpt-image-1" : "mock-openai/gpt-image-1";
+  const selectedProviderIds =
+    providerMode === "live-openai"
+      ? [
+          ...new Set(
+            [primaryModel, alternateModel, imageGenerationModelRef]
+              .map((ref) => splitModelRef(ref)?.provider)
+              .filter((provider): provider is string => Boolean(provider)),
+          ),
+        ]
+      : [];
+  const pluginEntries =
+    providerMode === "live-openai"
+      ? Object.fromEntries(selectedProviderIds.map((providerId) => [providerId, { enabled: true }]))
+      : {};
+  const liveModelParams =
+    providerMode === "live-openai"
+      ? {
+          transport: "sse",
+          openaiWsWarmup: false,
+          ...(params.fastMode ? { fastMode: true } : {}),
+        }
+      : {
+          transport: "sse",
+          openaiWsWarmup: false,
+        };
   const allowedOrigins =
     params.controlUiAllowedOrigins && params.controlUiAllowedOrigins.length > 0
       ? params.controlUiAllowedOrigins
@@ -22,30 +147,40 @@ export function buildQaGatewayConfig(params: {
 
   return {
     plugins: {
+      ...(providerMode === "mock-openai" ? { allow: ["memory-core", "qa-channel"] } : {}),
       entries: {
         acpx: {
           enabled: false,
         },
+        "memory-core": {
+          enabled: true,
+        },
+        ...pluginEntries,
       },
     },
     agents: {
       defaults: {
         workspace: params.workspaceDir,
         model: {
-          primary: "mock-openai/gpt-5.4",
+          primary: primaryModel,
+        },
+        imageGenerationModel: {
+          primary: imageGenerationModelRef,
+        },
+        memorySearch: {
+          sync: {
+            watch: true,
+            watchDebounceMs: 25,
+            onSessionStart: true,
+            onSearch: true,
+          },
         },
         models: {
-          "mock-openai/gpt-5.4": {
-            params: {
-              transport: "sse",
-              openaiWsWarmup: false,
-            },
+          [primaryModel]: {
+            params: liveModelParams,
           },
-          "mock-openai/gpt-5.4-alt": {
-            params: {
-              transport: "sse",
-              openaiWsWarmup: false,
-            },
+          [alternateModel]: {
+            params: liveModelParams,
           },
         },
         subagents: {
@@ -58,7 +193,7 @@ export function buildQaGatewayConfig(params: {
           id: "qa",
           default: true,
           model: {
-            primary: "mock-openai/gpt-5.4",
+            primary: primaryModel,
           },
           identity: {
             name: "C-3PO QA",
@@ -72,48 +207,19 @@ export function buildQaGatewayConfig(params: {
         },
       ],
     },
-    models: {
-      mode: "replace",
-      providers: {
-        "mock-openai": {
-          baseUrl: params.providerBaseUrl,
-          apiKey: "test",
-          api: "openai-responses",
-          models: [
-            {
-              id: "gpt-5.4",
-              name: "gpt-5.4",
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-              },
-              contextWindow: 128_000,
-              maxTokens: 4096,
-            },
-            {
-              id: "gpt-5.4-alt",
-              name: "gpt-5.4-alt",
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-              },
-              contextWindow: 128_000,
-              maxTokens: 4096,
-            },
-          ],
-        },
-      },
+    memory: {
+      backend: "builtin",
     },
+    ...(providerMode === "mock-openai"
+      ? {
+          models: {
+            mode: "replace",
+            providers: {
+              "mock-openai": mockOpenAiProvider,
+            },
+          },
+        }
+      : {}),
     gateway: {
       mode: "local",
       bind: params.bind,
@@ -123,10 +229,16 @@ export function buildQaGatewayConfig(params: {
         token: params.gatewayToken,
       },
       controlUi: {
-        enabled: true,
-        ...(params.controlUiRoot ? { root: params.controlUiRoot } : {}),
-        allowInsecureAuth: true,
-        allowedOrigins,
+        enabled: params.controlUiEnabled ?? true,
+        ...((params.controlUiEnabled ?? true) && params.controlUiRoot
+          ? { root: params.controlUiRoot }
+          : {}),
+        ...((params.controlUiEnabled ?? true)
+          ? {
+              allowInsecureAuth: true,
+              allowedOrigins,
+            }
+          : {}),
       },
     },
     discovery: {
@@ -135,6 +247,7 @@ export function buildQaGatewayConfig(params: {
       },
     },
     channels: {
+      ...DISABLED_BUNDLED_CHANNELS,
       "qa-channel": {
         enabled: true,
         baseUrl: params.qaBusBaseUrl,

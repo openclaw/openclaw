@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MattermostConfigSchema } from "./config-schema.js";
+import { MattermostConfigSchema } from "./config-schema-core.js";
 
 describe("MattermostConfigSchema", () => {
   it("accepts SecretRef botToken at top-level", () => {

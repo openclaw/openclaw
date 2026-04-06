@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   loadOpenClawPluginCliRegistry: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
+  loadConfig: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
 }));
 
 vi.mock("./loader.js", () => ({
@@ -21,7 +23,17 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (...args: unknown[]) => mocks.applyPluginAutoEnable(...args),
 }));
 
-import { getPluginCliCommandDescriptors, registerPluginCliCommands } from "./cli.js";
+vi.mock("../config/config.js", () => ({
+  loadConfig: (...args: unknown[]) => mocks.loadConfig(...args),
+  readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
+}));
+
+import {
+  getPluginCliCommandDescriptors,
+  loadValidatedConfigForPluginRegistration,
+  registerPluginCliCommands,
+  registerPluginCliCommandsFromValidatedConfig,
+} from "./cli.js";
 
 function createProgram(existingCommandName?: string) {
   const program = new Command();
@@ -131,6 +143,13 @@ describe("registerPluginCliCommands", () => {
       changes: [],
       autoEnabledReasons: {},
     }));
+    mocks.loadConfig.mockReset();
+    mocks.loadConfig.mockReturnValue({} as OpenClawConfig);
+    mocks.readConfigFileSnapshot.mockReset();
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      config: {},
+    });
   });
 
   it("skips plugin CLI registrars when commands already exist", async () => {
@@ -379,5 +398,37 @@ describe("registerPluginCliCommands", () => {
 
     expect(mocks.memoryRegister).toHaveBeenCalledTimes(1);
     expect(mocks.memoryListAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns null for validated plugin CLI config when the snapshot is invalid", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValueOnce({
+      valid: false,
+      config: { plugins: { load: { paths: ["/tmp/evil"] } } },
+    });
+
+    await expect(loadValidatedConfigForPluginRegistration()).resolves.toBeNull();
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("loads validated plugin CLI config when the snapshot is valid", async () => {
+    const loadedConfig = { plugins: { enabled: true } } as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValueOnce({
+      valid: true,
+      config: loadedConfig,
+    });
+    mocks.loadConfig.mockReturnValueOnce(loadedConfig);
+
+    await expect(loadValidatedConfigForPluginRegistration()).resolves.toBe(loadedConfig);
+    expect(mocks.loadConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips plugin CLI registration from validated config when the snapshot is invalid", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValueOnce({
+      valid: false,
+      config: {},
+    });
+
+    await expect(registerPluginCliCommandsFromValidatedConfig(createProgram())).resolves.toBeNull();
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 });

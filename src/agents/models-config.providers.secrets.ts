@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
-import { resolveProviderWebSearchPluginConfig } from "../plugin-sdk/provider-web-search.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profiles.js";
@@ -439,16 +438,15 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
   // Providers own any provider-specific fallback auth logic via
   // resolveSyntheticAuth(...). Discovery/bootstrap callers may consume
   // non-secret markers from source config, but must never persist plaintext.
-  const synthetic =
-    resolveProviderSyntheticAuthWithPlugin({
-      provider: params.provider,
+  const synthetic = resolveProviderSyntheticAuthWithPlugin({
+    provider: params.provider,
+    config: params.config,
+    context: {
       config: params.config,
-      context: {
-        config: params.config,
-        provider: params.provider,
-        providerConfig: params.config?.models?.providers?.[params.provider],
-      },
-    }) ?? resolveXaiConfigFallbackAuth(params);
+      provider: params.provider,
+      providerConfig: params.config?.models?.providers?.[params.provider],
+    },
+  });
   const apiKey = synthetic?.apiKey?.trim();
   if (!apiKey) {
     return undefined;
@@ -466,75 +464,4 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
         mode: "api_key",
         source: "config",
       };
-}
-
-function resolveXaiConfigFallbackAuth(params: { provider: string; config?: OpenClawConfig }):
-  | {
-      apiKey: string;
-      source: string;
-      mode: "api-key";
-    }
-  | undefined {
-  if (params.provider.trim().toLowerCase() !== "xai") {
-    return undefined;
-  }
-  const xaiPluginEntry = params.config?.plugins?.entries?.xai;
-  if (xaiPluginEntry?.enabled === false) {
-    return undefined;
-  }
-  const pluginApiKey = normalizeOptionalSecretInput(
-    resolveProviderWebSearchPluginConfig(
-      params.config as Record<string, unknown> | undefined,
-      "xai",
-    )?.apiKey,
-  );
-  if (pluginApiKey) {
-    return {
-      apiKey: pluginApiKey,
-      source: "plugins.entries.xai.config.webSearch.apiKey",
-      mode: "api-key",
-    };
-  }
-  const pluginApiKeyRef = coerceSecretRef(
-    resolveProviderWebSearchPluginConfig(
-      params.config as Record<string, unknown> | undefined,
-      "xai",
-    )?.apiKey,
-  );
-  if (pluginApiKeyRef) {
-    return {
-      apiKey:
-        pluginApiKeyRef.source === "env"
-          ? pluginApiKeyRef.id.trim()
-          : resolveNonEnvSecretRefApiKeyMarker(pluginApiKeyRef.source),
-      source: "plugins.entries.xai.config.webSearch.apiKey",
-      mode: "api-key",
-    };
-  }
-  const legacyGrokApiKey = normalizeOptionalSecretInput(
-    (params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined | null)?.grok
-      ?.apiKey,
-  );
-  if (legacyGrokApiKey) {
-    return {
-      apiKey: legacyGrokApiKey,
-      source: "tools.web.search.grok.apiKey",
-      mode: "api-key",
-    };
-  }
-  const legacyGrokApiKeyRef = coerceSecretRef(
-    (params.config?.tools?.web?.search as { grok?: { apiKey?: unknown } } | undefined | null)?.grok
-      ?.apiKey,
-  );
-  if (legacyGrokApiKeyRef) {
-    return {
-      apiKey:
-        legacyGrokApiKeyRef.source === "env"
-          ? legacyGrokApiKeyRef.id.trim()
-          : resolveNonEnvSecretRefApiKeyMarker(legacyGrokApiKeyRef.source),
-      source: "tools.web.search.grok.apiKey",
-      mode: "api-key",
-    };
-  }
-  return undefined;
 }

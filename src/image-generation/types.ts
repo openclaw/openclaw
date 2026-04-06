@@ -11,6 +11,13 @@ export type GeneratedImageAsset = {
 
 export type ImageGenerationResolution = "1K" | "2K" | "4K";
 
+export type ImageGenerationIgnoredOverrideKey = "size" | "aspectRatio" | "resolution";
+
+export type ImageGenerationIgnoredOverride = {
+  key: ImageGenerationIgnoredOverrideKey;
+  value: string;
+};
+
 export type ImageGenerationSourceImage = {
   buffer: Buffer;
   mimeType: string;

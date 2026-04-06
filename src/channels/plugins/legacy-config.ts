@@ -1,6 +1,10 @@
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
-import { listBootstrapChannelPlugins } from "./bootstrap-registry.js";
+import { iterateBootstrapChannelPlugins } from "./bootstrap-registry.js";
 
 export function collectChannelLegacyConfigRules(): LegacyConfigRule[] {
-  return listBootstrapChannelPlugins().flatMap((plugin) => plugin.doctor?.legacyConfigRules ?? []);
+  const rules: LegacyConfigRule[] = [];
+  for (const plugin of iterateBootstrapChannelPlugins()) {
+    rules.push(...(plugin.doctor?.legacyConfigRules ?? []));
+  }
+  return rules;
 }

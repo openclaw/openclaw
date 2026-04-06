@@ -116,4 +116,42 @@ describe("google video generation provider", () => {
       }),
     ).rejects.toThrow("Google video generation does not support image and video inputs together.");
   });
+
+  it("rounds unsupported durations to the nearest Veo value", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              videoBytes: Buffer.from("mp4-bytes").toString("base64"),
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "google",
+      model: "veo-3.1-fast-generate-preview",
+      prompt: "A tiny robot watering a windowsill garden",
+      cfg: {},
+      durationSeconds: 5,
+    });
+
+    expect(generateVideosMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          durationSeconds: 6,
+        }),
+      }),
+    );
+  });
 });

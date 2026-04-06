@@ -129,7 +129,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
             Math.max(1, Math.floor(configOverride.agents.defaults.subagents.announceTimeoutMs)),
             2_147_000_000,
           )
-        : 90_000;
+        : 120_000;
     const retryDelaysMs =
       process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
     let retryIndex = 0;
@@ -162,7 +162,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   resolveSubagentAnnounceTimeoutMs: (cfg: typeof configOverride) => {
     const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
     if (typeof configured !== "number" || !Number.isFinite(configured)) {
-      return 90_000;
+      return 120_000;
     }
     return Math.min(Math.max(1, Math.floor(configured)), 2_147_000_000);
   },
@@ -278,27 +278,27 @@ describe("subagent announce timeout config", () => {
     fallbackRequesterResolution = null;
   });
 
-  it("uses 90s timeout by default for direct announce agent call", async () => {
+  it("uses 120s timeout by default for direct announce agent call", async () => {
     await runAnnounceFlowForTest("run-default-timeout");
 
     const directAgentCall = findGatewayCall(
       (call) => call.method === "agent" && call.expectFinal === true,
     );
-    expect(directAgentCall?.timeoutMs).toBe(90_000);
+    expect(directAgentCall?.timeoutMs).toBe(120_000);
   });
 
   it("honors configured announce timeout for direct announce agent call", async () => {
-    setConfiguredAnnounceTimeout(90_000);
+    setConfiguredAnnounceTimeout(120_000);
     await runAnnounceFlowForTest("run-config-timeout-agent");
 
     const directAgentCall = findGatewayCall(
       (call) => call.method === "agent" && call.expectFinal === true,
     );
-    expect(directAgentCall?.timeoutMs).toBe(90_000);
+    expect(directAgentCall?.timeoutMs).toBe(120_000);
   });
 
   it("honors configured announce timeout for completion direct agent call", async () => {
-    setConfiguredAnnounceTimeout(90_000);
+    setConfiguredAnnounceTimeout(120_000);
     await runAnnounceFlowForTest("run-config-timeout-send", {
       requesterOrigin: {
         channel: "discord",
@@ -310,7 +310,7 @@ describe("subagent announce timeout config", () => {
     const completionDirectAgentCall = findGatewayCall(
       (call) => call.method === "agent" && call.expectFinal === true,
     );
-    expect(completionDirectAgentCall?.timeoutMs).toBe(90_000);
+    expect(completionDirectAgentCall?.timeoutMs).toBe(120_000);
   });
 
   it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
@@ -320,7 +320,7 @@ describe("subagent announce timeout config", () => {
         if (request.method === "chat.history") {
           return { messages: [] };
         }
-        throw new Error("gateway timeout after 90000ms");
+        throw new Error("gateway timeout after 120000ms");
       };
 
       const announcePromise = runAnnounceFlowForTest("run-completion-timeout-retry", {

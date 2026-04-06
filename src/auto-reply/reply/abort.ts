@@ -152,9 +152,16 @@ export function stopSubagentsForRequester(params: {
       continue;
     }
     const latest = abortDeps.getLatestSubagentRunByChildSessionKey(childKey);
+    if (!latest) {
+      const existing = dedupedRunsByChildKey.get(childKey);
+      if (!existing || run.createdAt >= existing.createdAt) {
+        dedupedRunsByChildKey.set(childKey, run);
+      }
+      continue;
+    }
     const latestControllerSessionKey =
       latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
-    if (!latest || latest.runId !== run.runId || latestControllerSessionKey !== requesterKey) {
+    if (latest.runId !== run.runId || latestControllerSessionKey !== requesterKey) {
       continue;
     }
     const existing = dedupedRunsByChildKey.get(childKey);
@@ -224,14 +231,20 @@ export async function tryFastAbortFromMessage(params: {
 }): Promise<{ handled: boolean; aborted: boolean; stoppedSubagents?: number }> {
   const { ctx, cfg } = params;
   const targetKey = resolveAbortTargetKey(ctx);
-  const agentId = resolveSessionAgentId({
-    sessionKey: targetKey ?? ctx.SessionKey ?? "",
-    config: cfg,
-  });
   // Use RawBody/CommandBody for abort detection (clean message without structural context).
   const raw = stripStructuralPrefixes(ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "");
   const isGroup = ctx.ChatType?.trim().toLowerCase() === "group";
-  const stripped = isGroup ? stripMentions(raw, ctx, cfg, agentId) : raw;
+  const stripped = isGroup
+    ? stripMentions(
+        raw,
+        ctx,
+        cfg,
+        resolveSessionAgentId({
+          sessionKey: targetKey ?? ctx.SessionKey ?? "",
+          config: cfg,
+        }),
+      )
+    : raw;
   const abortRequested = isAbortRequestText(stripped);
   if (!abortRequested) {
     return { handled: false, aborted: false };
@@ -247,6 +260,10 @@ export async function tryFastAbortFromMessage(params: {
     return { handled: false, aborted: false };
   }
 
+  const agentId = resolveSessionAgentId({
+    sessionKey: targetKey ?? ctx.SessionKey ?? "",
+    config: cfg,
+  });
   const abortKey = targetKey ?? auth.from ?? auth.to;
   const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
 

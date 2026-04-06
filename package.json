@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.5",
+  "version": "2026.4.6",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -94,6 +94,10 @@
     "./plugin-sdk/channel-setup": {
       "types": "./dist/plugin-sdk/channel-setup.d.ts",
       "default": "./dist/plugin-sdk/channel-setup.js"
+    },
+    "./plugin-sdk/channel-streaming": {
+      "types": "./dist/plugin-sdk/channel-streaming.d.ts",
+      "default": "./dist/plugin-sdk/channel-streaming.js"
     },
     "./plugin-sdk/setup-tools": {
       "types": "./dist/plugin-sdk/setup-tools.d.ts",
@@ -207,6 +211,14 @@
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-runtime.js"
     },
+    "./plugin-sdk/media-generation-runtime": {
+      "types": "./dist/plugin-sdk/media-generation-runtime.d.ts",
+      "default": "./dist/plugin-sdk/media-generation-runtime.js"
+    },
+    "./plugin-sdk/conversation-binding-runtime": {
+      "types": "./dist/plugin-sdk/conversation-binding-runtime.d.ts",
+      "default": "./dist/plugin-sdk/conversation-binding-runtime.js"
+    },
     "./plugin-sdk/conversation-runtime": {
       "types": "./dist/plugin-sdk/conversation-runtime.d.ts",
       "default": "./dist/plugin-sdk/conversation-runtime.js"
@@ -235,6 +247,10 @@
       "types": "./dist/plugin-sdk/agent-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-runtime.js"
     },
+    "./plugin-sdk/simple-completion-runtime": {
+      "types": "./dist/plugin-sdk/simple-completion-runtime.d.ts",
+      "default": "./dist/plugin-sdk/simple-completion-runtime.js"
+    },
     "./plugin-sdk/speech-core": {
       "types": "./dist/plugin-sdk/speech-core.d.ts",
       "default": "./dist/plugin-sdk/speech-core.js"
@@ -262,6 +278,10 @@
     "./plugin-sdk/cli-runtime": {
       "types": "./dist/plugin-sdk/cli-runtime.d.ts",
       "default": "./dist/plugin-sdk/cli-runtime.js"
+    },
+    "./plugin-sdk/cli-backend": {
+      "types": "./dist/plugin-sdk/cli-backend.d.ts",
+      "default": "./dist/plugin-sdk/cli-backend.js"
     },
     "./plugin-sdk/hook-runtime": {
       "types": "./dist/plugin-sdk/hook-runtime.d.ts",
@@ -351,6 +371,10 @@
       "types": "./dist/plugin-sdk/browser-config.d.ts",
       "default": "./dist/plugin-sdk/browser-config.js"
     },
+    "./plugin-sdk/browser-config-runtime": {
+      "types": "./dist/plugin-sdk/browser-config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/browser-config-runtime.js"
+    },
     "./plugin-sdk/browser-config-support": {
       "types": "./dist/plugin-sdk/browser-config-support.d.ts",
       "default": "./dist/plugin-sdk/browser-config-support.js"
@@ -359,9 +383,21 @@
       "types": "./dist/plugin-sdk/browser-control-auth.d.ts",
       "default": "./dist/plugin-sdk/browser-control-auth.js"
     },
+    "./plugin-sdk/browser-node-runtime": {
+      "types": "./dist/plugin-sdk/browser-node-runtime.d.ts",
+      "default": "./dist/plugin-sdk/browser-node-runtime.js"
+    },
     "./plugin-sdk/browser-profiles": {
       "types": "./dist/plugin-sdk/browser-profiles.d.ts",
       "default": "./dist/plugin-sdk/browser-profiles.js"
+    },
+    "./plugin-sdk/browser-security-runtime": {
+      "types": "./dist/plugin-sdk/browser-security-runtime.d.ts",
+      "default": "./dist/plugin-sdk/browser-security-runtime.js"
+    },
+    "./plugin-sdk/browser-setup-tools": {
+      "types": "./dist/plugin-sdk/browser-setup-tools.d.ts",
+      "default": "./dist/plugin-sdk/browser-setup-tools.js"
     },
     "./plugin-sdk/browser-support": {
       "types": "./dist/plugin-sdk/browser-support.d.ts",
@@ -531,6 +567,10 @@
       "types": "./dist/plugin-sdk/googlechat-runtime-shared.d.ts",
       "default": "./dist/plugin-sdk/googlechat-runtime-shared.js"
     },
+    "./plugin-sdk/media-generation-runtime-shared": {
+      "types": "./dist/plugin-sdk/media-generation-runtime-shared.d.ts",
+      "default": "./dist/plugin-sdk/media-generation-runtime-shared.js"
+    },
     "./plugin-sdk/image-generation": {
       "types": "./dist/plugin-sdk/image-generation.d.ts",
       "default": "./dist/plugin-sdk/image-generation.js"
@@ -538,6 +578,14 @@
     "./plugin-sdk/image-generation-core": {
       "types": "./dist/plugin-sdk/image-generation-core.d.ts",
       "default": "./dist/plugin-sdk/image-generation-core.js"
+    },
+    "./plugin-sdk/music-generation": {
+      "types": "./dist/plugin-sdk/music-generation.d.ts",
+      "default": "./dist/plugin-sdk/music-generation.js"
+    },
+    "./plugin-sdk/music-generation-core": {
+      "types": "./dist/plugin-sdk/music-generation-core.d.ts",
+      "default": "./dist/plugin-sdk/music-generation-core.js"
     },
     "./plugin-sdk/video-generation": {
       "types": "./dist/plugin-sdk/video-generation.d.ts",
@@ -679,6 +727,10 @@
       "types": "./dist/plugin-sdk/memory-core-host-secret.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-secret.js"
     },
+    "./plugin-sdk/memory-core-host-events": {
+      "types": "./dist/plugin-sdk/memory-core-host-events.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-events.js"
+    },
     "./plugin-sdk/memory-core-host-status": {
       "types": "./dist/plugin-sdk/memory-core-host-status.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-status.js"
@@ -694,6 +746,30 @@
     "./plugin-sdk/memory-core-host-runtime-files": {
       "types": "./dist/plugin-sdk/memory-core-host-runtime-files.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-runtime-files.js"
+    },
+    "./plugin-sdk/memory-host-core": {
+      "types": "./dist/plugin-sdk/memory-host-core.d.ts",
+      "default": "./dist/plugin-sdk/memory-host-core.js"
+    },
+    "./plugin-sdk/memory-host-events": {
+      "types": "./dist/plugin-sdk/memory-host-events.d.ts",
+      "default": "./dist/plugin-sdk/memory-host-events.js"
+    },
+    "./plugin-sdk/memory-host-files": {
+      "types": "./dist/plugin-sdk/memory-host-files.d.ts",
+      "default": "./dist/plugin-sdk/memory-host-files.js"
+    },
+    "./plugin-sdk/memory-host-markdown": {
+      "types": "./dist/plugin-sdk/memory-host-markdown.d.ts",
+      "default": "./dist/plugin-sdk/memory-host-markdown.js"
+    },
+    "./plugin-sdk/memory-host-search": {
+      "types": "./dist/plugin-sdk/memory-host-search.d.ts",
+      "default": "./dist/plugin-sdk/memory-host-search.js"
+    },
+    "./plugin-sdk/memory-host-status": {
+      "types": "./dist/plugin-sdk/memory-host-status.d.ts",
+      "default": "./dist/plugin-sdk/memory-host-status.js"
     },
     "./plugin-sdk/memory-lancedb": {
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
@@ -951,7 +1027,7 @@
     "config:schema:check": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "config:schema:gen": "node --import tsx scripts/generate-base-config-schema.ts --write",
     "deadcode:ci": "pnpm deadcode:report:ci:knip",
-    "deadcode:knip": "pnpm dlx knip --config knip.config.ts --isolate-workspaces --production --no-progress --reporter compact --files --dependencies",
+    "deadcode:knip": "pnpm dlx knip --config knip.config.ts --production --no-progress --reporter compact --files --dependencies",
     "deadcode:report": "pnpm deadcode:knip; pnpm deadcode:ts-prune; pnpm deadcode:ts-unused",
     "deadcode:report:ci:knip": "mkdir -p .artifacts/deadcode && pnpm deadcode:knip > .artifacts/deadcode/knip.txt 2>&1 || true",
     "deadcode:report:ci:ts-prune": "mkdir -p .artifacts/deadcode && pnpm deadcode:ts-prune > .artifacts/deadcode/ts-prune.txt 2>&1 || true",
@@ -996,6 +1072,8 @@
     "lint:auth:pairing-account-scope": "node scripts/check-pairing-account-scope.mjs",
     "lint:docs": "pnpm dlx markdownlint-cli2",
     "lint:docs:fix": "pnpm dlx markdownlint-cli2 --fix",
+    "lint:extensions:bundled": "node scripts/run-bundled-extension-oxlint.mjs",
+    "lint:extensions:channels": "node scripts/run-extension-channel-oxlint.mjs",
     "lint:extensions:no-plugin-sdk-internal": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal",
     "lint:extensions:no-relative-outside-package": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=relative-outside-package",
     "lint:extensions:no-src-outside-plugin-sdk": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=src-outside-plugin-sdk",
@@ -1047,13 +1125,13 @@
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
     "stage:bundled-plugin-runtime-deps": "node scripts/stage-bundled-plugin-runtime-deps.mjs",
     "start": "node scripts/run-node.mjs",
-    "test": "node scripts/run-vitest.mjs run --config vitest.config.ts",
+    "test": "node scripts/test-projects.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "node scripts/run-vitest.mjs run --config vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
     "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
     "test:bundled": "node scripts/run-vitest.mjs run --config vitest.bundled.config.ts",
-    "test:changed": "node scripts/run-vitest.mjs run --config vitest.config.ts --changed origin/main",
-    "test:changed:max": "OPENCLAW_VITEST_MAX_WORKERS=8 node scripts/run-vitest.mjs run --config vitest.config.ts --changed origin/main",
+    "test:changed": "node scripts/test-projects.mjs --changed origin/main",
+    "test:changed:max": "OPENCLAW_VITEST_MAX_WORKERS=8 node scripts/test-projects.mjs --changed origin/main",
     "test:channels": "node scripts/run-vitest.mjs run --config vitest.channels.config.ts",
     "test:contracts": "pnpm test:contracts:channels && pnpm test:contracts:plugins",
     "test:contracts:channels": "node scripts/run-vitest.mjs run --config vitest.contracts.config.ts --maxWorkers=1 src/channels/plugins/contracts",
@@ -1066,6 +1144,7 @@
     "test:docker:gateway-network": "bash scripts/e2e/gateway-network-docker.sh",
     "test:docker:live-acp-bind": "bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-build": "bash scripts/test-live-build-docker.sh",
+    "test:docker:live-cli-backend": "bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-models": "bash scripts/test-live-models-docker.sh",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",
@@ -1091,15 +1170,16 @@
     "test:live:cache": "bun scripts/check-live-cache.ts",
     "test:live:gateway-profiles": "node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts",
     "test:live:models-profiles": "node scripts/test-live.mjs -- src/agents/models.profiles.live.test.ts",
-    "test:max": "OPENCLAW_VITEST_MAX_WORKERS=8 node scripts/run-vitest.mjs run --config vitest.config.ts",
+    "test:max": "OPENCLAW_VITEST_MAX_WORKERS=8 node scripts/test-projects.mjs",
     "test:parallels:linux": "bash scripts/e2e/parallels-linux-smoke.sh",
     "test:parallels:macos": "bash scripts/e2e/parallels-macos-smoke.sh",
     "test:parallels:npm-update": "bash scripts/e2e/parallels-npm-update-smoke.sh",
     "test:parallels:windows": "bash scripts/e2e/parallels-windows-smoke.sh",
     "test:perf:budget": "node scripts/test-perf-budget.mjs",
+    "test:perf:changed:bench": "node scripts/bench-test-changed.mjs",
     "test:perf:hotspots": "node scripts/test-hotspots.mjs",
-    "test:perf:imports": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 node scripts/run-vitest.mjs run --config vitest.config.ts",
-    "test:perf:imports:changed": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 node scripts/run-vitest.mjs run --config vitest.config.ts --changed origin/main",
+    "test:perf:imports": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 node scripts/test-projects.mjs",
+    "test:perf:imports:changed": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 node scripts/test-projects.mjs --changed origin/main",
     "test:perf:profile:main": "node scripts/run-vitest-profile.mjs main",
     "test:perf:profile:runner": "node scripts/run-vitest-profile.mjs runner",
     "test:sectriage": "node scripts/run-vitest.mjs run --config vitest.gateway.config.ts && node scripts/run-vitest.mjs run --config vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
@@ -1112,7 +1192,7 @@
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm ui:i18n:check && pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",
-    "test:watch": "node scripts/run-vitest.mjs --config vitest.config.ts",
+    "test:watch": "node scripts/test-projects.mjs --watch",
     "tool-display:check": "node --import tsx scripts/tool-display.ts --check",
     "tool-display:write": "node --import tsx scripts/tool-display.ts --write",
     "ts-topology": "node --import tsx scripts/ts-topology.ts",
@@ -1128,15 +1208,17 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "0.18.0",
     "@anthropic-ai/vertex-sdk": "^0.14.4",
-    "@aws-sdk/client-bedrock": "3.1023.0",
+    "@aws-sdk/client-bedrock": "3.1024.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+    "@aws-sdk/credential-provider-node": "3.972.29",
     "@clack/prompts": "^1.2.0",
     "@homebridge/ciao": "^1.3.6",
-    "@line/bot-sdk": "^10.6.0",
-    "@lydell/node-pty": "1.2.0-beta.3",
-    "@mariozechner/pi-agent-core": "0.65.0",
-    "@mariozechner/pi-ai": "0.65.0",
-    "@mariozechner/pi-coding-agent": "0.65.0",
-    "@mariozechner/pi-tui": "0.65.0",
+    "@line/bot-sdk": "^11.0.0",
+    "@lydell/node-pty": "1.2.0-beta.10",
+    "@mariozechner/pi-agent-core": "0.65.2",
+    "@mariozechner/pi-ai": "0.65.2",
+    "@mariozechner/pi-coding-agent": "0.65.2",
+    "@mariozechner/pi-tui": "0.65.2",
     "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
@@ -1164,19 +1246,20 @@
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.6.205",
     "playwright-core": "1.59.1",
+    "proxy-agent": "^8.0.0",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
     "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tslog": "^4.10.2",
-    "undici": "^8.0.1",
+    "undici": "^8.0.2",
     "uuid": "^13.0.0",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@grammyjs/types": "^3.25.0",
+    "@grammyjs/types": "^3.26.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
     "@types/express": "^5.0.6",
@@ -1184,7 +1267,7 @@
     "@types/node": "^25.5.2",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260404.1",
+    "@typescript/native-preview": "7.0.0-dev.20260406.1",
     "@vitest/coverage-v8": "^4.1.2",
     "jscpd": "4.0.8",
     "jsdom": "^29.0.1",

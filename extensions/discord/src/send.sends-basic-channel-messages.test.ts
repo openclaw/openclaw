@@ -316,7 +316,7 @@ describe("sendMessageDiscord", () => {
     );
     expect(loadWebMedia).toHaveBeenCalledWith(
       "file:///tmp/photo.jpg",
-      expect.objectContaining({ maxBytes: 8 * 1024 * 1024 }),
+      expect.objectContaining({ maxBytes: 100 * 1024 * 1024 }),
     );
   });
 

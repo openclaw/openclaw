@@ -5,6 +5,11 @@ import {
   type MemoryDreamingPhaseName,
   type MemoryDreamingStorageConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import {
+  replaceManagedMarkdownBlock,
+  withTrailingNewline,
+} from "openclaw/plugin-sdk/memory-host-markdown";
 
 const DAILY_PHASE_HEADINGS: Record<Exclude<MemoryDreamingPhaseName, "deep">, string> = {
   light: "## Light Sleep",
@@ -15,8 +20,6 @@ const DAILY_PHASE_LABELS: Record<Exclude<MemoryDreamingPhaseName, "deep">, strin
   light: "light",
   rem: "rem",
 };
-
-const DREAMS_FILENAME = "dreams.md";
 
 function resolvePhaseMarkers(phase: Exclude<MemoryDreamingPhaseName, "deep">): {
   start: string;
@@ -29,38 +32,9 @@ function resolvePhaseMarkers(phase: Exclude<MemoryDreamingPhaseName, "deep">): {
   };
 }
 
-function withTrailingNewline(content: string): string {
-  return content.endsWith("\n") ? content : `${content}\n`;
-}
-
-function replaceManagedBlock(params: {
-  original: string;
-  heading: string;
-  startMarker: string;
-  endMarker: string;
-  body: string;
-}): string {
-  const managedBlock = `${params.heading}\n${params.startMarker}\n${params.body}\n${params.endMarker}`;
-  const existingPattern = new RegExp(
-    `${escapeRegex(params.heading)}\\n${escapeRegex(params.startMarker)}[\\s\\S]*?${escapeRegex(params.endMarker)}`,
-    "m",
-  );
-  if (existingPattern.test(params.original)) {
-    return params.original.replace(existingPattern, managedBlock);
-  }
-  const trimmed = params.original.trimEnd();
-  if (trimmed.length === 0) {
-    return `${managedBlock}\n`;
-  }
-  return `${trimmed}\n\n${managedBlock}\n`;
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function resolveDreamsPath(workspaceDir: string): string {
-  return path.join(workspaceDir, DREAMS_FILENAME);
+function resolveDailyMemoryPath(workspaceDir: string, epochMs: number, timezone?: string): string {
+  const isoDay = formatMemoryDreamingDay(epochMs, timezone);
+  return path.join(workspaceDir, "memory", `${isoDay}.md`);
 }
 
 function resolveSeparateReportPath(
@@ -95,7 +69,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
   let reportPath: string | undefined;
 
   if (shouldWriteInline(params.storage)) {
-    inlinePath = resolveDreamsPath(params.workspaceDir);
+    inlinePath = resolveDailyMemoryPath(params.workspaceDir, nowMs, params.timezone);
     await fs.mkdir(path.dirname(inlinePath), { recursive: true });
     const original = await fs.readFile(inlinePath, "utf-8").catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
@@ -104,7 +78,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
       throw err;
     });
     const markers = resolvePhaseMarkers(params.phase);
-    const updated = replaceManagedBlock({
+    const updated = replaceManagedMarkdownBlock({
       original,
       heading: DAILY_PHASE_HEADINGS[params.phase],
       startMarker: markers.start,
@@ -131,6 +105,16 @@ export async function writeDailyDreamingPhaseBlock(params: {
     await fs.writeFile(reportPath, report, "utf-8");
   }
 
+  await appendMemoryHostEvent(params.workspaceDir, {
+    type: "memory.dream.completed",
+    timestamp: new Date(nowMs).toISOString(),
+    phase: params.phase,
+    ...(inlinePath ? { inlinePath } : {}),
+    ...(reportPath ? { reportPath } : {}),
+    lineCount: params.bodyLines.length,
+    storageMode: params.storage.mode,
+  });
+
   return {
     ...(inlinePath ? { inlinePath } : {}),
     ...(reportPath ? { reportPath } : {}),
@@ -152,5 +136,13 @@ export async function writeDeepDreamingReport(params: {
   await fs.mkdir(path.dirname(reportPath), { recursive: true });
   const body = params.bodyLines.length > 0 ? params.bodyLines.join("\n") : "- No durable changes.";
   await fs.writeFile(reportPath, `# Deep Sleep\n\n${body}\n`, "utf-8");
+  await appendMemoryHostEvent(params.workspaceDir, {
+    type: "memory.dream.completed",
+    timestamp: new Date(nowMs).toISOString(),
+    phase: "deep",
+    reportPath,
+    lineCount: params.bodyLines.length,
+    storageMode: params.storage.mode,
+  });
   return reportPath;
 }

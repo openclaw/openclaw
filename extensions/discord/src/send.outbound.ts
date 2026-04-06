@@ -67,6 +67,8 @@ type DiscordSendOpts = {
 
 type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
 
+const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
+
 type DiscordChannelMessageResult = {
   id?: string | null;
   channel_id?: string | null;
@@ -155,7 +157,7 @@ export async function sendMessageDiscord(
   const mediaMaxBytes =
     typeof accountInfo.config.mediaMaxMb === "number"
       ? accountInfo.config.mediaMaxMb * 1024 * 1024
-      : 8 * 1024 * 1024;
+      : DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
   const textWithTables = convertMarkdownTables(text ?? "", tableMode);
   const textWithMentions = rewriteDiscordKnownMentions(textWithTables, {
     accountId: accountInfo.accountId,

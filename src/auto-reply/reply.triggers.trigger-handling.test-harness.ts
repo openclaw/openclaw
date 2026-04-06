@@ -9,9 +9,7 @@ import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtim
 import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
-// oxlint-disable-next-line typescript/no-explicit-any
 type AnyMock = any;
-// oxlint-disable-next-line typescript/no-explicit-any
 type AnyMocks = Record<string, any>;
 
 function getSharedMocks<T>(key: string, create: () => T): T {

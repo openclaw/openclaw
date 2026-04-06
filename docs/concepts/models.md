@@ -30,6 +30,7 @@ Related:
   falls back to `agents.defaults.imageModel`, then the resolved session/default
   model.
 - `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
+- `agents.defaults.musicGenerationModel` is used by the shared music-generation capability. If omitted, `music_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered music-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
 - `agents.defaults.videoGenerationModel` is used by the shared video-generation capability. If omitted, `video_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered video-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
@@ -253,5 +254,6 @@ This applies whenever OpenClaw regenerates `models.json`, including command-driv
 - [Model Providers](/concepts/model-providers) — provider routing and auth
 - [Model Failover](/concepts/model-failover) — fallback chains
 - [Image Generation](/tools/image-generation) — image model configuration
+- [Music Generation](/tools/music-generation) — music model configuration
 - [Video Generation](/tools/video-generation) — video model configuration
 - [Configuration Reference](/gateway/configuration-reference#agent-defaults) — model config keys

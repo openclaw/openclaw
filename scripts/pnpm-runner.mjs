@@ -1,25 +1,9 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
-
-const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
+import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 function isPnpmExecPath(value) {
   return /^pnpm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(path.basename(value).toLowerCase());
-}
-
-function escapeForCmdExe(arg) {
-  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
-    throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
-  }
-  const escaped = arg.replace(/\^/g, "^^");
-  if (!escaped.includes(" ") && !escaped.includes('"')) {
-    return escaped;
-  }
-  return `"${escaped.replace(/"/g, '""')}"`;
-}
-
-function buildCmdExeCommandLine(command, args) {
-  return [escapeForCmdExe(command), ...args.map(escapeForCmdExe)].join(" ");
 }
 
 export function resolvePnpmRunner(params = {}) {

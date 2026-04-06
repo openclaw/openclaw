@@ -129,6 +129,71 @@ describe("image-generation runtime", () => {
         fileName: "sample.png",
       },
     ]);
+    expect(result.ignoredOverrides).toEqual([]);
+  });
+
+  it("drops unsupported provider geometry overrides and reports them", async () => {
+    let seenRequest:
+      | {
+          size?: string;
+          aspectRatio?: string;
+          resolution?: string;
+        }
+      | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("openai/gpt-image-1");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "openai",
+      capabilities: {
+        generate: {
+          supportsSize: true,
+          supportsAspectRatio: false,
+          supportsResolution: false,
+        },
+        edit: {
+          enabled: true,
+          supportsSize: true,
+          supportsAspectRatio: false,
+          supportsResolution: false,
+        },
+        geometry: {
+          sizes: ["1024x1024", "1024x1536", "1536x1024"],
+        },
+      },
+      async generateImage(req) {
+        seenRequest = {
+          size: req.size,
+          aspectRatio: req.aspectRatio,
+          resolution: req.resolution,
+        };
+        return {
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+        };
+      },
+    });
+
+    const result = await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "openai/gpt-image-1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      size: "1024x1024",
+      aspectRatio: "1:1",
+      resolution: "2K",
+    });
+
+    expect(seenRequest).toEqual({
+      size: "1024x1024",
+      aspectRatio: undefined,
+      resolution: undefined,
+    });
+    expect(result.ignoredOverrides).toEqual([
+      { key: "aspectRatio", value: "1:1" },
+      { key: "resolution", value: "2K" },
+    ]);
   });
 
   it("lists runtime image-generation providers through the provider registry", () => {

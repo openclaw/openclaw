@@ -65,6 +65,10 @@ function readPluginPackageJson(path: string): PluginPackageJson {
   return JSON.parse(readFileSync(path, "utf8")) as PluginPackageJson;
 }
 
+export function normalizeGitDiffPath(path: string): string {
+  return path.trim().replaceAll("\\", "/");
+}
+
 export function parsePluginReleaseSelection(value: string | undefined): string[] {
   if (!value?.trim()) {
     return [];
@@ -292,13 +296,43 @@ export function collectChangedExtensionIdsFromPaths(paths: readonly string[]): s
   return [...extensionIds].toSorted();
 }
 
-function isNullGitRef(ref: string | undefined): boolean {
+export function isNullGitRef(ref: string | undefined): boolean {
   return !ref || /^0+$/.test(ref);
 }
 
-export function collectChangedExtensionIdsFromGitRange(params: {
+function assertSafeGitRef(ref: string, label: string): string {
+  const trimmed = ref.trim();
+  if (!trimmed || isNullGitRef(trimmed)) {
+    throw new Error(`${label} is required.`);
+  }
+  if (
+    trimmed.startsWith("-") ||
+    trimmed.includes("\u0000") ||
+    trimmed.includes("\r") ||
+    trimmed.includes("\n")
+  ) {
+    throw new Error(`${label} must be a normal git ref or commit SHA.`);
+  }
+  return trimmed;
+}
+
+export function resolveGitCommitSha(rootDir: string, ref: string, label: string): string {
+  const safeRef = assertSafeGitRef(ref, label);
+  try {
+    return execFileSync("git", ["rev-parse", "--verify", "--quiet", `${safeRef}^{commit}`], {
+      cwd: rootDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch {
+    throw new Error(`${label} is not a valid git commit ref: ${safeRef}`);
+  }
+}
+
+export function collectChangedPathsFromGitRange(params: {
   rootDir?: string;
   gitRange: GitRangeSelection;
+  pathspecs: readonly string[];
 }): string[] {
   const rootDir = params.rootDir ?? resolve(".");
   const { baseRef, headRef } = params.gitRange;
@@ -307,9 +341,12 @@ export function collectChangedExtensionIdsFromGitRange(params: {
     return [];
   }
 
-  const changedPaths = execFileSync(
+  const baseSha = resolveGitCommitSha(rootDir, baseRef, "baseRef");
+  const headSha = resolveGitCommitSha(rootDir, headRef, "headRef");
+
+  return execFileSync(
     "git",
-    ["diff", "--name-only", "--diff-filter=ACMR", baseRef, headRef, "--", "extensions"],
+    ["diff", "--name-only", "--diff-filter=ACMR", baseSha, headSha, "--", ...params.pathspecs],
     {
       cwd: rootDir,
       encoding: "utf8",
@@ -318,9 +355,21 @@ export function collectChangedExtensionIdsFromGitRange(params: {
   )
     .split("\n")
     .map((line) => line.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((path) => normalizeGitDiffPath(path));
+}
 
-  return collectChangedExtensionIdsFromPaths(changedPaths);
+export function collectChangedExtensionIdsFromGitRange(params: {
+  rootDir?: string;
+  gitRange: GitRangeSelection;
+}): string[] {
+  return collectChangedExtensionIdsFromPaths(
+    collectChangedPathsFromGitRange({
+      rootDir: params.rootDir,
+      gitRange: params.gitRange,
+      pathspecs: ["extensions"],
+    }),
+  );
 }
 
 export function resolveChangedPublishablePluginPackages(params: {

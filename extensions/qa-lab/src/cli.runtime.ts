@@ -2,6 +2,7 @@ import path from "node:path";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { startQaLabServer } from "./lab-server.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
+import { runQaSuite } from "./suite.js";
 
 export async function runQaLabSelfCheckCommand(opts: { output?: string }) {
   const server = await startQaLabServer({
@@ -13,6 +14,25 @@ export async function runQaLabSelfCheckCommand(opts: { output?: string }) {
   } finally {
     await server.stop();
   }
+}
+
+export async function runQaSuiteCommand(opts: {
+  outputDir?: string;
+  providerMode?: "mock-openai" | "live-openai";
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+}) {
+  const result = await runQaSuite({
+    outputDir: opts.outputDir ? path.resolve(opts.outputDir) : undefined,
+    providerMode: opts.providerMode,
+    primaryModel: opts.primaryModel,
+    alternateModel: opts.alternateModel,
+    fastMode: opts.fastMode,
+  });
+  process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
+  process.stdout.write(`QA suite report: ${result.reportPath}\n`);
+  process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
 }
 
 export async function runQaLabUiCommand(opts: {

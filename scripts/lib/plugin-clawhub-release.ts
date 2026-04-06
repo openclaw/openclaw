@@ -4,11 +4,13 @@ import { join, resolve } from "node:path";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
 import {
+  collectChangedPathsFromGitRange,
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
   parsePluginReleaseArgs,
   parsePluginReleaseSelection,
   parsePluginReleaseSelectionMode,
+  resolveGitCommitSha,
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
   type GitRangeSelection,
@@ -90,43 +92,6 @@ const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
 
 function readPluginPackageJson(path: string): PluginPackageJson {
   return JSON.parse(readFileSync(path, "utf8")) as PluginPackageJson;
-}
-
-function normalizePath(path: string) {
-  return path.trim().replaceAll("\\", "/");
-}
-
-function isNullGitRef(ref: string | undefined): boolean {
-  return !ref || /^0+$/.test(ref);
-}
-
-function assertSafeGitRef(ref: string, label: string) {
-  const trimmed = ref.trim();
-  if (!trimmed || isNullGitRef(trimmed)) {
-    throw new Error(`${label} is required.`);
-  }
-  if (
-    trimmed.startsWith("-") ||
-    trimmed.includes("\u0000") ||
-    trimmed.includes("\r") ||
-    trimmed.includes("\n")
-  ) {
-    throw new Error(`${label} must be a normal git ref or commit SHA.`);
-  }
-  return trimmed;
-}
-
-function resolveGitCommitSha(rootDir: string, ref: string, label: string) {
-  const safeRef = assertSafeGitRef(ref, label);
-  try {
-    return execFileSync("git", ["rev-parse", "--verify", "--quiet", `${safeRef}^{commit}`], {
-      cwd: rootDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  } catch {
-    throw new Error(`${label} is not a valid git commit ref: ${safeRef}`);
-  }
 }
 
 function getRegistryBaseUrl(explicit?: string) {
@@ -239,29 +204,11 @@ function collectPluginClawHubReleasePathsFromGitRangeForPathspecs(
   },
   pathspecs: readonly string[],
 ): string[] {
-  const rootDir = params.rootDir ?? resolve(".");
-  const { baseRef, headRef } = params.gitRange;
-
-  if (isNullGitRef(baseRef) || isNullGitRef(headRef)) {
-    return [];
-  }
-
-  const baseSha = resolveGitCommitSha(rootDir, baseRef, "baseRef");
-  const headSha = resolveGitCommitSha(rootDir, headRef, "headRef");
-
-  return execFileSync(
-    "git",
-    ["diff", "--name-only", "--diff-filter=ACMR", baseSha, headSha, "--", ...pathspecs],
-    {
-      cwd: rootDir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  )
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((path) => normalizePath(path));
+  return collectChangedPathsFromGitRange({
+    rootDir: params.rootDir,
+    gitRange: params.gitRange,
+    pathspecs,
+  });
 }
 
 function hasSharedClawHubReleaseInputChanges(changedPaths: readonly string[]) {

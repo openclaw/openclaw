@@ -10,7 +10,11 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
-import { isHighSignalLiveModelRef, isModernModelRef } from "./live-model-filter.js";
+import {
+  isHighSignalLiveModelRef,
+  isModernModelRef,
+  selectHighSignalLiveItems,
+} from "./live-model-filter.js";
 
 const baseModel = (): Model<Api> =>
   ({
@@ -451,5 +455,31 @@ describe("isHighSignalLiveModelRef", () => {
     expect(
       isHighSignalLiveModelRef({ provider: "opencode", id: "claude-3-5-haiku-20241022" }),
     ).toBe(false);
+  });
+});
+
+describe("selectHighSignalLiveItems", () => {
+  it("prefers curated Google replacements before fallback provider spread", () => {
+    const items = [
+      { provider: "anthropic", id: "claude-opus-4-6" },
+      { provider: "google", id: "gemini-3.1-pro-preview" },
+      { provider: "google", id: "gemini-2.5-flash" },
+      { provider: "openai", id: "gpt-5.2" },
+      { provider: "opencode", id: "big-pickle" },
+    ];
+
+    expect(
+      selectHighSignalLiveItems(
+        items,
+        4,
+        (item) => item,
+        (item) => item.provider,
+      ),
+    ).toEqual([
+      { provider: "anthropic", id: "claude-opus-4-6" },
+      { provider: "google", id: "gemini-3.1-pro-preview" },
+      { provider: "google", id: "gemini-2.5-flash" },
+      { provider: "openai", id: "gpt-5.2" },
+    ]);
   });
 });

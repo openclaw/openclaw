@@ -110,7 +110,12 @@ function createReplyConfig(streamMode?: "block"): OpenClawConfig {
         workspace: "/tmp/workspace",
       },
     },
-    channels: { telegram: { allowFrom: ["*"], ...(streamMode ? { streaming: streamMode } : {}) } },
+    channels: {
+      telegram: {
+        allowFrom: ["*"],
+        ...(streamMode ? { streaming: { mode: streamMode } } : {}),
+      },
+    },
     session: { store: "/tmp/sessions.json" },
   };
 }

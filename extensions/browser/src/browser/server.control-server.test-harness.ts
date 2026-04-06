@@ -184,7 +184,7 @@ export function getChromeMcpMocks(): Record<string, MockFn> {
 const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));
 installChromeUserDataDirHooks(chromeUserDataDir);
 
-type BrowserServerModule = typeof import("./server.js");
+type BrowserServerModule = typeof import("../server.js");
 let browserServerModule: BrowserServerModule | null = null;
 
 async function loadBrowserServerModule(): Promise<BrowserServerModule> {
@@ -192,7 +192,7 @@ async function loadBrowserServerModule(): Promise<BrowserServerModule> {
     return browserServerModule;
   }
   vi.resetModules();
-  browserServerModule = await import("./server.js");
+  browserServerModule = await import("../server.js");
   return browserServerModule;
 }
 
@@ -400,6 +400,7 @@ export async function cleanupBrowserControlServerTestContext(): Promise<void> {
 }
 
 export function installBrowserControlServerHooks() {
+  const hookTimeoutMs = process.platform === "win32" ? 300_000 : 240_000;
   beforeEach(async () => {
     vi.useRealTimers();
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
@@ -463,7 +464,7 @@ export function installBrowserControlServerHooks() {
         return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
       }),
     );
-  });
+  }, hookTimeoutMs);
 
   afterEach(async () => {
     await cleanupBrowserControlServerTestContext();

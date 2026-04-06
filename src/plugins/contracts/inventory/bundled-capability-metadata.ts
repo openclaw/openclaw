@@ -5,6 +5,7 @@ import { listBundledPluginMetadata } from "../../bundled-plugin-metadata.js";
 
 export type BundledPluginContractSnapshot = {
   pluginId: string;
+  cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
@@ -12,6 +13,7 @@ export type BundledPluginContractSnapshot = {
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
   videoGenerationProviderIds: string[];
+  musicGenerationProviderIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
@@ -39,6 +41,7 @@ const BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES = listBundledPluginMetadata({
 export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSnapshot[] =
   BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.map(({ manifest }) => ({
     pluginId: manifest.id,
+    cliBackendIds: uniqueStrings(manifest.cliBackends),
     providerIds: uniqueStrings(manifest.providers),
     speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
     realtimeTranscriptionProviderIds: uniqueStrings(
@@ -48,12 +51,14 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
     mediaUnderstandingProviderIds: uniqueStrings(manifest.contracts?.mediaUnderstandingProviders),
     imageGenerationProviderIds: uniqueStrings(manifest.contracts?.imageGenerationProviders),
     videoGenerationProviderIds: uniqueStrings(manifest.contracts?.videoGenerationProviders),
+    musicGenerationProviderIds: uniqueStrings(manifest.contracts?.musicGenerationProviders),
     webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders),
     webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders),
     toolNames: uniqueStrings(manifest.contracts?.tools),
   }))
     .filter(
       (entry) =>
+        entry.cliBackendIds.length > 0 ||
         entry.providerIds.length > 0 ||
         entry.speechProviderIds.length > 0 ||
         entry.realtimeTranscriptionProviderIds.length > 0 ||
@@ -61,6 +66,7 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
         entry.mediaUnderstandingProviderIds.length > 0 ||
         entry.imageGenerationProviderIds.length > 0 ||
         entry.videoGenerationProviderIds.length > 0 ||
+        entry.musicGenerationProviderIds.length > 0 ||
         entry.webFetchProviderIds.length > 0 ||
         entry.webSearchProviderIds.length > 0 ||
         entry.toolNames.length > 0,

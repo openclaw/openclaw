@@ -79,6 +79,12 @@ pnpm qa:lab:build
 pnpm openclaw qa ui
 ```
 
+Full repo-backed QA suite:
+
+```bash
+pnpm openclaw qa suite
+```
+
 That launches the private QA debugger at a local URL, separate from the
 shipped Control UI bundle.
 

@@ -159,8 +159,8 @@ describe("listMemoryFiles", () => {
 });
 
 describe("isMemoryPath", () => {
-  it("allows explicit access to top-level dreams.md", () => {
-    expect(isMemoryPath("dreams.md")).toBe(true);
+  it("allows explicit access to top-level DREAMS.md", () => {
+    expect(isMemoryPath("DREAMS.md")).toBe(true);
   });
 });
 

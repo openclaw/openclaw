@@ -275,7 +275,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
-  it("migrates Discord streaming boolean alias to streaming enum", () => {
+  it("migrates Discord streaming boolean alias into nested streaming.mode", () => {
     const res = normalizeCompatibilityConfigValues(
       asLegacyConfig({
         channels: {
@@ -291,21 +291,25 @@ describe("normalizeCompatibilityConfigValues", () => {
       }),
     );
 
-    expect(res.config.channels?.discord?.streaming).toBe("partial");
+    expect(res.config.channels?.discord?.streaming).toEqual({
+      mode: "partial",
+    });
     expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
-    expect(res.config.channels?.discord?.accounts?.work?.streaming).toBe("off");
+    expect(res.config.channels?.discord?.accounts?.work?.streaming).toEqual({
+      mode: "off",
+    });
     expect(
       getLegacyProperty(res.config.channels?.discord?.accounts?.work, "streamMode"),
     ).toBeUndefined();
     expect(res.changes).toContain(
-      "Normalized channels.discord.streaming boolean → enum (partial).",
+      "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (partial).",
     );
     expect(res.changes).toContain(
-      "Normalized channels.discord.accounts.work.streaming boolean → enum (off).",
+      "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
     );
   });
 
-  it("migrates Discord legacy streamMode into streaming enum", () => {
+  it("migrates Discord legacy streamMode into nested streaming.mode", () => {
     const res = normalizeCompatibilityConfigValues(
       asLegacyConfig({
         channels: {
@@ -317,15 +321,17 @@ describe("normalizeCompatibilityConfigValues", () => {
       }),
     );
 
-    expect(res.config.channels?.discord?.streaming).toBe("block");
+    expect(res.config.channels?.discord?.streaming).toEqual({
+      mode: "block",
+    });
     expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
-      "Moved channels.discord.streamMode → channels.discord.streaming (block).",
-      "Normalized channels.discord.streaming boolean → enum (block).",
+      "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
+      "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (block).",
     ]);
   });
 
-  it("migrates Telegram streamMode into streaming enum", () => {
+  it("migrates Telegram streamMode into nested streaming.mode", () => {
     const res = normalizeCompatibilityConfigValues(
       asLegacyConfig({
         channels: {
@@ -336,14 +342,16 @@ describe("normalizeCompatibilityConfigValues", () => {
       }),
     );
 
-    expect(res.config.channels?.telegram?.streaming).toBe("block");
+    expect(res.config.channels?.telegram?.streaming).toEqual({
+      mode: "block",
+    });
     expect(getLegacyProperty(res.config.channels?.telegram, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
-      "Moved channels.telegram.streamMode → channels.telegram.streaming (block).",
+      "Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block).",
     ]);
   });
 
-  it("migrates Slack legacy streaming keys to unified config", () => {
+  it("migrates Slack legacy streaming keys into nested streaming config", () => {
     const res = normalizeCompatibilityConfigValues(
       asLegacyConfig({
         channels: {
@@ -355,12 +363,15 @@ describe("normalizeCompatibilityConfigValues", () => {
       }),
     );
 
-    expect(res.config.channels?.slack?.streaming).toBe("progress");
-    expect(res.config.channels?.slack?.nativeStreaming).toBe(false);
+    expect(res.config.channels?.slack?.streaming).toEqual({
+      mode: "progress",
+      nativeTransport: false,
+    });
     expect(getLegacyProperty(res.config.channels?.slack, "streamMode")).toBeUndefined();
     expect(res.changes).toEqual([
-      "Moved channels.slack.streamMode → channels.slack.streaming (progress).",
-      "Moved channels.slack.streaming (boolean) → channels.slack.nativeStreaming (false).",
+      "Moved channels.slack.streamMode → channels.slack.streaming.mode (progress).",
+      "Moved channels.slack.streaming (boolean) → channels.slack.streaming.mode (progress).",
+      "Moved channels.slack.streaming (boolean) → channels.slack.streaming.nativeTransport.",
     ]);
   });
 
@@ -373,7 +384,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           dmPolicy: "allowlist",
           allowFrom: ["123"],
           groupPolicy: "allowlist",
-          streaming: "partial",
+          streaming: { mode: "partial" },
           accounts: {
             alerts: {
               enabled: true,
@@ -389,7 +400,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       dmPolicy: "allowlist",
       allowFrom: ["123"],
       groupPolicy: "allowlist",
-      streaming: "partial",
+      streaming: { mode: "partial" },
     });
     expect(res.config.channels?.telegram?.botToken).toBeUndefined();
     expect(res.config.channels?.telegram?.dmPolicy).toBeUndefined();

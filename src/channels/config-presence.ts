@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
+import {
+  hasBundledChannelPersistedAuthState,
+  listBundledChannelIdsWithPersistedAuthState,
+} from "../channels/plugins/persisted-auth-state.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { listBootstrapChannelPlugins } from "./plugins/bootstrap-registry.js";
 import { listBundledChannelPluginIds } from "./plugins/bundled-ids.js";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
@@ -26,8 +29,10 @@ export function hasMeaningfulChannelConfig(value: unknown): boolean {
   return Object.keys(value).some((key) => key !== "enabled");
 }
 
-function listConfiguredChannelEnvPrefixes(): Array<[prefix: string, channelId: string]> {
-  return listBundledChannelPluginIds().map((channelId) => [
+function listChannelEnvPrefixes(
+  channelIds: readonly string[],
+): Array<[prefix: string, channelId: string]> {
+  return channelIds.map((channelId) => [
     `${channelId.replace(/[^a-z0-9]+/gi, "_").toUpperCase()}_`,
     channelId,
   ]);
@@ -37,13 +42,16 @@ function hasPersistedChannelState(env: NodeJS.ProcessEnv): boolean {
   return fs.existsSync(resolveStateDir(env, os.homedir));
 }
 
+const PERSISTED_AUTH_STATE_CHANNEL_IDS = listBundledChannelIdsWithPersistedAuthState();
+
 export function listPotentialConfiguredChannelIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
   options: ChannelPresenceOptions = {},
 ): string[] {
   const configuredChannelIds = new Set<string>();
-  const channelEnvPrefixes = listConfiguredChannelEnvPrefixes();
+  const channelIds = listBundledChannelPluginIds();
+  const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (channels) {
     for (const [key, value] of Object.entries(channels)) {
@@ -68,9 +76,9 @@ export function listPotentialConfiguredChannelIds(
   }
 
   if (options.includePersistedAuthState !== false && hasPersistedChannelState(env)) {
-    for (const plugin of listBootstrapChannelPlugins()) {
-      if (plugin.config?.hasPersistedAuthState?.({ cfg, env })) {
-        configuredChannelIds.add(plugin.id);
+    for (const channelId of PERSISTED_AUTH_STATE_CHANNEL_IDS) {
+      if (hasBundledChannelPersistedAuthState({ channelId, cfg, env })) {
+        configuredChannelIds.add(channelId);
       }
     }
   }
@@ -83,7 +91,8 @@ function hasEnvConfiguredChannel(
   env: NodeJS.ProcessEnv,
   options: ChannelPresenceOptions = {},
 ): boolean {
-  const channelEnvPrefixes = listConfiguredChannelEnvPrefixes();
+  const channelIds = listBundledChannelPluginIds();
+  const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
   for (const [key, value] of Object.entries(env)) {
     if (!hasNonEmptyString(value)) {
       continue;
@@ -95,8 +104,8 @@ function hasEnvConfiguredChannel(
   if (options.includePersistedAuthState === false || !hasPersistedChannelState(env)) {
     return false;
   }
-  return listBootstrapChannelPlugins().some((plugin) =>
-    Boolean(plugin.config?.hasPersistedAuthState?.({ cfg, env })),
+  return PERSISTED_AUTH_STATE_CHANNEL_IDS.some((channelId) =>
+    hasBundledChannelPersistedAuthState({ channelId, cfg, env }),
   );
 }
 

@@ -1,0 +1,68 @@
+{
+  "name": "@openclaw/plugin-sdk",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./config-runtime": {
+      "types": "./dist/packages/plugin-sdk/src/config-runtime.d.ts",
+      "default": "./src/config-runtime.ts"
+    },
+    "./plugin-entry": {
+      "types": "./dist/packages/plugin-sdk/src/plugin-entry.d.ts",
+      "default": "./src/plugin-entry.ts"
+    },
+    "./provider-auth": {
+      "types": "./dist/packages/plugin-sdk/src/provider-auth.d.ts",
+      "default": "./src/provider-auth.ts"
+    },
+    "./provider-auth-runtime": {
+      "types": "./dist/packages/plugin-sdk/src/provider-auth-runtime.d.ts",
+      "default": "./src/provider-auth-runtime.ts"
+    },
+    "./provider-entry": {
+      "types": "./dist/packages/plugin-sdk/src/provider-entry.d.ts",
+      "default": "./src/provider-entry.ts"
+    },
+    "./provider-http": {
+      "types": "./dist/packages/plugin-sdk/src/provider-http.d.ts",
+      "default": "./src/provider-http.ts"
+    },
+    "./provider-model-shared": {
+      "types": "./dist/packages/plugin-sdk/src/provider-model-shared.d.ts",
+      "default": "./src/provider-model-shared.ts"
+    },
+    "./provider-onboard": {
+      "types": "./dist/packages/plugin-sdk/src/provider-onboard.d.ts",
+      "default": "./src/provider-onboard.ts"
+    },
+    "./provider-stream-shared": {
+      "types": "./dist/packages/plugin-sdk/src/provider-stream-shared.d.ts",
+      "default": "./src/provider-stream-shared.ts"
+    },
+    "./provider-tools": {
+      "types": "./dist/packages/plugin-sdk/src/provider-tools.d.ts",
+      "default": "./src/provider-tools.ts"
+    },
+    "./provider-web-search": {
+      "types": "./dist/packages/plugin-sdk/src/provider-web-search.d.ts",
+      "default": "./src/provider-web-search.ts"
+    },
+    "./runtime-env": {
+      "types": "./dist/packages/plugin-sdk/src/runtime-env.d.ts",
+      "default": "./src/runtime-env.ts"
+    },
+    "./secret-input": {
+      "types": "./dist/packages/plugin-sdk/src/secret-input.d.ts",
+      "default": "./src/secret-input.ts"
+    },
+    "./testing": {
+      "types": "./dist/packages/plugin-sdk/src/testing.d.ts",
+      "default": "./src/testing.ts"
+    },
+    "./video-generation": {
+      "types": "./dist/packages/plugin-sdk/src/video-generation.d.ts",
+      "default": "./src/video-generation.ts"
+    }
+  }
+}

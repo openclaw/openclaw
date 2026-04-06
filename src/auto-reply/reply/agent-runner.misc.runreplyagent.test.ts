@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   clearMemoryPluginState,
@@ -24,7 +26,12 @@ import { createMockTypingController } from "./test-helpers.js";
 function createCliBackendTestConfig() {
   return {
     agents: {
-      defaults: {},
+      defaults: {
+        cliBackends: {
+          "claude-cli": {},
+          "google-gemini-cli": {},
+        },
+      },
     },
   };
 }
@@ -32,11 +39,11 @@ function createCliBackendTestConfig() {
 const runEmbeddedPiAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const abortEmbeddedPiRunMock = vi.fn();
+const clearSessionQueuesMock = vi.fn();
+const refreshQueuedFollowupSessionMock = vi.fn();
 const compactState = vi.hoisted(() => ({
   compactEmbeddedPiSessionMock: vi.fn(),
-  actualCompactEmbeddedPiSession: undefined as
-    | typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession
-    | undefined,
 }));
 
 function createDeferred<T>() {
@@ -61,26 +68,19 @@ vi.mock("../../agents/model-fallback.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
-vi.mock("../../agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/pi-embedded.js")>(
-    "../../agents/pi-embedded.js",
-  );
-  compactState.actualCompactEmbeddedPiSession = actual.compactEmbeddedPiSession;
+vi.mock("../../agents/pi-embedded.js", () => {
   return {
-    ...actual,
     compactEmbeddedPiSession: (params: unknown) =>
       compactState.compactEmbeddedPiSessionMock(params),
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+    abortEmbeddedPiRun: (...args: unknown[]) => abortEmbeddedPiRunMock(...args),
   };
 });
 
-vi.mock("../../runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../runtime.js")>("../../runtime.js");
+vi.mock("../../runtime.js", () => {
   return {
-    ...actual,
     defaultRuntime: {
-      ...actual.defaultRuntime,
       log: vi.fn(),
       error: (...args: unknown[]) => runtimeErrorMock(...args),
       exit: vi.fn(),
@@ -88,23 +88,35 @@ vi.mock("../../runtime.js", async () => {
   };
 });
 
-vi.mock("./queue.js", async () => {
-  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
+vi.mock("./queue.js", () => {
   return {
-    ...actual,
     enqueueFollowupRun: vi.fn(),
     scheduleFollowupDrain: vi.fn(),
+    clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
+    refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
   };
 });
 
 const loadCronStoreMock = vi.fn();
-vi.mock("../../cron/store.js", async () => {
-  const actual = await vi.importActual<typeof import("../../cron/store.js")>("../../cron/store.js");
+vi.mock("../../cron/store.js", () => {
   return {
-    ...actual,
     loadCronStore: (...args: unknown[]) => loadCronStoreMock(...args),
+    resolveCronStorePath: (storePath?: string) => storePath ?? "/tmp/openclaw-cron-store.json",
   };
 });
+
+vi.mock("../../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: () => ({
+    resolveSession: () => ({ kind: "none" }),
+    cancelSession: async () => {},
+  }),
+}));
+
+vi.mock("../../agents/subagent-registry.js", () => ({
+  getLatestSubagentRunByChildSessionKey: () => null,
+  listSubagentRunsForController: () => [],
+  markSubagentRunTerminated: () => 0,
+}));
 
 import { runReplyAgent } from "./agent-runner.js";
 
@@ -118,6 +130,11 @@ beforeEach(() => {
   runEmbeddedPiAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  abortEmbeddedPiRunMock.mockClear();
+  clearSessionQueuesMock.mockReset();
+  clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
+  refreshQueuedFollowupSessionMock.mockReset();
+  refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
@@ -168,7 +185,10 @@ describe("runReplyAgent onAgentRunStart", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: createCliBackendTestConfig(),
+        config:
+          provider === "claude-cli"
+            ? { agents: { defaults: { cliBackends: { "claude-cli": {} } } } }
+            : createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider,
         model,
@@ -228,14 +248,16 @@ describe("runReplyAgent onAgentRunStart", () => {
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
-          provider: "codex-cli",
-          model: "gpt-5.4",
+          provider: "claude-cli",
+          model: "opus-4.5",
         },
       },
     });
     const onAgentRunStart = vi.fn();
 
     const result = await createRun({
+      provider: "claude-cli",
+      model: "opus-4.5",
       opts: { runId: "run-started", onAgentRunStart },
     });
 
@@ -1497,6 +1519,100 @@ describe("runReplyAgent block streaming", () => {
   });
 });
 
+describe("runReplyAgent claude-cli routing", () => {
+  function createRun() {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "webchat",
+      OriginatingTo: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "webchat",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: { agents: { defaults: { cliBackends: { "claude-cli": {} } } } },
+        skillsSnapshot: {},
+        provider: "claude-cli",
+        model: "opus-4.5",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "claude-cli/opus-4.5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("uses the embedded runner for claude-cli provider", async () => {
+    const runId = "00000000-0000-0000-0000-000000000001";
+    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
+    const lifecyclePhases: string[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.runId !== runId) {
+        return;
+      }
+      if (evt.stream !== "lifecycle") {
+        return;
+      }
+      const phase = evt.data?.phase;
+      if (typeof phase === "string") {
+        lifecyclePhases.push(phase);
+      }
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "opus-4.5",
+        },
+      },
+    });
+
+    const result = await createRun();
+    unsubscribe();
+    randomSpy.mockRestore();
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(lifecyclePhases).toEqual(["start", "end"]);
+    expect(result).toMatchObject({ text: "ok" });
+  });
+});
+
 describe("runReplyAgent messaging tool suppression", () => {
   function createRun(
     messageProvider = "slack",
@@ -2041,8 +2157,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
       return { payloads: [{ text: "ok" }], meta: {} };
     });
     runWithModelFallbackMock.mockImplementation(async ({ run }: RunWithModelFallbackParams) => ({
-      result: await run("google", "gemini-3"),
-      provider: "google",
+      result: await run("google-gemini-cli", "gemini-3"),
+      provider: "google-gemini-cli",
       model: "gemini-3",
     }));
 

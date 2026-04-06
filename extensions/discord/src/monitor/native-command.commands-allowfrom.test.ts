@@ -75,9 +75,7 @@ function createDispatchSpy() {
       tool: 0,
     },
   } as never);
-  nativeCommandTesting.setDispatchReplyWithDispatcher(
-    dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
-  );
+  nativeCommandTesting.setDispatchReplyWithDispatcher(dispatcherModule.dispatchReplyWithDispatcher);
   return dispatchSpy;
 }
 
@@ -115,7 +113,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     nativeCommandTesting.setDispatchReplyWithDispatcher(
-      dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
+      dispatcherModule.dispatchReplyWithDispatcher,
     );
   });
 
@@ -151,6 +149,49 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     });
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     expectNotUnauthorizedReply(interaction);
+  });
+
+  it("authorizes guild slash commands from an allowlisted channel when commands.allowFrom is not configured", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ...cfg.commands,
+          allowFrom: undefined,
+        };
+      },
+    });
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectNotUnauthorizedReply(interaction);
+  });
+
+  it("rejects guild slash commands outside the Discord allowlist when commands.useAccessGroups is false and commands.allowFrom is not configured", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ...cfg.commands,
+          useAccessGroups: false,
+          allowFrom: undefined,
+        };
+        cfg.channels = {
+          ...cfg.channels,
+          discord: {
+            ...cfg.channels?.discord,
+            guilds: {
+              "000000000000000000": {
+                channels: {
+                  "111111111111111111": {
+                    enabled: true,
+                    requireMention: false,
+                  },
+                },
+              },
+            },
+          },
+        };
+      },
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expectUnauthorizedReply(interaction);
   });
 
   it("rejects guild slash commands when commands.allowFrom.discord does not match the sender", async () => {

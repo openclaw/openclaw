@@ -225,6 +225,10 @@ export class OpenClawApp extends LitElement {
   @state() dreamingStatusError: string | null = null;
   @state() dreamingStatus: DreamingStatus | null = null;
   @state() dreamingModeSaving = false;
+  @state() dreamDiaryLoading = false;
+  @state() dreamDiaryError: string | null = null;
+  @state() dreamDiaryPath: string | null = null;
+  @state() dreamDiaryContent: string | null = null;
   @state() configFormDirty = false;
   @state() configFormMode: "form" | "raw" = "form";
   @state() configSearchQuery = "";

@@ -92,6 +92,88 @@ async function resolveRequestedChannel(params: {
   return { cfg, channel };
 }
 
+function resolveGatewayOutboundTarget(params: {
+  channel: string;
+  to: string;
+  cfg: ReturnType<typeof loadConfig>;
+  accountId?: string;
+}):
+  | {
+      ok: true;
+      to: string;
+    }
+  | {
+      ok: false;
+      error: ReturnType<typeof errorShape>;
+    } {
+  const resolved = resolveOutboundTarget({
+    channel: params.channel,
+    to: params.to,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    mode: "explicit",
+  });
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)),
+    };
+  }
+  return { ok: true, to: resolved.to };
+}
+
+function buildGatewayDeliveryPayload(params: {
+  runId: string;
+  channel: string;
+  result: Record<string, unknown>;
+}): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    runId: params.runId,
+    messageId: params.result.messageId,
+    channel: params.channel,
+  };
+  if ("chatId" in params.result) {
+    payload.chatId = params.result.chatId;
+  }
+  if ("channelId" in params.result) {
+    payload.channelId = params.result.channelId;
+  }
+  if ("toJid" in params.result) {
+    payload.toJid = params.result.toJid;
+  }
+  if ("conversationId" in params.result) {
+    payload.conversationId = params.result.conversationId;
+  }
+  if ("pollId" in params.result) {
+    payload.pollId = params.result.pollId;
+  }
+  return payload;
+}
+
+function cacheGatewayDedupeSuccess(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  payload: Record<string, unknown>;
+}) {
+  params.context.dedupe.set(params.dedupeKey, {
+    ts: Date.now(),
+    ok: true,
+    payload: params.payload,
+  });
+}
+
+function cacheGatewayDedupeFailure(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  error: ReturnType<typeof errorShape>;
+}) {
+  params.context.dedupe.set(params.dedupeKey, {
+    ts: Date.now(),
+    ok: false,
+    error: params.error,
+  });
+}
+
 export const sendHandlers: GatewayRequestHandlers = {
   send: async ({ params, respond, context, client }) => {
     const p = params;
@@ -186,27 +268,26 @@ export const sendHandlers: GatewayRequestHandlers = {
 
     const work = (async (): Promise<InflightResult> => {
       try {
-        const resolved = resolveOutboundTarget({
+        const resolvedTarget = resolveGatewayOutboundTarget({
           channel: outboundChannel,
           to,
           cfg,
           accountId,
-          mode: "explicit",
         });
-        if (!resolved.ok) {
+        if (!resolvedTarget.ok) {
           return {
             ok: false,
-            error: errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)),
+            error: resolvedTarget.error,
             meta: { channel },
           };
         }
         const idLikeTarget = await maybeResolveIdLikeTarget({
           cfg,
           channel,
-          input: resolved.to,
+          input: resolvedTarget.to,
           accountId,
         });
-        const deliveryTarget = idLikeTarget?.to ?? resolved.to;
+        const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
         const mirrorPayloads = normalizeReplyPayloadsForDelivery([
           { text: message, mediaUrl, mediaUrls },
@@ -290,28 +371,8 @@ export const sendHandlers: GatewayRequestHandlers = {
         if (!result) {
           throw new Error("No delivery result");
         }
-        const payload: Record<string, unknown> = {
-          runId: idem,
-          messageId: result.messageId,
-          channel,
-        };
-        if ("chatId" in result) {
-          payload.chatId = result.chatId;
-        }
-        if ("channelId" in result) {
-          payload.channelId = result.channelId;
-        }
-        if ("toJid" in result) {
-          payload.toJid = result.toJid;
-        }
-        if ("conversationId" in result) {
-          payload.conversationId = result.conversationId;
-        }
-        context.dedupe.set(dedupeKey, {
-          ts: Date.now(),
-          ok: true,
-          payload,
-        });
+        const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
+        cacheGatewayDedupeSuccess({ context, dedupeKey, payload });
         return {
           ok: true,
           payload,
@@ -319,11 +380,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         };
       } catch (err) {
         const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-        context.dedupe.set(dedupeKey, {
-          ts: Date.now(),
-          ok: false,
-          error,
-        });
+        cacheGatewayDedupeFailure({ context, dedupeKey, error });
         return { ok: false, error, meta: { channel, error: formatForLog(err) } };
       }
     })();
@@ -429,15 +486,14 @@ export const sendHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const resolved = resolveOutboundTarget({
+      const resolvedTarget = resolveGatewayOutboundTarget({
         channel: channel,
         to,
         cfg,
         accountId,
-        mode: "explicit",
       });
-      if (!resolved.ok) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)));
+      if (!resolvedTarget.ok) {
+        respond(false, undefined, resolvedTarget.error);
         return;
       }
       const normalized = outbound.pollMaxOptions
@@ -445,7 +501,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         : normalizePollInput(poll);
       const result = await outbound.sendPoll({
         cfg,
-        to: resolved.to,
+        to: resolvedTarget.to,
         poll: normalized,
         accountId,
         threadId,
@@ -453,34 +509,18 @@ export const sendHandlers: GatewayRequestHandlers = {
         isAnonymous: request.isAnonymous,
         gatewayClientScopes: client?.connect?.scopes ?? [],
       });
-      const payload: Record<string, unknown> = {
-        runId: idem,
-        messageId: result.messageId,
-        channel,
-      };
-      if (result.toJid) {
-        payload.toJid = result.toJid;
-      }
-      if (result.channelId) {
-        payload.channelId = result.channelId;
-      }
-      if (result.conversationId) {
-        payload.conversationId = result.conversationId;
-      }
-      if (result.pollId) {
-        payload.pollId = result.pollId;
-      }
-      context.dedupe.set(`poll:${idem}`, {
-        ts: Date.now(),
-        ok: true,
+      const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
+      cacheGatewayDedupeSuccess({
+        context,
+        dedupeKey: `poll:${idem}`,
         payload,
       });
       respond(true, payload, undefined, { channel });
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-      context.dedupe.set(`poll:${idem}`, {
-        ts: Date.now(),
-        ok: false,
+      cacheGatewayDedupeFailure({
+        context,
+        dedupeKey: `poll:${idem}`,
         error,
       });
       respond(false, undefined, error, {

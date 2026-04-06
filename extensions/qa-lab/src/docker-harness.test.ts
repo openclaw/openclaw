@@ -61,6 +61,7 @@ describe("qa docker harness", () => {
     );
     expect(compose).toContain("OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json");
     expect(compose).toContain("OPENCLAW_STATE_DIR: /tmp/openclaw/state");
+    expect(compose).toContain('OPENCLAW_NO_RESPAWN: "1"');
 
     const envExample = await readFile(path.join(outputDir, ".env.example"), "utf8");
     expect(envExample).toContain("OPENCLAW_GATEWAY_TOKEN=qa-token");
@@ -80,6 +81,9 @@ describe("qa docker harness", () => {
       "utf8",
     );
     expect(kickoff).toContain("Lobster Invaders");
+
+    const readme = await readFile(path.join(outputDir, "README.md"), "utf8");
+    expect(readme).toContain("in-process restarts inside Docker");
   });
 
   it("builds the reusable QA image with bundled QA extensions", async () => {

@@ -40,6 +40,7 @@ describe("qa-lab server", () => {
       kickoffTask: string;
       scenarios: Array<{ id: string; title: string }>;
       defaults: { conversationId: string; senderId: string };
+      runner: { status: string; selection: { providerMode: string; scenarioIds: string[] } };
     };
     expect(bootstrap.defaults.conversationId).toBe("qa-operator");
     expect(bootstrap.defaults.senderId).toBe("qa-operator");
@@ -48,6 +49,9 @@ describe("qa-lab server", () => {
     expect(bootstrap.kickoffTask).toContain("Lobster Invaders");
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
     expect(bootstrap.scenarios.some((scenario) => scenario.id === "dm-chat-baseline")).toBe(true);
+    expect(bootstrap.runner.status).toBe("idle");
+    expect(bootstrap.runner.selection.providerMode).toBe("mock-openai");
+    expect(bootstrap.runner.selection.scenarioIds).toHaveLength(bootstrap.scenarios.length);
 
     const messageResponse = await fetch(`${lab.baseUrl}/api/inbound/message`, {
       method: "POST",
@@ -122,7 +126,11 @@ describe("qa-lab server", () => {
         res.end(JSON.stringify({ ok: true, status: "live" }));
         return;
       }
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "x-frame-options": "DENY",
+        "content-security-policy": "default-src 'self'; frame-ancestors 'none';",
+      });
       res.end("<!doctype html><title>control-ui</title><h1>Control UI</h1>");
     });
     await new Promise<void>((resolve, reject) => {
@@ -168,6 +176,8 @@ describe("qa-lab server", () => {
 
     const rootResponse = await fetch(`${lab.listenUrl}/control-ui/`);
     expect(rootResponse.status).toBe(200);
+    expect(rootResponse.headers.get("x-frame-options")).toBeNull();
+    expect(rootResponse.headers.get("content-security-policy")).toContain("frame-ancestors 'self'");
     expect(await rootResponse.text()).toContain("Control UI");
   });
 
@@ -185,5 +195,102 @@ describe("qa-lab server", () => {
     const html = await rootResponse.text();
     expect(html).not.toContain("QA Lab UI not built");
     expect(html).toContain("<title>");
+  });
+
+  it("can disable the embedded echo gateway for real-suite runs", async () => {
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      embeddedGateway: "disabled",
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    await fetch(`${lab.baseUrl}/api/inbound/message`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        conversation: { id: "bob", kind: "direct" },
+        senderId: "bob",
+        senderName: "Bob",
+        text: "hello from suite",
+      }),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const snapshot = (await (await fetch(`${lab.baseUrl}/api/state`)).json()) as {
+      messages: Array<{ direction: string }>;
+    };
+    expect(snapshot.messages.filter((message) => message.direction === "outbound")).toHaveLength(0);
+  });
+
+  it("exposes structured outcomes and can attach control-ui after startup", async () => {
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      embeddedGateway: "disabled",
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const initialOutcomes = (await (await fetch(`${lab.baseUrl}/api/outcomes`)).json()) as {
+      run: null | unknown;
+    };
+    expect(initialOutcomes.run).toBeNull();
+
+    lab.setScenarioRun({
+      kind: "suite",
+      status: "running",
+      startedAt: "2026-04-06T09:00:00.000Z",
+      scenarios: [
+        {
+          id: "channel-chat-baseline",
+          name: "Channel baseline conversation",
+          status: "pass",
+          steps: [{ name: "reply check", status: "pass", details: "ok" }],
+          finishedAt: "2026-04-06T09:00:01.000Z",
+        },
+        {
+          id: "cron-one-minute-ping",
+          name: "Cron one-minute ping",
+          status: "running",
+          startedAt: "2026-04-06T09:00:02.000Z",
+        },
+      ],
+    });
+    lab.setControlUi({
+      controlUiUrl: "http://127.0.0.1:18789/",
+      controlUiToken: "late-token",
+    });
+
+    const bootstrap = (await (await fetch(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+      controlUiEmbeddedUrl: string | null;
+    };
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/#token=late-token");
+
+    const outcomes = (await (await fetch(`${lab.baseUrl}/api/outcomes`)).json()) as {
+      run: {
+        status: string;
+        counts: { total: number; passed: number; running: number };
+        scenarios: Array<{ id: string; status: string }>;
+      };
+    };
+    expect(outcomes.run.status).toBe("running");
+    expect(outcomes.run.counts).toEqual({
+      total: 2,
+      pending: 0,
+      running: 1,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+    });
+    expect(outcomes.run.scenarios.map((scenario) => scenario.id)).toEqual([
+      "channel-chat-baseline",
+      "cron-one-minute-ping",
+    ]);
   });
 });

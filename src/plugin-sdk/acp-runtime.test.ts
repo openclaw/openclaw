@@ -55,6 +55,25 @@ describe("tryDispatchAcpReplyHook", () => {
     vi.clearAllMocks();
   });
 
+  it("skips ACP runtime lookup for plain-text deny turns", async () => {
+    const result = await tryDispatchAcpReplyHook(
+      {
+        ...event,
+        sendPolicy: "deny",
+        ctx: buildTestCtx({
+          SessionKey: "agent:test:session",
+          BodyForCommands: "write a test",
+          BodyForAgent: "write a test",
+        }),
+      },
+      ctx,
+    );
+
+    expect(result).toBeUndefined();
+    expect(bypassMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it("skips ACP dispatch when send policy denies delivery and no bypass applies", async () => {
     bypassMock.mockResolvedValue(false);
 
@@ -96,5 +115,30 @@ describe("tryDispatchAcpReplyHook", () => {
 
     expect(result).toBeUndefined();
     expect(dispatchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not let ACP claim reset commands before local command handling", async () => {
+    bypassMock.mockResolvedValue(true);
+    dispatchMock.mockResolvedValue(undefined);
+
+    const result = await tryDispatchAcpReplyHook(
+      {
+        ...event,
+        ctx: buildTestCtx({
+          SessionKey: "agent:test:session",
+          CommandBody: "/new",
+          BodyForCommands: "/new",
+          BodyForAgent: "/new",
+        }),
+      },
+      ctx,
+    );
+
+    expect(result).toBeUndefined();
+    expect(dispatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bypassForCommand: true,
+      }),
+    );
   });
 });

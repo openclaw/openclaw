@@ -83,6 +83,8 @@ export type MatrixExecApprovalConfig = {
   target?: MatrixExecApprovalTarget;
 };
 
+export type MatrixStreamingMode = "partial" | "quiet" | "off";
+
 export type MatrixNetworkConfig = {
   /** Dangerous opt-in for trusted private/internal Matrix homeservers. */
   dangerouslyAllowPrivateNetwork?: boolean;
@@ -189,16 +191,20 @@ export type MatrixConfig = {
   /**
    * Streaming mode for Matrix replies.
    * - `"partial"`: edit a single draft message in place for the current
+   *   assistant block as the model generates text using normal Matrix text
+   *   messages. This preserves legacy preview-first notification behavior.
+   * - `"quiet"`: edit a single quiet draft notice in place for the current
    *   assistant block as the model generates text.
    * - `"off"`: deliver the full reply once the model finishes.
    * - Use `blockStreaming: true` when you want completed assistant blocks to
    *   stay visible as separate progress messages. When combined with
-   *   `"partial"`, Matrix keeps a live draft for the current block and
+   *   preview streaming, Matrix keeps a live draft for the current block and
    *   preserves completed blocks as separate messages.
-   * - `true` maps to `"partial"`, `false` maps to `"off"`.
+   * - `true` maps to `"partial"`, `false` maps to `"off"` for backward
+   *   compatibility.
    * Default: `"off"`.
    */
-  streaming?: "partial" | "off" | boolean;
+  streaming?: MatrixStreamingMode | boolean;
 };
 
 export type CoreConfig = {

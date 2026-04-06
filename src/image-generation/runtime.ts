@@ -2,16 +2,17 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import {
+  buildNoCapabilityModelConfiguredMessage,
+  resolveCapabilityModelCandidates,
+  throwCapabilityGenerationFailure,
+} from "../media-generation/runtime-shared.js";
 import { parseImageGenerationModelRef } from "./model-ref.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
 import type {
   GeneratedImageAsset,
+  ImageGenerationIgnoredOverride,
   ImageGenerationResolution,
   ImageGenerationResult,
   ImageGenerationSourceImage,
@@ -38,90 +39,81 @@ export type GenerateImageRuntimeResult = {
   model: string;
   attempts: FallbackAttempt[];
   metadata?: Record<string, unknown>;
+  ignoredOverrides: ImageGenerationIgnoredOverride[];
 };
 
-function resolveImageGenerationCandidates(params: {
-  cfg: OpenClawConfig;
-  modelOverride?: string;
-}): Array<{ provider: string; model: string }> {
-  const candidates: Array<{ provider: string; model: string }> = [];
-  const seen = new Set<string>();
-  const add = (raw: string | undefined) => {
-    const parsed = parseImageGenerationModelRef(raw);
-    if (!parsed) {
-      return;
-    }
-    const key = `${parsed.provider}/${parsed.model}`;
-    if (seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    candidates.push(parsed);
-  };
-
-  add(params.modelOverride);
-  add(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.imageGenerationModel));
-  for (const fallback of resolveAgentModelFallbackValues(
-    params.cfg.agents?.defaults?.imageGenerationModel,
-  )) {
-    add(fallback);
-  }
-  return candidates;
-}
-
-function throwImageGenerationFailure(params: {
-  attempts: FallbackAttempt[];
-  lastError: unknown;
-}): never {
-  if (params.attempts.length <= 1 && params.lastError) {
-    throw params.lastError;
-  }
-  const summary =
-    params.attempts.length > 0
-      ? params.attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
-      : "unknown";
-  throw new Error(`All image generation models failed (${params.attempts.length}): ${summary}`, {
-    cause: params.lastError instanceof Error ? params.lastError : undefined,
-  });
-}
-
 function buildNoImageGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
-  const providers = listImageGenerationProviders(cfg);
-  const sampleModel = providers.find(
-    (provider) => provider.id.trim().length > 0 && provider.defaultModel?.trim(),
-  );
-  const sampleRef = sampleModel
-    ? `${sampleModel.id}/${sampleModel.defaultModel}`
-    : "<provider>/<model>";
-  const authHints = providers
-    .flatMap((provider) => {
-      const envVars = getProviderEnvVars(provider.id);
-      if (envVars.length === 0) {
-        return [];
-      }
-      return [`${provider.id}: ${envVars.join(" / ")}`];
-    })
-    .slice(0, 3);
-  return [
-    `No image-generation model configured. Set agents.defaults.imageGenerationModel.primary to a provider/model like "${sampleRef}".`,
-    authHints.length > 0
-      ? `If you want a specific provider, also configure that provider's auth/API key first (${authHints.join("; ")}).`
-      : "If you want a specific provider, also configure that provider's auth/API key first.",
-  ].join(" ");
+  return buildNoCapabilityModelConfiguredMessage({
+    capabilityLabel: "image-generation",
+    modelConfigKey: "imageGenerationModel",
+    providers: listImageGenerationProviders(cfg),
+  });
 }
 
 export function listRuntimeImageGenerationProviders(params?: { config?: OpenClawConfig }) {
   return listImageGenerationProviders(params?.config);
 }
 
+function resolveProviderImageGenerationOverrides(params: {
+  provider: NonNullable<ReturnType<typeof getImageGenerationProvider>>;
+  size?: string;
+  aspectRatio?: string;
+  resolution?: ImageGenerationResolution;
+  inputImages?: ImageGenerationSourceImage[];
+}) {
+  const hasInputImages = (params.inputImages?.length ?? 0) > 0;
+  const modeCaps = hasInputImages
+    ? params.provider.capabilities.edit
+    : params.provider.capabilities.generate;
+  const geometry = params.provider.capabilities.geometry;
+  const ignoredOverrides: ImageGenerationIgnoredOverride[] = [];
+  let size = params.size;
+  let aspectRatio = params.aspectRatio;
+  let resolution = params.resolution;
+
+  if (
+    size &&
+    (!modeCaps.supportsSize ||
+      ((geometry?.sizes?.length ?? 0) > 0 && !geometry?.sizes?.includes(size)))
+  ) {
+    ignoredOverrides.push({ key: "size", value: size });
+    size = undefined;
+  }
+
+  if (
+    aspectRatio &&
+    (!modeCaps.supportsAspectRatio ||
+      ((geometry?.aspectRatios?.length ?? 0) > 0 && !geometry?.aspectRatios?.includes(aspectRatio)))
+  ) {
+    ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
+    aspectRatio = undefined;
+  }
+
+  if (
+    resolution &&
+    (!modeCaps.supportsResolution ||
+      ((geometry?.resolutions?.length ?? 0) > 0 && !geometry?.resolutions?.includes(resolution)))
+  ) {
+    ignoredOverrides.push({ key: "resolution", value: resolution });
+    resolution = undefined;
+  }
+
+  return {
+    size,
+    aspectRatio,
+    resolution,
+    ignoredOverrides,
+  };
+}
+
 export async function generateImage(
   params: GenerateImageParams,
 ): Promise<GenerateImageRuntimeResult> {
-  const candidates = resolveImageGenerationCandidates({
+  const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
+    modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
     modelOverride: params.modelOverride,
+    parseModelRef: parseImageGenerationModelRef,
   });
   if (candidates.length === 0) {
     throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg));
@@ -144,6 +136,13 @@ export async function generateImage(
     }
 
     try {
+      const sanitized = resolveProviderImageGenerationOverrides({
+        provider,
+        size: params.size,
+        aspectRatio: params.aspectRatio,
+        resolution: params.resolution,
+        inputImages: params.inputImages,
+      });
       const result: ImageGenerationResult = await provider.generateImage({
         provider: candidate.provider,
         model: candidate.model,
@@ -152,9 +151,9 @@ export async function generateImage(
         agentDir: params.agentDir,
         authStore: params.authStore,
         count: params.count,
-        size: params.size,
-        aspectRatio: params.aspectRatio,
-        resolution: params.resolution,
+        size: sanitized.size,
+        aspectRatio: sanitized.aspectRatio,
+        resolution: sanitized.resolution,
         inputImages: params.inputImages,
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
@@ -166,6 +165,7 @@ export async function generateImage(
         model: result.model ?? candidate.model,
         attempts,
         metadata: result.metadata,
+        ignoredOverrides: sanitized.ignoredOverrides,
       };
     } catch (err) {
       lastError = err;
@@ -182,5 +182,9 @@ export async function generateImage(
     }
   }
 
-  throwImageGenerationFailure({ attempts, lastError });
+  throwCapabilityGenerationFailure({
+    capabilityLabel: "image generation",
+    attempts,
+    lastError,
+  });
 }

@@ -1,11 +1,8 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import {
-  type DeliveryContext,
-  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   resolveConversationDeliveryTarget,
@@ -37,11 +34,14 @@ import {
   runSubagentAnnounceDispatch,
   type SubagentAnnounceDeliveryResult,
 } from "./subagent-announce-dispatch.js";
+import { resolveAnnounceOrigin, type DeliveryContext } from "./subagent-announce-origin.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
 
-const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 90_000;
+export { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+
+const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 type SubagentAnnounceDeliveryDeps = {
@@ -62,8 +62,6 @@ function resolveDirectAnnounceTransientRetryDelaysMs() {
     ? ([8, 16, 32] as const)
     : ([5_000, 10_000, 20_000] as const);
 }
-
-type DeliveryContextSource = Parameters<typeof deliveryContextFromSession>[0];
 
 export function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
   const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
@@ -92,50 +90,6 @@ function summarizeDeliveryError(error: unknown): string {
   } catch {
     return "error";
   }
-}
-
-function normalizeTelegramAnnounceTarget(target: string | undefined): string | undefined {
-  const trimmed = target?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.startsWith("group:")) {
-    return `telegram:${trimmed.slice("group:".length)}`;
-  }
-  if (!trimmed.startsWith("telegram:")) {
-    return undefined;
-  }
-  const raw = trimmed.slice("telegram:".length);
-  const topicMatch = /^(.*):topic:[^:]+$/u.exec(raw);
-  return `telegram:${topicMatch?.[1] ?? raw}`;
-}
-
-function shouldStripThreadFromAnnounceEntry(
-  normalizedRequester?: DeliveryContext,
-  normalizedEntry?: DeliveryContext,
-): boolean {
-  if (
-    !normalizedRequester?.to ||
-    normalizedRequester.threadId != null ||
-    normalizedEntry?.threadId == null
-  ) {
-    return false;
-  }
-  const requesterChannel = normalizedRequester.channel?.trim().toLowerCase();
-  if (requesterChannel === "telegram") {
-    const requesterTarget = normalizeTelegramAnnounceTarget(normalizedRequester.to);
-    const entryTarget = normalizeTelegramAnnounceTarget(normalizedEntry?.to);
-    if (requesterTarget && entryTarget) {
-      return requesterTarget !== entryTarget;
-    }
-  }
-  const plugin = requesterChannel ? getChannelPlugin(requesterChannel) : undefined;
-  return Boolean(
-    plugin?.conversationBindings?.shouldStripThreadFromAnnounceOrigin?.({
-      requester: normalizedRequester,
-      entry: normalizedEntry,
-    }),
-  );
 }
 
 const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
@@ -224,31 +178,6 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
       await waitForAnnounceRetryDelay(delayMs, params.signal);
     }
   }
-}
-
-export function resolveAnnounceOrigin(
-  entry?: DeliveryContextSource,
-  requesterOrigin?: DeliveryContext,
-): DeliveryContext | undefined {
-  const normalizedRequester = normalizeDeliveryContext(requesterOrigin);
-  const normalizedEntry = deliveryContextFromSession(entry);
-  if (normalizedRequester?.channel && isInternalMessageChannel(normalizedRequester.channel)) {
-    return mergeDeliveryContext(
-      {
-        accountId: normalizedRequester.accountId,
-        threadId: normalizedRequester.threadId,
-      },
-      normalizedEntry,
-    );
-  }
-  const entryForMerge =
-    normalizedEntry && shouldStripThreadFromAnnounceEntry(normalizedRequester, normalizedEntry)
-      ? (() => {
-          const { threadId: _ignore, ...rest } = normalizedEntry;
-          return rest;
-        })()
-      : normalizedEntry;
-  return mergeDeliveryContext(normalizedRequester, entryForMerge);
 }
 
 export async function resolveSubagentCompletionOrigin(params: {

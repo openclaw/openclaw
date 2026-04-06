@@ -45,7 +45,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
         channels: { slack: { enabled: true } },
       } as OpenClawConfig,
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
     return slackCtx;
   }
@@ -138,7 +137,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
         session: { dmScope: "main" },
       } as OpenClawConfig,
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
     // Simulate API returning correct type for DM channel
     slackCtx.resolveChannelName = async () => ({ name: undefined, type: "im" as const });
@@ -160,7 +158,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     options?: { includeFromCheck?: boolean },
   ) {
     expect(prepared).toBeTruthy();
-    // oxlint-disable-next-line typescript/no-explicit-any
     expectInboundContextContract(prepared!.ctxPayload as any);
     expect(prepared!.isDirectMessage).toBe(true);
     expect(prepared!.route.sessionKey).toBe("agent:main:main");
@@ -190,7 +187,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
         ? {}
         : { defaultRequireMention: params.defaultRequireMention }),
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
     if (params?.asChannel) {
       slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
@@ -210,7 +206,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const prepared = await prepareWithDefaultCtx(message);
 
     expect(prepared).toBeTruthy();
-    // oxlint-disable-next-line typescript/no-explicit-any
     expectInboundContextContract(prepared!.ctxPayload as any);
   });
 
@@ -225,7 +220,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
         channels: { slack: { enabled: true } },
       } as OpenClawConfig,
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
 
     const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
@@ -303,7 +297,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       } as OpenClawConfig,
       defaultRequireMention: false,
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
     slackCtx.resolveUserName = async () => ({ name: "Bot" }) as any;
 
     const account = createSlackAccount({ allowBots: true });
@@ -338,7 +331,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
         C123: { systemPrompt: "Config prompt" },
       },
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
     const channelInfo = {
       name: "general",
@@ -594,7 +586,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       } as OpenClawConfig,
       replyToMode: "all",
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
 
     const message = createSlackMessage({ ts: "500.000" });

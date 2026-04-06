@@ -1,15 +1,16 @@
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { qaChannelPlugin } from "./src/channel.js";
-import { setQaChannelRuntime } from "./src/runtime.js";
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { qaChannelPlugin } from "./src/channel.js";
-export { setQaChannelRuntime } from "./src/runtime.js";
-
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "qa-channel",
   name: "QA Channel",
   description: "Synthetic QA channel plugin",
-  plugin: qaChannelPlugin as ChannelPlugin,
-  setRuntime: setQaChannelRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "qaChannelPlugin",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setQaChannelRuntime",
+  },
 });

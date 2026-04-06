@@ -30,6 +30,30 @@ const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
 const log = createSubsystemLogger("agent/embedded");
 
+function collectPendingMediaFromInternalEvents(
+  events: SubscribeEmbeddedPiSessionParams["internalEvents"],
+): string[] {
+  if (!events?.length) {
+    return [];
+  }
+  const pending: string[] = [];
+  const seen = new Set<string>();
+  for (const event of events) {
+    if (!Array.isArray(event.mediaUrls)) {
+      continue;
+    }
+    for (const mediaUrl of event.mediaUrls) {
+      const normalized = typeof mediaUrl === "string" ? mediaUrl.trim() : "";
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      pending.push(normalized);
+    }
+  }
+  return pending;
+}
+
 export type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
@@ -40,6 +64,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const reasoningMode = params.reasoningMode ?? "off";
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
+  const initialPendingToolMediaUrls = collectPendingMediaFromInternalEvents(params.internalEvents);
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
     toolMetas: [],
@@ -86,7 +111,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
-    pendingToolMediaUrls: [],
+    pendingToolMediaUrls: initialPendingToolMediaUrls,
     pendingToolAudioAsVoice: false,
     deterministicApprovalPromptSent: false,
   };

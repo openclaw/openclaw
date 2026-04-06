@@ -178,6 +178,33 @@ describe("task-executor", () => {
     });
   });
 
+  it("persists explicit task kind metadata on created runs", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const created = createRunningTaskRun({
+        runtime: "cli",
+        taskKind: "video_generation",
+        sourceId: "video_generate:openai",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-executor-kind",
+        task: "Generate lobster video",
+        startedAt: 10,
+        deliveryStatus: "not_applicable",
+      });
+
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        taskKind: "video_generation",
+        sourceId: "video_generate:openai",
+      });
+      expect(findTaskByRunId("run-executor-kind")).toMatchObject({
+        taskId: created.taskId,
+        taskKind: "video_generation",
+      });
+    });
+  });
+
   it("auto-creates a one-task flow and keeps it synced with task status", async () => {
     await withTaskExecutorStateDir(async () => {
       const created = createRunningTaskRun({

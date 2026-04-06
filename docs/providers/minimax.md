@@ -14,6 +14,7 @@ MiniMax also provides:
 
 - bundled speech synthesis via T2A v2
 - bundled image understanding via `MiniMax-VL-01`
+- bundled music generation via `music-2.5+`
 - bundled `web_search` through the MiniMax Coding Plan search API
 
 Provider split:
@@ -64,6 +65,34 @@ that explicit provider config exists. Image understanding is exposed separately
 through the plugin-owned `MiniMax-VL-01` media provider.
 
 See [Image Generation](/tools/image-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
+## Music generation
+
+The bundled `minimax` plugin also registers music generation through the shared
+`music_generate` tool.
+
+- Default music model: `minimax/music-2.5+`
+- Also supports `minimax/music-2.5` and `minimax/music-2.0`
+- Prompt controls: `lyrics`, `instrumental`, `durationSeconds`
+- Output format: `mp3`
+- Session-backed runs detach through the shared task/status flow, including `action: "status"`
+
+To use MiniMax as the default music provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      musicGenerationModel: {
+        primary: "minimax/music-2.5+",
+      },
+    },
+  },
+}
+```
+
+See [Music Generation](/tools/music-generation) for the shared tool
 parameters, provider selection, and failover behavior.
 
 ## Video generation

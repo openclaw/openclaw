@@ -1,12 +1,13 @@
 import { formatDurationHuman } from "../../../src/infra/format-time/format-duration.ts";
 import { formatRelativeTimestamp } from "../../../src/infra/format-time/format-relative.ts";
 import { stripAssistantInternalScaffolding } from "../../../src/shared/text/assistant-visible-text.js";
+import { t } from "../i18n/index.ts";
 
 export { formatRelativeTimestamp, formatDurationHuman };
 
 export function formatMs(ms?: number | null): string {
   if (!ms && ms !== 0) {
-    return "n/a";
+    return t("common.na");
   }
   return new Date(ms).toLocaleString();
 }
@@ -48,13 +49,6 @@ export function toNumber(value: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-export function parseList(input: string): string[] {
-  return input
-    .split(/[,\n]/)
-    .map((v) => v.trim())
-    .filter((v) => v.length > 0);
-}
-
 export function stripThinkingTags(value: string): string {
   return stripAssistantInternalScaffolding(value);
 }
@@ -88,11 +82,4 @@ export function formatTokens(tokens: number | null | undefined, fallback = "0"):
   }
   const m = tokens / 1_000_000;
   return m < 10 ? `${m.toFixed(1)}M` : `${Math.round(m)}M`;
-}
-
-export function formatPercent(value: number | null | undefined, fallback = "—"): string {
-  if (value == null || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return `${(value * 100).toFixed(1)}%`;
 }

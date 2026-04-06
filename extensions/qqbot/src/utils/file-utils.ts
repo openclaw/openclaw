@@ -66,8 +66,12 @@ export function isLargeFile(sizeBytes: number): boolean {
 
 /** Format a byte count into a human-readable size string. */
 export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  if (bytes < 1024) {
+    return `${bytes}B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)}KB`;
+  }
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
@@ -111,7 +115,9 @@ export async function downloadFile(
     }
 
     const resp = await fetch(url, { redirect: "follow" });
-    if (!resp.ok || !resp.body) return null;
+    if (!resp.ok || !resp.body) {
+      return null;
+    }
 
     let filename = originalFilename?.trim() || "";
     if (!filename) {

@@ -14,6 +14,12 @@ import { fileURLToPath } from "node:url";
 import { handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
+import type { QaRunnerModelOption } from "./model-catalog.runtime.js";
+import {
+  createIdleQaRunnerSnapshot,
+  createQaRunOutputDir,
+  normalizeQaRunSelection,
+} from "./run-config.js";
 import { qaChannelPlugin, setQaChannelRuntime, type OpenClawConfig } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runQaSelfCheckAgainstState, type QaSelfCheckResult } from "./self-check.js";
@@ -24,12 +30,66 @@ type QaLabLatestReport = {
   generatedAt: string;
 };
 
+export type { QaLabLatestReport };
+
 type QaLabBootstrapDefaults = {
   conversationKind: "direct" | "channel";
   conversationId: string;
   senderId: string;
   senderName: string;
 };
+
+type QaLabRunStatus = "idle" | "running" | "completed";
+
+type QaLabScenarioStep = {
+  name: string;
+  status: "pass" | "fail" | "skip";
+  details?: string;
+};
+
+export type QaLabScenarioOutcome = {
+  id: string;
+  name: string;
+  status: "pending" | "running" | "pass" | "fail" | "skip";
+  details?: string;
+  steps?: QaLabScenarioStep[];
+  startedAt?: string;
+  finishedAt?: string;
+};
+
+export type QaLabScenarioRun = {
+  kind: "suite" | "self-check";
+  status: QaLabRunStatus;
+  startedAt?: string;
+  finishedAt?: string;
+  scenarios: QaLabScenarioOutcome[];
+  counts: {
+    total: number;
+    pending: number;
+    running: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+  };
+};
+
+function countQaLabScenarioRun(scenarios: QaLabScenarioOutcome[]) {
+  return {
+    total: scenarios.length,
+    pending: scenarios.filter((scenario) => scenario.status === "pending").length,
+    running: scenarios.filter((scenario) => scenario.status === "running").length,
+    passed: scenarios.filter((scenario) => scenario.status === "pass").length,
+    failed: scenarios.filter((scenario) => scenario.status === "fail").length,
+    skipped: scenarios.filter((scenario) => scenario.status === "skip").length,
+  };
+}
+
+function withQaLabRunCounts(run: Omit<QaLabScenarioRun, "counts">): QaLabScenarioRun {
+  return {
+    ...run,
+    counts: countQaLabScenarioRun(run.scenarios),
+  };
+}
 
 function injectKickoffMessage(params: {
   state: QaBusState;
@@ -150,6 +210,22 @@ function rewriteControlUiProxyPath(pathname: string, search: string) {
   return `${stripped}${search}`;
 }
 
+function rewriteEmbeddedControlUiHeaders(
+  headers: IncomingMessage["headers"],
+): Record<string, string | string[] | number | undefined> {
+  const rewritten: Record<string, string | string[] | number | undefined> = { ...headers };
+  delete rewritten["x-frame-options"];
+
+  const csp = headers["content-security-policy"];
+  if (typeof csp === "string") {
+    rewritten["content-security-policy"] = csp.includes("frame-ancestors")
+      ? csp.replace(/frame-ancestors\s+[^;]+/i, "frame-ancestors 'self'")
+      : `${csp}; frame-ancestors 'self'`;
+  }
+
+  return rewritten;
+}
+
 async function proxyHttpRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -171,7 +247,10 @@ async function proxyHttpRequest(params: {
       },
     },
     (upstreamRes) => {
-      params.res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+      params.res.writeHead(
+        upstreamRes.statusCode ?? 502,
+        rewriteEmbeddedControlUiHeaders(upstreamRes.headers),
+      );
       upstreamRes.pipe(params.res);
     },
   );
@@ -342,19 +421,53 @@ export async function startQaLabServer(params?: {
 }) {
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
+  let latestScenarioRun: QaLabScenarioRun | null = null;
   const scenarioCatalog = readQaBootstrapScenarioCatalog();
   const bootstrapDefaults = createBootstrapDefaults(params?.autoKickoffTarget);
-  const controlUiProxyTarget = params?.controlUiProxyTarget?.trim()
+  let runnerModelOptions: QaRunnerModelOption[] = [];
+  let runnerModelCatalogStatus: "loading" | "ready" | "failed" = "loading";
+  let runnerSnapshot = createIdleQaRunnerSnapshot(scenarioCatalog.scenarios);
+  let activeSuiteRun: Promise<void> | null = null;
+  let controlUiProxyTarget = params?.controlUiProxyTarget?.trim()
     ? new URL(params.controlUiProxyTarget)
     : null;
+  let controlUiUrl = params?.controlUiUrl?.trim() || null;
+  let controlUiToken = params?.controlUiToken?.trim() || null;
   let gateway:
     | {
         cfg: OpenClawConfig;
         stop: () => Promise<void>;
       }
     | undefined;
+  const embeddedGatewayEnabled = params?.embeddedGateway !== "disabled";
+  let labHandle: {
+    baseUrl: string;
+    listenUrl: string;
+    state: QaBusState;
+    setControlUi: (next: {
+      controlUiUrl?: string | null;
+      controlUiToken?: string | null;
+      controlUiProxyTarget?: string | null;
+    }) => void;
+    setScenarioRun: (next: Omit<QaLabScenarioRun, "counts"> | null) => void;
+    setLatestReport: (next: QaLabLatestReport | null) => void;
+    runSelfCheck: () => Promise<QaSelfCheckResult>;
+    stop: () => Promise<void>;
+  } | null = null;
 
   let publicBaseUrl = "";
+  const runnerModelCatalogPromise = (async () => {
+    try {
+      const { loadQaRunnerModelOptions } = await import("./model-catalog.runtime.js");
+      runnerModelOptions = await loadQaRunnerModelOptions({
+        repoRoot: process.cwd(),
+      });
+      runnerModelCatalogStatus = "ready";
+    } catch {
+      runnerModelOptions = [];
+      runnerModelCatalogStatus = "failed";
+    }
+  })();
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
@@ -375,21 +488,26 @@ export async function startQaLabServer(params?: {
       }
 
       if (req.method === "GET" && url.pathname === "/api/bootstrap") {
-        const controlUiUrl = controlUiProxyTarget
+        const resolvedControlUiUrl = controlUiProxyTarget
           ? `${publicBaseUrl}/control-ui/`
-          : params?.controlUiUrl?.trim() || null;
+          : controlUiUrl;
         const controlUiEmbeddedUrl =
-          controlUiUrl && params?.controlUiToken
-            ? `${controlUiUrl.replace(/\/?$/, "/")}#token=${encodeURIComponent(params.controlUiToken)}`
-            : controlUiUrl;
+          resolvedControlUiUrl && controlUiToken
+            ? `${resolvedControlUiUrl.replace(/\/?$/, "/")}#token=${encodeURIComponent(controlUiToken)}`
+            : resolvedControlUiUrl;
         writeJson(res, 200, {
           baseUrl: publicBaseUrl,
           latestReport,
-          controlUiUrl,
+          controlUiUrl: resolvedControlUiUrl,
           controlUiEmbeddedUrl,
           kickoffTask: scenarioCatalog.kickoffTask,
           scenarios: scenarioCatalog.scenarios,
           defaults: bootstrapDefaults,
+          runner: runnerSnapshot,
+          runnerCatalog: {
+            status: runnerModelCatalogStatus,
+            real: runnerModelOptions,
+          },
         });
         return;
       }
@@ -405,8 +523,26 @@ export async function startQaLabServer(params?: {
         writeJson(res, 200, { report: latestReport });
         return;
       }
+      if (req.method === "GET" && url.pathname === "/api/outcomes") {
+        writeJson(res, 200, { run: latestScenarioRun });
+        return;
+      }
       if (req.method === "POST" && url.pathname === "/api/reset") {
+        if (activeSuiteRun) {
+          writeError(res, 409, "QA suite run already in progress");
+          return;
+        }
         state.reset();
+        latestReport = null;
+        latestScenarioRun = null;
+        runnerSnapshot = {
+          ...runnerSnapshot,
+          status: "idle",
+          artifacts: null,
+          error: null,
+          startedAt: undefined,
+          finishedAt: undefined,
+        };
         writeJson(res, 200, { ok: true });
         return;
       }
@@ -428,10 +564,41 @@ export async function startQaLabServer(params?: {
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/scenario/self-check") {
+        if (activeSuiteRun) {
+          writeError(res, 409, "QA suite run already in progress");
+          return;
+        }
+        latestScenarioRun = withQaLabRunCounts({
+          kind: "self-check",
+          status: "running",
+          startedAt: new Date().toISOString(),
+          scenarios: [
+            {
+              id: "qa-self-check",
+              name: "Synthetic Slack-class roundtrip",
+              status: "running",
+            },
+          ],
+        });
         const result = await runQaSelfCheckAgainstState({
           state,
           cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
           outputPath: params?.outputPath,
+        });
+        latestScenarioRun = withQaLabRunCounts({
+          kind: "self-check",
+          status: "completed",
+          startedAt: latestScenarioRun.startedAt,
+          finishedAt: new Date().toISOString(),
+          scenarios: [
+            {
+              id: "qa-self-check",
+              name: result.scenarioResult.name,
+              status: result.scenarioResult.status,
+              details: result.scenarioResult.details,
+              steps: result.scenarioResult.steps,
+            },
+          ],
         });
         latestReport = {
           outputPath: result.outputPath,
@@ -439,6 +606,68 @@ export async function startQaLabServer(params?: {
           generatedAt: new Date().toISOString(),
         };
         writeJson(res, 200, serializeSelfCheck(result));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/scenario/suite") {
+        if (activeSuiteRun) {
+          writeError(res, 409, "QA suite run already in progress");
+          return;
+        }
+        const selection = normalizeQaRunSelection(await readJson(req), scenarioCatalog.scenarios);
+        state.reset();
+        latestReport = null;
+        latestScenarioRun = null;
+        const startedAt = new Date().toISOString();
+        runnerSnapshot = {
+          status: "running",
+          selection,
+          startedAt,
+          finishedAt: undefined,
+          artifacts: null,
+          error: null,
+        };
+        activeSuiteRun = (async () => {
+          try {
+            const { runQaSuiteFromRuntime } = await import("./suite-launch.runtime.js");
+            const result = await runQaSuiteFromRuntime({
+              lab: labHandle ?? undefined,
+              outputDir: createQaRunOutputDir(),
+              providerMode: selection.providerMode,
+              primaryModel: selection.primaryModel,
+              alternateModel: selection.alternateModel,
+              fastMode: selection.fastMode,
+              scenarioIds: selection.scenarioIds,
+            });
+            runnerSnapshot = {
+              status: "completed",
+              selection,
+              startedAt,
+              finishedAt: new Date().toISOString(),
+              artifacts: {
+                outputDir: result.outputDir,
+                reportPath: result.reportPath,
+                summaryPath: result.summaryPath,
+                watchUrl: result.watchUrl,
+              },
+              error: null,
+            };
+          } catch (error) {
+            runnerSnapshot = {
+              status: "failed",
+              selection,
+              startedAt,
+              finishedAt: new Date().toISOString(),
+              artifacts: null,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          } finally {
+            activeSuiteRun = null;
+          }
+        })();
+        writeJson(res, 202, {
+          ok: true,
+          runner: runnerSnapshot,
+        });
         return;
       }
 
@@ -495,7 +724,9 @@ export async function startQaLabServer(params?: {
     advertiseHost: params?.advertiseHost,
     advertisePort: params?.advertisePort,
   });
-  gateway = await startQaGatewayLoop({ state, baseUrl: listenUrl });
+  if (embeddedGatewayEnabled) {
+    gateway = await startQaGatewayLoop({ state, baseUrl: listenUrl });
+  }
   if (params?.sendKickoffOnStart) {
     injectKickoffMessage({
       state,
@@ -503,6 +734,7 @@ export async function startQaLabServer(params?: {
       kickoffTask: scenarioCatalog.kickoffTask,
     });
   }
+  void runnerModelCatalogPromise;
 
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -518,15 +750,59 @@ export async function startQaLabServer(params?: {
     });
   });
 
-  return {
+  const lab = {
     baseUrl: publicBaseUrl,
     listenUrl,
     state,
+    setControlUi(next: {
+      controlUiUrl?: string | null;
+      controlUiToken?: string | null;
+      controlUiProxyTarget?: string | null;
+    }) {
+      controlUiUrl = next.controlUiUrl?.trim() || null;
+      controlUiToken = next.controlUiToken?.trim() || null;
+      controlUiProxyTarget = next.controlUiProxyTarget?.trim()
+        ? new URL(next.controlUiProxyTarget)
+        : null;
+    },
+    setScenarioRun(next: Omit<QaLabScenarioRun, "counts"> | null) {
+      latestScenarioRun = next ? withQaLabRunCounts(next) : null;
+    },
+    setLatestReport(next: QaLabLatestReport | null) {
+      latestReport = next;
+    },
     async runSelfCheck() {
+      latestScenarioRun = withQaLabRunCounts({
+        kind: "self-check",
+        status: "running",
+        startedAt: new Date().toISOString(),
+        scenarios: [
+          {
+            id: "qa-self-check",
+            name: "Synthetic Slack-class roundtrip",
+            status: "running",
+          },
+        ],
+      });
       const result = await runQaSelfCheckAgainstState({
         state,
-        cfg: gateway!.cfg,
+        cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
         outputPath: params?.outputPath,
+      });
+      latestScenarioRun = withQaLabRunCounts({
+        kind: "self-check",
+        status: "completed",
+        startedAt: latestScenarioRun.startedAt,
+        finishedAt: new Date().toISOString(),
+        scenarios: [
+          {
+            id: "qa-self-check",
+            name: result.scenarioResult.name,
+            status: result.scenarioResult.status,
+            details: result.scenarioResult.details,
+            steps: result.scenarioResult.steps,
+          },
+        ],
       });
       latestReport = {
         outputPath: result.outputPath,
@@ -542,6 +818,8 @@ export async function startQaLabServer(params?: {
       );
     },
   };
+  labHandle = lab;
+  return lab;
 }
 
 function serializeSelfCheck(result: QaSelfCheckResult) {

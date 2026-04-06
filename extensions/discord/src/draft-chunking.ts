@@ -1,3 +1,4 @@
+import { resolveChannelStreamingPreviewChunk } from "openclaw/plugin-sdk/channel-streaming";
 import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
@@ -20,7 +21,9 @@ export function resolveDiscordDraftStreamingChunking(
   });
   const normalizedAccountId = normalizeAccountId(accountId);
   const accountCfg = resolveAccountEntry(cfg?.channels?.discord?.accounts, normalizedAccountId);
-  const draftCfg = accountCfg?.draftChunk ?? cfg?.channels?.discord?.draftChunk;
+  const draftCfg =
+    resolveChannelStreamingPreviewChunk(accountCfg) ??
+    resolveChannelStreamingPreviewChunk(cfg?.channels?.discord);
 
   const maxRequested = Math.max(
     1,

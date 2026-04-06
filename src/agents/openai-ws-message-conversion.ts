@@ -339,7 +339,6 @@ export function convertMessagesToInputItems(
             Boolean(parseAssistantTextSignature(record.textSignature)?.phase)
           );
         });
-
         const pushAssistantText = (phase?: OpenAIResponsesAssistantPhase) => {
           if (textParts.length === 0) {
             return;
@@ -365,7 +364,12 @@ export function convertMessagesToInputItems(
           if (block.type === "text" && typeof block.text === "string") {
             const parsedSignature = parseAssistantTextSignature(block.textSignature);
             const blockPhase =
-              parsedSignature?.phase ?? (hasExplicitBlockPhase ? undefined : assistantMessagePhase);
+              parsedSignature?.phase ??
+              (parsedSignature?.id
+                ? assistantMessagePhase
+                : hasExplicitBlockPhase
+                  ? undefined
+                  : assistantMessagePhase);
             if (textParts.length > 0 && blockPhase !== currentTextPhase) {
               pushAssistantText(currentTextPhase);
             }

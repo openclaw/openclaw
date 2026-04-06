@@ -273,7 +273,7 @@ export function createMSTeamsPollStoreFs(params?: MSTeamsPollStoreFsOptions): MS
   const empty: PollStoreData = { version: 1, polls: {} };
 
   const readStore = async (): Promise<PollStoreData> => {
-    const { value } = await readJsonFile<PollStoreData>(filePath, empty);
+    const { value } = await readJsonFile(filePath, empty);
     const pruned = pruneToLimit(pruneExpired(value.polls ?? {}));
     return { version: 1, polls: pruned };
   };

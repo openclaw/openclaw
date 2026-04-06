@@ -24,6 +24,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   },
   formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
   refreshProviderOAuthCredentialWithPlugin: async () => null,
+  resolveExternalAuthProfilesWithPlugins: () => [],
   resolveProviderSyntheticAuthWithPlugin: (params: {
     provider: string;
     context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };

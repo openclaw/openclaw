@@ -10,33 +10,14 @@ import {
   invalidateMessageCharsCacheEntry,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
-import { truncateToolResultText } from "./tool-result-truncation.js";
 
-// Keep a conservative input budget to absorb tokenizer variance and provider framing overhead.
-const CONTEXT_INPUT_HEADROOM_RATIO = 0.75;
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
-// High-water mark: if context exceeds this ratio after tool-result compaction,
-// trigger full session compaction via the existing overflow recovery cascade.
 const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
 
-export const CONTEXT_LIMIT_TRUNCATION_NOTICE = "[truncated: output exceeded context limit]";
-const CONTEXT_LIMIT_TRUNCATION_SUFFIX = `\n${CONTEXT_LIMIT_TRUNCATION_NOTICE}`;
-
-export const PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER =
-  "[compacted: tool output removed to free context]";
-export const PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE =
-  "[compacted: tool output trimmed to free context]";
-
+export const CONTEXT_LIMIT_TRUNCATION_NOTICE = "more characters truncated";
 export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
-  "Preemptive context overflow: estimated context size exceeds safe threshold during tool loop";
-
-const PREEMPTIVE_TOOL_RESULT_COMPACTION_SUFFIX = `\n${PREEMPTIVE_TOOL_RESULT_COMPACTION_NOTICE}`;
-const MIN_COMPACTED_TOOL_RESULT_TEXT_CHARS = 96;
-const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO =
-  CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
-const MIN_COMPACTED_TOOL_RESULT_ESTIMATE_CHARS = Math.ceil(
-  MIN_COMPACTED_TOOL_RESULT_TEXT_CHARS * TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO,
-);
+  "Context overflow: estimated context size exceeds safe threshold during tool loop.";
+const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO = 4 / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 
 type GuardableTransformContext = (
   messages: AgentMessage[],
@@ -49,27 +30,35 @@ type GuardableAgentRecord = {
   transformContext?: GuardableTransformContext;
 };
 
+export function formatContextLimitTruncationNotice(truncatedChars: number): string {
+  return `[... ${Math.max(1, Math.floor(truncatedChars))} ${CONTEXT_LIMIT_TRUNCATION_NOTICE}]`;
+}
+
 function truncateTextToBudget(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
 
   if (maxChars <= 0) {
-    return CONTEXT_LIMIT_TRUNCATION_NOTICE;
+    return formatContextLimitTruncationNotice(text.length);
   }
 
-  const bodyBudget = Math.max(0, maxChars - CONTEXT_LIMIT_TRUNCATION_SUFFIX.length);
-  if (bodyBudget <= 0) {
-    return CONTEXT_LIMIT_TRUNCATION_NOTICE;
+  let bodyBudget = maxChars;
+  for (let i = 0; i < 4; i += 1) {
+    const estimatedSuffix = formatContextLimitTruncationNotice(
+      Math.max(1, text.length - bodyBudget),
+    );
+    bodyBudget = Math.max(0, maxChars - estimatedSuffix.length);
   }
 
   let cutPoint = bodyBudget;
-  const newline = text.lastIndexOf("\n", bodyBudget);
+  const newline = text.lastIndexOf("\n", cutPoint);
   if (newline > bodyBudget * 0.7) {
     cutPoint = newline;
   }
 
-  return text.slice(0, cutPoint) + CONTEXT_LIMIT_TRUNCATION_SUFFIX;
+  const omittedChars = text.length - cutPoint;
+  return text.slice(0, cutPoint) + formatContextLimitTruncationNotice(omittedChars);
 }
 
 function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
@@ -89,89 +78,6 @@ function estimateBudgetToTextBudget(maxChars: number): number {
   return Math.max(0, Math.floor(maxChars / TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO));
 }
 
-function compactToolResultToEstimateBudget(
-  msg: AgentMessage,
-  maxChars: number,
-  cache: MessageCharEstimateCache,
-): AgentMessage {
-  if (!isToolResultMessage(msg)) {
-    return msg;
-  }
-
-  const estimatedChars = estimateMessageCharsCached(msg, cache);
-  if (estimatedChars <= maxChars) {
-    return msg;
-  }
-
-  const rawText = getToolResultText(msg);
-  if (!rawText) {
-    return replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-  }
-
-  const textBudget = estimateBudgetToTextBudget(maxChars);
-  if (textBudget <= PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER.length) {
-    return replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-  }
-
-  const maxCompactedTextChars = Math.max(MIN_COMPACTED_TOOL_RESULT_TEXT_CHARS, textBudget);
-  if (maxCompactedTextChars <= PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER.length) {
-    return replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-  }
-
-  const minKeepChars = Math.max(
-    96,
-    Math.min(
-      MIN_COMPACTED_TOOL_RESULT_TEXT_CHARS,
-      maxCompactedTextChars - PREEMPTIVE_TOOL_RESULT_COMPACTION_SUFFIX.length - 1,
-    ),
-  );
-
-  const compactedText = truncateToolResultText(rawText, maxCompactedTextChars, {
-    suffix: PREEMPTIVE_TOOL_RESULT_COMPACTION_SUFFIX,
-    minKeepChars,
-  });
-
-  return replaceToolResultText(msg, compactedText);
-}
-
-function compactToPlaceholderInPlace(params: {
-  messages: AgentMessage[];
-  charsNeeded: number;
-  cache: MessageCharEstimateCache;
-}): number {
-  const { messages, charsNeeded, cache } = params;
-  if (charsNeeded <= 0) {
-    return 0;
-  }
-
-  let reduced = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (!isToolResultMessage(msg)) {
-      continue;
-    }
-
-    const before = estimateMessageCharsCached(msg, cache);
-    if (before <= PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER.length) {
-      continue;
-    }
-
-    const compacted = replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    applyMessageMutationInPlace(msg, compacted, cache);
-    const after = estimateMessageCharsCached(msg, cache);
-    if (after >= before) {
-      continue;
-    }
-
-    reduced += before - after;
-    if (reduced >= charsNeeded) {
-      break;
-    }
-  }
-
-  return reduced;
-}
-
 function truncateToolResultToChars(
   msg: AgentMessage,
   maxChars: number,
@@ -188,12 +94,16 @@ function truncateToolResultToChars(
 
   const rawText = getToolResultText(msg);
   if (!rawText) {
-    return replaceToolResultText(msg, CONTEXT_LIMIT_TRUNCATION_NOTICE);
+    const omittedChars = Math.max(
+      1,
+      estimateBudgetToTextBudget(Math.max(estimatedChars - maxChars, 1)),
+    );
+    return replaceToolResultText(msg, formatContextLimitTruncationNotice(omittedChars));
   }
 
   const textBudget = estimateBudgetToTextBudget(maxChars);
   if (textBudget <= 0) {
-    return replaceToolResultText(msg, CONTEXT_LIMIT_TRUNCATION_NOTICE);
+    return replaceToolResultText(msg, formatContextLimitTruncationNotice(rawText.length));
   }
 
   if (rawText.length <= textBudget) {
@@ -204,90 +114,35 @@ function truncateToolResultToChars(
   return replaceToolResultText(msg, truncatedText);
 }
 
-function compactExistingToolResultsInPlace(params: {
-  messages: AgentMessage[];
-  charsNeeded: number;
-  cache: MessageCharEstimateCache;
-}): number {
-  const { messages, charsNeeded, cache } = params;
-  if (charsNeeded <= 0) {
-    return 0;
-  }
-
-  let reduced = 0;
-  // Compact newest-first so more of the cached prefix survives: rewriting
-  // messages[k] for small k invalidates the provider prompt cache from that point onward.
-  // Keep a truncated slice of newer tool output before falling back to a
-  // full placeholder so recent, user-visible results remain readable when possible.
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (!isToolResultMessage(msg)) {
-      continue;
-    }
-
-    const before = estimateMessageCharsCached(msg, cache);
-    if (before <= PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER.length) {
-      continue;
-    }
-
-    const targetAfter = Math.max(
-      MIN_COMPACTED_TOOL_RESULT_ESTIMATE_CHARS,
-      before - (charsNeeded - reduced),
-    );
-
-    let compacted = compactToolResultToEstimateBudget(msg, targetAfter, cache);
-    let after = estimateMessageCharsCached(compacted, cache);
-    if (after >= before) {
-      compacted = replaceToolResultText(msg, PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-      after = estimateMessageCharsCached(compacted, cache);
-    }
-
-    applyMessageMutationInPlace(msg, compacted, cache);
-    if (after >= before) {
-      continue;
-    }
-
-    reduced += before - after;
-    if (reduced >= charsNeeded) {
-      break;
-    }
-  }
-
-  if (reduced < charsNeeded) {
-    reduced += compactToPlaceholderInPlace({
-      messages,
-      charsNeeded: charsNeeded - reduced,
-      cache,
-    });
-  }
-
-  return reduced;
-}
-
 function cloneMessagesForGuard(messages: AgentMessage[]): AgentMessage[] {
   return messages.map(
     (msg) => ({ ...(msg as unknown as Record<string, unknown>) }) as unknown as AgentMessage,
   );
 }
 
-function contextNeedsToolResultCompaction(params: {
+function toolResultsNeedTruncation(params: {
   messages: AgentMessage[];
-  contextBudgetChars: number;
   maxSingleToolResultChars: number;
 }): boolean {
-  const { messages, contextBudgetChars, maxSingleToolResultChars } = params;
+  const { messages, maxSingleToolResultChars } = params;
   const estimateCache = createMessageCharEstimateCache();
-  let sawToolResult = false;
   for (const message of messages) {
     if (!isToolResultMessage(message)) {
       continue;
     }
-    sawToolResult = true;
     if (estimateMessageCharsCached(message, estimateCache) > maxSingleToolResultChars) {
       return true;
     }
   }
-  return sawToolResult && estimateContextChars(messages, estimateCache) > contextBudgetChars;
+  return false;
+}
+
+function exceedsPreemptiveOverflowThreshold(params: {
+  messages: AgentMessage[];
+  maxContextChars: number;
+}): boolean {
+  const estimateCache = createMessageCharEstimateCache();
+  return estimateContextChars(params.messages, estimateCache) > params.maxContextChars;
 }
 
 function applyMessageMutationInPlace(
@@ -312,15 +167,13 @@ function applyMessageMutationInPlace(
   }
 }
 
-function enforceToolResultContextBudgetInPlace(params: {
+function enforceToolResultLimitInPlace(params: {
   messages: AgentMessage[];
-  contextBudgetChars: number;
   maxSingleToolResultChars: number;
 }): void {
-  const { messages, contextBudgetChars, maxSingleToolResultChars } = params;
+  const { messages, maxSingleToolResultChars } = params;
   const estimateCache = createMessageCharEstimateCache();
 
-  // Ensure each tool result has an upper bound before considering total context usage.
   for (const message of messages) {
     if (!isToolResultMessage(message)) {
       continue;
@@ -328,19 +181,6 @@ function enforceToolResultContextBudgetInPlace(params: {
     const truncated = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
     applyMessageMutationInPlace(message, truncated, estimateCache);
   }
-
-  let currentChars = estimateContextChars(messages, estimateCache);
-  if (currentChars <= contextBudgetChars) {
-    return;
-  }
-
-  // Compact newest tool outputs first so more of the cached prefix survives;
-  // stop once the context is back under budget.
-  compactExistingToolResultsInPlace({
-    messages,
-    charsNeeded: currentChars - contextBudgetChars,
-    cache: estimateCache,
-  });
 }
 
 export function installToolResultContextGuard(params: {
@@ -348,19 +188,15 @@ export function installToolResultContextGuard(params: {
   contextWindowTokens: number;
 }): () => void {
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
-  const contextBudgetChars = Math.max(
+  const maxContextChars = Math.max(
     1_024,
-    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * CONTEXT_INPUT_HEADROOM_RATIO),
+    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * PREEMPTIVE_OVERFLOW_RATIO),
   );
   const maxSingleToolResultChars = Math.max(
     1_024,
     Math.floor(
       contextWindowTokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * SINGLE_TOOL_RESULT_CONTEXT_SHARE,
     ),
-  );
-  const preemptiveOverflowChars = Math.max(
-    contextBudgetChars,
-    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * PREEMPTIVE_OVERFLOW_RATIO),
   );
 
   // Agent.transformContext is private in pi-coding-agent, so access it via a
@@ -374,28 +210,24 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const contextMessages = contextNeedsToolResultCompaction({
+    const contextMessages = toolResultsNeedTruncation({
       messages: sourceMessages,
-      contextBudgetChars,
       maxSingleToolResultChars,
     })
       ? cloneMessagesForGuard(sourceMessages)
       : sourceMessages;
-    enforceToolResultContextBudgetInPlace({
-      messages: contextMessages,
-      contextBudgetChars,
-      maxSingleToolResultChars,
-    });
-
-    // After tool-result compaction, check if context still exceeds the high-water mark.
-    // If it does, non-tool-result content dominates and only full LLM-based session
-    // compaction can reduce context size. Throwing a context overflow error triggers
-    // the existing overflow recovery cascade in run.ts.
-    const postEnforcementChars = estimateContextChars(
-      contextMessages,
-      createMessageCharEstimateCache(),
-    );
-    if (postEnforcementChars > preemptiveOverflowChars) {
+    if (contextMessages !== sourceMessages) {
+      enforceToolResultLimitInPlace({
+        messages: contextMessages,
+        maxSingleToolResultChars,
+      });
+    }
+    if (
+      exceedsPreemptiveOverflowThreshold({
+        messages: contextMessages,
+        maxContextChars,
+      })
+    ) {
       throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
     }
 
