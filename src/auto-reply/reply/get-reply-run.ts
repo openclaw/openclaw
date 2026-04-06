@@ -347,7 +347,14 @@ export async function runPreparedReply(
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
   const baseBodyTrimmed = baseBodyForPrompt.trim();
   const hasMediaAttachment = Boolean(
-    sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
+    sessionCtx.MediaPath ||
+      sessionCtx.MediaUrl ||
+      (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0) ||
+      (sessionCtx.MediaUrls && sessionCtx.MediaUrls.length > 0) ||
+      ctx.MediaPath?.trim() ||
+      ctx.MediaUrl?.trim() ||
+      (Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0) ||
+      (Array.isArray(ctx.MediaUrls) && ctx.MediaUrls.length > 0),
   );
   if (!baseBodyTrimmed && !hasMediaAttachment) {
     // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
@@ -605,11 +612,47 @@ export async function runPreparedReply(
     ({ activeSessionId, isActive, isStreaming } = queueState.busyState);
   }
   const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
+  // Snapshot media-related context for deferred media understanding in the
+  // followup runner.  When MediaUnderstanding is already populated the runner
+  // knows transcription already succeeded and skips re-application.
+  const hasMediaAttachments = Boolean(
+    ctx.MediaPath?.trim() ||
+      ctx.MediaUrl?.trim() ||
+      (Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0) ||
+      (Array.isArray(ctx.MediaUrls) && ctx.MediaUrls.length > 0),
+  );
+  const mediaContext = hasMediaAttachments
+    ? {
+        Body: ctx.Body,
+        CommandBody: ctx.CommandBody,
+        RawBody: ctx.RawBody,
+        Provider: ctx.Provider ?? sessionCtx.Provider,
+        Surface: ctx.Surface ?? sessionCtx.Surface,
+        MediaPath: ctx.MediaPath,
+        MediaUrl: ctx.MediaUrl,
+        MediaType: ctx.MediaType,
+        MediaDir: ctx.MediaDir,
+        MediaPaths: ctx.MediaPaths ? [...ctx.MediaPaths] : undefined,
+        MediaUrls: ctx.MediaUrls ? [...ctx.MediaUrls] : undefined,
+        MediaTypes: ctx.MediaTypes ? [...ctx.MediaTypes] : undefined,
+        MediaRemoteHost: ctx.MediaRemoteHost,
+        Transcript: ctx.Transcript,
+        MediaUnderstanding: ctx.MediaUnderstanding ? [...ctx.MediaUnderstanding] : undefined,
+        MediaUnderstandingDecisions: ctx.MediaUnderstandingDecisions
+          ? [...ctx.MediaUnderstandingDecisions]
+          : undefined,
+        OriginatingChannel: ctx.OriginatingChannel,
+        OriginatingTo: ctx.OriginatingTo,
+        AccountId: ctx.AccountId,
+        MessageThreadId: ctx.MessageThreadId,
+      }
+    : undefined;
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
+    mediaContext,
     // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,

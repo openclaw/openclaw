@@ -2,6 +2,10 @@ import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { SkillSnapshot } from "../../../agents/skills.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type {
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+} from "../../../media-understanding/types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
@@ -19,12 +23,55 @@ export type QueueSettings = {
 
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
+/**
+ * Snapshot of media-related context fields carried on a FollowupRun so that
+ * the followup runner can apply media understanding (e.g. voice-note
+ * transcription) when it was not applied — or failed — in the primary path.
+ */
+export type FollowupMediaContext = {
+  Body?: string;
+  CommandBody?: string;
+  RawBody?: string;
+  Provider?: string;
+  Surface?: string;
+  MediaPath?: string;
+  MediaUrl?: string;
+  MediaType?: string;
+  MediaDir?: string;
+  MediaPaths?: string[];
+  MediaUrls?: string[];
+  MediaTypes?: string[];
+  MediaRemoteHost?: string;
+  Transcript?: string;
+  MediaUnderstanding?: MediaUnderstandingOutput[];
+  MediaUnderstandingDecisions?: MediaUnderstandingDecision[];
+  OriginatingChannel?: OriginatingChannelType;
+  OriginatingTo?: string;
+  AccountId?: string;
+  MessageThreadId?: string | number;
+  DeferredMediaApplied?: boolean;
+  /**
+   * Set when file extraction has already been applied to Body (either in the
+   * primary path or by a previous deferred-media run). This avoids re-running
+   * file extraction when Body already contains real extracted `<file>...</file>`
+   * blocks.
+   */
+  DeferredFileBlocksExtracted?: boolean;
+};
+
 export type FollowupRun = {
   prompt: string;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
   enqueuedAt: number;
+  /**
+   * Media context snapshot from the original inbound message.
+   * When present and MediaUnderstanding is empty, the followup runner will
+   * attempt to apply media understanding (audio transcription, etc.) before
+   * passing the prompt to the agent.
+   */
+  mediaContext?: FollowupMediaContext;
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider

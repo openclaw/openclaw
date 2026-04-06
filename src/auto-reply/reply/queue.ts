@@ -10,6 +10,7 @@ export {
 export { resolveQueueSettings } from "./queue/settings-runtime.js";
 export { clearFollowupQueue, refreshQueuedFollowupSession } from "./queue/state.js";
 export type {
+  FollowupMediaContext,
   FollowupRun,
   QueueDedupeMode,
   QueueDropPolicy,

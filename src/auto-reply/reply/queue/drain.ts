@@ -3,15 +3,17 @@ import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
+  buildQueueSummaryLine,
+  buildQueueSummaryPrompt,
   clearQueueSummaryState,
   drainCollectQueueStep,
   drainNextQueueItem,
   hasCrossChannelItems,
-  previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
+import { applyDeferredMediaUnderstandingToQueuedRun } from "../followup-media.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { FOLLOWUP_QUEUES } from "./state.js";
+import { FOLLOWUP_QUEUES, type FollowupQueueState } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
 // Persists the most recent runFollowup callback per queue key so that
@@ -132,6 +134,59 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   };
 }
 
+function clearFollowupQueueSummaryState(queue: FollowupQueueState): void {
+  clearQueueSummaryState(queue);
+  queue.summaryItems = [];
+}
+
+export async function applyDeferredMediaToQueuedRuns(items: FollowupRun[]): Promise<void> {
+  await Promise.allSettled(
+    items.map((item) =>
+      applyDeferredMediaUnderstandingToQueuedRun(item, { logLabel: "followup queue" }),
+    ),
+  );
+}
+
+async function resolveSummaryLines(items: FollowupRun[]): Promise<string[]> {
+  // Parallelize the media understanding API calls upfront (same pattern as
+  // applyDeferredMediaToQueuedRuns), then build summary lines sequentially
+  // so line order matches the original item order.
+  await Promise.allSettled(
+    items.map((item) =>
+      applyDeferredMediaUnderstandingToQueuedRun(item, { logLabel: "followup queue" }),
+    ),
+  );
+  // After deferred media, prefer the updated prompt (which includes transcripts)
+  // over the original summaryLine (which may just be the caption text).
+  return items.map((item) =>
+    buildQueueSummaryLine(item.prompt.trim() || item.summaryLine?.trim() || ""),
+  );
+}
+
+export async function buildMediaAwareQueueSummaryPrompt(params: {
+  dropPolicy: FollowupQueueState["dropPolicy"];
+  droppedCount: number;
+  summaryLines: string[];
+  summaryItems: FollowupRun[];
+  noun: string;
+}): Promise<string | undefined> {
+  if (params.dropPolicy !== "summarize" || params.droppedCount <= 0) {
+    return undefined;
+  }
+  const summaryLines =
+    params.summaryItems.length > 0
+      ? await resolveSummaryLines(params.summaryItems)
+      : params.summaryLines;
+  return buildQueueSummaryPrompt({
+    state: {
+      dropPolicy: params.dropPolicy,
+      droppedCount: params.droppedCount,
+      summaryLines: [...summaryLines],
+    },
+    noun: params.noun,
+  });
+}
+
 export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
@@ -183,7 +238,14 @@ export function scheduleFollowupDrain(
           }
 
           const items = queue.items.slice();
-          const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+          await applyDeferredMediaToQueuedRuns(items);
+          const summary = await buildMediaAwareQueueSummaryPrompt({
+            dropPolicy: queue.dropPolicy,
+            droppedCount: queue.droppedCount,
+            summaryLines: queue.summaryLines,
+            summaryItems: queue.summaryItems,
+            noun: "message",
+          });
           const authGroups = splitCollectItemsByAuthorization(items);
           if (authGroups.length === 0) {
             const run = queue.lastRun;
@@ -195,7 +257,7 @@ export function scheduleFollowupDrain(
               run,
               enqueuedAt: Date.now(),
             });
-            clearQueueSummaryState(queue);
+            clearFollowupQueueSummaryState(queue);
             continue;
           }
 
@@ -221,14 +283,20 @@ export function scheduleFollowupDrain(
             });
             queue.items.splice(0, groupItems.length);
             if (pendingSummary) {
-              clearQueueSummaryState(queue);
+              clearFollowupQueueSummaryState(queue);
               pendingSummary = undefined;
             }
           }
           continue;
         }
 
-        const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+        const summaryPrompt = await buildMediaAwareQueueSummaryPrompt({
+          dropPolicy: queue.dropPolicy,
+          droppedCount: queue.droppedCount,
+          summaryLines: queue.summaryLines,
+          summaryItems: queue.summaryItems,
+          noun: "message",
+        });
         if (summaryPrompt) {
           const run = queue.lastRun;
           if (!run) {
@@ -249,7 +317,7 @@ export function scheduleFollowupDrain(
           ) {
             break;
           }
-          clearQueueSummaryState(queue);
+          clearFollowupQueueSummaryState(queue);
           continue;
         }
 

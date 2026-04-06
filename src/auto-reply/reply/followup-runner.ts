@@ -26,6 +26,7 @@ import {
   resolveQueuedReplyRuntimeConfig,
   resolveRunAuthProfile,
 } from "./agent-runner-utils.js";
+import { applyDeferredMediaUnderstandingToQueuedRun } from "./followup-media.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
@@ -187,6 +188,7 @@ export function createFollowupRunner(params: {
         activeSessionEntry?.systemPromptReport,
       );
       replyOperation.setPhase("running");
+      await applyDeferredMediaUnderstandingToQueuedRun(queued, { logLabel: "followup" });
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: runtimeConfig,
