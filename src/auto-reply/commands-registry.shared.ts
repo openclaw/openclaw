@@ -174,6 +174,13 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "tasks",
+      nativeName: "tasks",
+      description: "List background tasks for this session.",
+      textAlias: "/tasks",
+      category: "status",
+    }),
+    defineChatCommand({
       key: "allowlist",
       description: "List/add/remove allowlist entries.",
       textAlias: "/allowlist",

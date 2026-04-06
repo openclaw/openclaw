@@ -165,6 +165,92 @@ describe("exec approvals default agent migration", () => {
   });
 });
 
+describe("exec approvals invalid explicit policy fallback", () => {
+  it("treats invalid explicit agent fields as masked and falls back to defaults instead of wildcard", () => {
+    const resolved = resolveExecApprovalsFromFile({
+      file: {
+        version: 1,
+        defaults: {
+          security: "deny",
+          ask: "on-miss",
+          askFallback: "deny",
+        },
+        agents: {
+          "*": {
+            security: "full",
+            ask: "always",
+            askFallback: "full",
+          },
+          runner: {
+            security: "foo" as unknown as ExecApprovalsAgent["security"],
+            ask: "Always" as unknown as ExecApprovalsAgent["ask"],
+            askFallback: "bar" as unknown as ExecApprovalsAgent["askFallback"],
+          },
+        },
+      },
+      agentId: "runner",
+      overrides: {
+        security: "full",
+        ask: "off",
+        askFallback: "full",
+      },
+    });
+
+    expect(resolved.agent).toMatchObject({
+      security: "deny",
+      ask: "on-miss",
+      askFallback: "deny",
+    });
+    expect(resolved.agentSources).toEqual({
+      security: "defaults.security",
+      ask: "defaults.ask",
+      askFallback: "defaults.askFallback",
+    });
+  });
+
+  it("treats null explicit agent fields as unset and still considers wildcard", () => {
+    const resolved = resolveExecApprovalsFromFile({
+      file: {
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "full",
+        },
+        agents: {
+          "*": {
+            security: "deny",
+            ask: "always",
+            askFallback: "deny",
+          },
+          runner: {
+            security: null as unknown as ExecApprovalsAgent["security"],
+            ask: null as unknown as ExecApprovalsAgent["ask"],
+            askFallback: null as unknown as ExecApprovalsAgent["askFallback"],
+          },
+        },
+      },
+      agentId: "runner",
+      overrides: {
+        security: "full",
+        ask: "off",
+        askFallback: "full",
+      },
+    });
+
+    expect(resolved.agent).toMatchObject({
+      security: "deny",
+      ask: "always",
+      askFallback: "deny",
+    });
+    expect(resolved.agentSources).toEqual({
+      security: "agents.*.security",
+      ask: "agents.*.ask",
+      askFallback: "agents.*.askFallback",
+    });
+  });
+});
+
 describe("normalizeExecApprovals handles string allowlist entries (#9790)", () => {
   function normalizeMainAllowlist(file: ExecApprovalsFile): ExecAllowlistEntry[] | undefined {
     const normalized = normalizeExecApprovals(file);
@@ -266,5 +352,109 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
     if (entries) {
       expectNoSpreadStringArtifacts(entries);
     }
+  });
+});
+
+describe("normalizeExecApprovals strips invalid security/ask enum values (#59006)", () => {
+  it("drops invalid defaults.security values like 'none'", () => {
+    const file = {
+      version: 1,
+      defaults: { security: "none" },
+      agents: {},
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.defaults?.security).toBeUndefined();
+  });
+
+  it("drops invalid defaults.ask values like 'never'", () => {
+    const file = {
+      version: 1,
+      defaults: { ask: "never" },
+      agents: {},
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.defaults?.ask).toBeUndefined();
+  });
+
+  it("drops invalid defaults.askFallback values", () => {
+    const file = {
+      version: 1,
+      defaults: { askFallback: "none" },
+      agents: {},
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.defaults?.askFallback).toBeUndefined();
+  });
+
+  it("preserves valid defaults.security and defaults.ask values", () => {
+    const file: ExecApprovalsFile = {
+      version: 1,
+      defaults: { security: "full", ask: "off", askFallback: "deny" },
+      agents: {},
+    };
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.defaults?.security).toBe("full");
+    expect(normalized.defaults?.ask).toBe("off");
+    expect(normalized.defaults?.askFallback).toBe("deny");
+  });
+
+  it("drops invalid agent-level security/ask values", () => {
+    const file = {
+      version: 1,
+      agents: {
+        main: { security: "none", ask: "never", askFallback: "open" },
+      },
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.agents?.main?.security).toBeUndefined();
+    expect(normalized.agents?.main?.ask).toBeUndefined();
+    expect(normalized.agents?.main?.askFallback).toBeUndefined();
+  });
+
+  it("drops invalid wildcard agent security/ask values", () => {
+    const file = {
+      version: 1,
+      agents: {
+        "*": { security: "none", ask: "off" },
+      },
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.agents?.["*"]?.security).toBeUndefined();
+    expect(normalized.agents?.["*"]?.ask).toBe("off");
+  });
+
+  it("resolves to built-in defaults when invalid values are stripped", () => {
+    const file = {
+      version: 1,
+      defaults: { security: "none", ask: "never" },
+      agents: {
+        "*": { security: "none", ask: "off" },
+      },
+    } as unknown as ExecApprovalsFile;
+    const resolved = resolveExecApprovalsFromFile({ file });
+    // Invalid "none" in defaults is stripped, so fallback to DEFAULT_SECURITY ("full")
+    expect(resolved.defaults.security).toBe("full");
+    // Invalid "never" in defaults is stripped, so fallback to DEFAULT_ASK ("off")
+    expect(resolved.defaults.ask).toBe("off");
+    // Wildcard agent "none" is stripped, so agent inherits resolved defaults
+    expect(resolved.agent.security).toBe("full");
+    // Wildcard agent ask="off" is valid and preserved
+    expect(resolved.agent.ask).toBe("off");
+  });
+
+  it("strips non-string policy values (e.g. numbers, booleans) without throwing", () => {
+    const file = {
+      version: 1,
+      defaults: { security: 1, ask: true, askFallback: ["deny"] },
+      agents: {
+        main: { security: 42, ask: false },
+      },
+    } as unknown as ExecApprovalsFile;
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.defaults?.security).toBeUndefined();
+    expect(normalized.defaults?.ask).toBeUndefined();
+    expect(normalized.defaults?.askFallback).toBeUndefined();
+    expect(normalized.agents?.main?.security).toBeUndefined();
+    expect(normalized.agents?.main?.ask).toBeUndefined();
   });
 });

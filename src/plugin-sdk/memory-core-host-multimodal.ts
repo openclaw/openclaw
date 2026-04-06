@@ -1,1 +1,1 @@
-export * from "../../packages/memory-host-sdk/src/multimodal.js";
+export * from "../memory-host-sdk/multimodal.js";

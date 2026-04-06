@@ -31,8 +31,7 @@ describe("generateUUID", () => {
   it("still returns a v4 UUID when crypto is missing", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const id = generateUUID(null);
-      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(() => generateUUID(null)).toThrow("Web Crypto is required for UUID generation");
       expect(warnSpy).toHaveBeenCalled();
     } finally {
       warnSpy.mockRestore();

@@ -1,12 +1,7 @@
-import type {
-  MarkdownTableMode,
-  OpenClawConfig,
-  ReplyPayload,
-  RuntimeEnv,
-} from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { chunkMatrixText, sendMessageMatrix } from "../send.js";
+import type { MarkdownTableMode, OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 const THINKING_BLOCK_RE =
@@ -40,7 +35,7 @@ export async function deliverMatrixReplies(params: {
   client: MatrixClient;
   runtime: RuntimeEnv;
   textLimit: number;
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   threadId?: string;
   accountId?: string;
   mediaLocalRoots?: readonly string[];

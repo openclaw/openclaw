@@ -1,3 +1,4 @@
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
@@ -171,7 +172,7 @@ export function resolveMattermostReplyRootId(params: {
 export function resolveMattermostEffectiveReplyToId(params: {
   kind: ChatType;
   postId?: string | null;
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): string | undefined {
   const threadRootId = params.threadRootId?.trim();
@@ -185,14 +186,18 @@ export function resolveMattermostEffectiveReplyToId(params: {
   if (!postId) {
     return undefined;
   }
-  return params.replyToMode === "all" || params.replyToMode === "first" ? postId : undefined;
+  return params.replyToMode === "all" ||
+    params.replyToMode === "first" ||
+    params.replyToMode === "batched"
+    ? postId
+    : undefined;
 }
 
 export function resolveMattermostThreadSessionContext(params: {
   baseSessionKey: string;
   kind: ChatType;
   postId?: string | null;
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): { effectiveReplyToId?: string; sessionKey: string; parentSessionKey?: string } {
   const effectiveReplyToId = resolveMattermostEffectiveReplyToId({
@@ -273,9 +278,35 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const client = createMattermostClient({
     baseUrl,
     botToken,
-    allowPrivateNetwork: account.config?.allowPrivateNetwork === true,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
   });
-  const botUser = await fetchMattermostMe(client);
+
+  // Wait for the Mattermost API to accept our bot token before proceeding.
+  // When a bot account is disabled and re-enabled, the session is invalidated
+  // and API calls return 401 until the account is fully active again.  Retrying
+  // here (with exponential backoff) keeps the monitor alive and prevents the
+  // framework's auto-restart budget from being exhausted.
+  let botUser!: MattermostUser;
+  await runWithReconnect(
+    async () => {
+      botUser = await fetchMattermostMe(client);
+    },
+    {
+      abortSignal: opts.abortSignal,
+      jitterRatio: 0.2,
+      shouldReconnect: ({ outcome }) => outcome === "rejected",
+      onError: (err) => {
+        runtime.error?.(`mattermost: API auth failed: ${String(err)}`);
+        opts.statusSink?.({ lastError: String(err), connected: false });
+      },
+      onReconnect: (delayMs) => {
+        runtime.log?.(`mattermost: API not accessible, retrying in ${Math.round(delayMs / 1000)}s`);
+      },
+    },
+  );
+  if (opts.abortSignal?.aborted) {
+    return;
+  }
   const botUserId = botUser.id;
   const botUsername = botUser.username?.trim() || undefined;
   runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
@@ -1645,6 +1676,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     runtime,
     webSocketFactory: opts.webSocketFactory,
     nextSeq: () => seq++,
+    getBotUpdateAt: async () => {
+      const me = await fetchMattermostMe(client);
+      return me.update_at ?? 0;
+    },
     onPosted: async (post, payload) => {
       await debouncer.enqueue({ post, payload });
     },

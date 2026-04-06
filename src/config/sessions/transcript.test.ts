@@ -1,0 +1,196 @@
+import fs from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import * as transcriptEvents from "../../sessions/transcript-events.js";
+import { resolveSessionTranscriptPathInDir } from "./paths.js";
+import { useTempSessionsFixture } from "./test-helpers.js";
+import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
+
+describe("appendAssistantMessageToSessionTranscript", () => {
+  const fixture = useTempSessionsFixture("transcript-test-");
+  const sessionId = "test-session-id";
+  const sessionKey = "test-session";
+
+  function writeTranscriptStore() {
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          chatType: "direct",
+          channel: "discord",
+        },
+      }),
+      "utf-8",
+    );
+  }
+
+  it("creates transcript file and appends message for valid session", async () => {
+    writeTranscriptStore();
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(fs.existsSync(result.sessionFile)).toBe(true);
+      const sessionFileMode = fs.statSync(result.sessionFile).mode & 0o777;
+      if (process.platform !== "win32") {
+        expect(sessionFileMode).toBe(0o600);
+      }
+
+      const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
+      expect(lines.length).toBe(2);
+
+      const header = JSON.parse(lines[0]);
+      expect(header.type).toBe("session");
+      expect(header.id).toBe(sessionId);
+
+      const messageLine = JSON.parse(lines[1]);
+      expect(messageLine.type).toBe("message");
+      expect(messageLine.message.role).toBe("assistant");
+      expect(messageLine.message.content[0].type).toBe("text");
+      expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+    }
+  });
+
+  it("emits transcript update events for delivery mirrors", async () => {
+    const store = {
+      [sessionKey]: {
+        sessionId,
+        chatType: "direct",
+        channel: "discord",
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      storePath: fixture.storePath(),
+    });
+
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    expect(emitSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile,
+        sessionKey,
+        messageId: expect.any(String),
+        message: expect.objectContaining({
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Hello from delivery mirror!" }],
+        }),
+      }),
+    );
+    emitSpy.mockRestore();
+  });
+
+  it("does not append a duplicate delivery mirror for the same idempotency key", async () => {
+    writeTranscriptStore();
+
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+    expect(lines.length).toBe(2);
+
+    const messageLine = JSON.parse(lines[1]);
+    expect(messageLine.message.idempotencyKey).toBe("mirror:test-source-message");
+    expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+  });
+
+  it("finds session entry using normalized (lowercased) key", async () => {
+    const storeKey = "agent:main:bluebubbles:direct:+15551234567";
+    const store = {
+      [storeKey]: {
+        sessionId: "test-session-normalized",
+        chatType: "direct",
+        channel: "bluebubbles",
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey: "agent:main:BlueBubbles:direct:+15551234567",
+      text: "Hello normalized!",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("finds Slack session entry using normalized (lowercased) key", async () => {
+    const storeKey = "agent:main:slack:direct:u12345abc";
+    const store = {
+      [storeKey]: {
+        sessionId: "test-slack-session",
+        chatType: "direct",
+        channel: "slack",
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey: "agent:main:slack:direct:U12345ABC",
+      text: "Hello Slack user!",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("ignores malformed transcript lines when checking mirror idempotency", async () => {
+    writeTranscriptStore();
+
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 1,
+          id: sessionId,
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        "{not-json",
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            idempotencyKey: "mirror:test-source-message",
+            content: [{ type: "text", text: "Hello from delivery mirror!" }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      idempotencyKey: "mirror:test-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+    expect(lines.length).toBe(3);
+  });
+});

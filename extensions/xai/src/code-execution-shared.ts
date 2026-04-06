@@ -1,8 +1,17 @@
 import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeXaiModelId } from "../model-id.js";
-import { extractXaiWebSearchContent, type XaiWebSearchResponse } from "./web-search-shared.js";
+import {
+  buildXaiResponsesToolBody,
+  resolveXaiResponseTextAndCitations,
+  XAI_RESPONSES_ENDPOINT,
+} from "./responses-tool-shared.js";
+import {
+  coerceXaiToolConfig,
+  resolveNormalizedXaiToolModel,
+  resolvePositiveIntegerToolConfig,
+} from "./tool-config-shared.js";
+import { type XaiWebSearchResponse } from "./web-search-shared.js";
 
-export const XAI_CODE_EXECUTION_ENDPOINT = "https://api.x.ai/v1/responses";
+export const XAI_CODE_EXECUTION_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 export const XAI_DEFAULT_CODE_EXECUTION_MODEL = "grok-4-1-fast";
 
 export type XaiCodeExecutionConfig = {
@@ -24,32 +33,23 @@ export type XaiCodeExecutionResult = {
   outputTypes: string[];
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 export function resolveXaiCodeExecutionConfig(
   config?: Record<string, unknown>,
 ): XaiCodeExecutionConfig {
-  return isRecord(config) ? (config as XaiCodeExecutionConfig) : {};
+  return coerceXaiToolConfig<XaiCodeExecutionConfig>(config);
 }
 
 export function resolveXaiCodeExecutionModel(config?: Record<string, unknown>): string {
-  const resolved = resolveXaiCodeExecutionConfig(config);
-  return typeof resolved.model === "string" && resolved.model.trim()
-    ? normalizeXaiModelId(resolved.model.trim())
-    : XAI_DEFAULT_CODE_EXECUTION_MODEL;
+  return resolveNormalizedXaiToolModel({
+    config,
+    defaultModel: XAI_DEFAULT_CODE_EXECUTION_MODEL,
+  });
 }
 
 export function resolveXaiCodeExecutionMaxTurns(
   config?: Record<string, unknown>,
 ): number | undefined {
-  const raw = resolveXaiCodeExecutionConfig(config).maxTurns;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return undefined;
-  }
-  const normalized = Math.trunc(raw);
-  return normalized > 0 ? normalized : undefined;
+  return resolvePositiveIntegerToolConfig(config, "maxTurns");
 }
 
 export function buildXaiCodeExecutionPayload(params: {
@@ -85,17 +85,17 @@ export async function requestXaiCodeExecution(params: {
       url: XAI_CODE_EXECUTION_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
-      body: {
+      body: buildXaiResponsesToolBody({
         model: params.model,
-        input: [{ role: "user", content: params.task }],
+        inputText: params.task,
         tools: [{ type: "code_interpreter" }],
-        ...(params.maxTurns ? { max_turns: params.maxTurns } : {}),
-      },
+        maxTurns: params.maxTurns,
+      }),
       errorLabel: "xAI",
     },
     async (response) => {
       const data = (await response.json()) as XaiCodeExecutionResponse;
-      const { text, annotationCitations } = extractXaiWebSearchContent(data);
+      const { content, citations } = resolveXaiResponseTextAndCitations(data);
       const outputTypes = Array.isArray(data.output)
         ? [
             ...new Set(
@@ -105,12 +105,8 @@ export async function requestXaiCodeExecution(params: {
             ),
           ]
         : [];
-      const citations =
-        Array.isArray(data.citations) && data.citations.length > 0
-          ? data.citations
-          : annotationCitations;
       return {
-        content: text ?? "No response",
+        content,
         citations,
         usedCodeExecution: outputTypes.includes("code_interpreter_call"),
         outputTypes,

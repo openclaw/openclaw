@@ -6,6 +6,7 @@ import { applyExtraParamsToAgent } from "./extra-params.js";
 
 export type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
   headers?: Record<string, string>;
+  options?: SimpleStreamOptions;
   payload: TPayload;
 };
 
@@ -22,7 +23,7 @@ function createMockStream(): ReturnType<StreamFn> {
 }
 
 type RunExtraParamsCaseParams<
-  TApi extends "openai-completions" | "openai-responses",
+  TApi extends "openai-completions" | "openai-responses" | "azure-openai-responses",
   TPayload extends Record<string, unknown>,
 > = {
   applyModelId?: string;
@@ -36,7 +37,7 @@ type RunExtraParamsCaseParams<
 };
 
 export function runExtraParamsCase<
-  TApi extends "openai-completions" | "openai-responses",
+  TApi extends "openai-completions" | "openai-responses" | "azure-openai-responses",
   TPayload extends Record<string, unknown>,
 >(params: RunExtraParamsCaseParams<TApi, TPayload>): ExtraParamsCapture<TPayload> {
   const captured: ExtraParamsCapture<TPayload> = {
@@ -45,6 +46,7 @@ export function runExtraParamsCase<
 
   const baseStreamFn: StreamFn = (model, _context, options) => {
     captured.headers = options?.headers;
+    captured.options = options;
     options?.onPayload?.(params.payload, model);
     return createMockStream();
   };

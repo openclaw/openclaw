@@ -73,14 +73,17 @@ describe("updateMatrixAccountConfig", () => {
     });
   });
 
-  it("stores and clears Matrix allowBots and allowPrivateNetwork settings", () => {
+  it("stores and clears Matrix allowBots, allowPrivateNetwork, and proxy settings", () => {
     const cfg = {
       channels: {
         matrix: {
           accounts: {
             default: {
               allowBots: true,
-              allowPrivateNetwork: true,
+              network: {
+                dangerouslyAllowPrivateNetwork: true,
+              },
+              proxy: "http://127.0.0.1:7890",
             },
           },
         },
@@ -90,12 +93,14 @@ describe("updateMatrixAccountConfig", () => {
     const updated = updateMatrixAccountConfig(cfg, "default", {
       allowBots: "mentions",
       allowPrivateNetwork: null,
+      proxy: null,
     });
 
     expect(updated.channels?.["matrix"]?.accounts?.default).toMatchObject({
       allowBots: "mentions",
     });
-    expect(updated.channels?.["matrix"]?.accounts?.default?.allowPrivateNetwork).toBeUndefined();
+    expect(updated.channels?.["matrix"]?.accounts?.default?.network).toBeUndefined();
+    expect(updated.channels?.["matrix"]?.accounts?.default?.proxy).toBeUndefined();
   });
 
   it("normalizes account id and defaults account enabled=true", () => {
@@ -119,7 +124,7 @@ describe("updateMatrixAccountConfig", () => {
             policy: "pairing",
           },
           groups: {
-            "!default:example.org": { allow: true },
+            "!default:example.org": { enabled: true },
           },
           accounts: {
             ops: {
@@ -142,14 +147,14 @@ describe("updateMatrixAccountConfig", () => {
       },
       groupPolicy: "allowlist",
       groups: {
-        "!ops-room:example.org": { allow: true },
+        "!ops-room:example.org": { enabled: true },
       },
       rooms: null,
     });
 
     expect(updated.channels?.["matrix"]?.dm?.policy).toBe("pairing");
     expect(updated.channels?.["matrix"]?.groups).toEqual({
-      "!default:example.org": { allow: true },
+      "!default:example.org": { enabled: true },
     });
     expect(updated.channels?.["matrix"]?.accounts?.ops).toMatchObject({
       dm: {
@@ -159,7 +164,7 @@ describe("updateMatrixAccountConfig", () => {
       },
       groupPolicy: "allowlist",
       groups: {
-        "!ops-room:example.org": { allow: true },
+        "!ops-room:example.org": { enabled: true },
       },
     });
     expect(updated.channels?.["matrix"]?.accounts?.ops?.rooms).toBeUndefined();

@@ -71,4 +71,35 @@ describe("doctor repair sequencing", () => {
     expect(result.warningNotes[0]).not.toContain("\u001B");
     expect(result.warningNotes[0]).not.toContain("\r");
   });
+
+  it("emits Discord warnings when unsafe numeric ids block repair", async () => {
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          channels: {
+            discord: {
+              allowFrom: [106232522769186816],
+            },
+          },
+        } as unknown as OpenClawConfig,
+        candidate: {
+          channels: {
+            discord: {
+              allowFrom: [106232522769186816],
+            },
+          },
+        } as unknown as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.changeNotes).toEqual([]);
+    expect(result.warningNotes).toHaveLength(1);
+    expect(result.warningNotes[0]).toContain("could not be auto-repaired");
+    expect(result.warningNotes[0]).toContain('rerun "openclaw doctor --fix"');
+    expect(result.state.pendingChanges).toBe(false);
+    expect(result.state.candidate.channels?.discord?.allowFrom).toEqual([106232522769186816]);
+  });
 });

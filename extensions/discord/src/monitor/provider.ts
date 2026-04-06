@@ -20,15 +20,9 @@ import {
 } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  GROUP_POLICY_BLOCKED_LABEL,
-  resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { getPluginCommandSpecs } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
   danger,
   isVerbose,
@@ -38,10 +32,18 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  GROUP_POLICY_BLOCKED_LABEL,
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
+import { isDiscordExecApprovalClientEnabled } from "../exec-approvals.js";
 import { fetchDiscordApplicationId } from "../probe.js";
+import { resolveDiscordProxyFetchForAccount } from "../proxy-fetch.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
 import {
@@ -91,6 +93,8 @@ export type MonitorDiscordOpts = {
   replyToMode?: ReplyToMode;
   setStatus?: DiscordMonitorStatusSink;
 };
+
+const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 
 type DiscordVoiceManager = import("../voice/manager.js").DiscordVoiceManager;
 
@@ -354,7 +358,7 @@ async function deployDiscordCommands(params: {
       // errors like Discord 30034 fail fast and don't wedge the provider.
       restClient.options.queueRequests = false;
     }
-    params.runtime.log?.("discord: native commands using Carbon reconcile path");
+    logVerbose("discord: native commands using Carbon reconcile path");
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         await params.client.handleDeployRequest();
@@ -591,6 +595,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const discordAccountThreadBindings =
     cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
   const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
+  const discordProxyFetch = resolveDiscordProxyFetchForAccount(account, cfg, runtime);
   const dmConfig = rawDiscordCfg.dm;
   let guildEntries = rawDiscordCfg.guilds;
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
@@ -610,7 +615,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     log: (message) => runtime.log?.(warn(message)),
   });
   let allowFrom = discordCfg.allowFrom ?? dmConfig?.allowFrom;
-  const mediaMaxBytes = (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? 8) * 1024 * 1024;
+  const mediaMaxBytes =
+    (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? DEFAULT_DISCORD_MEDIA_MAX_MB) * 1024 * 1024;
   const textLimit = resolveTextChunkLimit(cfg, "discord", account.accountId, {
     fallbackLimit: 2000,
   });
@@ -824,7 +830,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
     // Initialize exec approvals handler if enabled
     const execApprovalsConfig = discordCfg.execApprovals ?? {};
-    const execApprovalsHandler = execApprovalsConfig.enabled
+    const execApprovalsHandler = isDiscordExecApprovalClientEnabled({
+      cfg,
+      accountId: account.accountId,
+      configOverride: execApprovalsConfig,
+    })
       ? new DiscordExecApprovalHandler({
           token,
           accountId: account.accountId,
@@ -898,6 +908,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       accountId: account.accountId,
       applicationId,
       token,
+      proxyFetch: discordProxyFetch,
       commands,
       components,
       modals,
@@ -1053,6 +1064,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       messageHandler,
       trackInboundEvent,
       eventQueueListenerTimeoutMs: eventQueueOpts.listenerTimeout,
+    });
+
+    logDiscordStartupPhase({
+      runtime,
+      accountId: account.accountId,
+      phase: "client-start",
+      startAt: startupStartedAt,
+      gateway: lifecycleGateway,
     });
 
     const botIdentity =

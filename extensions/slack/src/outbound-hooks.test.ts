@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
@@ -73,11 +73,13 @@ const expectSlackSendCalledWith = (
 };
 
 describe("slack outbound hook wiring", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ slackOutbound } = await import("./outbound-adapter.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     sendMessageSlackMock.mockResolvedValue({ messageId: "1234.5678", channelId: "C123" });
-    ({ slackOutbound } = await import("./outbound-adapter.js"));
   });
 
   afterEach(() => {
@@ -136,6 +138,38 @@ describe("slack outbound hook wiring", () => {
       { channelId: "slack", accountId: "default" },
     );
     expectSlackSendCalledWith("hello");
+  });
+
+  it("uses configured defaultAccount for hook context when accountId is omitted", async () => {
+    const mockRunner = {
+      hasHooks: vi.fn().mockReturnValue(true),
+      runMessageSending: vi.fn().mockResolvedValue(undefined),
+    };
+    getGlobalHookRunnerMock.mockReturnValue(mockRunner);
+
+    const sendText = slackOutbound.sendText as NonNullable<typeof slackOutbound.sendText>;
+    await sendText({
+      cfg: {
+        channels: {
+          slack: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      to: "C123",
+      text: "hello",
+      replyToId: "1111.2222",
+    });
+
+    expect(mockRunner.runMessageSending).toHaveBeenCalledWith(
+      { to: "C123", content: "hello", metadata: { threadTs: "1111.2222", channelId: "C123" } },
+      { channelId: "slack", accountId: "work" },
+    );
   });
 
   it("cancels send when hook returns cancel:true", async () => {

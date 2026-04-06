@@ -100,6 +100,7 @@ describe("matrix reply context", () => {
     expect(result).toEqual({
       replyToBody: "This is the original message",
       replyToSender: "Alice",
+      replyToSenderId: "@alice:example.org",
     });
 
     // Second call should use cache
@@ -198,6 +199,7 @@ describe("matrix reply context", () => {
     expect(second).toEqual({
       replyToBody: "Recovered message",
       replyToSender: "Bob",
+      replyToSenderId: "@bob:example.org",
     });
 
     expect(getEvent).toHaveBeenCalledTimes(2);
@@ -231,6 +233,7 @@ describe("matrix reply context", () => {
     expect(result).toEqual({
       replyToBody: "Hello",
       replyToSender: "@charlie:example.org",
+      replyToSenderId: "@charlie:example.org",
     });
   });
 

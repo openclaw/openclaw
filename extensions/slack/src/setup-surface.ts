@@ -7,11 +7,11 @@ import {
   parseMentionOrPrefixedId,
   promptLegacyChannelAllowFromForAccount,
   type WizardPrompter,
-} from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
-} from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   resolveDefaultSlackAccountId,

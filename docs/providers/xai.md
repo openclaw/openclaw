@@ -38,14 +38,34 @@ the bundled xAI model provider now reuses that key as a fallback too.
 
 OpenClaw now includes these xAI model families out of the box:
 
+- `grok-3`, `grok-3-fast`, `grok-3-mini`, `grok-3-mini-fast`
 - `grok-4`, `grok-4-0709`
-- `grok-4-fast-reasoning`, `grok-4-fast-non-reasoning`
-- `grok-4-1-fast-reasoning`, `grok-4-1-fast-non-reasoning`
-- `grok-4.20-reasoning`, `grok-4.20-non-reasoning`
+- `grok-4-fast`, `grok-4-fast-non-reasoning`
+- `grok-4-1-fast`, `grok-4-1-fast-non-reasoning`
+- `grok-4.20-beta-latest-reasoning`, `grok-4.20-beta-latest-non-reasoning`
 - `grok-code-fast-1`
 
 The plugin also forward-resolves newer `grok-4*` and `grok-code-fast*` ids when
 they follow the same API shape.
+
+Fast-model notes:
+
+- `grok-4-fast`, `grok-4-1-fast`, and the `grok-4.20-beta-*` variants are the
+  current image-capable Grok refs in the bundled catalog.
+- `/fast on` or `agents.defaults.models["xai/<model>"].params.fastMode: true`
+  rewrites native xAI requests as follows:
+  - `grok-3` -> `grok-3-fast`
+  - `grok-3-mini` -> `grok-3-mini-fast`
+  - `grok-4` -> `grok-4-fast`
+  - `grok-4-0709` -> `grok-4-fast`
+
+Legacy compatibility aliases still normalize to the canonical bundled ids. For
+example:
+
+- `grok-4-fast-reasoning` -> `grok-4-fast`
+- `grok-4-1-fast-reasoning` -> `grok-4-1-fast`
+- `grok-4.20-reasoning` -> `grok-4.20-beta-latest-reasoning`
+- `grok-4.20-non-reasoning` -> `grok-4.20-beta-latest-non-reasoning`
 
 ## Web search
 
@@ -55,6 +75,34 @@ The bundled `grok` web-search provider uses `XAI_API_KEY` too:
 openclaw config set tools.web.search.provider grok
 ```
 
+## Video generation
+
+The bundled `xai` plugin also registers video generation through the shared
+`video_generate` tool.
+
+- Default video model: `xai/grok-imagine-video`
+- Modes: text-to-video, image-to-video, and remote video edit/extend flows
+- Supports `aspectRatio` and `resolution`
+- Current limit: local video buffers are not accepted; use remote `http(s)`
+  URLs for video-reference/edit inputs
+
+To use xAI as the default video provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "xai/grok-imagine-video",
+      },
+    },
+  },
+}
+```
+
+See [Video Generation](/tools/video-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
 ## Known limits
 
 - Auth is API-key only today. There is no xAI OAuth/device-code flow in OpenClaw yet.
@@ -63,6 +111,11 @@ openclaw config set tools.web.search.provider grok
 ## Notes
 
 - OpenClaw applies xAI-specific tool-schema and tool-call compatibility fixes automatically on the shared runner path.
+- Native xAI requests default `tool_stream: true`. Set
+  `agents.defaults.models["xai/<model>"].params.tool_stream` to `false` to
+  disable it.
+- The bundled xAI wrapper strips unsupported strict tool-schema flags and
+  reasoning payload keys before sending native xAI requests.
 - `web_search`, `x_search`, and `code_execution` are exposed as OpenClaw tools. OpenClaw enables the specific xAI built-in it needs inside each tool request instead of attaching all native tools to every chat turn.
 - `x_search` and `code_execution` are owned by the bundled xAI plugin rather than hardcoded into the core model runtime.
 - `code_execution` is remote xAI sandbox execution, not local [`exec`](/tools/exec).

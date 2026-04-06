@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
@@ -23,8 +23,11 @@ vi.mock("./github-copilot-token.js", () => ({
 
 let prepareSimpleCompletionModel: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModel;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
+  ({ prepareSimpleCompletionModel } = await import("./simple-completion-runtime.js"));
+});
+
+beforeEach(() => {
   hoisted.resolveModelMock.mockReset();
   hoisted.getApiKeyForModelMock.mockReset();
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockReset();
@@ -54,7 +57,6 @@ beforeEach(async () => {
     source: "cache:/tmp/copilot-token.json",
     baseUrl: "https://api.individual.githubcopilot.com",
   });
-  ({ prepareSimpleCompletionModel } = await import("./simple-completion-runtime.js"));
 });
 
 describe("prepareSimpleCompletionModel", () => {
@@ -134,7 +136,7 @@ describe("prepareSimpleCompletionModel", () => {
     hoisted.resolveModelMock.mockReturnValueOnce({
       model: {
         provider: "amazon-bedrock",
-        id: "anthropic.claude-sonnet-4-5",
+        id: "anthropic.claude-sonnet-4-6",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -149,7 +151,7 @@ describe("prepareSimpleCompletionModel", () => {
     const result = await prepareSimpleCompletionModel({
       cfg: undefined,
       provider: "amazon-bedrock",
-      modelId: "anthropic.claude-sonnet-4-5",
+      modelId: "anthropic.claude-sonnet-4-6",
       allowMissingApiKeyModes: ["aws-sdk"],
     });
 
@@ -157,7 +159,7 @@ describe("prepareSimpleCompletionModel", () => {
       expect.objectContaining({
         model: expect.objectContaining({
           provider: "amazon-bedrock",
-          id: "anthropic.claude-sonnet-4-5",
+          id: "anthropic.claude-sonnet-4-6",
         }),
         auth: {
           source: "aws-sdk default chain",

@@ -173,11 +173,13 @@ function installRuntimeHooks() {
         const plugin = await fixture.load();
         return {
           fixture,
-          providers: registerProviderPlugin({
-            plugin: plugin.default,
-            id: fixture.pluginId,
-            name: fixture.name,
-          }).providers,
+          providers: (
+            await registerProviderPlugin({
+              plugin: plugin.default,
+              id: fixture.pluginId,
+              name: fixture.name,
+            })
+          ).providers,
         };
       }),
     );
@@ -600,6 +602,33 @@ export function describeOpenAIProviderRuntimeContract() {
         provider: "openai-codex",
         api: "openai-codex-responses",
         contextWindow: 1_050_000,
+        maxTokens: 128_000,
+      });
+    });
+
+    it("owns forward-compat codex mini models", () => {
+      const provider = requireProviderContractProvider("openai-codex");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4-mini",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5.1-codex-mini"
+              ? createModel({
+                  id,
+                  api: "openai-codex-responses",
+                  provider: "openai-codex",
+                  baseUrl: "https://chatgpt.com/backend-api",
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-5.4-mini",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        contextWindow: 272_000,
         maxTokens: 128_000,
       });
     });

@@ -1,4 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { buildNativeAnthropicReplayPolicyForModel } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   mergeImplicitAnthropicVertexProvider,
   resolveAnthropicVertexConfigApiKey,
@@ -35,10 +36,7 @@ export default definePluginEntry({
         },
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
-      capabilities: {
-        providerFamily: "anthropic",
-        dropThinkingBlockModelHints: ["claude"],
-      },
+      buildReplayPolicy: ({ modelId }) => buildNativeAnthropicReplayPolicyForModel(modelId),
     });
   },
 });

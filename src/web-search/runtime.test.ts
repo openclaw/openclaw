@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
@@ -8,20 +8,15 @@ type TestPluginWebSearchConfig = {
   };
 };
 
-const { resolveBundledPluginWebSearchProvidersMock, resolveRuntimeWebSearchProvidersMock } =
-  vi.hoisted(() => ({
-    resolveBundledPluginWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(
-      () => [],
-    ),
+const { resolvePluginWebSearchProvidersMock, resolveRuntimeWebSearchProvidersMock } = vi.hoisted(
+  () => ({
+    resolvePluginWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
     resolveRuntimeWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
-  }));
-
-vi.mock("../plugins/web-search-providers.js", () => ({
-  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
-}));
+  }),
+);
 
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
+  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
   resolveRuntimeWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
 }));
 
@@ -64,15 +59,17 @@ describe("web search runtime", () => {
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
 
-  beforeEach(async () => {
-    vi.resetModules();
-    resolveBundledPluginWebSearchProvidersMock.mockReset();
-    resolveRuntimeWebSearchProvidersMock.mockReset();
-    resolveBundledPluginWebSearchProvidersMock.mockReturnValue([]);
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([]);
+  beforeAll(async () => {
     ({ runWebSearch } = await import("./runtime.js"));
     ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
       await import("../secrets/runtime.js"));
+  });
+
+  beforeEach(() => {
+    resolvePluginWebSearchProvidersMock.mockReset();
+    resolveRuntimeWebSearchProvidersMock.mockReset();
+    resolvePluginWebSearchProvidersMock.mockReturnValue([]);
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -125,7 +122,7 @@ describe("web search runtime", () => {
       }),
     });
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
-    resolveBundledPluginWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
 
     const config: OpenClawConfig = {
       plugins: {
@@ -172,7 +169,7 @@ describe("web search runtime", () => {
       }),
     });
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
-    resolveBundledPluginWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
 
     const config: OpenClawConfig = {
       plugins: {
@@ -274,17 +271,9 @@ describe("web search runtime", () => {
           selectedProvider: "beta",
           diagnostics: [],
         },
-        xSearch: {
-          active: false,
-          apiKeySource: "missing",
-          diagnostics: [],
-        },
         fetch: {
-          firecrawl: {
-            active: false,
-            apiKeySource: "missing",
-            diagnostics: [],
-          },
+          providerSource: "none",
+          diagnostics: [],
         },
         diagnostics: [],
       },

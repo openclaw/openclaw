@@ -8,6 +8,7 @@
  * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
  * - mdl_back              - back to providers list
  */
+import { fitsTelegramCallbackData } from "./approval-callback-data.js";
 
 export type ButtonRow = Array<{ text: string; callback_data: string }>;
 
@@ -39,7 +40,6 @@ export type ModelsKeyboardParams = {
 };
 
 const MODELS_PAGE_SIZE = 8;
-const MAX_CALLBACK_DATA_BYTES = 64;
 const CALLBACK_PREFIX = {
   providers: "mdl_prov",
   back: "mdl_back",
@@ -108,13 +108,11 @@ export function buildModelSelectionCallbackData(params: {
   model: string;
 }): string | null {
   const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
-  if (Buffer.byteLength(fullCallbackData, "utf8") <= MAX_CALLBACK_DATA_BYTES) {
+  if (fitsTelegramCallbackData(fullCallbackData)) {
     return fullCallbackData;
   }
   const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  return Buffer.byteLength(compactCallbackData, "utf8") <= MAX_CALLBACK_DATA_BYTES
-    ? compactCallbackData
-    : null;
+  return fitsTelegramCallbackData(compactCallbackData) ? compactCallbackData : null;
 }
 
 export function resolveModelSelection(params: {
@@ -144,6 +142,20 @@ export function resolveModelSelection(params: {
     model: params.callback.model,
     matchingProviders,
   };
+}
+
+function isCurrentModelSelection(params: {
+  currentModel?: string;
+  provider: string;
+  model: string;
+}): boolean {
+  const currentModel = params.currentModel?.trim();
+  if (!currentModel) {
+    return false;
+  }
+  return currentModel.includes("/")
+    ? currentModel === `${params.provider}/${params.model}`
+    : currentModel === params.model;
 }
 
 /**
@@ -197,11 +209,6 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
 
-  // Model buttons - one per row
-  const currentModelId = currentModel?.includes("/")
-    ? currentModel.split("/").slice(1).join("/")
-    : currentModel;
-
   for (const model of pageModels) {
     const callbackData = buildModelSelectionCallbackData({ provider, model });
     // Skip models that still exceed Telegram's callback_data limit.
@@ -209,7 +216,7 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       continue;
     }
 
-    const isCurrentModel = model === currentModelId;
+    const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
     const displayLabel = modelNames?.get(`${provider}/${model}`) ?? model;
     const displayText = truncateModelId(displayLabel, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
