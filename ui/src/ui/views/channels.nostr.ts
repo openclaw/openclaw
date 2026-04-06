@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
@@ -209,16 +210,18 @@ export function renderNostrCard(params: {
                 <span>${summaryRunning ? "Yes" : "No"}</span>
               </div>
               <div>
-                <span class="label">Public Key</span>
+                <span class="label">${t("common.publicKey")}</span>
                 <span class="monospace" title="${summaryPublicKey ?? ""}"
                   >${truncatePubkey(summaryPublicKey)}</span
                 >
               </div>
               <div>
-                <span class="label">Last start</span>
-                <span
-                  >${summaryLastStartAt ? formatRelativeTimestamp(summaryLastStartAt) : "n/a"}</span
-                >
+                <span class="label">${t("common.lastStart")}</span>
+                <span>
+                  ${summaryLastStartAt
+                    ? formatRelativeTimestamp(summaryLastStartAt)
+                    : t("common.na")}
+                </span>
               </div>
             </div>
           `}
@@ -228,7 +231,7 @@ export function renderNostrCard(params: {
       ${renderProfileSection()} ${renderChannelConfigSection({ channelId: "nostr", props })}
 
       <div class="row" style="margin-top: 12px;">
-        <button class="btn" @click=${() => props.onRefresh(false)}>Refresh</button>
+        <button class="btn" @click=${() => props.onRefresh(false)}>${t("common.refresh")}</button>
       </div>
     </div>
   `;
