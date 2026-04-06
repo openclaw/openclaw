@@ -23,6 +23,7 @@ import {
   isHighSignalLiveModelRef,
   selectHighSignalLiveItems,
 } from "../agents/live-model-filter.js";
+import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
@@ -823,37 +824,85 @@ async function getFreeGatewayPort(): Promise<number> {
   throw new Error("failed to acquire a free gateway port block");
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function connectClient(params: { url: string; token: string }) {
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError: Error | null = null;
+
+  while (Date.now() - startedAt < GATEWAY_LIVE_PROBE_TIMEOUT_MS) {
+    attempt += 1;
+    const remainingMs = GATEWAY_LIVE_PROBE_TIMEOUT_MS - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    try {
+      return await connectClientOnce({
+        ...params,
+        timeoutMs: Math.min(remainingMs, 10_000),
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (!isRetryableGatewayConnectError(lastError) || remainingMs <= 2_000) {
+        throw lastError;
+      }
+      await sleep(Math.min(500 * attempt, 2_000));
+    }
+  }
+
+  throw lastError ?? new Error("gateway connect timeout");
+}
+
+async function connectClientOnce(params: { url: string; token: string; timeoutMs: number }) {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    const stop = (err?: Error, client?: GatewayClient) => {
+    let client: GatewayClient | undefined;
+    const stop = (err?: Error, connectedClient?: GatewayClient) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
       if (err) {
+        if (client) {
+          void client.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});
+        }
         reject(err);
       } else {
-        resolve(client as GatewayClient);
+        resolve(connectedClient as GatewayClient);
       }
     };
-    const client = new GatewayClient({
+    client = new GatewayClient({
       url: params.url,
       token: params.token,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: "vitest-live",
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.TEST,
+      requestTimeoutMs: params.timeoutMs,
+      connectChallengeTimeoutMs: params.timeoutMs,
       onHelloOk: () => stop(undefined, client),
       onConnectError: (err) => stop(err),
       onClose: (code, reason) =>
         stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
     });
-    const timer = setTimeout(() => stop(new Error("gateway connect timeout")), 10_000);
+    const timer = setTimeout(() => stop(new Error("gateway connect timeout")), params.timeoutMs);
     timer.unref();
     client.start();
   });
+}
+
+function isRetryableGatewayConnectError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("gateway closed during connect (1000)") ||
+    message.includes("gateway connect timeout") ||
+    message.includes("gateway connect challenge timeout") ||
+    message.includes("gateway request timeout for connect")
+  );
 }
 
 function extractTranscriptMessageText(message: unknown): string {
@@ -1841,8 +1890,14 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const useExplicit = Boolean(rawModels) && !useModern;
         const filter = useExplicit ? parseFilter(rawModels) : null;
         const maxModels = GATEWAY_LIVE_MAX_MODELS;
+        const targetMatcher = createLiveTargetMatcher({
+          providerFilter: PROVIDERS,
+          modelFilter: filter,
+          config: cfg,
+          env: process.env,
+        });
         const wanted = filter
-          ? all.filter((m) => filter.has(`${m.provider}/${m.id}`))
+          ? all.filter((m) => targetMatcher.matchesModel(m.provider, m.id))
           : all.filter((m) => isHighSignalLiveModelRef({ provider: m.provider, id: m.id }));
 
         const candidates: Array<Model<Api>> = [];
@@ -1851,7 +1906,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
             continue;
           }
-          if (PROVIDERS && !PROVIDERS.has(model.provider)) {
+          if (!targetMatcher.matchesProvider(model.provider)) {
             continue;
           }
           const modelRef = `${model.provider}/${model.id}`;

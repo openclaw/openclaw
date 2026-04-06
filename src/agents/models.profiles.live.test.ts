@@ -9,6 +9,7 @@ import {
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
 import { isHighSignalLiveModelRef, selectHighSignalLiveItems } from "./live-model-filter.js";
+import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
@@ -418,6 +419,12 @@ describeLive("live models (profile keys)", () => {
       const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
       const perModelTimeoutMs = toInt(process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS, 30_000);
       const maxModels = toInt(process.env.OPENCLAW_LIVE_MAX_MODELS, 0);
+      const targetMatcher = createLiveTargetMatcher({
+        providerFilter: providers,
+        modelFilter: filter,
+        config: cfg,
+        env: process.env,
+      });
 
       const failures: Array<{ model: string; error: string }> = [];
       const skipped: Array<{ model: string; reason: string }> = [];
@@ -430,11 +437,11 @@ describeLive("live models (profile keys)", () => {
         if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
           continue;
         }
-        if (providers && !providers.has(model.provider)) {
+        if (!targetMatcher.matchesProvider(model.provider)) {
           continue;
         }
         const id = `${model.provider}/${model.id}`;
-        if (filter && !filter.has(id)) {
+        if (!targetMatcher.matchesModel(model.provider, model.id)) {
           continue;
         }
         if (!filter && useModern) {

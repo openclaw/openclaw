@@ -1,11 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as zaloSecrets from "../../extensions/zalo/src/secret-contract.ts";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 
-vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
-  const zaloSecrets = await import("../../extensions/zalo/src/secret-contract.ts");
+vi.mock("../channels/plugins/bootstrap-registry.js", () => {
   return {
     getBootstrapChannelPlugin: (id: string) =>
       id === "zalo"
@@ -97,9 +97,10 @@ describe("secrets runtime snapshot zalo token activity", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.zalo?.accounts?.work?.botToken).toBe(
-      "resolved-zalo-work-token",
-    );
+    expect(
+      (snapshot.config.channels?.zalo?.accounts?.work as { botToken?: unknown } | undefined)
+        ?.botToken,
+    ).toBe("resolved-zalo-work-token");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.zalo.accounts.work.botToken",
     );
@@ -153,9 +154,10 @@ describe("secrets runtime snapshot zalo token activity", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.zalo?.accounts?.default?.botToken).toBe(
-      "resolved-zalo-default-token",
-    );
+    expect(
+      (snapshot.config.channels?.zalo?.accounts?.default as { botToken?: unknown } | undefined)
+        ?.botToken,
+    ).toBe("resolved-zalo-default-token");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.zalo.accounts.default.botToken",
     );

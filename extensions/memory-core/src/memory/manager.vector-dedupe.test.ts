@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryIndexManager } from "./index.js";
 
 vi.mock("./embeddings.js", () => {
@@ -22,10 +22,14 @@ vi.mock("./embeddings.js", () => {
 type MemoryStorageModule = typeof import("openclaw/plugin-sdk/memory-core-host-engine-storage");
 type TestManagerModule = typeof import("./test-manager.js");
 type MemoryIndexModule = typeof import("./index.js");
+type MemoryEmbeddingProvidersModule =
+  typeof import("../../../../src/plugins/memory-embedding-providers.js");
 
 let buildFileEntry: MemoryStorageModule["buildFileEntry"];
 let createMemoryManagerOrThrow: TestManagerModule["createMemoryManagerOrThrow"];
 let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
+let clearRegistry: MemoryEmbeddingProvidersModule["clearMemoryEmbeddingProviders"];
+let registerAdapter: MemoryEmbeddingProvidersModule["registerMemoryEmbeddingProvider"];
 
 async function ensureProviderInitialized(manager: MemoryIndexManager): Promise<void> {
   await (
@@ -53,11 +57,25 @@ describe("memory vector dedupe", () => {
     manager = null;
   }
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ buildFileEntry } = await import("openclaw/plugin-sdk/memory-core-host-engine-storage"));
     ({ createMemoryManagerOrThrow } = await import("./test-manager.js"));
     ({ closeAllMemorySearchManagers } = await import("./index.js"));
+    ({
+      clearMemoryEmbeddingProviders: clearRegistry,
+      registerMemoryEmbeddingProvider: registerAdapter,
+    } = await import("../../../../src/plugins/memory-embedding-providers.js"));
+  });
+
+  beforeEach(async () => {
+    clearRegistry();
+    registerAdapter({
+      id: "openai",
+      defaultModel: "mock-embed",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await seedMemoryWorkspace(workspaceDir);
@@ -66,7 +84,12 @@ describe("memory vector dedupe", () => {
   afterEach(async () => {
     await closeManagerIfOpen();
     await closeAllMemorySearchManagers();
+    clearRegistry();
     await fs.rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  afterAll(() => {
+    vi.resetModules();
   });
 
   it("deletes existing vector rows before inserting replacements", async () => {

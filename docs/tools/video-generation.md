@@ -103,20 +103,20 @@ runtime modes at runtime.
 This is the explicit mode contract used by `video_generate`, contract tests,
 and the shared live sweep.
 
-| Provider | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes today                                                                                    |
-| -------- | ---------- | -------------- | -------------- | ---------------------------------------------------------------------------------------------------------- |
-| Alibaba  | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs |
-| BytePlus | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                 |
-| ComfyUI  | Yes        | Yes            | No             | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                 |
-| fal      | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                 |
-| Google   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`, `videoToVideo`                                                                 |
-| MiniMax  | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                 |
-| OpenAI   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`, `videoToVideo`                                                                 |
-| Qwen     | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs |
-| Runway   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`        |
-| Together | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                 |
-| Vydra    | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                 |
-| xAI      | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider currently needs a remote MP4 URL  |
+| Provider | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes today                                                                                                                  |
+| -------- | ---------- | -------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Alibaba  | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                               |
+| BytePlus | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
+| ComfyUI  | Yes        | Yes            | No             | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                                               |
+| fal      | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
+| Google   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; shared `videoToVideo` skipped because the current buffer-backed Gemini/Veo sweep does not accept that input  |
+| MiniMax  | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
+| OpenAI   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; shared `videoToVideo` skipped because this org/input path currently needs provider-side inpaint/remix access |
+| Qwen     | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                               |
+| Runway   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                      |
+| Together | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
+| Vydra    | Yes        | Yes            | No             | `generate`; shared `imageToVideo` skipped because bundled `veo3` is text-only and bundled `kling` requires a remote image URL            |
+| xAI      | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider currently needs a remote MP4 URL                                |
 
 ## Tool parameters
 
@@ -140,7 +140,7 @@ and the shared live sweep.
 | Parameter         | Type    | Description                                                              |
 | ----------------- | ------- | ------------------------------------------------------------------------ |
 | `aspectRatio`     | string  | `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9`  |
-| `resolution`      | string  | `480P`, `720P`, or `1080P`                                               |
+| `resolution`      | string  | `480P`, `720P`, `768P`, or `1080P`                                       |
 | `durationSeconds` | number  | Target duration in seconds (rounded to nearest provider-supported value) |
 | `size`            | string  | Size hint when the provider supports it                                  |
 | `audio`           | boolean | Enable generated audio when supported                                    |
@@ -254,6 +254,12 @@ Opt-in live coverage for the shared bundled providers:
 OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/video-generation-providers.live.test.ts
 ```
 
+Repo wrapper:
+
+```bash
+pnpm test:live:media video
+```
+
 This live file loads missing provider env vars from `~/.profile`, prefers
 live/env API keys ahead of stored auth profiles by default, and runs the
 declared modes it can exercise safely with local media:
@@ -265,8 +271,6 @@ declared modes it can exercise safely with local media:
 
 Today the shared `videoToVideo` live lane covers:
 
-- `google`
-- `openai`
 - `runway` only when you select `runway/gen4_aleph`
 
 ## Configuration

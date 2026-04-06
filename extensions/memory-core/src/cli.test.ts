@@ -22,14 +22,31 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
 );
 
 vi.mock("./cli.host.runtime.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./cli.host.runtime.js")>("./cli.host.runtime.js");
+  const [runtimeCli, runtimeCore, runtimeFiles] = await Promise.all([
+    import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
+    import("openclaw/plugin-sdk/memory-core-host-runtime-core"),
+    import("openclaw/plugin-sdk/memory-core-host-runtime-files"),
+  ]);
   return {
-    ...actual,
+    colorize: runtimeCli.colorize,
+    defaultRuntime: runtimeCli.defaultRuntime,
+    formatErrorMessage: runtimeCli.formatErrorMessage,
     getMemorySearchManager,
+    isRich: runtimeCli.isRich,
+    listMemoryFiles: runtimeFiles.listMemoryFiles,
     loadConfig,
+    normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
+    resolveSessionTranscriptsDirForAgent: runtimeCore.resolveSessionTranscriptsDirForAgent,
+    resolveStateDir: runtimeCore.resolveStateDir,
+    setVerbose: runtimeCli.setVerbose,
+    shortenHomeInString: runtimeCli.shortenHomeInString,
+    shortenHomePath: runtimeCli.shortenHomePath,
+    theme: runtimeCli.theme,
+    withManager: runtimeCli.withManager,
+    withProgress: runtimeCli.withProgress,
+    withProgressTotals: runtimeCli.withProgressTotals,
   };
 });
 

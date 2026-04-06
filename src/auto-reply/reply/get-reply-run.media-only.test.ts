@@ -123,10 +123,10 @@ function createGatewayDrainingError(): Error {
 }
 
 async function loadFreshGetReplyRunModuleForTest() {
-  ({ runPreparedReply } = await importFreshModule<typeof import("./get-reply-run.js")>(
+  return await importFreshModule<typeof import("./get-reply-run.js")>(
     import.meta.url,
     `./get-reply-run.js?scope=media-only-${loadScopeCounter++}`,
-  ));
+  );
 }
 
 function baseParams(
@@ -207,6 +207,7 @@ function baseParams(
 
 describe("runPreparedReply media-only handling", () => {
   beforeAll(async () => {
+    ({ runPreparedReply } = await import("./get-reply-run.js"));
     ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
     ({ routeReply } = await import("./route-reply.runtime.js"));
     ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
@@ -250,7 +251,6 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(piRuntime.waitForEmbeddedPiRunEnd).mockImplementation((sessionId, timeoutMs) =>
       waitForEmbeddedPiRunEndActual(sessionId, timeoutMs),
     );
-    await loadFreshGetReplyRunModuleForTest();
   });
 
   it("does not load session store runtime on module import", async () => {

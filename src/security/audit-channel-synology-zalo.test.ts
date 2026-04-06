@@ -53,9 +53,7 @@ function createSynologyChatAccount(params: {
 }): ResolvedSynologyChatAccount {
   const channel = params.cfg.channels?.["synology-chat"] ?? {};
   const accountConfig =
-    params.accountId === "default"
-      ? channel
-      : ((channel.accounts as Record<string, unknown> | undefined)?.[params.accountId] ?? {});
+    params.accountId === "default" ? channel : (channel.accounts?.[params.accountId] ?? {});
   return {
     accountId: params.accountId,
     dangerouslyAllowNameMatching:

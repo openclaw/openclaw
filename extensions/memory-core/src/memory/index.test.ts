@@ -165,12 +165,6 @@ describe("memory index", () => {
     indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
     indexFtsOnlyPath = path.join(workspaceDir, "index-fts-only.sqlite");
     sourceChangeStateDir = path.join(fixtureRoot, "state-source-change");
-
-    await fs.mkdir(memoryDir, { recursive: true });
-    await fs.writeFile(
-      path.join(memoryDir, "2026-01-12.md"),
-      "# Log\nAlpha memory line.\nZebra memory line.",
-    );
   });
 
   afterAll(async () => {
@@ -195,10 +189,12 @@ describe("memory index", () => {
     providerCalls = [];
     forceNoProvider = false;
 
+    rmSync(workspaceDir, { recursive: true, force: true });
     mkdirSync(memoryDir, { recursive: true });
-
-    // Clean additional paths that may have been created by earlier cases.
-    rmSync(extraDir, { recursive: true, force: true });
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-12.md"),
+      "# Log\nAlpha memory line.\nZebra memory line.",
+    );
   });
 
   function resetManagerForTest(manager: MemoryIndexManager) {

@@ -66,26 +66,28 @@ function extractTracks(params: { payload: GoogleGenerateMusicResponse; model: st
 } {
   const lyrics: string[] = [];
   const tracks: GeneratedMusicAsset[] = [];
-  for (const part of params.payload.candidates?.[0]?.content?.parts ?? []) {
-    if (part.text?.trim()) {
-      lyrics.push(part.text.trim());
-      continue;
-    }
-    const inline = part.inlineData ?? part.inline_data;
-    const data = inline?.data?.trim();
-    if (!data) {
-      continue;
-    }
-    const mimeType = inline?.mimeType?.trim() || inline?.mime_type?.trim() || "audio/mpeg";
-    tracks.push({
-      buffer: Buffer.from(data, "base64"),
-      mimeType,
-      fileName: resolveTrackFileName({
-        index: tracks.length,
+  for (const candidate of params.payload.candidates ?? []) {
+    for (const part of candidate.content?.parts ?? []) {
+      if (part.text?.trim()) {
+        lyrics.push(part.text.trim());
+        continue;
+      }
+      const inline = part.inlineData ?? part.inline_data;
+      const data = inline?.data?.trim();
+      if (!data) {
+        continue;
+      }
+      const mimeType = inline?.mimeType?.trim() || inline?.mime_type?.trim() || "audio/mpeg";
+      tracks.push({
+        buffer: Buffer.from(data, "base64"),
         mimeType,
-        model: params.model,
-      }),
-    });
+        fileName: resolveTrackFileName({
+          index: tracks.length,
+          mimeType,
+          model: params.model,
+        }),
+      });
+    }
   }
   return { tracks, lyrics };
 }

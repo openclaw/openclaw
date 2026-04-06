@@ -1,11 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
-import {
-  adaptScopedAccountAccessor,
-  createScopedChannelConfigAdapter,
-} from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -29,6 +23,13 @@ import {
   DEFAULT_ACCOUNT_ID,
   type ChannelPlugin,
 } from "./channel-api.js";
+import {
+  describeMattermostAccount,
+  isMattermostConfigured,
+  mattermostConfigAdapter,
+  mattermostMeta as meta,
+  normalizeMattermostAllowEntry as normalizeAllowEntry,
+} from "./channel-config-shared.js";
 import { MattermostChannelConfigSchema } from "./config-surface.js";
 import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
@@ -241,19 +242,6 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   },
 };
 
-const meta = {
-  id: "mattermost",
-  label: "Mattermost",
-  selectionLabel: "Mattermost (plugin)",
-  detailLabel: "Mattermost Bot",
-  docsPath: "/channels/mattermost",
-  docsLabel: "mattermost",
-  blurb: "self-hosted Slack-style chat; install the plugin to enable.",
-  systemImage: "bubble.left.and.bubble.right",
-  order: 65,
-  quickstartAllowFrom: true,
-} as const;
-
 function readTrimmedString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -288,40 +276,6 @@ function readMattermostReplyToId(params: Record<string, unknown>): string | unde
   return readTrimmedString(params.replyToId) ?? readTrimmedString(params.replyTo);
 }
 
-function normalizeAllowEntry(entry: string): string {
-  return entry
-    .trim()
-    .replace(/^(mattermost|user):/i, "")
-    .replace(/^@/, "")
-    .toLowerCase();
-}
-
-function formatAllowEntry(entry: string): string {
-  const trimmed = entry.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed.startsWith("@")) {
-    const username = trimmed.slice(1).trim();
-    return username ? `@${username.toLowerCase()}` : "";
-  }
-  return trimmed.replace(/^(mattermost|user):/i, "").toLowerCase();
-}
-
-const mattermostConfigAdapter = createScopedChannelConfigAdapter<ResolvedMattermostAccount>({
-  sectionKey: "mattermost",
-  listAccountIds: listMattermostAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveMattermostAccount),
-  defaultAccountId: resolveDefaultMattermostAccountId,
-  clearBaseFields: ["botToken", "baseUrl", "name"],
-  resolveAllowFrom: (account: ResolvedMattermostAccount) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) =>
-    formatNormalizedAllowFromEntries({
-      allowFrom,
-      normalizeEntry: formatAllowEntry,
-    }),
-});
-
 export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = createChatChannelPlugin({
   base: {
     id: "mattermost",
@@ -344,16 +298,8 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,
-      isConfigured: (account) => Boolean(account.botToken && account.baseUrl),
-      describeAccount: (account) =>
-        describeAccountSnapshot({
-          account,
-          configured: Boolean(account.botToken && account.baseUrl),
-          extra: {
-            botTokenSource: account.botTokenSource,
-            baseUrl: account.baseUrl,
-          },
-        }),
+      isConfigured: isMattermostConfigured,
+      describeAccount: describeMattermostAccount,
     },
     auth: mattermostApprovalAuth,
     doctor: mattermostDoctor,
@@ -441,7 +387,9 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       resolveGatewayAuthBypassPaths: ({ cfg }) => {
         const base = cfg.channels?.mattermost;
         const callbackPaths = new Set(
-          collectMattermostSlashCallbackPaths(base?.commands).filter(
+          collectMattermostSlashCallbackPaths(
+            base?.commands as Partial<MattermostSlashCommandConfig> | undefined,
+          ).filter(
             (path) =>
               path === "/api/channels/mattermost/command" ||
               path.startsWith("/api/channels/mattermost/"),

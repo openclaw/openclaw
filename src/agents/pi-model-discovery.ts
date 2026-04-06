@@ -6,11 +6,13 @@ import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   normalizeProviderResolvedModelWithPlugin,
+  resolveProviderSyntheticAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
@@ -243,6 +245,36 @@ function resolvePiCredentials(agentDir: string): PiCredentialMap {
     credentials[provider] = {
       type: "api_key",
       key: resolved.apiKey,
+    };
+  }
+  const syntheticProviders = new Set<string>();
+  for (const plugin of loadPluginManifestRegistry().plugins) {
+    for (const provider of plugin.providers) {
+      syntheticProviders.add(provider);
+    }
+    for (const backend of plugin.cliBackends) {
+      syntheticProviders.add(backend);
+    }
+  }
+  for (const provider of syntheticProviders) {
+    if (credentials[provider]) {
+      continue;
+    }
+    const resolved = resolveProviderSyntheticAuthWithPlugin({
+      provider,
+      context: {
+        config: undefined,
+        provider,
+        providerConfig: undefined,
+      },
+    });
+    const apiKey = resolved?.apiKey?.trim();
+    if (!apiKey) {
+      continue;
+    }
+    credentials[provider] = {
+      type: "api_key",
+      key: apiKey,
     };
   }
   return credentials;

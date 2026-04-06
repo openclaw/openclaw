@@ -26,6 +26,7 @@ import {
   isPluginSdkLightTarget,
   resolvePluginSdkLightIncludePattern,
 } from "../vitest.plugin-sdk-paths.mjs";
+import { fullSuiteVitestShards } from "../vitest.test-shards.mjs";
 import { isBoundaryTestFile, isBundledPluginDependentUnitTestFile } from "../vitest.unit-paths.mjs";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 
@@ -650,6 +651,26 @@ export function buildVitestRunPlans(
     });
   }
   return plans;
+}
+
+export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
+  const { forwardedArgs, watchMode } = parseTestProjectsArgs(args, cwd);
+  if (watchMode) {
+    return [
+      {
+        config: "vitest.config.ts",
+        forwardedArgs,
+        includePatterns: null,
+        watchMode,
+      },
+    ];
+  }
+  return fullSuiteVitestShards.map((shard) => ({
+    config: shard.config,
+    forwardedArgs,
+    includePatterns: null,
+    watchMode: false,
+  }));
 }
 
 export function createVitestRunSpecs(args, params = {}) {

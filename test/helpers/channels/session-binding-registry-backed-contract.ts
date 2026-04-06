@@ -11,7 +11,6 @@ import {
   telegramPlugin,
   resetTelegramThreadBindingsForTests,
 } from "../../../extensions/telegram/test-api.js";
-import { getSessionBindingContractRegistry } from "../../../src/channels/plugins/contracts/registry-session-binding.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -26,6 +25,7 @@ import { resetPluginRuntimeStateForTest } from "../../../src/plugins/runtime.js"
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/index.js";
 import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
+import { getSessionBindingContractRegistry } from "./registry-session-binding.js";
 
 type DiscordThreadBindingTesting = {
   resetThreadBindingsForTests: () => void;

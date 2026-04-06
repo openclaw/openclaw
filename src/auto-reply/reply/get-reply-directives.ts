@@ -41,6 +41,44 @@ function loadSkillCommands() {
   return skillCommandsPromise;
 }
 
+function resolveDirectiveCommandText(params: { ctx: MsgContext; sessionCtx: TemplateContext }) {
+  const commandSource =
+    params.sessionCtx.BodyForCommands ??
+    params.sessionCtx.CommandBody ??
+    params.sessionCtx.RawBody ??
+    params.sessionCtx.Transcript ??
+    params.sessionCtx.BodyStripped ??
+    params.sessionCtx.Body ??
+    params.ctx.BodyForCommands ??
+    params.ctx.CommandBody ??
+    params.ctx.RawBody ??
+    "";
+  const promptSource =
+    params.sessionCtx.BodyForAgent ??
+    params.sessionCtx.BodyStripped ??
+    params.sessionCtx.Body ??
+    "";
+  return {
+    commandSource,
+    promptSource,
+    commandText: commandSource || promptSource,
+  };
+}
+
+function resolveConfiguredDirectiveAliases(params: {
+  cfg: OpenClawConfig;
+  commandTextHasSlash: boolean;
+  reservedCommands: Set<string>;
+}) {
+  if (!params.commandTextHasSlash) {
+    return [];
+  }
+  return Object.values(params.cfg.agents?.defaults?.models ?? {})
+    .map((entry) => entry.alias?.trim())
+    .filter((alias): alias is string => Boolean(alias))
+    .filter((alias) => !params.reservedCommands.has(alias.toLowerCase()));
+}
+
 export type ReplyDirectiveContinuation = {
   commandSource: string;
   command: ReturnType<typeof buildCommandContext>;
@@ -173,19 +211,10 @@ export async function resolveReplyDirectives(params: {
 
   // Prefer CommandBody/RawBody (clean message without structural context) for directive parsing.
   // Keep `Body`/`BodyStripped` as the best-available prompt text (may include context).
-  const commandSource =
-    sessionCtx.BodyForCommands ??
-    sessionCtx.CommandBody ??
-    sessionCtx.RawBody ??
-    sessionCtx.Transcript ??
-    sessionCtx.BodyStripped ??
-    sessionCtx.Body ??
-    ctx.BodyForCommands ??
-    ctx.CommandBody ??
-    ctx.RawBody ??
-    "";
-  const promptSource = sessionCtx.BodyForAgent ?? sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  const commandText = commandSource || promptSource;
+  const { commandText } = resolveDirectiveCommandText({
+    ctx,
+    sessionCtx,
+  });
   const command = buildCommandContext({
     ctx,
     cfg,
@@ -211,12 +240,11 @@ export async function resolveReplyDirectives(params: {
     }
   }
 
-  const rawAliases = commandTextHasSlash
-    ? Object.values(cfg.agents?.defaults?.models ?? {})
-        .map((entry) => entry.alias?.trim())
-        .filter((alias): alias is string => Boolean(alias))
-        .filter((alias) => !reservedCommands.has(alias.toLowerCase()))
-    : [];
+  const rawAliases = resolveConfiguredDirectiveAliases({
+    cfg,
+    commandTextHasSlash,
+    reservedCommands,
+  });
 
   // Only load workspace skill commands when we actually need them to filter aliases.
   // This avoids scanning skills for messages that only use plain text with no slash syntax.

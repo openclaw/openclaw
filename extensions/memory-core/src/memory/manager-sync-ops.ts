@@ -46,6 +46,7 @@ import {
   type EmbeddingProviderRuntime,
   resolveEmbeddingProviderFallbackModel,
 } from "./embeddings.js";
+import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 
 type MemoryIndexMeta = {
   model: string;
@@ -671,23 +672,13 @@ export abstract class MemoryManagerSyncOps {
     params?: { reason?: string; force?: boolean; sessionFiles?: string[] },
     needsFullReindex = false,
   ) {
-    if (!this.sources.has("sessions")) {
-      return false;
-    }
-    if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
-      return true;
-    }
-    if (params?.force) {
-      return true;
-    }
-    if (needsFullReindex) {
-      return true;
-    }
-    const reason = params?.reason;
-    if (reason === "session-start" || reason === "watch") {
-      return false;
-    }
-    return this.sessionsDirty && this.sessionsDirtyFiles.size > 0;
+    return shouldSyncSessionsForReindex({
+      hasSessionSource: this.sources.has("sessions"),
+      sessionsDirty: this.sessionsDirty,
+      dirtySessionFileCount: this.sessionsDirtyFiles.size,
+      sync: params,
+      needsFullReindex,
+    });
   }
 
   private async syncMemoryFiles(params: {

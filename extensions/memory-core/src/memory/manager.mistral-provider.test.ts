@@ -3,26 +3,43 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings.js";
-import type {
-  EmbeddingProvider,
-  EmbeddingProviderRuntime,
-  EmbeddingProviderResult,
-} from "./embeddings.js";
 import type { MemoryIndexManager } from "./index.js";
 type MemoryIndexModule = typeof import("./index.js");
+type MemoryEmbeddingProvidersModule =
+  typeof import("../../../../src/plugins/memory-embedding-providers.js");
+
+const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
+
+type EmbeddingProvider = {
+  id: string;
+  model: string;
+  embedQuery: (text: string) => Promise<number[]>;
+  embedBatch: (texts: string[]) => Promise<number[][]>;
+};
+
+type EmbeddingProviderRuntime = {
+  id: string;
+  cacheKeyData: { provider: string; model: string };
+};
+
+type EmbeddingProviderResult = {
+  requestedProvider: string;
+  provider: EmbeddingProvider | null;
+  fallbackFrom?: string;
+  fallbackReason?: string;
+  providerUnavailableReason?: string;
+  runtime?: EmbeddingProviderRuntime;
+};
 
 const { createEmbeddingProviderMock } = vi.hoisted(() => ({
   createEmbeddingProviderMock: vi.fn(),
 }));
 
-vi.mock("./embeddings.js", async () => {
-  const actual = await vi.importActual<typeof import("./embeddings.js")>("./embeddings.js");
-  return {
-    ...actual,
-    createEmbeddingProvider: createEmbeddingProviderMock,
-  };
-});
+vi.mock("./embeddings.js", () => ({
+  createEmbeddingProvider: createEmbeddingProviderMock,
+  resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
+    providerId === "ollama" ? DEFAULT_OLLAMA_EMBEDDING_MODEL : fallbackSourceModel,
+}));
 
 vi.mock("./sqlite-vec.js", () => ({
   loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
@@ -76,15 +93,40 @@ describe("memory manager mistral provider wiring", () => {
   let workspaceDir = "";
   let indexPath = "";
   let manager: MemoryIndexManager | null = null;
+  let clearRegistry: MemoryEmbeddingProvidersModule["clearMemoryEmbeddingProviders"];
+  let registerAdapter: MemoryEmbeddingProvidersModule["registerMemoryEmbeddingProvider"];
 
   beforeAll(async () => {
     vi.resetModules();
     ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
+    ({
+      clearMemoryEmbeddingProviders: clearRegistry,
+      registerMemoryEmbeddingProvider: registerAdapter,
+    } = await import("../../../../src/plugins/memory-embedding-providers.js"));
   });
 
   beforeEach(async () => {
     vi.clearAllMocks();
     createEmbeddingProviderMock.mockReset();
+    clearRegistry();
+    registerAdapter({
+      id: "openai",
+      defaultModel: "text-embedding-3-small",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
+    registerAdapter({
+      id: "mistral",
+      defaultModel: "mistral-embed",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
+    registerAdapter({
+      id: "ollama",
+      defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-mistral-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
@@ -97,6 +139,7 @@ describe("memory manager mistral provider wiring", () => {
       manager = null;
     }
     await closeAllMemorySearchManagers();
+    clearRegistry();
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";

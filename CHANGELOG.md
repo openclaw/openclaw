@@ -38,9 +38,11 @@ Docs: https://docs.openclaw.ai
 - Gateway/containers: auto-bind to `0.0.0.0` during container startup for Docker and Podman compatibility, while keeping host-side status and doctor checks on the hardened loopback default when `gateway.bind` is unset. (#61818) Thanks @openperf.
 - Gateway/status: probe local TLS gateways over `wss://`, forward the local cert fingerprint for self-signed loopback probes, and warn when the local TLS runtime cannot load the configured cert. (#61935) Thanks @ThanhNguyxn07.
 - Slack/threading: keep legacy thread stickiness for real replies when older callers omit `isThreadReply`, while still honoring `replyToMode` for Slack's auto-created top-level `thread_ts`. (#61835) Thanks @kaonash.
+- Discord/voice: re-arm DAVE receive passthrough without suppressing decrypt-failure rejoin recovery, and clear capture state before finalize teardown so rapid speaker restarts keep their next utterance. (#41536) Thanks @wit-oc.
 - Providers/Google: recognize Gemma model ids in native Google forward-compat resolution, keep the requested provider when cloning fallback templates, and force Gemma reasoning off so Gemma 4 routes stop failing through the Google catalog fallback. (#61507) Thanks @eyjohn.
 - Providers/Anthropic: skip `service_tier` injection for OAuth-authenticated stream wrapper requests so Claude OAuth requests stop failing with HTTP 401. (#60356) thanks @openperf.
 - Providers/OpenAI: keep WebSocket text buffered until a real assistant phase arrives, even when text deltas land before a phaseless `output_item.added` announcement. (#61954) Thanks @100yenadmin.
+- Providers/OpenAI: accept case-insensitive `plugins.entries.openai.config.personality` values, keep unknown overrides on the friendly overlay path, and add `on` as an alias for `friendly`. Thanks @vincentkoc.
 - Discord/thread titles: stop forcing a hardcoded temperature for generated auto-thread names so Codex-backed thread title generation works on `openai-codex/*` models again. (#59525)
 - Agents/message tool: add a `read` plus `threadId` discoverability hint when the configured channel actions support threaded message reads.
 - Agents/context overflow: combine oversized and aggregate tool-result recovery in one repair pass, and restore a total-context overflow backstop during tool loops so recoverable sessions retry instead of failing early. (#61651) Thanks @Takhoffman.
@@ -56,6 +58,10 @@ Docs: https://docs.openclaw.ai
 - Docs/i18n: relocalize final localized-page links after translation so generated locale pages stop keeping stale English-root links when targets appear later in the same run. (#61796) thanks @hxy91819.
 - Docs/i18n: remove the zh-CN homepage redirect override so Mintlify can resolve the localized Chinese homepage without self-redirecting `/zh-CN/index`.
 - Tools/web_fetch and web_search: fix `TypeError: fetch failed` caused by undici 8.0 enabling HTTP/2 by default; pinned SSRF-guard dispatchers now explicitly set `allowH2: false` to restore HTTP/1.1 behavior and keep the custom DNS-pinning lookup compatible. (#61738, #61777) Thanks @zozo123.
+- Agents/session keys: backfill `sessionKey` from `sessionId` in the embedded PI runner when callers omit it, so hooks, LCM, and compaction receive a valid key; also normalize whitespace-only session keys to `undefined` before downstream consumers see them. (#60555) Thanks @100yenadmin.
+- Plugins/provider hooks: stop recursive provider snapshot loads from overflowing the stack during plugin initialization, while still preserving cached nested provider-hook results. (#61922, #61938, #61946, #61951)
+- Discord/voice: re-arm DAVE receive passthrough without suppressing decrypt-failure rejoin recovery, and clear capture state before finalize teardown so rapid speaker restarts keep their next utterance. (#41536) Thanks @wit-oc.
+
 ## 2026.4.5
 
 ### Breaking

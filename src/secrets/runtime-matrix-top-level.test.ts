@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as matrixSecrets from "../../extensions/matrix/src/secret-contract.ts";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -14,8 +15,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
-vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
-  const matrixSecrets = await import("../../extensions/matrix/src/secret-contract.ts");
+vi.mock("../channels/plugins/bootstrap-registry.js", () => {
   return {
     getBootstrapChannelPlugin: (id: string) =>
       id === "matrix"

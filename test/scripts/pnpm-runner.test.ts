@@ -94,6 +94,8 @@ describe("resolvePnpmRunner", () => {
     const env = { PATH: "/custom/bin", FOO: "bar" };
     expect(
       createPnpmRunnerSpawnSpec({
+        cwd: "/repo",
+        detached: true,
         npmExecPath: "",
         pnpmArgs: ["exec", "vitest", "run"],
         platform: "linux",
@@ -103,6 +105,8 @@ describe("resolvePnpmRunner", () => {
       command: "pnpm",
       args: ["exec", "vitest", "run"],
       options: {
+        cwd: "/repo",
+        detached: true,
         stdio: "inherit",
         env,
         shell: false,

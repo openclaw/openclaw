@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as matrixSecrets from "../../extensions/matrix/src/secret-contract.ts";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -15,8 +16,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
-vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
-  const matrixSecrets = await import("../../extensions/matrix/src/secret-contract.ts");
+vi.mock("../channels/plugins/bootstrap-registry.js", () => {
   return {
     getBootstrapChannelPlugin: (id: string) =>
       id === "matrix"
@@ -157,7 +157,10 @@ describe("secrets runtime snapshot matrix shadowing", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.matrix?.accounts?.ops?.password).toEqual({
+    expect(
+      (snapshot.config.channels?.matrix?.accounts?.ops as { password?: unknown } | undefined)
+        ?.password,
+    ).toEqual({
       source: "env",
       provider: "default",
       id: "MATRIX_OPS_PASSWORD",
@@ -331,7 +334,10 @@ describe("secrets runtime snapshot matrix shadowing", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.matrix?.accounts?.default?.password).toEqual({
+    expect(
+      (snapshot.config.channels?.matrix?.accounts?.default as { password?: unknown } | undefined)
+        ?.password,
+    ).toEqual({
       source: "env",
       provider: "default",
       id: "MATRIX_DEFAULT_PASSWORD",

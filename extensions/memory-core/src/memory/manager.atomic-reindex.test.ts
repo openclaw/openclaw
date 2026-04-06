@@ -10,6 +10,8 @@ let shouldFail = false;
 type EmbeddingTestMocksModule = typeof import("./embedding.test-mocks.js");
 type TestManagerHelpersModule = typeof import("./test-manager-helpers.js");
 type MemoryIndexModule = typeof import("./index.js");
+type MemoryEmbeddingProvidersModule =
+  typeof import("../../../../src/plugins/memory-embedding-providers.js");
 
 describe("memory manager atomic reindex", () => {
   let fixtureRoot = "";
@@ -21,6 +23,8 @@ describe("memory manager atomic reindex", () => {
   let resetEmbeddingMocks: EmbeddingTestMocksModule["resetEmbeddingMocks"];
   let getRequiredMemoryIndexManager: TestManagerHelpersModule["getRequiredMemoryIndexManager"];
   let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
+  let clearRegistry: MemoryEmbeddingProvidersModule["clearMemoryEmbeddingProviders"];
+  let registerAdapter: MemoryEmbeddingProvidersModule["registerMemoryEmbeddingProvider"];
 
   beforeAll(async () => {
     vi.resetModules();
@@ -29,11 +33,22 @@ describe("memory manager atomic reindex", () => {
     resetEmbeddingMocks = embeddingMocks.resetEmbeddingMocks;
     ({ getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js"));
     ({ closeAllMemorySearchManagers } = await import("./index.js"));
+    ({
+      clearMemoryEmbeddingProviders: clearRegistry,
+      registerMemoryEmbeddingProvider: registerAdapter,
+    } = await import("../../../../src/plugins/memory-embedding-providers.js"));
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-atomic-"));
   });
 
   beforeEach(async () => {
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    clearRegistry();
+    registerAdapter({
+      id: "openai",
+      defaultModel: "mock-embed",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
     resetEmbeddingMocks();
     shouldFail = false;
     embedBatch.mockImplementation(async (texts: string[]) => {
@@ -55,6 +70,7 @@ describe("memory manager atomic reindex", () => {
       manager = null;
     }
     await closeAllMemorySearchManagers();
+    clearRegistry();
     vi.unstubAllEnvs();
   });
 
@@ -75,7 +91,7 @@ describe("memory manager atomic reindex", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
-            store: { path: indexPath },
+            store: { path: indexPath, vector: { enabled: false } },
             cache: { enabled: false },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
             chunking: { tokens: 4000, overlap: 0 },

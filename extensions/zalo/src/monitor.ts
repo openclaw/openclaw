@@ -700,18 +700,38 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       };
       runtime.log?.(`[${account.accountId}] Zalo webhook registered path=${path}`);
 
-      const unregister = registerZaloWebhookTarget({
-        token,
-        account,
-        config,
-        runtime,
-        core,
-        path,
-        secret: webhookSecret,
-        statusSink: (patch) => statusSink?.(patch),
-        mediaMaxMb: effectiveMediaMaxMb,
-        fetcher,
-      });
+      const unregister = registerZaloWebhookTarget(
+        {
+          token,
+          account,
+          config,
+          runtime,
+          core,
+          path,
+          secret: webhookSecret,
+          statusSink: (patch) => statusSink?.(patch),
+          mediaMaxMb: effectiveMediaMaxMb,
+          fetcher,
+        },
+        {
+          route: {
+            auth: "plugin",
+            match: "exact",
+            pluginId: "zalo",
+            source: "zalo-webhook",
+            accountId: account.accountId,
+            log: runtime.log,
+            handler: async (req, res) => {
+              const handled = await handleZaloWebhookRequest(req, res);
+              if (!handled && !res.headersSent) {
+                res.statusCode = 404;
+                res.setHeader("Content-Type", "text/plain; charset=utf-8");
+                res.end("Not Found");
+              }
+            },
+          },
+        },
+      );
       stopHandlers.push(unregister);
       await waitForAbortSignal(abortSignal);
       return;

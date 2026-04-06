@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { ensureModelAllowlistEntry } from "./provider-model-allowlist.js";
-import { applyAgentDefaultPrimaryModel } from "./provider-model-primary.js";
 export {
   applyOpencodeZenModelDefault,
   OPENCODE_ZEN_DEFAULT_MODEL,
-} from "../../extensions/opencode/api.js";
+} from "../plugin-sdk/opencode.js";
+import { ensureModelAllowlistEntry } from "./provider-model-allowlist.js";
+import { applyAgentDefaultPrimaryModel } from "./provider-model-primary.js";
 
 export const OPENAI_DEFAULT_MODEL = "openai/gpt-5.4";
 export const OPENAI_CODEX_DEFAULT_MODEL = "openai-codex/gpt-5.4";

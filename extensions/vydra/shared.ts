@@ -1,4 +1,11 @@
-import { assertOkOrThrowHttpError, fetchWithTimeout } from "openclaw/plugin-sdk/provider-http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  assertOkOrThrowHttpError,
+  fetchWithTimeout,
+  resolveProviderHttpRequestConfig,
+} from "openclaw/plugin-sdk/provider-http";
+import type { AuthStoreDataV1 } from "openclaw/plugin-sdk/provider-types";
 
 export const DEFAULT_VYDRA_BASE_URL = "https://www.vydra.ai/api/v1";
 export const DEFAULT_VYDRA_IMAGE_MODEL = "grok-imagine";
@@ -72,6 +79,50 @@ export function resolveVydraBaseUrlFromConfig(cfg: unknown): string {
   const providers = asObject(models?.providers);
   const vydra = asObject(providers?.vydra);
   return normalizeVydraBaseUrl(trimToUndefined(vydra?.baseUrl));
+}
+
+export async function resolveVydraRequestContext(params: {
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  authStore?: AuthStoreDataV1;
+  capability: "image" | "video";
+}): Promise<{
+  fetchFn: typeof fetch;
+  baseUrl: string;
+  allowPrivateNetwork: boolean;
+  headers: Headers;
+  dispatcherPolicy: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
+}> {
+  const auth = await resolveApiKeyForProvider({
+    provider: "vydra",
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    store: params.authStore,
+  });
+  if (!auth.apiKey) {
+    throw new Error("Vydra API key missing");
+  }
+  const fetchFn = fetch;
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+    resolveProviderHttpRequestConfig({
+      baseUrl: resolveVydraBaseUrlFromConfig(params.cfg),
+      defaultBaseUrl: DEFAULT_VYDRA_BASE_URL,
+      allowPrivateNetwork: false,
+      defaultHeaders: {
+        Authorization: `Bearer ${auth.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      provider: "vydra",
+      capability: params.capability,
+      transport: "http",
+    });
+  return {
+    fetchFn,
+    baseUrl,
+    allowPrivateNetwork,
+    headers,
+    dispatcherPolicy,
+  };
 }
 
 export function resolveVydraResponseJobId(payload: unknown): string | undefined {
@@ -215,4 +266,33 @@ export async function waitForVydraJob(params: {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
   throw new Error(`Vydra job ${params.jobId} did not finish in time`);
+}
+
+export async function resolveCompletedVydraPayload(params: {
+  submitted: unknown;
+  baseUrl: string;
+  headers: Headers;
+  timeoutMs?: number;
+  fetchFn: typeof fetch;
+  kind: VydraMediaKind;
+  missingJobIdMessage: string;
+}): Promise<unknown> {
+  if (
+    resolveVydraResponseStatus(params.submitted) === "completed" ||
+    extractVydraResultUrls(params.submitted, params.kind).length > 0
+  ) {
+    return params.submitted;
+  }
+  const jobId = resolveVydraResponseJobId(params.submitted);
+  if (!jobId) {
+    throw new Error(resolveVydraErrorMessage(params.submitted) ?? params.missingJobIdMessage);
+  }
+  return waitForVydraJob({
+    baseUrl: params.baseUrl,
+    jobId,
+    headers: params.headers,
+    timeoutMs: params.timeoutMs,
+    fetchFn: params.fetchFn,
+    kind: params.kind,
+  });
 }

@@ -3,7 +3,6 @@ import { type FSWatcher } from "chokidar";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveGlobalSingleton,
   resolveMemorySearchConfig,
   createSubsystemLogger,
   type OpenClawConfig,
@@ -28,6 +27,12 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
+import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
+import {
+  closeManagedCacheEntries,
+  getOrCreateManagedCacheEntry,
+  resolveSingletonManagedCache,
+} from "./manager-cache.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 const SNIPPET_MAX_CHARS = 700;
@@ -37,26 +42,11 @@ const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const BATCH_FAILURE_LIMIT = 2;
 
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
-type MemoryIndexManagerCacheStore = {
-  indexCache: Map<string, MemoryIndexManager>;
-  indexCachePending: Map<string, Promise<MemoryIndexManager>>;
-};
-
-function getMemoryIndexManagerCacheStore(): MemoryIndexManagerCacheStore {
-  // Keep manager caches reachable across `vi.resetModules()` so cleanup still reaches older managers.
-  return resolveGlobalSingleton<MemoryIndexManagerCacheStore>(
-    MEMORY_INDEX_MANAGER_CACHE_KEY,
-    () => ({
-      indexCache: new Map<string, MemoryIndexManager>(),
-      indexCachePending: new Map<string, Promise<MemoryIndexManager>>(),
-    }),
-  );
-}
 
 const log = createSubsystemLogger("memory");
 
-const { indexCache: INDEX_CACHE, indexCachePending: INDEX_CACHE_PENDING } =
-  getMemoryIndexManagerCacheStore();
+const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
+  resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
 
 type MemoryReadonlyRecoveryState = {
   closed: boolean;
@@ -174,19 +164,13 @@ export async function runMemorySyncWithReadonlyRecovery(
 }
 
 export async function closeAllMemoryIndexManagers(): Promise<void> {
-  const pending = Array.from(INDEX_CACHE_PENDING.values());
-  if (pending.length > 0) {
-    await Promise.allSettled(pending);
-  }
-  const managers = Array.from(INDEX_CACHE.values());
-  INDEX_CACHE.clear();
-  for (const manager of managers) {
-    try {
-      await manager.close();
-    } catch (err) {
+  await closeManagedCacheEntries({
+    cache: INDEX_CACHE,
+    pending: INDEX_CACHE_PENDING,
+    onCloseError: (err) => {
       log.warn(`failed to close memory index manager: ${String(err)}`);
-    }
-  }
+    },
+  });
 }
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
@@ -285,48 +269,21 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const purpose = params.purpose === "status" ? "status" : "default";
     const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}`;
     const statusOnly = params.purpose === "status";
-    if (statusOnly) {
-      return new MemoryIndexManager({
-        cacheKey: key,
-        cfg,
-        agentId,
-        workspaceDir,
-        settings,
-        purpose: params.purpose,
-      });
-    }
-    const existing = INDEX_CACHE.get(key);
-    if (existing) {
-      return existing;
-    }
-    const pending = INDEX_CACHE_PENDING.get(key);
-    if (pending) {
-      return pending;
-    }
-    const createPromise = (async () => {
-      const refreshed = INDEX_CACHE.get(key);
-      if (refreshed) {
-        return refreshed;
-      }
-      const manager = new MemoryIndexManager({
-        cacheKey: key,
-        cfg,
-        agentId,
-        workspaceDir,
-        settings,
-        purpose: params.purpose,
-      });
-      INDEX_CACHE.set(key, manager);
-      return manager;
-    })();
-    INDEX_CACHE_PENDING.set(key, createPromise);
-    try {
-      return await createPromise;
-    } finally {
-      if (INDEX_CACHE_PENDING.get(key) === createPromise) {
-        INDEX_CACHE_PENDING.delete(key);
-      }
-    }
+    return await getOrCreateManagedCacheEntry({
+      cache: INDEX_CACHE,
+      pending: INDEX_CACHE_PENDING,
+      key,
+      bypassCache: statusOnly,
+      create: async () =>
+        new MemoryIndexManager({
+          cacheKey: key,
+          cfg,
+          agentId,
+          workspaceDir,
+          settings,
+          purpose: params.purpose,
+        }),
+    });
   }
 
   private constructor(params: {
@@ -440,11 +397,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return [];
     }
     void this.warmSession(opts?.sessionKey);
-    if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
-      void this.sync({ reason: "search" }).catch((err) => {
+    startAsyncSearchSync({
+      enabled: this.settings.sync.onSearch,
+      dirty: this.dirty,
+      sessionsDirty: this.sessionsDirty,
+      sync: async (params) => await this.sync(params),
+      onError: (err) => {
         log.warn(`memory sync failed (search): ${String(err)}`);
-      });
-    }
+      },
+    });
     const hasIndexedContent = this.hasIndexedContent();
     if (!hasIndexedContent) {
       return [];
@@ -982,16 +943,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;
     }
-    if (pendingSync) {
-      try {
-        await pendingSync;
-      } catch {}
-    }
-    if (pendingProviderInit) {
-      try {
-        await pendingProviderInit;
-      } catch {}
-    }
+    await awaitPendingManagerWork({ pendingSync, pendingProviderInit });
     this.db.close();
     INDEX_CACHE.delete(this.cacheKey);
   }

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -9,7 +10,6 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
-import { applyMergePatch } from "../../config/merge-patch.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -18,6 +18,11 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
+import {
+  initFastReplySessionState,
+  resolveGetReplyConfig,
+  shouldUseReplyFastTestBootstrap,
+} from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
@@ -135,10 +140,15 @@ export async function getReplyFromConfig(
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
-  const cfg =
-    configOverride == null
-      ? loadConfig()
-      : (applyMergePatch(loadConfig(), configOverride) as OpenClawConfig);
+  const cfg = resolveGetReplyConfig({
+    loadConfig,
+    isFastTestEnv,
+    configOverride,
+  });
+  const useFastTestBootstrap = shouldUseReplyFastTestBootstrap({
+    isFastTestEnv,
+    configOverride,
+  });
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
@@ -181,10 +191,12 @@ export async function getReplyFromConfig(
   }
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
-  const workspace = await ensureAgentWorkspace({
-    dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-  });
+  const workspace = useFastTestBootstrap
+    ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
+    : await ensureAgentWorkspace({
+        dir: workspaceDirRaw,
+        ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+      });
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
@@ -227,11 +239,19 @@ export async function getReplyFromConfig(
     cfg,
     commandAuthorized,
   });
-  const sessionState = await initSessionState({
-    ctx: finalized,
-    cfg,
-    commandAuthorized,
-  });
+  const sessionState = useFastTestBootstrap
+    ? initFastReplySessionState({
+        ctx: finalized,
+        cfg,
+        agentId,
+        commandAuthorized,
+        workspaceDir,
+      })
+    : await initSessionState({
+        ctx: finalized,
+        cfg,
+        commandAuthorized,
+      });
   let {
     sessionCtx,
     sessionEntry,
@@ -434,32 +454,34 @@ export async function getReplyFromConfig(
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
-  const { getGlobalHookRunner } = await loadHookRunnerGlobal();
-  const hookRunner = getGlobalHookRunner();
-  if (hookRunner?.hasHooks("before_agent_reply")) {
-    const { resolveOriginMessageProvider } = await loadOriginRouting();
-    const hookMessageProvider = resolveOriginMessageProvider({
-      originatingChannel: sessionCtx.OriginatingChannel,
-      provider: sessionCtx.Provider,
-    });
-    const hookResult = await hookRunner.runBeforeAgentReply(
-      { cleanedBody },
-      {
-        agentId,
-        sessionKey: agentSessionKey,
-        sessionId,
-        workspaceDir,
-        messageProvider: hookMessageProvider,
-        trigger: opts?.isHeartbeat ? "heartbeat" : "user",
-        channelId: hookMessageProvider,
-      },
-    );
-    if (hookResult?.handled) {
-      return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+  if (!useFastTestBootstrap) {
+    const { getGlobalHookRunner } = await loadHookRunnerGlobal();
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("before_agent_reply")) {
+      const { resolveOriginMessageProvider } = await loadOriginRouting();
+      const hookMessageProvider = resolveOriginMessageProvider({
+        originatingChannel: sessionCtx.OriginatingChannel,
+        provider: sessionCtx.Provider,
+      });
+      const hookResult = await hookRunner.runBeforeAgentReply(
+        { cleanedBody },
+        {
+          agentId,
+          sessionKey: agentSessionKey,
+          sessionId,
+          workspaceDir,
+          messageProvider: hookMessageProvider,
+          trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+          channelId: hookMessageProvider,
+        },
+      );
+      if (hookResult?.handled) {
+        return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+      }
     }
   }
 
-  if (sessionKey && hasInboundMedia(ctx)) {
+  if (!useFastTestBootstrap && sessionKey && hasInboundMedia(ctx)) {
     const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
     await stageSandboxMedia({
       ctx,

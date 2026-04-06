@@ -26,21 +26,42 @@ export type ChannelDefaultsConfig = {
 
 export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
 
+export type ExtensionNestedPolicyConfig = {
+  policy?: string;
+  allowFrom?: Array<string | number> | ReadonlyArray<string | number>;
+  [key: string]: unknown;
+};
+
 /**
  * Base type for extension channel config sections.
  * Extensions can use this as a starting point for their channel config.
  */
 export type ExtensionChannelConfig = {
   enabled?: boolean;
-  allowFrom?: string | string[];
+  allowFrom?: Array<string | number> | ReadonlyArray<string | number>;
   /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
-  defaultTo?: string;
+  defaultTo?: string | number;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
   dmPolicy?: string;
   groupPolicy?: GroupPolicy;
   contextVisibility?: ContextVisibilityMode;
   healthMonitor?: ChannelHealthMonitorConfig;
+  dm?: ExtensionNestedPolicyConfig;
+  network?: Record<string, unknown>;
+  groups?: Record<string, unknown>;
+  rooms?: Record<string, unknown>;
+  mediaMaxMb?: number;
+  callbackBaseUrl?: string;
+  interactions?: { callbackBaseUrl?: string; [key: string]: unknown };
+  execApprovals?: Record<string, unknown>;
+  threadBindings?: {
+    enabled?: boolean;
+    spawnAcpSessions?: boolean;
+    spawnSubagentSessions?: boolean;
+  };
+  spawnSubagentSessions?: boolean;
+  dangerouslyAllowPrivateNetwork?: boolean;
   accounts?: Record<string, unknown>;
   [key: string]: unknown;
 };
@@ -50,5 +71,6 @@ export interface ChannelsConfig {
   /** Map provider -> channel id -> model override. */
   modelByChannel?: ChannelModelByChannelConfig;
   /** Channel sections are plugin-owned; concrete channel files augment this interface. */
-  [key: string]: unknown;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
 }

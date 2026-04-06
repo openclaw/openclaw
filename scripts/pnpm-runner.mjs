@@ -44,6 +44,8 @@ export function createPnpmRunnerSpawnSpec(params = {}) {
     command: runner.command,
     args: runner.args,
     options: {
+      cwd: params.cwd,
+      detached: params.detached,
       stdio: params.stdio ?? "inherit",
       env: params.env ?? runner.env ?? process.env,
       shell: runner.shell,

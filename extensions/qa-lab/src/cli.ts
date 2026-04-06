@@ -57,6 +57,19 @@ async function runQaDockerBuildImage(opts: { image?: string }) {
   await runtime.runQaDockerBuildImageCommand(opts);
 }
 
+async function runQaDockerUp(opts: {
+  outputDir?: string;
+  gatewayPort?: number;
+  qaLabPort?: number;
+  providerBaseUrl?: string;
+  image?: string;
+  usePrebuiltImage?: boolean;
+  skipUiBuild?: boolean;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaDockerUpCommand(opts);
+}
+
 async function runQaMockOpenAi(opts: { host?: string; port?: number }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaMockOpenAiCommand(opts);
@@ -164,6 +177,29 @@ export function registerQaLabCli(program: Command) {
     .action(async (opts: { image?: string }) => {
       await runQaDockerBuildImage(opts);
     });
+
+  qa.command("up")
+    .description("Build the QA site, start the Docker-backed QA stack, and print the QA Lab URL")
+    .option("--output-dir <path>", "Output directory for docker-compose + state files")
+    .option("--gateway-port <port>", "Gateway host port", (value: string) => Number(value))
+    .option("--qa-lab-port <port>", "QA lab host port", (value: string) => Number(value))
+    .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
+    .option("--image <name>", "Image tag", "openclaw:qa-local-prebaked")
+    .option("--use-prebuilt-image", "Use image: instead of build: in docker-compose", false)
+    .option("--skip-ui-build", "Skip pnpm qa:lab:build before starting Docker", false)
+    .action(
+      async (opts: {
+        outputDir?: string;
+        gatewayPort?: number;
+        qaLabPort?: number;
+        providerBaseUrl?: string;
+        image?: string;
+        usePrebuiltImage?: boolean;
+        skipUiBuild?: boolean;
+      }) => {
+        await runQaDockerUp(opts);
+      },
+    );
 
   qa.command("mock-openai")
     .description("Run the local mock OpenAI Responses API server for QA")

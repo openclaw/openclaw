@@ -13,6 +13,7 @@ import {
   loadModelCatalogMock,
   runEmbeddedPiAgentMock,
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 type RunPreparedReply = typeof import("./reply/get-reply-run.js").runPreparedReply;
@@ -136,7 +137,7 @@ export function makeWhatsAppDirectiveConfig(
   defaults: Record<string, unknown>,
   extra: Record<string, unknown> = {},
 ) {
-  return {
+  return withFastReplyConfig({
     agents: {
       defaults: {
         workspace: path.join(home, "openclaw"),
@@ -146,7 +147,7 @@ export function makeWhatsAppDirectiveConfig(
     channels: { whatsapp: { allowFrom: ["*"] } },
     session: { store: sessionStorePath(home) },
     ...extra,
-  };
+  });
 }
 
 export const AUTHORIZED_WHATSAPP_COMMAND = {

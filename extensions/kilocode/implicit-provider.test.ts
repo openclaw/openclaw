@@ -1,9 +1,9 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { captureEnv } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
 import { resolveImplicitProvidersForTest } from "../../src/agents/models-config.e2e-harness.js";
-import { captureEnv } from "../../src/test-utils/env.js";
 
 describe("Kilo Gateway implicit provider", () => {
   it("should include kilocode when KILOCODE_API_KEY is configured", async () => {

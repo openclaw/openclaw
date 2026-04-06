@@ -5,6 +5,11 @@ import {
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import type {
+  ChannelDoctorConfigMutation,
+  ChannelDoctorLegacyConfigRule,
+} from "./channel-contract.js";
+import type { OpenClawConfig } from "./config-runtime.js";
 
 export { isPrivateIpAddress };
 export type { SsrFPolicy };
@@ -105,6 +110,97 @@ export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
     `Moved ${params.pathPrefix}.allowPrivateNetwork → ${params.pathPrefix}.network.dangerouslyAllowPrivateNetwork (${String(resolvedDangerousAllowPrivateNetwork)}).`,
   );
   return { entry: nextEntry, changed: true };
+}
+
+function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
+  const accounts = asRecord(value);
+  return Boolean(
+    accounts &&
+    Object.values(accounts).some((account) =>
+      hasLegacyFlatAllowPrivateNetworkAlias(asRecord(account) ?? {}),
+    ),
+  );
+}
+
+export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: string }): {
+  legacyConfigRules: ChannelDoctorLegacyConfigRule[];
+  normalizeCompatibilityConfig: (params: { cfg: OpenClawConfig }) => ChannelDoctorConfigMutation;
+} {
+  const pathPrefix = `channels.${params.channelKey}`;
+  return {
+    legacyConfigRules: [
+      {
+        path: ["channels", params.channelKey],
+        message: `${pathPrefix}.allowPrivateNetwork is legacy; use ${pathPrefix}.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".`,
+        match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(asRecord(value) ?? {}),
+      },
+      {
+        path: ["channels", params.channelKey, "accounts"],
+        message: `${pathPrefix}.accounts.<id>.allowPrivateNetwork is legacy; use ${pathPrefix}.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".`,
+        match: hasLegacyAllowPrivateNetworkInAccounts,
+      },
+    ],
+    normalizeCompatibilityConfig: ({ cfg }) => {
+      const channels = asRecord(cfg.channels);
+      const channelEntry = asRecord(channels?.[params.channelKey]);
+      if (!channelEntry) {
+        return { config: cfg, changes: [] };
+      }
+
+      const changes: string[] = [];
+      let updatedChannel = channelEntry;
+      let changed = false;
+
+      const topLevel = migrateLegacyFlatAllowPrivateNetworkAlias({
+        entry: updatedChannel,
+        pathPrefix,
+        changes,
+      });
+      updatedChannel = topLevel.entry;
+      changed = changed || topLevel.changed;
+
+      const accounts = asRecord(updatedChannel.accounts);
+      if (accounts) {
+        let accountsChanged = false;
+        const nextAccounts: Record<string, unknown> = { ...accounts };
+        for (const [accountId, accountValue] of Object.entries(accounts)) {
+          const account = asRecord(accountValue);
+          if (!account) {
+            continue;
+          }
+          const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
+            entry: account,
+            pathPrefix: `${pathPrefix}.accounts.${accountId}`,
+            changes,
+          });
+          if (!migrated.changed) {
+            continue;
+          }
+          nextAccounts[accountId] = migrated.entry;
+          accountsChanged = true;
+        }
+        if (accountsChanged) {
+          updatedChannel = { ...updatedChannel, accounts: nextAccounts };
+          changed = true;
+        }
+      }
+
+      if (!changed) {
+        return { config: cfg, changes: [] };
+      }
+
+      return {
+        config: {
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            [params.channelKey]: updatedChannel,
+          } as OpenClawConfig["channels"],
+        },
+        changes,
+      };
+    },
+  };
 }
 
 export function ssrfPolicyFromAllowPrivateNetwork(

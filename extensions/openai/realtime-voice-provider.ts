@@ -7,6 +7,12 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import WebSocket from "ws";
+import {
+  asFiniteNumber,
+  readRealtimeErrorDetail,
+  resolveOpenAIProviderConfigRecord,
+  trimToUndefined,
+} from "./realtime-provider-shared.js";
 
 export type OpenAIRealtimeVoice =
   | "alloy"
@@ -78,36 +84,10 @@ type RealtimeSessionUpdate = {
   };
 };
 
-function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readRealtimeErrorDetail(error: unknown): string {
-  if (typeof error === "string" && error) {
-    return error;
-  }
-  const message = asObject(error)?.message;
-  if (typeof message === "string" && message) {
-    return message;
-  }
-  return "Unknown error";
-}
-
 function normalizeProviderConfig(
   config: RealtimeVoiceProviderConfig,
 ): OpenAIRealtimeVoiceProviderConfig {
-  const providers = asObject(config.providers);
-  const raw = asObject(providers?.openai) ?? asObject(config.openai) ?? asObject(config);
+  const raw = resolveOpenAIProviderConfigRecord(config);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -115,10 +95,10 @@ function normalizeProviderConfig(
     }),
     model: trimToUndefined(raw?.model),
     voice: trimToUndefined(raw?.voice) as OpenAIRealtimeVoice | undefined,
-    temperature: asNumber(raw?.temperature),
-    vadThreshold: asNumber(raw?.vadThreshold),
-    silenceDurationMs: asNumber(raw?.silenceDurationMs),
-    prefixPaddingMs: asNumber(raw?.prefixPaddingMs),
+    temperature: asFiniteNumber(raw?.temperature),
+    vadThreshold: asFiniteNumber(raw?.vadThreshold),
+    silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
+    prefixPaddingMs: asFiniteNumber(raw?.prefixPaddingMs),
     azureEndpoint: trimToUndefined(raw?.azureEndpoint),
     azureDeployment: trimToUndefined(raw?.azureDeployment),
     azureApiVersion: trimToUndefined(raw?.azureApiVersion),

@@ -7,6 +7,7 @@ import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 
 afterEach(() => {
   vi.resetModules();
+  vi.doUnmock("../../plugins/bundled-channel-runtime.js");
   vi.doUnmock("../../plugins/bundled-plugin-metadata.js");
   vi.doUnmock("../../plugins/discovery.js");
   vi.doUnmock("../../plugins/manifest-registry.js");
@@ -20,12 +21,12 @@ describe("bundled channel entry shape guards", () => {
     .map((plugin) => plugin.rootDir);
 
   it("treats missing bundled discovery results as empty", async () => {
-    vi.doMock("../../plugins/bundled-plugin-metadata.js", async (importOriginal) => {
+    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
       const actual =
-        await importOriginal<typeof import("../../plugins/bundled-plugin-metadata.js")>();
+        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
       return {
         ...actual,
-        listBundledPluginMetadata: () => [],
+        listBundledChannelPluginMetadata: () => [],
       };
     });
 

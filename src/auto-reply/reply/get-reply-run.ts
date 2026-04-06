@@ -16,7 +16,6 @@ import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
-import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
@@ -39,6 +38,7 @@ import {
 } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { buildReplyPromptBodies } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
@@ -46,7 +46,6 @@ import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
-import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<
@@ -347,23 +346,14 @@ export async function runPreparedReply(
     if (eventsBlock) {
       drainedSystemEventBlocks.push(eventsBlock);
     }
-    const combinedEventsBlock = drainedSystemEventBlocks.join("\n");
-    const prependEvents = (body: string) =>
-      combinedEventsBlock ? `${combinedEventsBlock}\n\n${body}` : body;
-    const bodyWithEvents = prependEvents(effectiveBaseBody);
-    const prefixedBodyWithEvents = appendUntrustedContext(
-      prependEvents(prefixedBodyCore),
-      sessionCtx.UntrustedContext,
-    );
-    const prefixedBody = [threadContextNote, prefixedBodyWithEvents].filter(Boolean).join("\n\n");
-    const queueBodyBase = [threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
-    const queuedBody = mediaNote
-      ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
-      : queueBodyBase;
-    const prefixedCommandBody = mediaNote
-      ? [mediaNote, mediaReplyHint, prefixedBody || ""].filter(Boolean).join("\n").trim()
-      : prefixedBody;
-    return { prefixedCommandBody, queuedBody };
+    return buildReplyPromptBodies({
+      ctx,
+      sessionCtx,
+      effectiveBaseBody,
+      prefixedBody: prefixedBodyCore,
+      threadContextNote,
+      systemEventBlocks: drainedSystemEventBlocks,
+    });
   };
   const skillResult =
     process.env.OPENCLAW_TEST_FAST === "1"
@@ -389,10 +379,6 @@ export async function runPreparedReply(
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  const mediaNote = buildInboundMediaNote(ctx);
-  const mediaReplyHint = mediaNote
-    ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths - they are blocked for security. Keep caption in the text body."
-    : undefined;
   let { prefixedCommandBody, queuedBody } = await rebuildPromptBodies();
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();

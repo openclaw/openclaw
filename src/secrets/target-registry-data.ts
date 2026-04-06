@@ -1,6 +1,6 @@
 import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
 import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
@@ -19,16 +19,13 @@ function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
       continue;
     }
     if (!metadata.publicSurfaceArtifacts?.includes("contract-api.js")) {
-      continue;
+      if (!metadata.publicSurfaceArtifacts?.includes("secret-contract-api.js")) {
+        continue;
+      }
     }
     try {
-      const contractApi = loadBundledPluginPublicSurfaceModuleSync<{
-        secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
-      }>({
-        dirName: metadata.dirName,
-        artifactBasename: "contract-api.js",
-      });
-      entries.push(...(contractApi.secretTargetRegistryEntries ?? []));
+      const contractApi = loadBundledChannelSecretContractApi(metadata.manifest.id);
+      entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
       channelIds.forEach((channelId) => handledChannelIds.add(channelId));
     } catch {
       // Fall back to the full bootstrap plugin surface for channels that do not
@@ -468,6 +465,10 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
 ];
 
 let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
+
+export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
+  return CORE_SECRET_TARGET_REGISTRY;
+}
 
 export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   if (cachedSecretTargetRegistry) {

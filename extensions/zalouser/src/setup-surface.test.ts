@@ -295,7 +295,10 @@ describe("zalouser setup wizard", () => {
 
     const next = zalouserSetupWizard.dmPolicy?.setPolicy(cfg, "open");
     expect(next?.channels?.zalouser?.dmPolicy).toBe("disabled");
-    expect(next?.channels?.zalouser?.accounts?.work?.dmPolicy).toBe("open");
+    const workAccount = next?.channels?.zalouser?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
@@ -317,8 +320,11 @@ describe("zalouser setup wizard", () => {
     );
 
     expect(next?.channels?.zalouser?.dmPolicy).toBeUndefined();
-    expect(next?.channels?.zalouser?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next?.channels?.zalouser?.accounts?.work?.allowFrom).toEqual(["123456789", "*"]);
+    const workAccount = next?.channels?.zalouser?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["123456789", "*"]);
   });
 
   it("shows the account-scoped current DM policy in quickstart notes", async () => {

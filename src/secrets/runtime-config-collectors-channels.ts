@@ -1,5 +1,6 @@
 import { getBootstrapChannelSecrets } from "../channels/plugins/bootstrap-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 import { type ResolverContext, type SecretDefaults } from "./runtime-shared.js";
 
 export function collectChannelConfigAssignments(params: {
@@ -12,10 +13,10 @@ export function collectChannelConfigAssignments(params: {
     return;
   }
   for (const channelId of channelIds) {
-    const secrets = getBootstrapChannelSecrets(channelId);
-    if (!secrets) {
-      continue;
-    }
-    secrets.collectRuntimeConfigAssignments?.(params);
+    const contract = loadBundledChannelSecretContractApi(channelId);
+    const collectRuntimeConfigAssignments =
+      contract?.collectRuntimeConfigAssignments ??
+      getBootstrapChannelSecrets(channelId)?.collectRuntimeConfigAssignments;
+    collectRuntimeConfigAssignments?.(params);
   }
 }

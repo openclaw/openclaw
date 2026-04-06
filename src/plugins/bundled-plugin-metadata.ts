@@ -227,18 +227,24 @@ export function resolveBundledPluginWorkspaceSourcePath(params: {
 export function resolveBundledPluginGeneratedPath(
   rootDir: string,
   entry: BundledPluginPathPair | undefined,
+  pluginDirName?: string,
 ): string | null {
   if (!entry) {
     return null;
   }
-  const candidates = [entry.built, entry.source]
-    .filter(
-      (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
-    )
-    .map((candidate) => path.resolve(rootDir, candidate));
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
+  const entryOrder = [entry.built, entry.source].filter(
+    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
+  );
+  const baseDirs = [
+    path.resolve(rootDir, "dist", "extensions", pluginDirName ?? ""),
+    path.resolve(rootDir, "extensions", pluginDirName ?? ""),
+  ];
+  for (const baseDir of baseDirs) {
+    for (const entryPath of entryOrder) {
+      const candidate = path.resolve(baseDir, normalizeRelativePluginEntryPath(entryPath));
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
     }
   }
   return null;

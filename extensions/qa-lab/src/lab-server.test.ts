@@ -40,6 +40,7 @@ describe("qa-lab server", () => {
       kickoffTask: string;
       scenarios: Array<{ id: string; title: string }>;
       defaults: { conversationId: string; senderId: string };
+      runner: { status: string; selection: { providerMode: string; scenarioIds: string[] } };
     };
     expect(bootstrap.defaults.conversationId).toBe("qa-operator");
     expect(bootstrap.defaults.senderId).toBe("qa-operator");
@@ -48,6 +49,9 @@ describe("qa-lab server", () => {
     expect(bootstrap.kickoffTask).toContain("Lobster Invaders");
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
     expect(bootstrap.scenarios.some((scenario) => scenario.id === "dm-chat-baseline")).toBe(true);
+    expect(bootstrap.runner.status).toBe("idle");
+    expect(bootstrap.runner.selection.providerMode).toBe("mock-openai");
+    expect(bootstrap.runner.selection.scenarioIds).toHaveLength(bootstrap.scenarios.length);
 
     const messageResponse = await fetch(`${lab.baseUrl}/api/inbound/message`, {
       method: "POST",

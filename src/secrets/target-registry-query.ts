@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { getPath } from "./path-utils.js";
-import { getSecretTargetRegistry } from "./target-registry-data.js";
+import { getCoreSecretTargetRegistry, getSecretTargetRegistry } from "./target-registry-data.js";
 import {
   compileTargetRegistryEntry,
   expandPathTokens,
@@ -22,6 +22,12 @@ let compiledSecretTargetRegistryState: {
   openClawCompiledSecretTargets: CompiledTargetRegistryEntry[];
   openClawTargetsById: Map<string, CompiledTargetRegistryEntry[]>;
   targetsByType: Map<string, CompiledTargetRegistryEntry[]>;
+} | null = null;
+
+let compiledCoreOpenClawTargetState: {
+  knownTargetIds: Set<string>;
+  openClawCompiledSecretTargets: CompiledTargetRegistryEntry[];
+  openClawTargetsById: Map<string, CompiledTargetRegistryEntry[]>;
 } | null = null;
 
 function buildTargetTypeIndex(
@@ -81,6 +87,21 @@ function getCompiledSecretTargetRegistryState() {
     targetsByType: buildTargetTypeIndex(compiledSecretTargetRegistry),
   };
   return compiledSecretTargetRegistryState;
+}
+
+function getCompiledCoreOpenClawTargetState() {
+  if (compiledCoreOpenClawTargetState) {
+    return compiledCoreOpenClawTargetState;
+  }
+  const openClawCompiledSecretTargets = getCoreSecretTargetRegistry()
+    .filter((entry) => entry.configFile === "openclaw.json")
+    .map(compileTargetRegistryEntry);
+  compiledCoreOpenClawTargetState = {
+    knownTargetIds: new Set(openClawCompiledSecretTargets.map((entry) => entry.id)),
+    openClawCompiledSecretTargets,
+    openClawTargetsById: buildConfigTargetIdIndex(openClawCompiledSecretTargets),
+  };
+  return compiledCoreOpenClawTargetState;
 }
 
 function normalizeAllowedTargetIds(targetIds?: Iterable<string>): Set<string> | null {
@@ -281,7 +302,13 @@ export function discoverConfigSecretTargetsByIds(
   targetIds?: Iterable<string>,
 ): DiscoveredConfigSecretTarget[] {
   const allowedTargetIds = normalizeAllowedTargetIds(targetIds);
-  const registryState = getCompiledSecretTargetRegistryState();
+  const registryState =
+    allowedTargetIds !== null &&
+    Array.from(allowedTargetIds).every((targetId) =>
+      getCompiledCoreOpenClawTargetState().knownTargetIds.has(targetId),
+    )
+      ? getCompiledCoreOpenClawTargetState()
+      : getCompiledSecretTargetRegistryState();
   const discoveryEntries = resolveDiscoveryEntries({
     allowedTargetIds,
     defaultEntries: registryState.openClawCompiledSecretTargets,

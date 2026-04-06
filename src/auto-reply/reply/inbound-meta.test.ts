@@ -1,7 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
 import type { TemplateContext } from "../templating.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (channelId: string) =>
+    channelId === "slack"
+      ? {
+          agentPrompt: {
+            inboundFormattingHints: () => ({
+              text_markup: "slack_mrkdwn",
+              rules: [
+                "Use Slack mrkdwn, not standard Markdown.",
+                "Bold uses *single asterisks*.",
+                "Links use <url|label>.",
+                "Code blocks use triple backticks without a language identifier.",
+                "Do not use markdown headings or pipe tables.",
+              ],
+            }),
+          },
+        }
+      : undefined,
+  normalizeChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
+}));
 
 function parseInboundMetaPayload(text: string): Record<string, unknown> {
   const match = text.match(/```json\n([\s\S]*?)\n```/);

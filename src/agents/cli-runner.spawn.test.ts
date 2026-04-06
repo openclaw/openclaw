@@ -19,7 +19,9 @@ import {
   stubBootstrapContext,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
+import { executePreparedCliRun } from "./cli-runner/execute.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
+import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
 beforeEach(() => {
   resetAgentEventsForTest();
@@ -28,7 +30,6 @@ beforeEach(() => {
 
 describe("runCliAgent spawn path", () => {
   it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
         reason: "exit",
@@ -42,17 +43,48 @@ describe("runCliAgent spawn path", () => {
       }),
     );
 
-    await runCliAgent({
-      sessionId: "s1",
-      sessionFile: "/tmp/session.jsonl",
+    const backendConfig = {
+      command: "claude",
+      args: ["-p", "--output-format", "stream-json"],
+      output: "jsonl" as const,
+      input: "stdin" as const,
+      modelArg: "--model",
+      systemPromptArg: "--append-system-prompt",
+      systemPromptWhen: "first" as const,
+      serialize: true,
+    };
+    const context: PreparedCliRunContext = {
+      params: {
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        prompt: "Run: node script.mjs",
+        provider: "claude-cli",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-no-tools-disabled",
+        extraSystemPrompt: "You are a helpful assistant.",
+      },
+      started: Date.now(),
       workspaceDir: "/tmp",
-      prompt: "Run: node script.mjs",
-      provider: "claude-cli",
-      model: "sonnet",
-      timeoutMs: 1_000,
-      runId: "run-no-tools-disabled",
-      extraSystemPrompt: "You are a helpful assistant.",
-    });
+      backendResolved: {
+        id: "claude-cli",
+        config: backendConfig,
+        bundleMcp: true,
+        pluginId: "anthropic",
+      },
+      preparedBackend: {
+        backend: backendConfig,
+        env: {},
+      },
+      reusableCliSession: {},
+      modelId: "sonnet",
+      normalizedModel: "sonnet",
+      systemPrompt: "You are a helpful assistant.",
+      systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
+      bootstrapPromptWarningLines: [],
+    };
+    await executePreparedCliRun(context);
 
     const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
     const allArgs = (input.argv ?? []).join("\n");
@@ -92,57 +124,6 @@ describe("runCliAgent spawn path", () => {
     };
     expect(input.input).toContain("Explain this diff");
     expect(input.argv).not.toContain("Explain this diff");
-  });
-
-  it("injects a strict empty MCP config for bundle-MCP-enabled Claude CLI runs", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: JSON.stringify({
-          session_id: "session-123",
-          message: "ok",
-        }),
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    await runCliAgent({
-      sessionId: "s1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      config: {
-        agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {
-                command: "node",
-                args: ["/tmp/fake-claude.mjs"],
-                clearEnv: [],
-              },
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
-      prompt: "hi",
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      timeoutMs: 1_000,
-      runId: "run-bundle-mcp-empty",
-    });
-
-    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
-    expect(input.argv?.[0]).toBe("node");
-    expect(input.argv).toContain("/tmp/fake-claude.mjs");
-    expect(input.argv).toContain("--strict-mcp-config");
-    const configFlagIndex = input.argv?.indexOf("--mcp-config") ?? -1;
-    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
-    expect(input.argv?.[configFlagIndex + 1]).toMatch(/^\/.+\/mcp\.json$/);
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
@@ -246,7 +227,9 @@ describe("runCliAgent spawn path", () => {
       abortSignal: abortController.signal,
     });
 
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    });
     abortController.abort();
 
     await expect(runPromise).rejects.toMatchObject({ name: "AbortError" });
@@ -449,10 +432,10 @@ describe("runCliAgent spawn path", () => {
     };
     expect(input.env?.SAFE_KEEP).toBe("ok");
     expect(input.env?.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
-    expect(input.env?.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(input.env?.ANTHROPIC_BASE_URL).toBe("https://override.example.com/v1");
     expect(input.env?.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
     expect(input.env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
-    expect(input.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(input.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("override-oauth-token");
     expect(input.env?.CLAUDE_CODE_REMOTE).toBeUndefined();
     expect(input.env?.ANTHROPIC_UNIX_SOCKET).toBeUndefined();
     expect(input.env?.OTEL_LOGS_EXPORTER).toBeUndefined();

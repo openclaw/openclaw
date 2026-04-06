@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../templating.js";
+import { withFastReplyConfig } from "./get-reply-fast-path.js";
 import { registerGetReplyCommonMocks } from "./get-reply.test-mocks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -128,7 +129,7 @@ describe("getReplyFromConfig message hooks", () => {
   it("emits transcribed + preprocessed hooks with enriched context", async () => {
     const ctx = buildCtx();
 
-    await getReplyFromConfig(ctx, undefined, {});
+    await getReplyFromConfig(ctx, undefined, withFastReplyConfig({}));
 
     expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(2);
     expect(mocks.createInternalHookEvent).toHaveBeenNthCalledWith(
@@ -164,7 +165,7 @@ describe("getReplyFromConfig message hooks", () => {
       ctx.BodyForAgent = "<media:audio>";
     });
 
-    await getReplyFromConfig(buildCtx(), undefined, {});
+    await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
 
     expect(mocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
     expect(mocks.createInternalHookEvent).toHaveBeenCalledWith(
@@ -178,7 +179,7 @@ describe("getReplyFromConfig message hooks", () => {
   it("skips message hooks in fast test mode", async () => {
     process.env.OPENCLAW_TEST_FAST = "1";
 
-    await getReplyFromConfig(buildCtx(), undefined, {});
+    await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
 
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
     expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
@@ -187,7 +188,11 @@ describe("getReplyFromConfig message hooks", () => {
   });
 
   it("skips message hooks when SessionKey is unavailable", async () => {
-    await getReplyFromConfig(buildCtx({ SessionKey: undefined }), undefined, {});
+    await getReplyFromConfig(
+      buildCtx({ SessionKey: undefined }),
+      undefined,
+      withFastReplyConfig({}),
+    );
 
     expect(mocks.createInternalHookEvent).not.toHaveBeenCalled();
     expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
@@ -210,7 +215,7 @@ describe("getReplyFromConfig message hooks", () => {
         StickerMediaIncluded: undefined,
       }),
       undefined,
-      {},
+      withFastReplyConfig({}),
     );
 
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();

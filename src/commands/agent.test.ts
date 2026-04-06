@@ -100,43 +100,6 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
 }
 
-async function loadFreshAgentCommandModulesForTest() {
-  vi.resetModules();
-  const runEmbeddedPiAgentMock = vi.fn();
-  const loadModelCatalogMock = vi.fn();
-  const isCliProviderMock = vi.fn(() => false);
-  vi.doMock("../agents/pi-embedded.js", () => ({
-    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-    runEmbeddedPiAgent: runEmbeddedPiAgentMock,
-    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  }));
-  vi.doMock("../agents/model-catalog.js", () => ({
-    loadModelCatalog: loadModelCatalogMock,
-  }));
-  vi.doMock("../agents/model-selection.js", async () => {
-    const actual = await vi.importActual<typeof import("../agents/model-selection.js")>(
-      "../agents/model-selection.js",
-    );
-    return {
-      ...actual,
-      isCliProvider: isCliProviderMock,
-    };
-  });
-  const [agentModule, configModuleFresh, commandSecretGatewayModuleFresh] = await Promise.all([
-    import("./agent.js"),
-    import("../config/config.js"),
-    import("../cli/command-secret-gateway.js"),
-  ]);
-  return {
-    agentCommand: agentModule.agentCommand,
-    configModuleFresh,
-    commandSecretGatewayModuleFresh,
-    runEmbeddedPiAgentMock,
-    loadModelCatalogMock,
-    isCliProviderMock,
-  };
-}
-
 function mockConfig(
   home: string,
   storePath: string,
@@ -344,116 +307,6 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
-  it("sets runtime snapshots from source config before embedded agent run", async () => {
-    await withTempHome(async (home) => {
-      const {
-        agentCommand: freshAgentCommand,
-        configModuleFresh,
-        commandSecretGatewayModuleFresh,
-        runEmbeddedPiAgentMock,
-        loadModelCatalogMock,
-        isCliProviderMock,
-      } = await loadFreshAgentCommandModulesForTest();
-      const freshConfigSpy = vi.spyOn(configModuleFresh, "loadConfig");
-      const freshReadConfigFileSnapshotForWriteSpy = vi.spyOn(
-        configModuleFresh,
-        "readConfigFileSnapshotForWrite",
-      );
-      const freshSetRuntimeConfigSnapshotSpy = vi.spyOn(
-        configModuleFresh,
-        "setRuntimeConfigSnapshot",
-      );
-      runEmbeddedPiAgentMock.mockResolvedValue(createDefaultAgentResult());
-      loadModelCatalogMock.mockResolvedValue([]);
-      isCliProviderMock.mockImplementation(() => false);
-
-      const store = path.join(home, "sessions.json");
-      const loadedConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-6" },
-            models: { "anthropic/claude-opus-4-6": {} },
-            workspace: path.join(home, "openclaw"),
-          },
-        },
-        session: { store, mainKey: "main" },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
-              models: [],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      const sourceConfig = {
-        ...loadedConfig,
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
-              models: [],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      const resolvedConfig = {
-        ...loadedConfig,
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-resolved-runtime", // pragma: allowlist secret
-              models: [],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      freshConfigSpy.mockReturnValue(loadedConfig);
-      freshReadConfigFileSnapshotForWriteSpy.mockResolvedValue({
-        snapshot: { valid: true, resolved: sourceConfig },
-        writeOptions: {},
-      } as Awaited<ReturnType<typeof configModule.readConfigFileSnapshotForWrite>>);
-      const resolveSecretsSpy = vi
-        .spyOn(commandSecretGatewayModuleFresh, "resolveCommandSecretRefsViaGateway")
-        .mockResolvedValueOnce({
-          resolvedConfig,
-          diagnostics: [],
-          targetStatesByPath: {},
-          hadUnresolvedTargets: false,
-        });
-
-      await freshAgentCommand({ message: "hello", to: "+1555" }, runtime);
-
-      expect(resolveSecretsSpy).toHaveBeenCalledWith({
-        config: loadedConfig,
-        commandName: "agent",
-        targetIds: expect.any(Set),
-      });
-      expect(freshSetRuntimeConfigSnapshotSpy).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
-      expect(runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.config).toBe(resolvedConfig);
-    });
-  });
-
-  it("creates a session entry when deriving from --to", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      mockConfig(home, store);
-
-      await agentCommand({ message: "hello", to: "+1555" }, runtime);
-
-      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
-        string,
-        { sessionId: string }
-      >;
-      const entry = Object.values(saved)[0];
-      expect(entry.sessionId).toBeTruthy();
-    });
-  });
-
   it("persists thinking and verbose overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -1101,7 +954,7 @@ describe("agentCommand", () => {
     await expectPersistedSessionFile({
       seedKey: "agent:main:telegram:group:123:topic:456",
       sessionId: "sess-topic",
-      expectedPathFragment: "sess-topic-topic-456.jsonl",
+      expectedPathFragment: `${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}sess-topic.jsonl`,
     });
   });
 

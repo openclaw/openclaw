@@ -234,8 +234,13 @@ describe("line setup wizard", () => {
     });
 
     const next = lineSetupWizard.dmPolicy?.setPolicy(cfg, "open");
+    const workAccount = next?.channels?.line?.accounts?.work as
+      | {
+          dmPolicy?: string;
+        }
+      | undefined;
     expect(next?.channels?.line?.dmPolicy).toBe("disabled");
-    expect(next?.channels?.line?.accounts?.work?.dmPolicy).toBe("open");
+    expect(workAccount?.dmPolicy).toBe("open");
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
@@ -259,10 +264,16 @@ describe("line setup wizard", () => {
       "work",
     );
 
+    const workAccount = next?.channels?.line?.accounts?.work as
+      | {
+          dmPolicy?: string;
+          allowFrom?: string[];
+        }
+      | undefined;
     expect(next?.channels?.line?.dmPolicy).toBeUndefined();
     expect(next?.channels?.line?.allowFrom).toEqual(["Uroot"]);
-    expect(next?.channels?.line?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next?.channels?.line?.accounts?.work?.allowFrom).toEqual(["Uroot", "*"]);
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["Uroot", "*"]);
   });
 
   it("uses configured defaultAccount for omitted setup configured state", async () => {

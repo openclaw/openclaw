@@ -96,6 +96,7 @@ if ((${#auth_files[@]} > 0)); then
   for auth_file in "${auth_files[@]}"; do
     [ -n "$auth_file" ] || continue
     if [ -f "/host-auth-files/$auth_file" ]; then
+      mkdir -p "$(dirname "$HOME/$auth_file")"
       cp "/host-auth-files/$auth_file" "$HOME/$auth_file"
       chmod u+rw "$HOME/$auth_file" || true
     fi

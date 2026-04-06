@@ -255,9 +255,7 @@ export class GatewayClient {
         }
         if (fingerprint !== expected) {
           return new Error("Server TLS fingerprint mismatch");
-          return new Error("Server TLS fingerprint mismatch");
         }
-        return undefined;
         return undefined;
       };
     }

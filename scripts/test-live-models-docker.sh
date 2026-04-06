@@ -25,7 +25,7 @@ if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
     [[ -n "$auth_file" ]] || continue
     AUTH_FILES+=("$auth_file")
   done < <(openclaw_live_collect_auth_files)
-elif [[ -n "${OPENCLAW_LIVE_PROVIDERS:-}" && -n "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" ]]; then
+elif [[ -n "${OPENCLAW_LIVE_PROVIDERS:-}" || -n "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" ]]; then
   while IFS= read -r auth_dir; do
     [[ -n "$auth_dir" ]] || continue
     AUTH_DIRS+=("$auth_dir")
@@ -100,6 +100,7 @@ if ((${#auth_files[@]} > 0)); then
   for auth_file in "${auth_files[@]}"; do
     [ -n "$auth_file" ] || continue
     if [ -f "/host-auth-files/$auth_file" ]; then
+      mkdir -p "$(dirname "$HOME/$auth_file")"
       cp "/host-auth-files/$auth_file" "$HOME/$auth_file"
       chmod u+rw "$HOME/$auth_file" || true
     fi

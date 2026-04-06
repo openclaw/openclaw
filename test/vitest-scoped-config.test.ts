@@ -4,6 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createAcpVitestConfig } from "../vitest.acp.config.ts";
 import { createAgentsVitestConfig } from "../vitest.agents.config.ts";
+import { createAutoReplyCoreVitestConfig } from "../vitest.auto-reply-core.config.ts";
+import { createAutoReplyReplyVitestConfig } from "../vitest.auto-reply-reply.config.ts";
+import { createAutoReplyTopLevelVitestConfig } from "../vitest.auto-reply-top-level.config.ts";
 import { createAutoReplyVitestConfig } from "../vitest.auto-reply.config.ts";
 import { createChannelsVitestConfig } from "../vitest.channels.config.ts";
 import { createCliVitestConfig } from "../vitest.cli.config.ts";
@@ -175,6 +178,9 @@ describe("scoped vitest configs", () => {
   const defaultCommandsLightConfig = createCommandsLightVitestConfig({});
   const defaultCommandsConfig = createCommandsVitestConfig({});
   const defaultAutoReplyConfig = createAutoReplyVitestConfig({});
+  const defaultAutoReplyCoreConfig = createAutoReplyCoreVitestConfig({});
+  const defaultAutoReplyTopLevelConfig = createAutoReplyTopLevelVitestConfig({});
+  const defaultAutoReplyReplyConfig = createAutoReplyReplyVitestConfig({});
   const defaultAgentsConfig = createAgentsVitestConfig({});
   const defaultPluginsConfig = createPluginsVitestConfig({});
   const defaultProcessConfig = createProcessVitestConfig({});
@@ -193,6 +199,9 @@ describe("scoped vitest configs", () => {
       defaultExtensionProvidersConfig,
       defaultInfraConfig,
       defaultAutoReplyConfig,
+      defaultAutoReplyCoreConfig,
+      defaultAutoReplyTopLevelConfig,
+      defaultAutoReplyReplyConfig,
       defaultToolingConfig,
       defaultUiConfig,
     ]) {
@@ -214,6 +223,15 @@ describe("scoped vitest configs", () => {
       "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
+  });
+
+  it("splits auto-reply into narrower scoped buckets", () => {
+    expect(defaultAutoReplyCoreConfig.test?.include).toEqual(["*.test.ts"]);
+    expect(defaultAutoReplyCoreConfig.test?.exclude).toEqual(
+      expect.arrayContaining(["reply*.test.ts"]),
+    );
+    expect(defaultAutoReplyTopLevelConfig.test?.include).toEqual(["reply*.test.ts"]);
+    expect(defaultAutoReplyReplyConfig.test?.include).toEqual(["reply/**/*.test.ts"]);
   });
 
   it("keeps selected plugin-sdk and commands light lanes off the openclaw runtime setup", () => {
