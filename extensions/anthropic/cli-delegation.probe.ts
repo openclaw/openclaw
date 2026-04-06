@@ -7,6 +7,8 @@ const execFileAsync = promisify(execFile);
 const UNAUTH_PATTERNS = ["not logged in", "login required", "run `claude login`"];
 const SUB_KEYS = ["subscriptionType", "subscription_type", "planType", "plan_type"];
 const AUTH_METHOD_KEYS = ["authMethod", "auth_method"];
+const VALID_AUTH_METHODS = ["apiKey", "subscription"] as const;
+type AuthMethod = (typeof VALID_AUTH_METHODS)[number];
 
 /**
  * The auth-only slice of ClaudeCliStatus (with installed omitted).
@@ -52,10 +54,16 @@ export function parseClaudeAuthOutput(stdout: string): ClaudeAuthResult {
     return { authenticated: true };
   }
 
+  const rawMethod = findDeep(parsed, AUTH_METHOD_KEYS);
+  const authMethod =
+    rawMethod && (VALID_AUTH_METHODS as readonly string[]).includes(rawMethod)
+      ? (rawMethod as AuthMethod)
+      : undefined;
+
   return {
     authenticated: true,
     subscriptionType: findDeep(parsed, SUB_KEYS),
-    authMethod: findDeep(parsed, AUTH_METHOD_KEYS) as "apiKey" | "subscription" | undefined,
+    authMethod,
   };
 }
 
@@ -69,8 +77,8 @@ export async function probeClaudeCliStatus(binaryPath = "claude"): Promise<Claud
   // 1. Check installation
   try {
     await execFileAsync(binaryPath, ["--version"], { timeout: 10_000 });
-  } catch {
-    return { installed: false };
+  } catch (err) {
+    return { installed: false, reason: err instanceof Error ? err.message : String(err) };
   }
 
   // 2. Check auth status
@@ -124,6 +132,7 @@ export async function probeClaudeCapabilities(
 
       const init = await q.initializationResult();
       abort.abort();
+      q.close();
       return { subscriptionType: init.account?.subscriptionType };
     } finally {
       clearTimeout(timeoutId);

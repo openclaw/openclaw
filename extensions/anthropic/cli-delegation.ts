@@ -43,8 +43,15 @@ export function createClaudeSession(
       ...(config.newSessionId ? { sessionId: config.newSessionId } : {}),
       settingSources: config.settingSources ?? ["user", "project", "local"],
       includePartialMessages: true,
+      // Auto-approve all tool use — the CLI session already runs with the
+      // caller-chosen permissionMode (e.g. bypassPermissions), so the callback
+      // is only reached for tools the permission mode already permits.
       canUseTool: async () => ({ behavior: "allow" as const }),
-      env: process.env as Record<string, string>,
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(
+          (entry): entry is [string, string] => entry[1] !== undefined,
+        ),
+      ),
       ...(config.cwd ? { additionalDirectories: [config.cwd] } : {}),
     },
   });
@@ -83,11 +90,15 @@ export function adaptSdkMessage(msg: SDKMessage): AdaptedMessage {
     case "assistant": {
       const content = (msg as unknown as { message?: { content?: unknown[] } }).message?.content;
       if (Array.isArray(content)) {
+        let accumulated = "";
         for (const block of content) {
           const b = block as Record<string, unknown>;
           if (b.type === "text" && typeof b.text === "string") {
-            return { kind: "text_delta", text: b.text };
+            accumulated += b.text;
           }
+        }
+        if (accumulated) {
+          return { kind: "text_delta", text: accumulated };
         }
       }
       return { kind: "ignored" };

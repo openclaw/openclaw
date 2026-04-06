@@ -228,13 +228,22 @@ describe("models-config merge helpers", () => {
   it("replaces stale baseUrl when only model-level apis change", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
-        custom: createConfigProvider({ api: "" }),
+        custom: createConfigProvider({ api: undefined }),
       },
       existingProviders: {
         custom: createExistingProvider({
-          api: "",
+          api: undefined,
           models: [
-            { id: "agent-model", name: "Agent model", input: ["text"], api: "openai-completions" },
+            {
+              id: "agent-model",
+              name: "Agent model",
+              input: ["text"],
+              api: "openai-completions",
+              reasoning: false,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 8192,
+              maxTokens: 2048,
+            },
           ],
         }),
       },

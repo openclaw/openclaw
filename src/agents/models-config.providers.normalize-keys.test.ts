@@ -129,7 +129,17 @@ describe("normalizeProviders", () => {
           baseUrl: "https://config.example/v1",
           api: "openai-responses",
           apiKey: { source: "env", provider: "default", id: "CUSTOM_PROVIDER_API_KEY" },
-          models: [{ id: "config-model", name: "Config model", input: ["text"] }],
+          models: [
+            {
+              id: "config-model",
+              name: "Config model",
+              input: ["text"],
+              reasoning: false,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 8192,
+              maxTokens: 2048,
+            },
+          ],
         },
       };
 

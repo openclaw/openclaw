@@ -6,7 +6,7 @@ import path from "node:path";
 import { vi } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "../config/types.js";
 import { testConfigRoot, testIsNixMode, testState } from "./test-helpers.runtime-state.js";
 
 type GatewayConfigModule = typeof import("../config/config.js");
@@ -160,13 +160,20 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
         exists: true,
         raw,
         parsed: testState.legacyParsed ?? {},
+        // sourceConfig/resolved and runtimeConfig/config are backward-compat
+        // aliases kept during migration. Remove the deprecated aliases
+        // (sourceConfig, resolved) once all consumers use runtimeConfig/config.
+        sourceConfig: {} as ResolvedSourceConfig,
+        resolved: {} as ResolvedSourceConfig,
         valid: false,
-        config: {},
+        runtimeConfig: {} as RuntimeConfig,
+        config: {} as RuntimeConfig,
         hash: hashConfigRaw(raw),
         issues: testState.legacyIssues.map((issue) => ({
           path: issue.path,
           message: issue.message,
         })),
+        warnings: [],
         legacyIssues: testState.legacyIssues,
       };
     }
@@ -179,10 +186,14 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
         exists: false,
         raw: null,
         parsed: {},
+        sourceConfig: {} as ResolvedSourceConfig,
+        resolved: {} as ResolvedSourceConfig,
         valid: true,
-        config: composeTestConfig({}),
+        runtimeConfig: composeTestConfig({}) as RuntimeConfig,
+        config: composeTestConfig({}) as RuntimeConfig,
         hash: hashConfigRaw(null),
         issues: [],
+        warnings: [],
         legacyIssues: [],
       };
     }
@@ -194,10 +205,16 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
         exists: true,
         raw,
         parsed,
+        // Double assertion: test helper intentionally bypasses strict typing
+        // since parsed is raw JSON and ResolvedSourceConfig is a post-validation type.
+        sourceConfig: parsed as unknown as ResolvedSourceConfig,
+        resolved: parsed as unknown as ResolvedSourceConfig,
         valid: true,
-        config: composeTestConfig(parsed),
+        runtimeConfig: composeTestConfig(parsed) as RuntimeConfig,
+        config: composeTestConfig(parsed) as RuntimeConfig,
         hash: hashConfigRaw(raw),
         issues: [],
+        warnings: [],
         legacyIssues: [],
       };
     } catch (err) {
@@ -206,10 +223,14 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
         exists: true,
         raw: null,
         parsed: {},
+        sourceConfig: {} as ResolvedSourceConfig,
+        resolved: {} as ResolvedSourceConfig,
         valid: false,
-        config: {},
+        runtimeConfig: {} as RuntimeConfig,
+        config: {} as RuntimeConfig,
         hash: hashConfigRaw(null),
         issues: [{ path: "", message: `read failed: ${String(err)}` }],
+        warnings: [],
         legacyIssues: [],
       };
     }
@@ -268,10 +289,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     get isNixMode() {
       return testIsNixMode.value;
     },
-    migrateLegacyConfig: (raw: unknown) => ({
-      config: testState.migrationConfig ?? (raw as Record<string, unknown>),
-      changes: testState.migrationChanges,
-    }),
     applyConfigOverrides: (cfg: OpenClawConfig) =>
       composeTestConfig(cfg as Record<string, unknown>),
     loadConfig: loadRuntimeAwareTestConfig,

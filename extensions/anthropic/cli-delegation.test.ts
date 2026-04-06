@@ -224,6 +224,58 @@ describe("adaptSdkMessage", () => {
     const adapted = adaptSdkMessage(msg as any);
     expect(adapted.kind).toBe("ignored");
   });
+
+  it("adapts an assistant message with a single text block", async () => {
+    const { adaptSdkMessage } = await import("./cli-delegation.js");
+
+    const msg = {
+      type: "assistant" as const,
+      message: {
+        content: [{ type: "text", text: "Hello world" }],
+      },
+      uuid: "test-uuid",
+      session_id: "test-session",
+    };
+
+    const adapted = adaptSdkMessage(msg as any);
+    expect(adapted).toEqual({ kind: "text_delta", text: "Hello world" });
+  });
+
+  it("concatenates multiple text blocks in an assistant message", async () => {
+    const { adaptSdkMessage } = await import("./cli-delegation.js");
+
+    const msg = {
+      type: "assistant" as const,
+      message: {
+        content: [
+          { type: "text", text: "First part. " },
+          { type: "tool_use", id: "t1", name: "read", input: {} },
+          { type: "text", text: "Second part." },
+        ],
+      },
+      uuid: "test-uuid",
+      session_id: "test-session",
+    };
+
+    const adapted = adaptSdkMessage(msg as any);
+    expect(adapted).toEqual({ kind: "text_delta", text: "First part. Second part." });
+  });
+
+  it("returns ignored for assistant message with no text blocks", async () => {
+    const { adaptSdkMessage } = await import("./cli-delegation.js");
+
+    const msg = {
+      type: "assistant" as const,
+      message: {
+        content: [{ type: "tool_use", id: "t1", name: "read", input: {} }],
+      },
+      uuid: "test-uuid",
+      session_id: "test-session",
+    };
+
+    const adapted = adaptSdkMessage(msg as any);
+    expect(adapted.kind).toBe("ignored");
+  });
 });
 
 describe("claude-code-cli-delegation auth method registration", () => {
@@ -239,11 +291,15 @@ describe("CLI delegation end-to-end (mocked)", () => {
 
     // Use a binary path that does not exist
     const result = await probeClaudeCliStatus("/nonexistent/claude-binary");
-    expect(result).toEqual({ installed: false });
+    expect(result).toMatchObject({ installed: false });
+    expect(result.installed).toBe(false);
+    if (!result.installed) {
+      expect(result.reason).toEqual(expect.any(String));
+    }
   });
 
   it("sentinel credential is never a valid API key format", () => {
-    const sentinel = "__cli_delegation__";
+    const sentinel = CLI_DELEGATION_SENTINEL;
     // Anthropic API keys start with "sk-ant-"
     expect(sentinel).not.toMatch(/^sk-ant-/);
     // General API key patterns

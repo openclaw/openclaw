@@ -31,6 +31,12 @@ import type {
 
 type PluginManifestContractListKey =
   | "memoryEmbeddingProviders"
+  | "speechProviders"
+  | "realtimeTranscriptionProviders"
+  | "realtimeVoiceProviders"
+  | "mediaUnderstandingProviders"
+  | "imageGenerationProviders"
+  | "videoGenerationProviders"
   | "webFetchProviders"
   | "webSearchProviders";
 

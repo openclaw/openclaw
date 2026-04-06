@@ -348,8 +348,12 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
           groupLabel: "Anthropic",
           groupHint: "CLI delegation + API key + legacy token",
         },
-        run: async (_ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
-          const status = await probeClaudeCliStatus();
+        run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
+          const binaryPath =
+            typeof ctx.opts?.binaryPath === "string" && ctx.opts.binaryPath.trim().length > 0
+              ? ctx.opts.binaryPath.trim()
+              : undefined;
+          const status = await probeClaudeCliStatus(binaryPath);
 
           if (!status.installed) {
             throw new Error(

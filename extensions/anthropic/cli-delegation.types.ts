@@ -4,7 +4,7 @@ import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
  * Result of probing the Claude CLI for auth status.
  */
 export type ClaudeCliStatus =
-  | { installed: false }
+  | { installed: false; reason?: string }
   | { installed: true; authenticated: false; reason: string }
   | {
       installed: true;
