@@ -178,14 +178,14 @@ describe("nostr-profile-http", () => {
 
   describe("route matching", () => {
     it("returns false for non-nostr paths", async () => {
-      const { _res, run } = createProfileHttpHarness("GET", "/api/channels/telegram/profile");
+      const { run } = createProfileHttpHarness("GET", "/api/channels/telegram/profile");
       const result = await run();
 
       expect(result).toBe(false);
     });
 
     it("returns false for paths without accountId", async () => {
-      const { _res, run } = createProfileHttpHarness("GET", "/api/channels/nostr/");
+      const { run } = createProfileHttpHarness("GET", "/api/channels/nostr/");
       const result = await run();
 
       expect(result).toBe(false);

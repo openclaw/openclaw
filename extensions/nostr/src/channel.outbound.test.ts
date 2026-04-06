@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
 import { setNostrRuntime } from "./runtime.js";
@@ -64,7 +65,7 @@ describe("nostr outbound cfg threading", () => {
 
     const cfg = createCfg();
     await nostrPlugin.outbound!.sendText!({
-      cfg: cfg as unknown,
+      cfg: cfg as OpenClawConfig,
       to: "NPUB123",
       text: "|a|b|",
       accountId: "default",
@@ -121,7 +122,7 @@ describe("nostr outbound cfg threading", () => {
     };
 
     await nostrPlugin.outbound!.sendText!({
-      cfg: cfg as unknown,
+      cfg: cfg as OpenClawConfig,
       to: "NPUB123",
       text: "hello",
     });

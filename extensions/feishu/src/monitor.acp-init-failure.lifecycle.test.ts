@@ -60,7 +60,7 @@ async function setupLifecycleMonitor() {
   return setupFeishuLifecycleHandler({
     createEventDispatcherMock,
     onRegister: (registered) => {
-      handlers = registered;
+      _handlers = registered;
     },
     runtime: lastRuntime,
     cfg: lifecycleConfig,
@@ -74,7 +74,7 @@ describe("Feishu ACP-init failure lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
-    handlers = {};
+    _handlers = {};
     lastRuntime = null;
     setFeishuLifecycleStateDir("openclaw-feishu-acp-failure");
 

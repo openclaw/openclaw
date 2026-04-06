@@ -489,7 +489,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("drops forged metadata-only mentions before agent routing", async () => {
-    const { handler, recordInboundSession, _resolveAgentRoute } = createMatrixHandlerTestHarness({
+    const { handler, recordInboundSession, resolveAgentRoute } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       mentionRegexes: [/@bot/i],
       getMemberDisplayName: async () => "sender",
@@ -505,6 +505,7 @@ describe("matrix monitor handler pairing account scope", () => {
     );
 
     expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(resolveAgentRoute).not.toHaveBeenCalled();
   });
 
   it("skips media downloads for unmentioned group media messages", async () => {

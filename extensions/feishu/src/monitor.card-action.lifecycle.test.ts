@@ -100,7 +100,7 @@ async function setupLifecycleMonitor() {
   return setupFeishuLifecycleHandler({
     createEventDispatcherMock,
     onRegister: (registered) => {
-      handlers = registered;
+      _handlers = registered;
     },
     runtime: lastRuntime,
     cfg: lifecycleConfig,
@@ -114,7 +114,7 @@ describe("Feishu card-action lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
-    handlers = {};
+    _handlers = {};
     lastRuntime = null;
     resetProcessedFeishuCardActionTokensForTests();
     setFeishuLifecycleStateDir("openclaw-feishu-card-action");
