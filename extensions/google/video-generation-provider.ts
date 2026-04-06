@@ -184,7 +184,7 @@ async function requestGoogleVideoJson(params: {
       payload = { raw: text };
     }
     if (!response.ok) {
-      throw new Error(typeof payload === "object" ? JSON.stringify(payload) : String(payload));
+      throw new Error(typeof payload === "string" ? payload : JSON.stringify(payload ?? null));
     }
     return payload;
   } finally {
