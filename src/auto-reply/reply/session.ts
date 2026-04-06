@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentId, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
@@ -33,6 +33,8 @@ import {
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -868,10 +870,66 @@ export async function initSessionState(params: {
     IsNewSession: isNewSession ? "true" : "false",
   };
 
+  // Fire internal hooks for lazy session resets (daily/idle) so bundled hooks
+  // like session-memory can save state. Independent of the plugin hook runner;
+  // matches emitResetCommandHooks() which fires triggerInternalHook without
+  // checking hookRunner. Fire-and-forget because session-memory calls
+  // generateSlugViaLLM (up to 15s) and we must not block the user's message.
+  // Manual /new and /reset already fire these via emitResetCommandHooks().
+  if (isNewSession && !resetTriggered && previousSessionEntry && previousSessionEndReason) {
+    const hookEvent = createInternalHookEvent(
+      "command",
+      previousSessionEndReason, // "daily" | "idle"
+      sessionKey,
+      {
+        sessionEntry,
+        previousSessionEntry,
+        commandSource: "system",
+        workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+        cfg,
+      },
+    );
+    void triggerInternalHook(hookEvent).catch((err) => {
+      logVerbose(`internal hook failed (lazy reset): ${String(err)}`);
+    });
+  }
+
   // Run session plugin hooks (fire-and-forget)
   const hookRunner = getGlobalHookRunner();
   if (hookRunner && isNewSession) {
     const effectiveSessionId = sessionId ?? "";
+
+    // Fire before_reset plugin hook for lazy session resets.
+    // Requires previousSessionEndReason to avoid firing with an incorrect
+    // fallback reason when no reset policy is configured.
+    if (
+      !resetTriggered &&
+      previousSessionEntry &&
+      previousSessionEndReason &&
+      hookRunner.hasHooks("before_reset")
+    ) {
+      void (async () => {
+        // Dynamic import to avoid pulling the reset-hooks module's dependency tree
+        // (route-reply runtime, hook-runner-global, etc.) into session.ts's static imports.
+        const { loadBeforeResetTranscript } = await import("./commands-reset-hooks.js");
+        const { sessionFile, messages } = await loadBeforeResetTranscript({
+          sessionFile: previousSessionTranscript.sessionFile,
+        });
+        try {
+          await hookRunner.runBeforeReset(
+            { sessionFile, messages, reason: previousSessionEndReason },
+            {
+              agentId,
+              sessionKey,
+              sessionId: previousSessionEntry.sessionId,
+              workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+            },
+          );
+        } catch (err) {
+          logVerbose(`before_reset hook failed (lazy): ${String(err)}`);
+        }
+      })();
+    }
 
     // If replacing an existing session, fire session_end for the old one
     if (previousSessionEntry?.sessionId && previousSessionEntry.sessionId !== effectiveSessionId) {

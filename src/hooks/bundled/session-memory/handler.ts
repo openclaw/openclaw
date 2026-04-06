@@ -109,7 +109,11 @@ function resolveDisplaySessionKey(params: {
  */
 const saveSessionToMemory: HookHandler = async (event) => {
   // Only trigger on reset/new commands
-  const isResetCommand = event.action === "new" || event.action === "reset";
+  const isResetCommand =
+    event.action === "new" ||
+    event.action === "reset" ||
+    event.action === "daily" ||
+    event.action === "idle";
   if (event.type !== "command" || !isResetCommand) {
     return;
   }

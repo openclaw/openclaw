@@ -219,6 +219,80 @@ describe("session-memory hook", () => {
     await expect(fs.access(memoryDir)).rejects.toThrow();
   });
 
+  it("accepts daily reset action", async () => {
+    const tempDir = await createCaseWorkspace("daily-reset");
+    const sessionKey = "agent:main:main";
+
+    // Write a previous session transcript so the handler has content to save
+    const transcriptPath = path.join(tempDir, "prev-session.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      createMockSessionContent([
+        { role: "user", content: "Good morning" },
+        { role: "assistant", content: "Good morning! How can I help?" },
+      ]),
+    );
+
+    const event = createHookEvent("command", "daily", sessionKey, {
+      workspaceDir: tempDir,
+      previousSessionEntry: {
+        sessionId: "prev-session",
+        sessionFile: transcriptPath,
+        updatedAt: Date.now() - 48 * 60 * 60 * 1000,
+      },
+      commandSource: "system",
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files.length).toBe(1);
+  });
+
+  it("accepts idle reset action", async () => {
+    const tempDir = await createCaseWorkspace("idle-reset");
+    const sessionKey = "agent:main:main";
+
+    const transcriptPath = path.join(tempDir, "prev-session.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      createMockSessionContent([
+        { role: "user", content: "Check the weather" },
+        { role: "assistant", content: "Sunny and 72F today" },
+      ]),
+    );
+
+    const event = createHookEvent("command", "idle", sessionKey, {
+      workspaceDir: tempDir,
+      previousSessionEntry: {
+        sessionId: "prev-session",
+        sessionFile: transcriptPath,
+        updatedAt: Date.now() - 3 * 60 * 60 * 1000,
+      },
+      commandSource: "system",
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    expect(files.length).toBe(1);
+  });
+
+  it("still rejects unrelated actions after filter widening", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+
+    const event = createHookEvent("command", "status", "agent:main:main", {
+      workspaceDir: tempDir,
+    });
+
+    await handler(event);
+
+    const memoryDir = path.join(tempDir, "memory");
+    await expect(fs.access(memoryDir)).rejects.toThrow();
+  });
+
   it("creates memory file with session content on /new command", async () => {
     // Create a mock session file with user/assistant messages
     const sessionContent = createMockSessionContent([

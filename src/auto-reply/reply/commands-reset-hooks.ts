@@ -15,7 +15,7 @@ function loadRouteReplyRuntime() {
 
 export type ResetCommandAction = "new" | "reset";
 
-function parseTranscriptMessages(content: string): unknown[] {
+export function parseTranscriptMessages(content: string): unknown[] {
   const messages: unknown[] = [];
   for (const line of content.split("\n")) {
     if (!line.trim()) {
@@ -33,7 +33,9 @@ function parseTranscriptMessages(content: string): unknown[] {
   return messages;
 }
 
-async function findLatestArchivedTranscript(sessionFile: string): Promise<string | undefined> {
+export async function findLatestArchivedTranscript(
+  sessionFile: string,
+): Promise<string | undefined> {
   try {
     const dir = path.dirname(sessionFile);
     const base = path.basename(sessionFile);
@@ -48,7 +50,7 @@ async function findLatestArchivedTranscript(sessionFile: string): Promise<string
   }
 }
 
-async function loadBeforeResetTranscript(params: {
+export async function loadBeforeResetTranscript(params: {
   sessionFile?: string;
 }): Promise<{ sessionFile?: string; messages: unknown[] }> {
   const sessionFile = params.sessionFile;
