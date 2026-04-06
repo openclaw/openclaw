@@ -164,19 +164,29 @@ export function createWebOnMessageHandler(params: {
 
       // DM trigger gating: when dmRequireMention is enabled, only process DMs
       // that match one of the configured mentionPatterns.
+      // NOTE: patterns currently resolve from agents[*].groupChat.mentionPatterns
+      // (or agent identity name/emoji as fallback). A dedicated dmMentionPatterns
+      // resolution path may be added in a follow-up.
       if (params.account.dmRequireMention) {
         const mentionConfig = buildMentionConfig(loadConfig(), route.agentId);
-        const mentionDebug = debugMention(msg, mentionConfig, params.account.authDir);
-        const mentionGate = resolveMentionGating({
-          requireMention: true,
-          canDetectMention: true,
-          wasMentioned: mentionDebug.wasMentioned,
-        });
-        if (mentionGate.shouldSkip) {
-          logVerbose(`Skipping DM (no mention detected, dmRequireMention enabled): ${msg.body}`);
-          return;
+        if (mentionConfig.mentionRegexes.length === 0) {
+          // No patterns configured — allow DM through to avoid silent suppression.
+          logVerbose(
+            "dmRequireMention enabled but no mentionPatterns configured; allowing DM through",
+          );
+        } else {
+          const mentionDebug = debugMention(msg, mentionConfig, params.account.authDir);
+          const mentionGate = resolveMentionGating({
+            requireMention: true,
+            canDetectMention: true,
+            wasMentioned: mentionDebug.wasMentioned,
+          });
+          if (mentionGate.shouldSkip) {
+            logVerbose(`Skipping DM (no mention detected, dmRequireMention enabled): ${msg.body}`);
+            return;
+          }
+          msg.wasMentioned = mentionGate.effectiveWasMentioned;
         }
-        msg.wasMentioned = mentionGate.effectiveWasMentioned;
       }
     }
 
