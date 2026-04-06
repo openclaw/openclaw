@@ -173,6 +173,9 @@ export function createProcessSupervisor(): ProcessSupervisor {
       }
 
       adapter.onStdout((chunk) => {
+        if (settled) {
+          return;
+        }
         if (captureOutput) {
           stdout += chunk;
         }
@@ -180,6 +183,9 @@ export function createProcessSupervisor(): ProcessSupervisor {
         touchOutput();
       });
       adapter.onStderr((chunk) => {
+        if (settled) {
+          return;
+        }
         if (captureOutput) {
           stderr += chunk;
         }

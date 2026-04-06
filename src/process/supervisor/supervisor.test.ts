@@ -255,4 +255,39 @@ describe("process supervisor", () => {
     expect(streamed).toBe("streamed");
     expect(exit.stdout).toBe("");
   });
+
+  it("does not forward late stdout/stderr after the run has settled", async () => {
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    const chunks: string[] = [];
+    const run = await spawnChild(supervisor, {
+      sessionId: "s-late",
+      argv: createWriteStdoutArgv("early"),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-closed",
+      captureOutput: false,
+      onStdout: (chunk) => {
+        chunks.push(`out:${chunk}`);
+      },
+      onStderr: (chunk) => {
+        chunks.push(`err:${chunk}`);
+      },
+    });
+
+    adapter.emitStdout("early");
+    adapter.settle(0);
+
+    const exit = await run.wait();
+    expect(exit.reason).toBe("exit");
+
+    // Simulate late output arriving after the run has settled.
+    // Before the fix, these would be forwarded to onStdout/onStderr
+    // and could crash the gateway when the agent run is no longer active.
+    adapter.emitStdout("late-stdout");
+    adapter.emitStderr("late-stderr");
+
+    expect(chunks).toEqual(["out:early"]);
+  });
 });
