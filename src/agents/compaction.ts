@@ -398,7 +398,7 @@ export async function summarizeWithFallback(params: {
     return await summarizeChunks(params);
   } catch (fullError) {
     log.warn(
-      `Full summarization failed, trying partial: ${
+      `Full summarization failed: ${
         fullError instanceof Error ? fullError.message : String(fullError)
       }`,
     );
