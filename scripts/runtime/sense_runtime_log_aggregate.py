@@ -143,6 +143,27 @@ def derive_digest_title(bucket: str, band: str) -> str:
     return f'{bucket_label} ({normalized_band})'
 
 
+def derive_digest_sort_key(
+    max_recovery_rank: object,
+    latest_timestamp: object,
+    count: object,
+    notification_group_key: object,
+) -> str:
+    rank = int(max_recovery_rank) if isinstance(max_recovery_rank, int) else 0
+    parsed_dt, original_value = parse_timestamp(latest_timestamp)
+    if parsed_dt is not None:
+        timestamp_key = parsed_dt.strftime('%Y%m%dT%H%M%SZ')
+    elif isinstance(original_value, str) and original_value.strip():
+        timestamp_key = original_value.strip().replace(':', '').replace('-', '')
+    else:
+        timestamp_key = '00000000T000000Z'
+    normalized_count = int(count) if isinstance(count, int) else 0
+    normalized_group_key = (
+        str(notification_group_key).strip() if isinstance(notification_group_key, str) else 'unknown'
+    )
+    return f'{rank:03d}:{timestamp_key}:{normalized_count:06d}:{normalized_group_key}'
+
+
 def derive_path_group(route_signature: str) -> str:
     path_signature = derive_path_signature(route_signature)
     return PATH_SHORT_LABELS.get(path_signature, 'other')
@@ -476,6 +497,12 @@ def main() -> int:
                 'digest_title': derive_digest_title(
                     str(aggregate['notification_group_key']).split('.', 1)[0],
                     str(aggregate['band'] or 'none'),
+                ),
+                'digest_sort_key': derive_digest_sort_key(
+                    aggregate['max_recovery_rank'],
+                    aggregate['latest_timestamp'],
+                    aggregate['count'],
+                    aggregate['notification_group_key'],
                 ),
                 'notification_title': aggregate['notification_title'],
                 'notification_title_short': aggregate['notification_title_short'],
