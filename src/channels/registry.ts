@@ -20,9 +20,9 @@ type RegisteredChannelPluginEntry = {
 };
 
 function listRegisteredChannelPluginEntries(): RegisteredChannelPluginEntry[] {
-  const pinned = getActivePluginChannelRegistry();
-  if (pinned && pinned.channels && pinned.channels.length > 0) {
-    return pinned.channels;
+  const channelRegistry = getActivePluginChannelRegistry();
+  if (channelRegistry && channelRegistry.channels && channelRegistry.channels.length > 0) {
+    return channelRegistry.channels;
   }
   return getActivePluginRegistry()?.channels ?? [];
 }
