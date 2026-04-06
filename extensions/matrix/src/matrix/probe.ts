@@ -1,7 +1,18 @@
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import type { BaseProbeResult } from "../runtime-api.js";
-import { createMatrixClient, isBunRuntime } from "./client.js";
+import { isBunRuntime } from "./client/runtime.js";
+
+type MatrixProbeRuntimeDeps = Pick<typeof import("./probe.runtime.js"), "createMatrixClient">;
+
+let matrixProbeRuntimeDepsPromise: Promise<MatrixProbeRuntimeDeps> | undefined;
+
+async function loadMatrixProbeRuntimeDeps(): Promise<MatrixProbeRuntimeDeps> {
+  matrixProbeRuntimeDepsPromise ??= import("./probe.runtime.js").then((runtimeModule) => ({
+    createMatrixClient: runtimeModule.createMatrixClient,
+  }));
+  return await matrixProbeRuntimeDepsPromise;
+}
 
 export type MatrixProbe = BaseProbeResult & {
   status?: number | null;
@@ -13,6 +24,7 @@ export async function probeMatrix(params: {
   homeserver: string;
   accessToken: string;
   userId?: string;
+  deviceId?: string;
   timeoutMs: number;
   accountId?: string | null;
   allowPrivateNetwork?: boolean;
@@ -48,11 +60,14 @@ export async function probeMatrix(params: {
     };
   }
   try {
+    const { createMatrixClient } = await loadMatrixProbeRuntimeDeps();
     const inputUserId = params.userId?.trim() || undefined;
     const client = await createMatrixClient({
       homeserver: params.homeserver,
       userId: inputUserId,
       accessToken: params.accessToken,
+      deviceId: params.deviceId,
+      persistStorage: false,
       localTimeoutMs: params.timeoutMs,
       accountId: params.accountId,
       allowPrivateNetwork: params.allowPrivateNetwork,

@@ -72,6 +72,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   val manualTls by viewModel.manualTls.collectAsState()
   val manualEnabled by viewModel.manualEnabled.collectAsState()
   val gatewayToken by viewModel.gatewayToken.collectAsState()
+  val gatewayBootstrapToken by viewModel.gatewayBootstrapToken.collectAsState()
   val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
 
   var advancedOpen by rememberSaveable { mutableStateOf(false) }
@@ -241,9 +242,13 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             resolveGatewayConnectConfig(
               useSetupCode = inputMode == ConnectInputMode.SetupCode,
               setupCode = setupCode,
-              manualHost = manualHostInput,
-              manualPort = manualPortInput,
-              manualTls = manualTlsInput,
+              savedManualHost = manualHost,
+              savedManualPort = manualPort.toString(),
+              savedManualTls = manualTls,
+              manualHostInput = manualHostInput,
+              manualPortInput = manualPortInput,
+              manualTlsInput = manualTlsInput,
+              fallbackBootstrapToken = gatewayBootstrapToken,
               fallbackToken = gatewayToken,
               fallbackPassword = passwordInput,
             )
@@ -251,9 +256,23 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           if (config == null) {
             validationText =
               if (inputMode == ConnectInputMode.SetupCode) {
-                "Paste a valid setup code to connect."
+                val parsedSetup = decodeGatewaySetupCode(setupCode)
+                if (parsedSetup == null) {
+                  "Paste a valid setup code to connect."
+                } else {
+                  val parsedGateway = parseGatewayEndpointResult(parsedSetup.url)
+                  gatewayEndpointValidationMessage(
+                    parsedGateway.error ?: GatewayEndpointValidationError.INVALID_URL,
+                    GatewayEndpointInputSource.SETUP_CODE,
+                  )
+                }
               } else {
-                "Enter a valid manual host and port to connect."
+                val manualUrl = composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)
+                val parsedGateway = manualUrl?.let(::parseGatewayEndpointResult)
+                gatewayEndpointValidationMessage(
+                  parsedGateway?.error ?: GatewayEndpointValidationError.INVALID_URL,
+                  GatewayEndpointInputSource.MANUAL,
+                )
               }
             return@Button
           }
@@ -381,6 +400,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           Text("Run these on the gateway host:", style = mobileCallout, color = mobileTextSecondary)
           CommandBlock("openclaw qr --setup-code-only")
           CommandBlock("openclaw qr --json")
+          Text(
+            "For Tailscale or public hosts, use wss:// or Tailscale Serve. Private LAN ws:// remains supported.",
+            style = mobileCaption1,
+            color = mobileTextSecondary,
+          )
 
           if (inputMode == ConnectInputMode.SetupCode) {
             Text("Setup Code", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
@@ -463,7 +487,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             ) {
               Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("Use TLS", style = mobileHeadline, color = mobileText)
-                Text("Switch to secure websocket (`wss`).", style = mobileCallout, color = mobileTextSecondary)
+                Text(
+                  "Turn this on for Tailscale or public hosts. Private LAN ws:// remains supported.",
+                  style = mobileCallout,
+                  color = mobileTextSecondary,
+                )
               }
               Switch(
                 checked = manualTlsInput,

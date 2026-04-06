@@ -192,12 +192,16 @@ function dispatchAgentRunFromGateway(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
 }) {
-  if (params.ingressOpts.sessionKey?.trim()) {
+  const inputProvenance = normalizeInputProvenance(params.ingressOpts.inputProvenance);
+  const shouldTrackTask =
+    params.ingressOpts.sessionKey?.trim() && inputProvenance?.kind !== "inter_session";
+  if (shouldTrackTask) {
     try {
       createRunningTaskRun({
         runtime: "cli",
         sourceId: params.runId,
-        requesterSessionKey: params.ingressOpts.sessionKey,
+        ownerKey: params.ingressOpts.sessionKey,
+        scopeKind: "session",
         requesterOrigin: normalizeDeliveryContext({
           channel: params.ingressOpts.channel,
           to: params.ingressOpts.to,
@@ -578,8 +582,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         groupId: resolvedGroupId ?? entry?.groupId,
         groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
         space: resolvedGroupSpace ?? entry?.space,
-        cliSessionIds: entry?.cliSessionIds,
-        claudeCliSessionId: entry?.claudeCliSessionId,
       };
       sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
       const sendPolicy = resolveSendPolicy({

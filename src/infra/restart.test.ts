@@ -1,23 +1,25 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawnSync: (...args: Parameters<typeof actual.spawnSync>) => spawnSyncMock(...args),
-  };
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
+    },
+  );
 });
 
 vi.mock("./ports-lsof.js", () => ({
   resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
 }));
 
-vi.mock("../config/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/paths.js")>();
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
   return {
     ...actual,
     resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
@@ -30,27 +32,12 @@ let findGatewayPidsOnPortSync: typeof import("./restart-stale-pids.js").findGate
 
 let currentTimeMs = 0;
 
-beforeEach(async () => {
-  vi.resetModules();
-  vi.doMock("node:child_process", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("node:child_process")>();
-    return {
-      ...actual,
-      spawnSync: (...args: Parameters<typeof actual.spawnSync>) => spawnSyncMock(...args),
-    };
-  });
-  vi.doMock("./ports-lsof.js", () => ({
-    resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
-  }));
-  vi.doMock("../config/paths.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../config/paths.js")>();
-    return {
-      ...actual,
-      resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
-    };
-  });
+beforeAll(async () => {
   ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
     await import("./restart-stale-pids.js"));
+});
+
+beforeEach(() => {
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
   resolveGatewayPortMock.mockReset();

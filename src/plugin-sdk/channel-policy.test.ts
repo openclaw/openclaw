@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import type { GroupPolicy } from "../config/types.base.js";
-import { createRestrictSendersChannelSecurity } from "./channel-policy.js";
+import {
+  createDangerousNameMatchingMutableAllowlistWarningCollector,
+  createRestrictSendersChannelSecurity,
+} from "./channel-policy.js";
 
 describe("createRestrictSendersChannelSecurity", () => {
   it("builds dm policy resolution and open-group warnings from one descriptor", async () => {
@@ -54,5 +57,52 @@ describe("createRestrictSendersChannelSecurity", () => {
     ).toEqual([
       '- LINE groups: groupPolicy="open" allows any member in groups to trigger. Set channels.line.groupPolicy="allowlist" + channels.line.groupAllowFrom to restrict senders.',
     ]);
+  });
+});
+
+describe("createDangerousNameMatchingMutableAllowlistWarningCollector", () => {
+  const collectWarnings = createDangerousNameMatchingMutableAllowlistWarningCollector({
+    channel: "irc",
+    detector: (entry) => !entry.includes("@"),
+    collectLists: (scope) => [
+      {
+        pathLabel: `${scope.prefix}.allowFrom`,
+        list: scope.account.allowFrom,
+      },
+    ],
+  });
+
+  it("collects mutable entries while dangerous matching is disabled", () => {
+    expect(
+      collectWarnings({
+        cfg: {
+          channels: {
+            irc: {
+              allowFrom: ["charlie"],
+            },
+          },
+        } as never,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("mutable allowlist entry"),
+        expect.stringContaining("channels.irc.allowFrom: charlie"),
+      ]),
+    );
+  });
+
+  it("skips scopes that explicitly allow dangerous name matching", () => {
+    expect(
+      collectWarnings({
+        cfg: {
+          channels: {
+            irc: {
+              dangerouslyAllowNameMatching: true,
+              allowFrom: ["charlie"],
+            },
+          },
+        } as never,
+      }),
+    ).toEqual([]);
   });
 });

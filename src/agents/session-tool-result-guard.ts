@@ -6,7 +6,7 @@ import type {
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
-  HARD_MAX_TOOL_RESULT_CHARS,
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
 } from "./pi-embedded-runner/tool-result-truncation.js";
 import { createPendingToolCallState } from "./session-tool-result-state.js";
@@ -31,7 +31,7 @@ function capToolResultSize(msg: AgentMessage): AgentMessage {
   if ((msg as { role?: string }).role !== "toolResult") {
     return msg;
   }
-  return truncateToolResultMessage(msg, HARD_MAX_TOOL_RESULT_CHARS, {
+  return truncateToolResultMessage(msg, DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS, {
     suffix: GUARD_TRUNCATION_SUFFIX,
     minKeepChars: 2_000,
   });

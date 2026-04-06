@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const cryptoMocks = vi.hoisted(() => ({
   randomBytes: vi.fn((bytes: number) => Buffer.alloc(bytes, 0xab)),
@@ -19,8 +19,7 @@ let generateSecureInt: typeof import("./secure-random.js").generateSecureInt;
 let generateSecureToken: typeof import("./secure-random.js").generateSecureToken;
 let generateSecureUuid: typeof import("./secure-random.js").generateSecureUuid;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({
     generateSecureFraction,
     generateSecureHex,
@@ -28,6 +27,11 @@ beforeEach(async () => {
     generateSecureToken,
     generateSecureUuid,
   } = await import("./secure-random.js"));
+});
+
+beforeEach(() => {
+  cryptoMocks.randomBytes.mockClear();
+  cryptoMocks.randomUUID.mockReset();
 });
 
 describe("secure-random", () => {

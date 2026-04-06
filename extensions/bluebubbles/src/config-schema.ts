@@ -32,11 +32,20 @@ const bluebubblesGroupConfigSchema = z.object({
   tools: ToolPolicySchema,
 });
 
+const bluebubblesNetworkSchema = z
+  .object({
+    /** Dangerous opt-in for same-host or trusted private/internal BlueBubbles deployments. */
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const bluebubblesAccountSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     markdown: MarkdownConfigSchema,
+    actions: bluebubblesActionSchema,
     serverUrl: z.string().optional(),
     password: buildSecretInputSchema().optional(),
     webhookPath: z.string().optional(),
@@ -52,7 +61,7 @@ const bluebubblesAccountSchema = z
     mediaMaxMb: z.number().int().positive().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
     sendReadReceipts: z.boolean().optional(),
-    allowPrivateNetwork: z.boolean().optional(),
+    network: bluebubblesNetworkSchema,
     blockStreaming: z.boolean().optional(),
     groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
   })
@@ -70,7 +79,7 @@ const bluebubblesAccountSchema = z
 
 export const BlueBubblesConfigSchema = buildCatchallMultiAccountChannelSchema(
   bluebubblesAccountSchema,
-).extend({
+).safeExtend({
   actions: bluebubblesActionSchema,
 });
 

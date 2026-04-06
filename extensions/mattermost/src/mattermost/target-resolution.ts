@@ -1,3 +1,4 @@
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -82,7 +83,7 @@ export async function resolveMattermostOpaqueTarget(params: {
   const client = createMattermostClient({
     baseUrl,
     botToken: token,
-    allowPrivateNetwork: account?.config?.allowPrivateNetwork === true,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account?.config),
   });
   try {
     await fetchMattermostUser(client, input);

@@ -7,10 +7,6 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
-import {
-  listBundledWebSearchProviders,
-  resolveBundledWebSearchPluginId,
-} from "../plugins/bundled-web-search.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
@@ -35,7 +31,7 @@ export type SearchProviderSetupContribution = FlowContribution & {
   surface: "setup";
   provider: PluginWebSearchProviderEntry;
   option: SearchProviderSetupOption;
-  source: "bundled" | "runtime";
+  source: "runtime";
 };
 
 function resolveSearchProviderCredentialLabel(
@@ -47,27 +43,16 @@ function resolveSearchProviderCredentialLabel(
   return entry.credentialLabel?.trim() || `${entry.label} API key`;
 }
 
-export const SEARCH_PROVIDER_OPTIONS: readonly PluginWebSearchProviderEntry[] =
-  resolveSearchProviderSetupContributions().map((contribution) => contribution.provider);
+export function listSearchProviderOptions(
+  config?: OpenClawConfig,
+): readonly PluginWebSearchProviderEntry[] {
+  return resolveSearchProviderOptions(config);
+}
 
 function showsSearchProviderInSetup(
   entry: Pick<PluginWebSearchProviderEntry, "onboardingScopes">,
 ): boolean {
   return entry.onboardingScopes?.includes("text-inference") ?? false;
-}
-
-function canRepairBundledProviderSelection(
-  config: OpenClawConfig,
-  provider: Pick<PluginWebSearchProviderEntry, "id" | "pluginId">,
-): boolean {
-  const pluginId = provider.pluginId ?? resolveBundledWebSearchPluginId(provider.id);
-  if (!pluginId) {
-    return false;
-  }
-  if (config.plugins?.enabled === false) {
-    return false;
-  }
-  return !config.plugins?.deny?.includes(pluginId);
 }
 
 export function resolveSearchProviderOptions(
@@ -80,7 +65,7 @@ export function resolveSearchProviderOptions(
 
 function buildSearchProviderSetupContribution(params: {
   provider: PluginWebSearchProviderEntry;
-  source: "bundled" | "runtime";
+  source: "runtime";
 }): SearchProviderSetupContribution {
   return {
     id: `search:setup:${params.provider.id}`,
@@ -100,33 +85,18 @@ function buildSearchProviderSetupContribution(params: {
 export function resolveSearchProviderSetupContributions(
   config?: OpenClawConfig,
 ): SearchProviderSetupContribution[] {
-  if (!config) {
-    return sortFlowContributionsByLabel(
-      sortWebSearchProviders(listBundledWebSearchProviders())
-        .filter(showsSearchProviderInSetup)
-        .map((provider) => buildSearchProviderSetupContribution({ provider, source: "bundled" })),
-    );
-  }
-
-  const merged = new Map<string, SearchProviderSetupContribution>(
+  const providers = sortWebSearchProviders(
     resolvePluginWebSearchProviders({
       config,
-      bundledAllowlistCompat: true,
       env: process.env,
-    }).map((provider) => [
-      provider.id,
-      buildSearchProviderSetupContribution({ provider, source: "runtime" }),
-    ]),
+      mode: "setup",
+    }),
   );
-
-  for (const provider of listBundledWebSearchProviders()) {
-    if (merged.has(provider.id) || !canRepairBundledProviderSelection(config, provider)) {
-      continue;
-    }
-    merged.set(provider.id, buildSearchProviderSetupContribution({ provider, source: "bundled" }));
-  }
-
-  return sortFlowContributionsByLabel([...merged.values()]);
+  return sortFlowContributionsByLabel(
+    providers
+      .filter(showsSearchProviderInSetup)
+      .map((provider) => buildSearchProviderSetupContribution({ provider, source: "runtime" })),
+  );
 }
 
 function resolveSearchProviderEntry(
@@ -159,9 +129,12 @@ function providerIsReady(
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
   const search = config.tools?.web?.search;
   const entry = resolveSearchProviderEntry(config, provider);
+  const configuredValue = entry?.getConfiguredCredentialValue?.(config);
   return (
-    entry?.getConfiguredCredentialValue?.(config) ??
-    entry?.getCredentialValue(search as Record<string, unknown> | undefined)
+    configuredValue ??
+    (entry?.id === "brave"
+      ? entry.getCredentialValue(search as Record<string, unknown> | undefined)
+      : undefined)
   );
 }
 
@@ -179,8 +152,8 @@ export function hasExistingKey(config: OpenClawConfig, provider: SearchProvider)
 function buildSearchEnvRef(config: OpenClawConfig, provider: SearchProvider): SecretRef {
   const entry =
     resolveSearchProviderEntry(config, provider) ??
-    SEARCH_PROVIDER_OPTIONS.find((candidate) => candidate.id === provider) ??
-    listBundledWebSearchProviders().find((candidate) => candidate.id === provider);
+    listSearchProviderOptions(config).find((candidate) => candidate.id === provider) ??
+    listSearchProviderOptions().find((candidate) => candidate.id === provider);
   const envVar = entry?.envVars.find((k) => Boolean(process.env[k]?.trim())) ?? entry?.envVars[0];
   if (!envVar) {
     throw new Error(

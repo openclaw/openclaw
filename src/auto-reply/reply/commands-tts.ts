@@ -29,6 +29,10 @@ type ParsedTtsCommand = {
   args: string;
 };
 
+type TtsAttemptDetail = NonNullable<
+  NonNullable<ReturnType<typeof getLastTtsAttempt>>["attempts"]
+>[number];
+
 function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
   // Accept `/tts` and `/tts <action> [args]` as a single control surface.
   if (normalized === "/tts") {
@@ -43,6 +47,19 @@ function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
   }
   const [action, ...tail] = rest.split(/\s+/);
   return { action: action.toLowerCase(), args: tail.join(" ").trim() };
+}
+
+function formatAttemptDetails(attempts: TtsAttemptDetail[] | undefined): string | undefined {
+  if (!attempts || attempts.length === 0) {
+    return undefined;
+  }
+  return attempts
+    .map((attempt) => {
+      const reason = attempt.reasonCode === "success" ? "ok" : attempt.reasonCode;
+      const latency = Number.isFinite(attempt.latencyMs) ? ` ${attempt.latencyMs}ms` : "";
+      return `${attempt.provider}:${attempt.outcome}(${reason})${latency}`;
+    })
+    .join(", ");
 }
 
 function ttsUsage(): ReplyPayload {
@@ -135,6 +152,9 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
         textLength: args.length,
         summarized: false,
         provider: result.provider,
+        fallbackFrom: result.fallbackFrom,
+        attemptedProviders: result.attemptedProviders,
+        attempts: result.attempts,
         latencyMs: result.latencyMs,
       });
       const payload: ReplyPayload = {
@@ -150,6 +170,8 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       success: false,
       textLength: args.length,
       summarized: false,
+      attemptedProviders: result.attemptedProviders,
+      attempts: result.attempts,
       error: result.error,
       latencyMs: Date.now() - start,
     });
@@ -285,9 +307,26 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       lines.push(`Text: ${last.textLength} chars${last.summarized ? " (summarized)" : ""}`);
       if (last.success) {
         lines.push(`Provider: ${last.provider ?? "unknown"}`);
+        if (last.fallbackFrom && last.provider && last.fallbackFrom !== last.provider) {
+          lines.push(`Fallback: ${last.fallbackFrom} -> ${last.provider}`);
+        }
+        if (last.attemptedProviders && last.attemptedProviders.length > 1) {
+          lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
+        }
+        const details = formatAttemptDetails(last.attempts);
+        if (details) {
+          lines.push(`Attempt details: ${details}`);
+        }
         lines.push(`Latency: ${last.latencyMs ?? 0}ms`);
       } else if (last.error) {
         lines.push(`Error: ${last.error}`);
+        if (last.attemptedProviders && last.attemptedProviders.length > 0) {
+          lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
+        }
+        const details = formatAttemptDetails(last.attempts);
+        if (details) {
+          lines.push(`Attempt details: ${details}`);
+        }
       }
     }
     return { shouldContinue: false, reply: { text: lines.join("\n") } };

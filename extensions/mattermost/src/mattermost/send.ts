@@ -1,4 +1,5 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
@@ -31,6 +32,7 @@ export type MattermostSendOpts = {
   accountId?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   replyToId?: string;
   props?: Record<string, unknown>;
   buttons?: Array<unknown>;
@@ -354,7 +356,7 @@ async function resolveMattermostSendContext(
     : undefined;
   const dmRetryOptions = mergeDmRetryOptions(accountRetryConfig, opts.dmRetryOptions);
 
-  const allowPrivateNetwork = account.config.allowPrivateNetwork === true;
+  const allowPrivateNetwork = isPrivateNetworkOptInEnabled(account.config);
   const channelId = await resolveTargetChannelId({
     target,
     baseUrl,
@@ -417,6 +419,7 @@ export async function sendMessageMattermost(
     try {
       const media = await loadOutboundMediaFromUrl(mediaUrl, {
         mediaLocalRoots: opts.mediaLocalRoots,
+        mediaReadFile: opts.mediaReadFile,
       });
       const fileInfo = await uploadMattermostFile(client, {
         channelId,

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { withTempDir } from "./test-helpers/temp-dir.js";
 import {
   VERSION,
   readVersionFromBuildInfoForModuleUrl,
@@ -13,15 +13,6 @@ import {
   resolveUsableRuntimeVersion,
   resolveVersionFromModuleUrl,
 } from "./version.js";
-
-async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-version-"));
-  try {
-    return await run(dir);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-}
 
 function moduleUrlFrom(root: string, relativePath: string): string {
   return pathToFileURL(path.join(root, relativePath)).href;
@@ -46,7 +37,7 @@ function expectVersionMetadataToBeMissing(moduleUrl: string) {
 
 describe("version resolution", () => {
   it("resolves package version from nested dist/plugin-sdk module URL", async () => {
-    await withTempDir(async (root) => {
+    await withTempDir({ prefix: "openclaw-version-" }, async (root) => {
       await writeJsonFixture(root, "package.json", { name: "openclaw", version: "1.2.3" });
       const moduleUrl = await ensureModuleFixture(root);
       expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBe("1.2.3");
@@ -55,7 +46,7 @@ describe("version resolution", () => {
   });
 
   it("ignores unrelated nearby package.json files", async () => {
-    await withTempDir(async (root) => {
+    await withTempDir({ prefix: "openclaw-version-" }, async (root) => {
       await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2.3.4" });
       await writeJsonFixture(root, "dist/package.json", {
         name: "other-package",
@@ -67,7 +58,7 @@ describe("version resolution", () => {
   });
 
   it("falls back to build-info when package metadata is unavailable", async () => {
-    await withTempDir(async (root) => {
+    await withTempDir({ prefix: "openclaw-version-" }, async (root) => {
       await writeJsonFixture(root, "build-info.json", { version: "4.5.6" });
       const moduleUrl = await ensureModuleFixture(root);
       expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBeNull();
@@ -77,14 +68,14 @@ describe("version resolution", () => {
   });
 
   it("returns null when no version metadata exists", async () => {
-    await withTempDir(async (root) => {
+    await withTempDir({ prefix: "openclaw-version-" }, async (root) => {
       const moduleUrl = await ensureModuleFixture(root);
       expectVersionMetadataToBeMissing(moduleUrl);
     });
   });
 
   it("ignores non-openclaw package and blank build-info versions", async () => {
-    await withTempDir(async (root) => {
+    await withTempDir({ prefix: "openclaw-version-" }, async (root) => {
       await writeJsonFixture(root, "package.json", { name: "other-package", version: "9.9.9" });
       await writeJsonFixture(root, "build-info.json", { version: "  " });
       const moduleUrl = await ensureModuleFixture(root);
@@ -99,7 +90,7 @@ describe("version resolution", () => {
   });
 
   it("resolves binary version with explicit precedence", async () => {
-    await withTempDir(async (root) => {
+    await withTempDir({ prefix: "openclaw-version-" }, async (root) => {
       await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2.3.4" });
       const moduleUrl = await ensureModuleFixture(root);
       expect(

@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  buildTalkTestProviderConfig,
+  TALK_TEST_PROVIDER_API_KEY_PATH,
+  TALK_TEST_PROVIDER_ID,
+} from "../test-utils/talk-test-provider.js";
 import { buildSecretRefCredentialMatrix } from "./credential-matrix.js";
 import {
   discoverConfigSecretTargetsByIds,
@@ -83,21 +88,20 @@ describe("secret target registry", () => {
   it("supports filtered discovery by target ids", () => {
     const targets = discoverConfigSecretTargetsByIds(
       {
-        talk: {
-          apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
-        },
+        ...buildTalkTestProviderConfig({ source: "env", provider: "default", id: "TALK_API_KEY" }),
         gateway: {
           remote: {
             token: { source: "env", provider: "default", id: "REMOTE_TOKEN" },
           },
         },
       } as unknown as OpenClawConfig,
-      new Set(["talk.apiKey"]),
+      new Set(["talk.providers.*.apiKey"]),
     );
 
     expect(targets).toHaveLength(1);
-    expect(targets[0]?.entry.id).toBe("talk.apiKey");
-    expect(targets[0]?.path).toBe("talk.apiKey");
+    expect(targets[0]?.entry.id).toBe("talk.providers.*.apiKey");
+    expect(targets[0]?.providerId).toBe(TALK_TEST_PROVIDER_ID);
+    expect(targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
   });
 
   it("resolves config targets by exact path including sibling ref metadata", () => {

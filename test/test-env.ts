@@ -7,6 +7,7 @@ import JSON5 from "json5";
 type RestoreEntry = { key: string; value: string | undefined };
 
 const LIVE_EXTERNAL_AUTH_DIRS = [".claude", ".codex", ".minimax"] as const;
+const LIVE_EXTERNAL_AUTH_FILES = [".claude.json"] as const;
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   if (!value) {
@@ -225,6 +226,26 @@ function copyFileIfExists(sourcePath: string, targetPath: string): void {
   fs.copyFileSync(sourcePath, targetPath);
 }
 
+function restoreClaudeConfigFromBackupIfNeeded(tempHome: string): void {
+  const targetPath = path.join(tempHome, ".claude.json");
+  if (fs.existsSync(targetPath)) {
+    return;
+  }
+  const backupsDir = path.join(tempHome, ".claude", "backups");
+  if (!fs.existsSync(backupsDir)) {
+    return;
+  }
+  const latestBackup = fs
+    .readdirSync(backupsDir)
+    .filter((entry) => entry.startsWith(".claude.json.backup."))
+    .toSorted()
+    .at(-1);
+  if (!latestBackup) {
+    return;
+  }
+  copyFileIfExists(path.join(backupsDir, latestBackup), targetPath);
+}
+
 function sanitizeLiveConfig(raw: string): string {
   try {
     const parsed: {
@@ -316,9 +337,16 @@ function stageLiveTestState(params: {
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {
     copyDirIfExists(path.join(params.realHome, authDir), path.join(params.tempHome, authDir));
   }
+  for (const authFile of LIVE_EXTERNAL_AUTH_FILES) {
+    copyFileIfExists(path.join(params.realHome, authFile), path.join(params.tempHome, authFile));
+  }
+  restoreClaudeConfigFromBackupIfNeeded(params.tempHome);
 }
 
-export function installTestEnv(): { cleanup: () => void; tempHome: string } {
+export function installTestEnv(options?: { loadProfileEnv?: boolean }): {
+  cleanup: () => void;
+  tempHome: string;
+} {
   const live =
     process.env.LIVE === "1" ||
     process.env.OPENCLAW_LIVE_TEST === "1" ||
@@ -327,7 +355,10 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   const realHome = process.env.HOME ?? os.homedir();
   const liveEnvSnapshot = { ...process.env };
 
-  loadProfileEnv(realHome);
+  const shouldLoadProfileEnv = options?.loadProfileEnv ?? (live || allowRealHome);
+  if (shouldLoadProfileEnv) {
+    loadProfileEnv(realHome);
+  }
 
   if (live && allowRealHome) {
     return { cleanup: () => {}, tempHome: realHome };
@@ -343,6 +374,9 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   return testEnv;
 }
 
-export function withIsolatedTestHome(): { cleanup: () => void; tempHome: string } {
-  return installTestEnv();
+export function withIsolatedTestHome(options?: { loadProfileEnv?: boolean }): {
+  cleanup: () => void;
+  tempHome: string;
+} {
+  return installTestEnv(options);
 }

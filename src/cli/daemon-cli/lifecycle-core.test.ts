@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,
@@ -8,7 +9,7 @@ import {
   stubEmptyGatewayEnv,
 } from "./test-helpers/lifecycle-core-harness.js";
 
-const loadConfig = vi.fn(() => ({
+const loadConfig = vi.fn<() => OpenClawConfig>(() => ({
   gateway: {
     auth: {
       token: "config-token",
@@ -119,6 +120,71 @@ describe("runServiceRestart token drift", () => {
     );
   });
 
+  it("resolves config token SecretRefs using service command env before drift checks", async () => {
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        auth: {
+          mode: "token",
+          token: {
+            source: "env",
+            provider: "default",
+            id: "SERVICE_GATEWAY_TOKEN",
+          },
+        },
+      },
+    });
+    service.readCommand.mockResolvedValue({
+      programArguments: [],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "service-token",
+        SERVICE_GATEWAY_TOKEN: "service-token",
+      },
+    });
+
+    await runServiceRestart(createServiceRunArgs(true));
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toBeUndefined();
+  });
+
+  it("prefers service command env over process env for SecretRef token drift resolution", async () => {
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        auth: {
+          mode: "token",
+          token: {
+            source: "env",
+            provider: "default",
+            id: "SERVICE_GATEWAY_TOKEN",
+          },
+        },
+      },
+    });
+    service.readCommand.mockResolvedValue({
+      programArguments: [],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "service-token",
+        SERVICE_GATEWAY_TOKEN: "service-token",
+      },
+    });
+    vi.stubEnv("SERVICE_GATEWAY_TOKEN", "process-token");
+
+    await runServiceRestart(createServiceRunArgs(true));
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toBeUndefined();
+  });
+
   it("skips drift warning when disabled", async () => {
     await runServiceRestart({
       serviceNoun: "Node",
@@ -152,6 +218,33 @@ describe("runServiceRestart token drift", () => {
     expect(service.stop).not.toHaveBeenCalled();
   });
 
+  it("emits started when a not-loaded start path repairs the service", async () => {
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      onNotLoaded: async () => ({
+        result: "started",
+        message:
+          "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+        loaded: true,
+      }),
+    });
+
+    const payload = readJsonLog<{
+      result?: string;
+      message?: string;
+      service?: { loaded?: boolean };
+    }>();
+    expect(payload.result).toBe("started");
+    expect(payload.message).toContain("re-bootstrapped");
+    expect(payload.service?.loaded).toBe(true);
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
   it("runs restart health checks after an unmanaged restart signal", async () => {
     const postRestartCheck = vi.fn(async () => {});
     service.isLoaded.mockResolvedValue(false);
@@ -174,6 +267,36 @@ describe("runServiceRestart token drift", () => {
     const payload = readJsonLog<{ result?: string; message?: string }>();
     expect(payload.result).toBe("restarted");
     expect(payload.message).toContain("unmanaged process");
+  });
+
+  it("emits loaded restart state when launchd repair handles a not-loaded restart", async () => {
+    const postRestartCheck = vi.fn(async () => {});
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      onNotLoaded: async () => ({
+        result: "restarted",
+        message:
+          "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+        loaded: true,
+      }),
+      postRestartCheck,
+    });
+
+    expect(postRestartCheck).toHaveBeenCalledTimes(1);
+    expect(service.restart).not.toHaveBeenCalled();
+    const payload = readJsonLog<{
+      result?: string;
+      message?: string;
+      service?: { loaded?: boolean };
+    }>();
+    expect(payload.result).toBe("restarted");
+    expect(payload.message).toContain("re-bootstrapped");
+    expect(payload.service?.loaded).toBe(true);
   });
 
   it("skips restart health checks when restart is only scheduled", async () => {
