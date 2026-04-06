@@ -118,7 +118,7 @@ function sanitizeRecentModels(models: string[] | undefined, limit: number): stri
 async function readPreferencesStore(filePath: string): Promise<ModelPickerPreferencesStore> {
   const { value } = await readJsonFileWithFallback(filePath, {
     version: 1,
-    entries: {},
+    entries: {} as Record<string, ModelPickerPreferencesEntry>,
   });
   if (!value || typeof value !== "object" || value.version !== 1) {
     return { version: 1, entries: {} };

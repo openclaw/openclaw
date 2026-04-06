@@ -14,8 +14,42 @@ export interface STTConfig {
   model: string;
 }
 
+type QQBotSttProviderConfig = {
+  baseUrl?: string;
+  apiKey?: string;
+};
+
+type QQBotSttChannelConfig = QQBotSttProviderConfig & {
+  enabled?: boolean;
+  provider?: string;
+  model?: string;
+};
+
+type QQBotSttToolAudioModel = QQBotSttProviderConfig & {
+  provider?: string;
+  model?: string;
+};
+
+type QQBotSttConfigRoot = {
+  channels?: {
+    qqbot?: {
+      stt?: QQBotSttChannelConfig;
+    };
+  };
+  models?: {
+    providers?: Record<string, QQBotSttProviderConfig>;
+  };
+  tools?: {
+    media?: {
+      audio?: {
+        models?: QQBotSttToolAudioModel[];
+      };
+    };
+  };
+};
+
 export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null {
-  const c = cfg as unknown;
+  const c = cfg as QQBotSttConfigRoot;
 
   // Prefer plugin-specific STT config.
   const channelStt = c?.channels?.qqbot?.stt;

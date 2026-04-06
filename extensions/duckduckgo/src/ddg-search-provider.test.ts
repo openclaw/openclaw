@@ -17,6 +17,7 @@ describe("duckduckgo web search provider", () => {
     ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
     ({ __testing: ddgClientTesting } =
       await vi.importActual<typeof import("./ddg-client.js")>("./ddg-client.js"));
+    await import("../index.js");
   });
 
   beforeEach(() => {

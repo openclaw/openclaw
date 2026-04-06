@@ -167,9 +167,11 @@ export async function fetchChatUsers(
       return;
     }
     const transport = parsedUrl.protocol === "https:" ? https : http;
+    const requestOptions: http.RequestOptions | https.RequestOptions =
+      parsedUrl.protocol === "https:" ? { rejectUnauthorized: !allowInsecureSsl } : {};
 
     transport
-      .get(listUrl, { rejectUnauthorized: !allowInsecureSsl } as unknown, (res) => {
+      .get(listUrl, requestOptions, (res) => {
         let data = "";
         res.on("data", (c: Buffer) => {
           data += c.toString();

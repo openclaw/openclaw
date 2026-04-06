@@ -770,12 +770,9 @@ describe("discord component interactions", () => {
     const acknowledge = vi.fn().mockResolvedValue(undefined);
     const reply = vi.fn().mockResolvedValue(undefined);
     const update = vi.fn().mockResolvedValue(undefined);
-    const baseInteraction = createComponentButtonInteraction().interaction as unknown as Record<
-      string,
-      unknown
-    >;
+    const baseInteraction = createComponentButtonInteraction().interaction;
     const interaction = {
-      ...baseInteraction,
+      ...(baseInteraction as object),
       acknowledge,
       reply,
       update,
@@ -825,12 +822,9 @@ describe("discord component interactions", () => {
     const button = createDiscordComponentButton(createComponentContext());
     const acknowledge = vi.fn().mockResolvedValue(undefined);
     const followUp = vi.fn().mockResolvedValue(undefined);
-    const baseInteraction = createComponentButtonInteraction().interaction as unknown as Record<
-      string,
-      unknown
-    >;
+    const baseInteraction = createComponentButtonInteraction().interaction;
     const interaction = {
-      ...baseInteraction,
+      ...(baseInteraction as object),
       acknowledge,
       followUp,
     } as unknown as ButtonInteraction;
