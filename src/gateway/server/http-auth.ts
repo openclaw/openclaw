@@ -9,7 +9,10 @@ import {
   type ResolvedGatewayAuth,
 } from "../auth.js";
 import { CANVAS_CAPABILITY_TTL_MS } from "../canvas-capability.js";
-import { authorizeGatewayBearerRequestOrReply } from "../http-auth-helpers.js";
+import {
+  authorizeGatewayBearerRequestOrReply,
+  type GatewayAuthResultWithScopes,
+} from "../http-auth-helpers.js";
 import { getBearerToken } from "../http-utils.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "../protocol/client-info.js";
 import type { GatewayWsClient } from "./ws-types.js";
@@ -112,6 +115,30 @@ export async function enforcePluginRouteGatewayAuth(params: {
   trustedProxies: string[];
   allowRealIpFallback: boolean;
   rateLimiter?: AuthRateLimiter;
+  /** Optional: require specific scopes for the plugin route */
+  requiredScopes?: string[];
 }): Promise<boolean> {
-  return await authorizeGatewayBearerRequestOrReply(params);
+  const authResult = await authorizeGatewayBearerRequestOrReply(params, true);
+  
+  // If auth failed, the helper already sent failure response
+  if (!authResult || !authResult.ok) {
+    return false;
+  }
+  
+  // If caller specified required scopes, enforce them
+  if (params.requiredScopes && params.requiredScopes.length > 0) {
+    const callerScopes = authResult.scopes ?? [];
+    const hasAllRequired = params.requiredScopes.every(scope => callerScopes.includes(scope));
+    if (!hasAllRequired) {
+      // Send forbidden response
+      const { sendGatewayAuthFailure } = await import("../http-common.js");
+      sendGatewayAuthFailure(params.res, {
+        ok: false,
+        reason: `missing required scope for plugin route. Required: ${params.requiredScopes.join(", ")}`,
+      });
+      return false;
+    }
+  }
+  
+  return true;
 }
