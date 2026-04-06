@@ -220,7 +220,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
     discord: {
       enabled: true,
       token: "your-bot-token",
-      mediaMaxMb: 8,
+      mediaMaxMb: 100,
       allowBots: false,
       actions: {
         reactions: true,
