@@ -378,6 +378,55 @@ describe("command queue", () => {
     await expect(enqueueCommand(async () => "ok")).resolves.toBe("ok");
   });
 
+  it("notifyActiveTaskWaiters survives stale singleton without activeTaskWaiters (pre-restart state)", async () => {
+    // Simulate a state object created by an older module version that predates
+    // the activeTaskWaiters field. resolveGlobalSingleton returns it as-is on
+    // an in-process restart, causing Array.from(undefined) to crash.
+    const STATE_KEY = Symbol.for("openclaw.commandQueueState");
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const staleState = {
+      gatewayDraining: false,
+      lanes: new Map(),
+      // activeTaskWaiters intentionally omitted to simulate older code
+      nextTaskId: 1,
+    };
+    globalStore[STATE_KEY] = staleState;
+
+    try {
+      // Any of these should not throw even though activeTaskWaiters is missing
+      expect(() => resetAllLanes()).not.toThrow();
+      expect(() => resetCommandQueueStateForTest()).not.toThrow();
+      // After getQueueState() patches it, normal operation resumes
+      await expect(enqueueCommand(async () => "ok")).resolves.toBe("ok");
+    } finally {
+      resetCommandQueueStateForTest();
+    }
+  });
+
+  it("notifyActiveTaskWaiters handles concurrent task completion with multiple waiters", async () => {
+    const lane = `concurrent-notify-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 3);
+
+    const deferreds = [createDeferred(), createDeferred(), createDeferred()];
+
+    const tasks = deferreds.map((d) =>
+      enqueueCommandInLane(lane, async () => {
+        await d.promise;
+      }),
+    );
+
+    // Wait for all three concurrent tasks
+    const drainPromise = waitForActiveTasks(5000);
+    expect(getActiveTaskCount()).toBeGreaterThanOrEqual(3);
+
+    // Release all tasks concurrently — multiple notifyActiveTaskWaiters calls
+    // fire in the same microtask batch; the waiter must only be resolved once.
+    deferreds.forEach((d) => d.resolve());
+    const { drained } = await drainPromise;
+    expect(drained).toBe(true);
+    await Promise.all(tasks);
+  });
+
   it("shares lane state across distinct module instances", async () => {
     const commandQueueA = await importFreshModule<typeof import("./command-queue.js")>(
       import.meta.url,

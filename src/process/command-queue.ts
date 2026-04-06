@@ -64,12 +64,19 @@ function isExpectedNonErrorLaneFailure(err: unknown): boolean {
 const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
 
 function getQueueState() {
-  return resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
+  const state = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
     gatewayDraining: false,
     lanes: new Map<string, LaneState>(),
     activeTaskWaiters: new Set<ActiveTaskWaiter>(),
     nextTaskId: 1,
   }));
+  // Guard: state objects created by older module versions (e.g. before an
+  // in-process SIGUSR1 restart) may predate the activeTaskWaiters field.
+  // Initialize it here rather than crashing in notifyActiveTaskWaiters.
+  if (!state.activeTaskWaiters) {
+    state.activeTaskWaiters = new Set<ActiveTaskWaiter>();
+  }
+  return state;
 }
 
 function normalizeLane(lane: string): string {
@@ -131,7 +138,7 @@ function resolveActiveTaskWaiter(waiter: ActiveTaskWaiter, result: { drained: bo
 
 function notifyActiveTaskWaiters(): void {
   const queueState = getQueueState();
-  for (const waiter of Array.from(queueState.activeTaskWaiters)) {
+  for (const waiter of Array.from(queueState.activeTaskWaiters ?? [])) {
     if (waiter.activeTaskIds.size === 0 || !hasPendingActiveTasks(waiter.activeTaskIds)) {
       resolveActiveTaskWaiter(waiter, { drained: true });
     }
@@ -304,7 +311,7 @@ export function resetCommandQueueStateForTest(): void {
   const queueState = getQueueState();
   queueState.gatewayDraining = false;
   queueState.lanes.clear();
-  for (const waiter of Array.from(queueState.activeTaskWaiters)) {
+  for (const waiter of Array.from(queueState.activeTaskWaiters ?? [])) {
     resolveActiveTaskWaiter(waiter, { drained: true });
   }
   queueState.nextTaskId = 1;
