@@ -425,6 +425,15 @@ function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob
       params.job.state.scheduleErrorCount = undefined;
       changed = true;
     }
+    // Catch-up: if a cron job missed a scheduled run between lastRunAtMs and now,
+    // fire it immediately to prevent silent skips on gateway restart (see #33092, #12744).
+    if (params.job.schedule.kind === "cron" && typeof params.job.state.lastRunAtMs === "number") {
+      const missedAt = computeNextRunAtMs(params.job.schedule, params.job.state.lastRunAtMs);
+      if (isFiniteTimestamp(missedAt) && missedAt <= params.nowMs) {
+        params.job.state.nextRunAtMs = params.nowMs;
+        changed = true;
+      }
+    }
   } catch (err) {
     if (recordScheduleComputeError({ state: params.state, job: params.job, err })) {
       changed = true;
