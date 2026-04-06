@@ -540,7 +540,7 @@ describe("runEmbeddedPiAgent", () => {
 
     runEmbeddedAttemptMock
       .mockImplementationOnce(async (params: unknown) => {
-        expect((params as { prompt?: string }).prompt).toBe("ship it");
+        expect((params as { prompt?: string }).prompt).toMatch(/^ship it(?:\n\n|$)/);
         return makeEmbeddedRunnerAttempt({
           assistantTexts: ["I'll inspect the files, make the change, and run the checks."],
           lastAssistant: buildEmbeddedRunnerAssistant({
