@@ -228,6 +228,35 @@ def derive_recovery_priority(
     return 'medium'
 
 
+def derive_recovery_bucket(
+    error_code: str | None,
+    error_detail_code: str | None,
+    error_source_layer: str | None,
+    error_stage: str | None,
+) -> str:
+    detail = str(error_detail_code or '')
+    source_layer = str(error_source_layer or '')
+    stage = str(error_stage or '')
+    code = str(error_code or '')
+    if detail == 'AUTH_401':
+        return 'auth'
+    if stage == 'TASK_SUBMIT':
+        return 'runtime_submit'
+    if stage == 'TASK_POLL':
+        return 'runtime_poll'
+    if stage == 'EXECUTOR_GATE':
+        return 'executor_gate'
+    if stage == 'BRIDGE':
+        return 'config_mapping'
+    if stage in {'DISPATCH', 'TRIAGE'}:
+        return 'control_plane'
+    if stage == 'NONE' and code == 'NONE':
+        return 'none'
+    if source_layer in {'ENTRY', 'DISPATCH'}:
+        return 'control_plane'
+    return 'none'
+
+
 def finalize_output(output: dict) -> dict:
     output['error_code'] = normalize_executor_error_code(output)
     output['error_detail_code'] = normalize_executor_error_detail_code(output)
@@ -241,6 +270,12 @@ def finalize_output(output: dict) -> dict:
     output['recovery_priority'] = derive_recovery_priority(
         output.get('error_code'),
         output.get('error_detail_code'),
+        output.get('error_stage'),
+    )
+    output['recovery_bucket'] = derive_recovery_bucket(
+        output.get('error_code'),
+        output.get('error_detail_code'),
+        output.get('error_source_layer'),
         output.get('error_stage'),
     )
     output['manager_handoff'] = build_manager_handoff(output)
@@ -701,6 +736,7 @@ def build_manager_handoff(report: dict) -> dict:
         'error_stage': report.get('error_stage'),
         'recovery_hint': report.get('recovery_hint'),
         'recovery_priority': report.get('recovery_priority'),
+        'recovery_bucket': report.get('recovery_bucket'),
         'loop_convergence_state': convergence.get('state'),
         'primary_remaining_issue': summary.get('primary_remaining_issue'),
         'secondary_remaining_issues': summary.get('secondary_remaining_issues', []),
