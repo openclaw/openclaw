@@ -41,6 +41,7 @@ export const AgentDefaultsSchema = z
     workspace: z.string().optional(),
     repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
+    skipOptionalBootstrapFiles: z.array(z.string()).optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     bootstrapPromptTruncationWarning: z
