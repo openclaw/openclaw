@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
 import {
   createVideoGenerationTaskRun,
   recordVideoGenerationTaskProgress,
@@ -48,6 +49,7 @@ describe("video generate background helpers", () => {
     });
     expect(taskExecutorMocks.createRunningTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
+        taskKind: VIDEO_GENERATION_TASK_KIND,
         sourceId: "video_generate:openai",
         progressSummary: "Queued video generation",
       }),

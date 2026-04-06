@@ -10,6 +10,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
 import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
+import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
 
 const log = createSubsystemLogger("agents/tools/video-generate-background");
 
@@ -35,6 +36,7 @@ export function createVideoGenerationTaskRun(params: {
   try {
     const task = createRunningTaskRun({
       runtime: "cli",
+      taskKind: VIDEO_GENERATION_TASK_KIND,
       sourceId: params.providerId ? `video_generate:${params.providerId}` : "video_generate",
       requesterSessionKey: sessionKey,
       ownerKey: sessionKey,
