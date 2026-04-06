@@ -347,6 +347,7 @@ export function createSessionsSendTool(opts?: {
           runId,
           messageId: idempotencyKey,
           status: "timeout",
+          accepted: true,
           error: result.error,
           sessionKey: displayKey,
         });
