@@ -192,6 +192,30 @@ export function resolveSystemEventDeliveryContext(
   return resolved;
 }
 
+/**
+ * Remove queued exec-completion events for a specific process session.
+ * Used as a fallback cleanup when poll returns an exit result — if
+ * maybeNotifyOnExit raced ahead of the pollWaiting flag and already
+ * enqueued an event, this removes the now-redundant notification.
+ */
+export function removeExecEventsForSession(sessionKey: string, sessionId: string): number {
+  const key = requireSessionKey(sessionKey);
+  const entry = getSessionQueue(key);
+  if (!entry || entry.queue.length === 0) {
+    return 0;
+  }
+  const prefix = sessionId.slice(0, 8);
+  const before = entry.queue.length;
+  entry.queue = entry.queue.filter((e) => !e.text.includes(prefix));
+  const removed = before - entry.queue.length;
+  if (entry.queue.length === 0) {
+    entry.lastText = null;
+    entry.lastContextKey = null;
+    queues.delete(key);
+  }
+  return removed;
+}
+
 export function resetSystemEventsForTest() {
   queues.clear();
 }

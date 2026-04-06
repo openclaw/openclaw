@@ -33,6 +33,8 @@ export interface ProcessSession {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
+  /** True while a `process poll` is actively waiting for this session to exit. */
+  pollWaiting?: boolean;
   child?: ChildProcessWithoutNullStreams;
   stdin?: SessionStdin;
   pid?: number;

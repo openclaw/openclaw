@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+import { removeExecEventsForSession } from "../infra/system-events.js";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -341,6 +342,9 @@ export function createProcessTool(
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
           const pollWaitMs = resolvePollWaitMs(params.timeout);
+          // Suppress maybeNotifyOnExit while poll is actively waiting;
+          // the poll result itself is the notification path.
+          scopedSession.pollWaiting = true;
           if (pollWaitMs > 0 && !scopedSession.exited) {
             const deadline = Date.now() + pollWaitMs;
             while (!scopedSession.exited && Date.now() < deadline) {
@@ -349,11 +353,13 @@ export function createProcessTool(
               );
             }
           }
+          scopedSession.pollWaiting = false;
           const { stdout, stderr } = drainSession(scopedSession);
           const exited = scopedSession.exited;
           const exitCode = scopedSession.exitCode ?? 0;
           const exitSignal = scopedSession.exitSignal ?? undefined;
           if (exited) {
+            scopedSession.exitNotified = true;
             const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
             markExited(
               scopedSession,
@@ -361,6 +367,11 @@ export function createProcessTool(
               scopedSession.exitSignal ?? null,
               status,
             );
+            // Remove any exec-completion events that raced into the queue
+            // before pollWaiting was set (fallback for the race window).
+            if (scopedSession.sessionKey) {
+              removeExecEventsForSession(scopedSession.sessionKey, scopedSession.id);
+            }
           }
           const status = exited
             ? exitCode === 0 && exitSignal == null

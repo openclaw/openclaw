@@ -323,7 +323,12 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
 }
 
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
-  if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
+  if (
+    !session.backgrounded ||
+    !session.notifyOnExit ||
+    session.exitNotified ||
+    session.pollWaiting
+  ) {
     return;
   }
   const sessionKey = session.sessionKey?.trim();
