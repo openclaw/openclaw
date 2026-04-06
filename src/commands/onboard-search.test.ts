@@ -4,6 +4,14 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { listSearchProviderOptions, setupSearch } from "./onboard-search.js";
 
+const { resolveApiKeyForProviderMock } = vi.hoisted(() => ({
+  resolveApiKeyForProviderMock: vi.fn(),
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+}));
+
 const runtime: RuntimeEnv = {
   log: vi.fn(),
   error: vi.fn(),
@@ -28,6 +36,7 @@ const SEARCH_PROVIDER_ENV_VARS = [
 
 let originalSearchProviderEnv: Partial<Record<(typeof SEARCH_PROVIDER_ENV_VARS)[number], string>> =
   {};
+const originalFetch = global.fetch;
 
 function createPrompter(params: {
   selectValue?: string;
@@ -154,6 +163,8 @@ async function runQuickstartPerplexitySetup(
 
 describe("setupSearch", () => {
   beforeEach(() => {
+    resolveApiKeyForProviderMock.mockReset();
+    resolveApiKeyForProviderMock.mockRejectedValue(new Error("missing auth"));
     originalSearchProviderEnv = Object.fromEntries(
       SEARCH_PROVIDER_ENV_VARS.map((key) => [key, process.env[key]]),
     );
@@ -163,6 +174,7 @@ describe("setupSearch", () => {
   });
 
   afterEach(() => {
+    global.fetch = originalFetch;
     for (const key of SEARCH_PROVIDER_ENV_VARS) {
       const value = originalSearchProviderEnv[key];
       if (value === undefined) {
@@ -207,6 +219,13 @@ describe("setupSearch", () => {
   });
 
   it("reuses configured AIMLAPI provider auth without prompting for a second web-search key", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValue({
+      apiKey: "aiml-profile-key",
+      source: "profile:aimlapi:default",
+      profileId: "aimlapi:default",
+      mode: "api-key",
+    });
+    global.fetch = vi.fn(async () => new Response("", { status: 400 })) as typeof fetch;
     const text = vi.fn(async () => "");
     const prompter: WizardPrompter = {
       intro: vi.fn(async () => {}),
@@ -238,6 +257,60 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(result.plugins?.entries?.aimlapi?.enabled).toBe(true);
     expect(text).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
+      provider: "aimlapi",
+      cfg: expect.objectContaining({
+        auth: expect.any(Object),
+      }),
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      "https://api.aimlapi.com/v1/chat/completions",
+      expect.objectContaining({
+        method: "POST",
+        body: "",
+      }),
+    );
+  });
+
+  it("does not trust AIMLAPI profile metadata when auth probe returns 401", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValue({
+      apiKey: "aiml-invalid-key",
+      source: "profile:aimlapi:default",
+      profileId: "aimlapi:default",
+      mode: "api-key",
+    });
+    global.fetch = vi.fn(async () => new Response("", { status: 401 })) as typeof fetch;
+    const text = vi.fn(async () => "");
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select: vi.fn(async () => "aimlapi") as unknown as WizardPrompter["select"],
+      multiselect: vi.fn(async () => []) as unknown as WizardPrompter["multiselect"],
+      text,
+      confirm: vi.fn(async () => true),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const result = await setupSearch(
+      {
+        auth: {
+          profiles: {
+            "aimlapi:default": {
+              provider: "aimlapi",
+              mode: "api_key",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runtime,
+      prompter,
+    );
+
+    expect(result.tools?.web?.search?.provider).toBe("aimlapi");
+    expect(result.tools?.web?.search?.enabled).toBeUndefined();
+    expect(result.plugins?.entries?.aimlapi?.enabled).toBeUndefined();
+    expect(text).toHaveBeenCalled();
   });
 
   it("sets provider and key for brave", async () => {

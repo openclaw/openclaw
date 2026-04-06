@@ -267,13 +267,13 @@ importers:
         specifier: 0.18.0
         version: 0.18.0(zod@4.3.6)
 
-  extensions/alibaba: {}
-
   extensions/aimlapi:
     dependencies:
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
+
+  extensions/alibaba: {}
 
   extensions/amazon-bedrock:
     dependencies:
@@ -306,6 +306,8 @@ importers:
   extensions/chutes: {}
 
   extensions/cloudflare-ai-gateway: {}
+
+  extensions/comfy: {}
 
   extensions/copilot-proxy: {}
 
@@ -730,6 +732,8 @@ importers:
         version: link:../..
 
   extensions/volcengine: {}
+
+  extensions/vydra: {}
 
   extensions/whatsapp:
     dependencies:

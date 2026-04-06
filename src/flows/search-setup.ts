@@ -1,4 +1,5 @@
 import type { SecretInputMode } from "../commands/onboard-types.js";
+import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
@@ -126,11 +127,11 @@ function providerIsReady(
   return (
     hasExistingKey(config, entry.id) ||
     hasKeyInEnv(entry) ||
-    hasImplicitProviderAuth(config, entry.id)
+    hasImplicitProviderAuthMetadata(config, entry.id)
   );
 }
 
-function hasImplicitProviderAuth(
+function hasImplicitProviderAuthMetadata(
   config: OpenClawConfig,
   provider: string,
 ): boolean {
@@ -143,6 +144,40 @@ function hasImplicitProviderAuth(
       profileId.startsWith("aimlapi:") ||
       (typeof profile === "object" && profile !== null && profile.provider === "aimlapi"),
   );
+}
+
+async function hasImplicitProviderAuth(
+  config: OpenClawConfig,
+  provider: string,
+): Promise<boolean> {
+  if (provider !== "aimlapi" || !hasImplicitProviderAuthMetadata(config, provider)) {
+    return false;
+  }
+
+  try {
+    const resolved = await resolveApiKeyForProvider({
+      provider: "aimlapi",
+      cfg: config,
+    });
+    const apiKey = resolved?.apiKey?.trim();
+    if (!apiKey) {
+      return false;
+    }
+
+    const response = await fetch("https://api.aimlapi.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: "",
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    return response.ok || response.status === 400;
+  } catch {
+    return false;
+  }
 }
 
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
@@ -421,7 +456,7 @@ export async function runSearchSetupFlow(
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
-  const implicitAuthAvailable = hasImplicitProviderAuth(config, choice);
+  const implicitAuthAvailable = await hasImplicitProviderAuth(config, choice);
   const needsCredential = providerNeedsCredential(entry);
 
   if (opts?.quickstartDefaults && (keyConfigured || envAvailable || implicitAuthAvailable)) {

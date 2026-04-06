@@ -10,8 +10,8 @@ import {
   enforceSourceManagedProviderSecrets,
   normalizeProviders,
   resolveImplicitProviders,
-  type ProviderConfig,
 } from "./models-config.providers.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
