@@ -138,12 +138,10 @@ function createSlackReplyReferencePlanner(params: {
   hasReplied?: boolean;
   isThreadReply?: boolean;
 }) {
-  // Keep backward-compatible behavior: when a thread id is present and caller
-  // does not provide explicit classification, stay in thread. Callers that can
-  // distinguish Slack's auto-populated top-level thread_ts should pass
-  // `isThreadReply: false` to preserve replyToMode behavior.
-  const effectiveIsThreadReply = params.isThreadReply ?? Boolean(params.incomingThreadTs);
-  const effectiveMode = effectiveIsThreadReply ? "all" : params.replyToMode;
+  // Only force threading for genuine user thread replies. Slack auto-populates
+  // thread_ts on top-level messages; respect the configured replyToMode there.
+  // See: openclaw/openclaw#23839
+  const effectiveMode = params.isThreadReply ? "all" : params.replyToMode;
   return createReplyReferencePlanner({
     replyToMode: effectiveMode,
     existingId: params.incomingThreadTs,
