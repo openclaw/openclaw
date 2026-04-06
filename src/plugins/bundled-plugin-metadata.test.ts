@@ -105,6 +105,12 @@ describe("bundled plugin metadata", () => {
       specifier: "./auth-presence",
       exportName: "hasAnyWhatsAppAuth",
     });
+
+    const matrix = listBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
+    expect(matrix?.packageManifest?.channel?.persistedAuthState).toEqual({
+      specifier: "./auth-presence",
+      exportName: "hasAnyMatrixAuth",
+    });
   });
 
   it("keeps bundled configured-state metadata on channel package manifests", () => {
