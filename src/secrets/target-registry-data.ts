@@ -467,9 +467,15 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   },
 ];
 
-const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
-  ...CORE_SECRET_TARGET_REGISTRY,
-  ...listChannelSecretTargetRegistryEntries(),
-];
+let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
 
-export { SECRET_TARGET_REGISTRY };
+export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
+  if (cachedSecretTargetRegistry) {
+    return cachedSecretTargetRegistry;
+  }
+  cachedSecretTargetRegistry = [
+    ...CORE_SECRET_TARGET_REGISTRY,
+    ...listChannelSecretTargetRegistryEntries(),
+  ];
+  return cachedSecretTargetRegistry;
+}

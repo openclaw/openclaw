@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isChannelSurfaceTestFile } from "../vitest.channel-paths.mjs";
-import { isCommandsLightTestFile } from "../vitest.commands-light-paths.mjs";
+import {
+  isCommandsLightTarget,
+  resolveCommandsLightIncludePattern,
+} from "../vitest.commands-light-paths.mjs";
 import { isAcpxExtensionRoot } from "../vitest.extension-acpx-paths.mjs";
 import { isBlueBubblesExtensionRoot } from "../vitest.extension-bluebubbles-paths.mjs";
 import { isDiffsExtensionRoot } from "../vitest.extension-diffs-paths.mjs";
@@ -19,7 +22,10 @@ import { isTelegramExtensionRoot } from "../vitest.extension-telegram-paths.mjs"
 import { isVoiceCallExtensionRoot } from "../vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../vitest.extension-zalo-paths.mjs";
-import { isPluginSdkLightTestFile } from "../vitest.plugin-sdk-paths.mjs";
+import {
+  isPluginSdkLightTarget,
+  resolvePluginSdkLightIncludePattern,
+} from "../vitest.plugin-sdk-paths.mjs";
 import { isBoundaryTestFile, isBundledPluginDependentUnitTestFile } from "../vitest.unit-paths.mjs";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 
@@ -320,7 +326,7 @@ function classifyTarget(arg, cwd) {
     return "logging";
   }
   if (relative.startsWith("src/plugin-sdk/")) {
-    return isPluginSdkLightTestFile(relative) ? "pluginSdkLight" : "pluginSdk";
+    return isPluginSdkLightTarget(relative) ? "pluginSdkLight" : "pluginSdk";
   }
   if (relative.startsWith("src/process/")) {
     return "process";
@@ -344,7 +350,7 @@ function classifyTarget(arg, cwd) {
     return "cli";
   }
   if (relative.startsWith("src/commands/")) {
-    return isCommandsLightTestFile(relative) ? "commandLight" : "command";
+    return isCommandsLightTarget(relative) ? "commandLight" : "command";
   }
   if (relative.startsWith("src/auto-reply/")) {
     return "autoReply";
@@ -365,6 +371,19 @@ function classifyTarget(arg, cwd) {
     return "wizard";
   }
   return "default";
+}
+
+function resolveLightLaneIncludePatterns(kind, targetArg, cwd) {
+  const relative = toRepoRelativeTarget(targetArg, cwd);
+  if (kind === "pluginSdkLight") {
+    const includePattern = resolvePluginSdkLightIncludePattern(relative);
+    return includePattern ? [includePattern] : null;
+  }
+  if (kind === "commandLight") {
+    const includePattern = resolveCommandsLightIncludePattern(relative);
+    return includePattern ? [includePattern] : null;
+  }
+  return null;
 }
 
 function createVitestArgs(params) {
@@ -618,7 +637,10 @@ export function buildVitestRunPlans(
         grouped.every((targetArg) => isFileLikeTarget(toRepoRelativeTarget(targetArg, cwd))));
     const includePatterns = useCliTargetArgs
       ? null
-      : grouped.map((targetArg) => toScopedIncludePattern(targetArg, cwd));
+      : grouped.flatMap((targetArg) => {
+          const lightLanePatterns = resolveLightLaneIncludePatterns(kind, targetArg, cwd);
+          return lightLanePatterns ?? [toScopedIncludePattern(targetArg, cwd)];
+        });
     const scopedTargetArgs = useCliTargetArgs ? grouped : [];
     plans.push({
       config,
