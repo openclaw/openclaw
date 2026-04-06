@@ -169,6 +169,22 @@ describe("systemd availability", () => {
 
     await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
   });
+
+  it("does not fall back to machine user scope on permission-denied bus failures", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["--user", "status"]);
+      cb(
+        createExecFileError("Failed to connect to bus: Permission denied", {
+          stderr: "Failed to connect to bus: Permission denied",
+        }),
+        "",
+        "",
+      );
+    });
+
+    await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("isSystemdServiceEnabled", () => {
