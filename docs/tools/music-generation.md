@@ -144,6 +144,25 @@ ignored with a warning when the selected provider or model cannot honor them.
 - Prompt hint: later user/manual turns in the same session get a small runtime hint when a music task is already in flight so the model does not blindly call `music_generate` again.
 - No-session fallback: direct/local contexts without a real agent session still run inline and return the final audio result in the same turn.
 
+### Task lifecycle
+
+Each `music_generate` request moves through four states:
+
+1. **queued** -- task created, waiting for the provider to accept it.
+2. **running** -- provider is processing (typically 30 seconds to 3 minutes depending on provider and duration).
+3. **succeeded** -- track ready; the agent wakes and posts it to the conversation.
+4. **failed** -- provider error or timeout; the agent wakes with error details.
+
+Check status from the CLI:
+
+```bash
+openclaw tasks list
+openclaw tasks show <taskId>
+openclaw tasks cancel <taskId>
+```
+
+Duplicate prevention: if a music task is already `queued` or `running` for the current session, `music_generate` returns the existing task status instead of starting a new one. Use `action: "status"` to check explicitly without triggering a new generation.
+
 ## Configuration
 
 ### Model selection
