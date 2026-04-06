@@ -176,6 +176,8 @@ export type { ResolvedSessionMaintenanceConfig, SessionMaintenanceWarning };
 type SaveSessionStoreOptions = {
   /** Skip pruning, capping, and rotation (e.g. during one-time migrations). */
   skipMaintenance?: boolean;
+  /** Agent id for per-agent maintenance config resolution. */
+  agentId?: string;
   /** Active session key for warn-only maintenance. */
   activeSessionKey?: string;
   /**
@@ -279,7 +281,10 @@ async function saveSessionStoreUnlocked(
 
   if (!opts?.skipMaintenance) {
     // Resolve maintenance config once (avoids repeated loadConfig() calls).
-    const maintenance = { ...resolveMaintenanceConfig(), ...opts?.maintenanceOverride };
+    const maintenance = {
+      ...resolveMaintenanceConfig(opts?.agentId),
+      ...opts?.maintenanceOverride,
+    };
     const shouldWarnOnly = maintenance.mode === "warn";
     const beforeCount = Object.keys(store).length;
 

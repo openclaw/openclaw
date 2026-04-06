@@ -162,7 +162,7 @@ async function previewStoreCleanup(params: {
   activeKey?: string;
   fixMissing?: boolean;
 }) {
-  const maintenance = resolveMaintenanceConfig();
+  const maintenance = resolveMaintenanceConfig(params.target.agentId);
   const beforeStore = loadSessionStore(params.target.storePath, { skipCache: true });
   const previewStore = structuredClone(beforeStore);
   const staleKeys = new Set<string>();
@@ -293,7 +293,6 @@ function renderStoreDryRunPlan(params: {
 export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runtime: RuntimeEnv) {
   const cfg = loadConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
-  const mode = opts.enforce ? "enforce" : resolveMaintenanceConfig().mode;
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
     opts: {
@@ -312,9 +311,10 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
     actionRows: SessionCleanupActionRow[];
   }> = [];
   for (const target of targets) {
+    const targetMode = opts.enforce ? "enforce" : resolveMaintenanceConfig(target.agentId).mode;
     const result = await previewStoreCleanup({
       target,
-      mode,
+      mode: targetMode,
       dryRun: Boolean(opts.dryRun),
       activeKey: opts.activeKey,
       fixMissing: Boolean(opts.fixMissing),
@@ -330,7 +330,6 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
       }
       writeRuntimeJson(runtime, {
         allAgents: true,
-        mode,
         dryRun: true,
         stores: previewResults.map((result) => result.summary),
       });
@@ -356,6 +355,7 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
 
   const appliedSummaries: SessionCleanupSummary[] = [];
   for (const target of targets) {
+    const targetMode = opts.enforce ? "enforce" : resolveMaintenanceConfig(target.agentId).mode;
     const appliedReportRef: { current: SessionMaintenanceApplyReport | null } = {
       current: null,
     };
@@ -371,9 +371,10 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
         });
       },
       {
+        agentId: target.agentId,
         activeSessionKey: opts.activeKey,
         maintenanceOverride: {
-          mode,
+          mode: targetMode,
         },
         onMaintenanceApplied: (report) => {
           appliedReportRef.current = report;
@@ -389,7 +390,7 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
             ...(preview?.summary ?? {
               agentId: target.agentId,
               storePath: target.storePath,
-              mode,
+              mode: targetMode,
               dryRun: false,
               beforeCount: 0,
               afterCount: 0,
@@ -435,7 +436,6 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
     }
     writeRuntimeJson(runtime, {
       allAgents: true,
-      mode,
       dryRun: false,
       stores: appliedSummaries,
     });

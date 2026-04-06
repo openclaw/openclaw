@@ -124,16 +124,58 @@ function resolveHighWaterBytes(
 }
 
 /**
- * Resolve maintenance settings from openclaw.json (`session.maintenance`).
+ * Look up per-agent maintenance overrides from `agents.list[].maintenance`.
+ * Returns `undefined` when the agent has no overrides or is not found.
+ */
+function resolveAgentMaintenanceOverride(
+  agentId: string | undefined,
+): SessionMaintenanceConfig | undefined {
+  if (!agentId) {
+    return undefined;
+  }
+  try {
+    const agents = loadConfig().agents?.list;
+    if (!agents) {
+      return undefined;
+    }
+    const agent = agents.find((a) => a.id === agentId);
+    return agent?.maintenance ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Merge global session.maintenance with per-agent overrides.
+ * Per-agent values take precedence; unset fields fall through to global.
+ */
+function mergeMaintenanceConfig(
+  global: SessionMaintenanceConfig | undefined,
+  perAgent: SessionMaintenanceConfig | undefined,
+): SessionMaintenanceConfig | undefined {
+  if (!perAgent) {
+    return global;
+  }
+  if (!global) {
+    return perAgent;
+  }
+  return { ...global, ...perAgent };
+}
+
+/**
+ * Resolve maintenance settings from openclaw.json (`session.maintenance`),
+ * optionally merging per-agent overrides from `agents.list[].maintenance`.
  * Falls back to built-in defaults when config is missing or unset.
  */
-export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
-  let maintenance: SessionMaintenanceConfig | undefined;
+export function resolveMaintenanceConfig(agentId?: string): ResolvedSessionMaintenanceConfig {
+  let globalMaintenance: SessionMaintenanceConfig | undefined;
   try {
-    maintenance = loadConfig().session?.maintenance;
+    globalMaintenance = loadConfig().session?.maintenance;
   } catch {
     // Config may not be available (e.g. in tests). Use defaults.
   }
+  const agentOverride = resolveAgentMaintenanceOverride(agentId);
+  const maintenance = mergeMaintenanceConfig(globalMaintenance, agentOverride);
   const pruneAfterMs = resolvePruneAfterMs(maintenance);
   const maxDiskBytes = resolveMaxDiskBytes(maintenance);
   return {

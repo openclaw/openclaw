@@ -10,6 +10,7 @@ import {
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
+import { SessionMaintenanceSchema } from "./zod-schema.maintenance.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 export const HeartbeatSchema = z
@@ -808,6 +809,7 @@ export const AgentEntrySchema = z
       })
       .strict()
       .optional(),
+    maintenance: SessionMaintenanceSchema,
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,
