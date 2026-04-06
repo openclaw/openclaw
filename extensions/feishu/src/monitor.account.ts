@@ -26,6 +26,7 @@ import { parseFeishuDriveCommentNoticeEventPayload } from "./monitor.comment.js"
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
+import { deleteBotReplies } from "./recall-handler.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
@@ -818,6 +819,10 @@ function registerEventHandlers(
       } catch (err) {
         error(`feishu[${accountId}]: error handling card action: ${String(err)}`);
       }
+    },
+    "im.message.recalled_v1": async (data: unknown) => {
+      const event = data as { message_id: string };
+      await deleteBotReplies({ cfg, recalledUserMessageId: event.message_id, accountId, log });
     },
   });
 }

@@ -6,6 +6,7 @@ import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
+import { registerBotReply } from "./recall-handler.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
@@ -117,7 +118,7 @@ async function sendFallbackDirect(
     },
   });
   assertFeishuMessageApiSuccess(response, errorPrefix);
-  return toFeishuSendResult(response, params.receiveId);
+  return toFeishuSendResult(response, params.receiveId, false); // false = viaReplyPath
 }
 
 async function sendReplyOrFallbackDirect(
@@ -138,7 +139,10 @@ async function sendReplyOrFallbackDirect(
   },
 ): Promise<FeishuSendResult> {
   if (!params.replyToMessageId) {
-    return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+    return {
+      ...(await sendFallbackDirect(client, params.directParams, params.directErrorPrefix)),
+      viaReplyPath: false,
+    };
   }
 
   const threadReplyFallbackError = params.replyInThread
@@ -173,7 +177,7 @@ async function sendReplyOrFallbackDirect(
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
   assertFeishuMessageApiSuccess(response, params.replyErrorPrefix);
-  return toFeishuSendResult(response, params.directParams.receiveId);
+  return toFeishuSendResult(response, params.directParams.receiveId, true);
 }
 
 function parseInteractiveCardContent(parsed: unknown): string {
@@ -462,7 +466,7 @@ export async function sendMessageFeishu(
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
   const directParams = { receiveId, receiveIdType, content, msgType };
-  return sendReplyOrFallbackDirect(client, {
+  const result = await sendReplyOrFallbackDirect(client, {
     replyToMessageId,
     replyInThread,
     content,
@@ -471,6 +475,12 @@ export async function sendMessageFeishu(
     directErrorPrefix: "Feishu send failed",
     replyErrorPrefix: "Feishu reply failed",
   });
+  // Register bot reply for recall tracking
+  // Only register if sent via true reply path (not fallback direct send)
+  if (replyToMessageId && result.messageId && result.viaReplyPath === true) {
+    registerBotReply(replyToMessageId, result.messageId, true);
+  }
+  return result;
 }
 
 export type SendFeishuCardParams = {
@@ -489,7 +499,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   const content = JSON.stringify(card);
 
   const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
-  return sendReplyOrFallbackDirect(client, {
+  const result = await sendReplyOrFallbackDirect(client, {
     replyToMessageId,
     replyInThread,
     content,
@@ -498,6 +508,12 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
     directErrorPrefix: "Feishu card send failed",
     replyErrorPrefix: "Feishu card reply failed",
   });
+  // Register bot reply for recall tracking
+  // Only register if sent via true reply path (not fallback direct send)
+  if (replyToMessageId && result.messageId && result.viaReplyPath === true) {
+    registerBotReply(replyToMessageId, result.messageId, true);
+  }
+  return result;
 }
 
 export async function editMessageFeishu(params: {

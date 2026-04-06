@@ -18,12 +18,15 @@ export function assertFeishuMessageApiSuccess(
 export function toFeishuSendResult(
   response: FeishuMessageApiResponse,
   chatId: string,
+  viaReplyPath = true,
 ): {
   messageId: string;
   chatId: string;
+  viaReplyPath: boolean;
 } {
   return {
     messageId: response.data?.message_id ?? "unknown",
     chatId,
+    viaReplyPath,
   };
 }
