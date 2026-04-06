@@ -141,7 +141,6 @@ async function runPromptResolvedAllowFromWithToken(params: {
   resolveEntries: AllowFromResolver;
 }) {
   return await promptResolvedAllowFrom({
-    // oxlint-disable-next-line typescript/no-explicit-any
     prompter: params.prompter as any,
     existing: [],
     token: "xoxb-test",
@@ -199,7 +198,6 @@ async function runPromptSingleChannelSecretInput(params: {
 }) {
   return await promptSingleChannelSecretInput({
     cfg: {},
-    // oxlint-disable-next-line typescript/no-explicit-any
     prompter: params.prompter as any,
     providerHint: params.providerHint,
     credentialLabel: params.credentialLabel,
@@ -262,7 +260,6 @@ async function runPromptLegacyAllowFrom(params: {
   return await promptLegacyChannelAllowFrom({
     cfg: params.cfg ?? {},
     channel: params.channel,
-    // oxlint-disable-next-line typescript/no-explicit-any
     prompter: params.prompter as any,
     existing: params.existing,
     token: params.token,
@@ -282,7 +279,6 @@ describe("promptResolvedAllowFrom", () => {
     const resolveEntries = vi.fn();
 
     const result = await promptResolvedAllowFrom({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       existing: ["111"],
       token: "",
@@ -292,7 +288,6 @@ describe("promptResolvedAllowFrom", () => {
       parseInputs: parseCsvInputs,
       parseId: (value) => (/^\d+$/.test(value.trim()) ? value.trim() : null),
       invalidWithoutTokenNote: "ids only",
-      // oxlint-disable-next-line typescript/no-explicit-any
       resolveEntries: resolveEntries as any,
     });
 
@@ -397,7 +392,6 @@ describe("promptLegacyChannelAllowFromForAccount", () => {
         },
       } as OpenClawConfig,
       channel: "slack",
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       defaultAccountId: DEFAULT_ACCOUNT_ID,
       resolveAccount: () => ({
@@ -774,7 +768,6 @@ describe("createPromptParsedAllowFromForAccount", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
     });
 
@@ -798,7 +791,6 @@ describe("parsed allowFrom prompt builders", () => {
     const prompter = createPrompter(["npub1"]);
     const next = await promptAllowFrom({
       cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
     });
 
@@ -819,7 +811,6 @@ describe("parsed allowFrom prompt builders", () => {
 
     const next = await promptAllowFrom({
       cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: createPrompter(["users/123"]) as any,
     });
 
@@ -2010,7 +2001,6 @@ describe("resolveAccountIdForConfigure", () => {
   it("uses normalized override without prompting", async () => {
     const accountId = await resolveAccountIdForConfigure({
       cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: {} as any,
       label: "Signal",
       accountOverride: " Team Primary ",
@@ -2024,7 +2014,6 @@ describe("resolveAccountIdForConfigure", () => {
   it("uses default account when override is missing and prompting disabled", async () => {
     const accountId = await resolveAccountIdForConfigure({
       cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: {} as any,
       label: "Signal",
       shouldPromptAccountIds: false,
@@ -2043,7 +2032,6 @@ describe("resolveAccountIdForConfigure", () => {
 
     const accountId = await resolveAccountIdForConfigure({
       cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Signal",
       shouldPromptAccountIds: true,
