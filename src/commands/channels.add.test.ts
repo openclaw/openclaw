@@ -487,4 +487,34 @@ describe("channelsAddCommand", () => {
       'Channel signal post-setup warning for "ops": hook failed',
     );
   });
+
+  it("shows login guidance when a channel supports auth login but not add", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "whatsapp",
+              label: "WhatsApp",
+              docsPath: "/channels/whatsapp",
+            }),
+            auth: {
+              login: vi.fn(async () => {}),
+            },
+          } as ChannelPlugin,
+          source: "test",
+        },
+      ]),
+    );
+
+    await channelsAddCommand({ channel: "whatsapp" }, runtime, { hasFlags: true });
+
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Channel whatsapp does not support add. Use openclaw channels login --channel whatsapp to link it.",
+    );
+  });
 });

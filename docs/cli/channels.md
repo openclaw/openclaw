@@ -48,6 +48,7 @@ openclaw channels remove --channel telegram --delete
 ```
 
 Tip: `openclaw channels add --help` shows per-channel flags (token, private key, app token, signal-cli paths, etc).
+For WhatsApp specifically, use `openclaw channels login --channel whatsapp` to link the account.
 
 Common non-interactive add surfaces include:
 

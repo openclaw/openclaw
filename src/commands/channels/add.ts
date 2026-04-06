@@ -263,7 +263,13 @@ export async function channelsAddCommand(
 
   const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
   if (!plugin?.setup?.applyAccountConfig) {
-    runtime.error(`Channel ${channel} does not support add.`);
+    if (plugin?.auth?.login) {
+      runtime.error(
+        `Channel ${channel} does not support add. Use openclaw channels login --channel ${channel} to link it.`,
+      );
+    } else {
+      runtime.error(`Channel ${channel} does not support add.`);
+    }
     runtime.exit(1);
     return;
   }
