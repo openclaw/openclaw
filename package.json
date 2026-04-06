@@ -1250,6 +1250,7 @@
       "axios": "1.13.6",
       "defu": "6.1.5",
       "fast-xml-parser": "5.5.7",
+      "lodash-es": "4.18.1",
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",
       "file-type": "22.0.0",

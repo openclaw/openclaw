@@ -30,6 +30,27 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("console.log(1)");
   });
 
+  it("renders mermaid fences into renderable mermaid blocks", () => {
+    const html = toSanitizedMarkdownHtml(
+      ["```mermaid", "flowchart TD", "A --> B", "```"].join("\n"),
+    );
+    expect(html).toContain('class="mermaid-block"');
+    expect(html).toContain('class="mermaid-block__render"');
+    expect(html).toContain('class="mermaid-block__dialog"');
+    expect(html).toContain('class="language-mermaid"');
+    expect(html).toContain("Mermaid source");
+    expect(html).toContain("Click to enlarge");
+  });
+
+  it("renders Mermaid fences case-insensitively", () => {
+    const html = toSanitizedMarkdownHtml(
+      ["```Mermaid", "flowchart TD", "A --> B", "```"].join("\n"),
+    );
+
+    expect(html).toContain('class="mermaid-block"');
+    expect(html).toContain('class="language-mermaid"');
+  });
+
   it("flattens remote markdown images into alt text", () => {
     const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/image.png)");
     expect(html).not.toContain("<img");

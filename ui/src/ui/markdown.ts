@@ -11,6 +11,7 @@ const allowedTags = [
   "code",
   "del",
   "details",
+  "dialog",
   "div",
   "em",
   "h1",
@@ -48,6 +49,9 @@ const allowedAttrs = [
   "data-code",
   "type",
   "aria-label",
+  "aria-modal",
+  "role",
+  "tabindex",
 ];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
@@ -243,7 +247,8 @@ htmlEscapeRenderer.code = ({
   lang?: string;
   escaped?: boolean;
 }) => {
-  const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
+  const normalizedLang = lang?.trim().toLowerCase() ?? "";
+  const langClass = normalizedLang ? ` class="language-${escapeHtml(normalizedLang)}"` : "";
   const safeText = escaped ? text : escapeHtml(text);
   const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
   const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
@@ -255,10 +260,14 @@ htmlEscapeRenderer.code = ({
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 
+  if (normalizedLang === "mermaid") {
+    return `<div class="mermaid-block"><div class="mermaid-block__render" aria-label="Mermaid diagram. Click to enlarge." role="button" tabindex="0" title="Click to enlarge"></div><dialog class="mermaid-block__dialog" aria-modal="true"><div class="mermaid-block__dialog-panel"><div class="mermaid-block__dialog-header"><div class="mermaid-block__dialog-title">Mermaid diagram</div><button type="button" class="btn btn--sm mermaid-block__dialog-close" aria-label="Close Mermaid preview">Close</button></div><div class="mermaid-block__dialog-body"></div></div></dialog><details class="mermaid-block__source"><summary>Mermaid source</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details></div>`;
+  }
+
   const trimmed = text.trim();
   const isJson =
-    lang === "json" ||
-    (!lang &&
+    normalizedLang === "json" ||
+    (!normalizedLang &&
       ((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
         (trimmed.startsWith("[") && trimmed.endsWith("]"))));
 

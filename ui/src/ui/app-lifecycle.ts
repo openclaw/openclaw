@@ -17,6 +17,7 @@ import {
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import { scheduleMermaidRender } from "./mermaid.ts";
 import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
@@ -35,6 +36,10 @@ type LifecycleHost = {
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string | null;
+  settings?: {
+    chatShowThinking?: boolean;
+    chatShowToolCalls?: boolean;
+  };
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
@@ -88,13 +93,20 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
   if (host.tab === "chat" && host.chatManualRefreshInFlight) {
     return;
   }
+  const previousSettings = changed.get("settings") as LifecycleHost["settings"] | undefined;
+  const chatRenderSettingsChanged =
+    changed.has("settings") &&
+    !!previousSettings &&
+    (previousSettings.chatShowThinking !== host.settings?.chatShowThinking ||
+      previousSettings.chatShowToolCalls !== host.settings?.chatShowToolCalls);
   if (
     host.tab === "chat" &&
     (changed.has("chatMessages") ||
       changed.has("chatToolMessages") ||
       changed.has("chatStream") ||
       changed.has("chatLoading") ||
-      changed.has("tab"))
+      changed.has("tab") ||
+      chatRenderSettingsChanged)
   ) {
     const forcedByTab = changed.has("tab");
     const forcedByLoad =
@@ -109,6 +121,7 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
       host as unknown as Parameters<typeof scheduleChatScroll>[0],
       forcedByTab || forcedByLoad || streamJustStarted || !host.chatHasAutoScrolled,
     );
+    scheduleMermaidRender();
   }
   if (
     host.tab === "logs" &&
