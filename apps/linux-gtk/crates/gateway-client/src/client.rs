@@ -94,6 +94,11 @@ impl GatewayClient {
     }
 
     /// Send an RPC request with a custom timeout.
+    ///
+    /// The timeout uses a background OS thread + oneshot channel so it
+    /// works regardless of whether the caller is on a tokio runtime or
+    /// the GLib main loop (`glib::spawn_future_local`). On timeout, a
+    /// `Cancel` command removes the dead sender from the pending map.
     pub async fn request_with_timeout(
         &self,
         method: &str,
@@ -114,16 +119,31 @@ impl GatewayClient {
             })
             .map_err(|_| ClientError::SendFailed)?;
 
-        // Use tokio::time::sleep + futures select instead of spawning an OS
-        // thread per request. On timeout, send a Cancel command so the
-        // pending-map entry gets cleaned up (prevents unbounded leak on
-        // long-lived degraded connections).
-        let sleep = tokio::time::sleep(timeout);
-        tokio::pin!(sleep);
+        // Use a oneshot + background thread for the timeout so we don't
+        // require an entered tokio runtime on the polling thread. This
+        // matters because callers include `glib::spawn_future_local`
+        // which runs on the GLib main loop, not a tokio executor.
+        let (timeout_tx, timeout_rx) = oneshot::channel::<()>();
+        std::thread::Builder::new()
+            .name("rpc-timeout".into())
+            .spawn(move || {
+                std::thread::sleep(timeout);
+                let _ = timeout_tx.send(());
+            })
+            .map_err(|_| ClientError::SendFailed)?;
 
-        tokio::select! {
-            result = reply_rx => {
-                let result = result.map_err(|_| ClientError::SendFailed)?;
+        use futures_util::future::Either;
+        let mut reply_fut = Box::pin(reply_rx);
+        let mut timeout_fut = Box::pin(timeout_rx);
+        let result = futures_util::future::select(
+            reply_fut.as_mut(),
+            timeout_fut.as_mut(),
+        )
+        .await;
+
+        match result {
+            Either::Left((reply_result, _)) => {
+                let result = reply_result.map_err(|_| ClientError::SendFailed)?;
                 match result {
                     Ok(resp) if resp.ok => Ok(resp.payload),
                     Ok(resp) => {
@@ -137,7 +157,7 @@ impl GatewayClient {
                     Err(e) => Err(e),
                 }
             }
-            _ = &mut sleep => {
+            Either::Right(_) => {
                 let _ = self.cmd_tx.try_send(WsCommand::Cancel(id));
                 Err(ClientError::Timeout)
             }
@@ -408,7 +428,13 @@ async fn try_connect(
                         }
                     }
                     Some(WsCommand::Request { frame, id, reply }) => {
-                        if let Err(e) = ws_write.send(Message::Text(frame.into())).await {
+                        // Skip stale requests whose caller already timed out
+                        // and dropped the receiver. This prevents replaying
+                        // mutating RPCs (chat.send, sessions.patch) after
+                        // reconnect when the user already saw a timeout.
+                        if reply.is_closed() {
+                            debug!("skipping stale request {id} (caller timed out)");
+                        } else if let Err(e) = ws_write.send(Message::Text(frame.into())).await {
                             let _ = reply.send(Err(ClientError::WebSocket(e.to_string())));
                         } else {
                             pending.lock().await.insert(id, reply);

@@ -19,6 +19,9 @@ mod imp {
         pub active_session: RefCell<Option<String>>,
         pub stream_text: RefCell<String>,
         pub stream_run_id: RefCell<Option<String>>,
+        /// Session key of the currently streaming run, so finalization
+        /// routes to the correct session even if the user switches tabs.
+        pub stream_session_key: RefCell<String>,
         pub agents: RefCell<Vec<serde_json::Value>>,
         pub sessions: RefCell<Vec<serde_json::Value>>,
         pub channels: RefCell<Vec<serde_json::Value>>,
@@ -90,6 +93,14 @@ impl AppState {
 
     pub fn set_stream_run_id(&self, id: Option<String>) {
         *self.imp().stream_run_id.borrow_mut() = id;
+    }
+
+    pub fn stream_session_key(&self) -> String {
+        self.imp().stream_session_key.borrow().clone()
+    }
+
+    pub fn set_stream_session_key(&self, key: String) {
+        *self.imp().stream_session_key.borrow_mut() = key;
     }
 
     pub fn agents(&self) -> Vec<serde_json::Value> {

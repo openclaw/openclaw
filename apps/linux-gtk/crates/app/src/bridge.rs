@@ -241,14 +241,15 @@ impl EventBridge {
 
         match stream {
             "assistant" => {
-                // `data.text` is the running-accumulated text; just overwrite
-                // the stream buffer so the typing indicator shows the whole
-                // reply so far.
+                // `data.text` is the running-accumulated text; overwrite
+                // the stream buffer. Track session key so finalization
+                // routes to the correct session even if user switches tabs.
                 if let Some(text) = data
                     .and_then(|d| d.get("text"))
                     .and_then(|v| v.as_str())
                 {
                     state.set_stream_text(text.to_string());
+                    state.set_stream_session_key(session_key.clone());
                     if let Some(id) = run_id {
                         state.set_stream_run_id(Some(id));
                     }
@@ -261,20 +262,25 @@ impl EventBridge {
                     .unwrap_or("");
                 match phase {
                     "start" => {
+                        state.set_stream_session_key(session_key.clone());
                         if let Some(id) = run_id {
                             state.set_stream_run_id(Some(id));
                         }
                     }
                     "end" => {
-                        // Flush the accumulated stream as a finalized
-                        // assistant bubble.
+                        // Use the STORED stream session key, not the
+                        // lifecycle event's session key, to correctly
+                        // attribute text even if events interleave.
+                        let sk = state.stream_session_key();
+                        let sk = if sk.is_empty() { session_key.clone() } else { sk };
                         let text = state.stream_text();
                         if !text.is_empty() {
                             let rid = run_id.unwrap_or_default();
-                            state.push_assistant_message(session_key.clone(), rid, text);
+                            state.push_assistant_message(sk, rid, text);
                         }
                         state.set_stream_text(String::new());
                         state.set_stream_run_id(None);
+                        state.set_stream_session_key(String::new());
                     }
                     _ => {}
                 }
