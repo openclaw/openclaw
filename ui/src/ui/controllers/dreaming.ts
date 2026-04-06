@@ -1,7 +1,8 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ConfigSnapshot } from "../types.ts";
 
-export type DreamingMode = "off" | "core" | "rem" | "deep";
+export type DreamingPhaseId = "light" | "deep" | "rem";
+const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
 
 type DreamingPhaseStatusBase = {
   enabled: boolean;
@@ -31,7 +32,6 @@ type RemDreamingStatus = DreamingPhaseStatusBase & {
 };
 
 export type DreamingStatus = {
-  mode: DreamingMode;
   enabled: boolean;
   timezone?: string;
   verboseLogging: boolean;
@@ -53,6 +53,12 @@ type DoctorMemoryStatusPayload = {
   dreaming?: unknown;
 };
 
+type DoctorMemoryDreamDiaryPayload = {
+  found?: unknown;
+  path?: unknown;
+  content?: unknown;
+};
+
 export type DreamingState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -62,6 +68,10 @@ export type DreamingState = {
   dreamingStatusError: string | null;
   dreamingStatus: DreamingStatus | null;
   dreamingModeSaving: boolean;
+  dreamDiaryLoading: boolean;
+  dreamDiaryError: string | null;
+  dreamDiaryPath: string | null;
+  dreamDiaryContent: string | null;
   lastError: string | null;
 };
 
@@ -106,19 +116,6 @@ function normalizeStorageMode(value: unknown): DreamingStatus["storageMode"] {
   return "inline";
 }
 
-function normalizeDreamingMode(value: unknown): DreamingMode | undefined {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
-  if (
-    normalized === "off" ||
-    normalized === "core" ||
-    normalized === "rem" ||
-    normalized === "deep"
-  ) {
-    return normalized;
-  }
-  return undefined;
-}
-
 function normalizeNextRun(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -146,13 +143,9 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
   const timezone = normalizeTrimmedString(record.timezone);
   const storePath = normalizeTrimmedString(record.storePath);
   const storeError = normalizeTrimmedString(record.storeError);
-  const explicitMode = normalizeDreamingMode(record.mode);
-  const enabled = normalizeBoolean(record.enabled, false);
-  const mode = explicitMode ?? (enabled ? "core" : "off");
 
   return {
-    mode,
-    enabled,
+    enabled: normalizeBoolean(record.enabled, false),
     ...(timezone ? { timezone } : {}),
     verboseLogging: normalizeBoolean(record.verboseLogging, false),
     storageMode: normalizeStorageMode(record.storageMode),
@@ -208,6 +201,33 @@ export async function loadDreamingStatus(state: DreamingState): Promise<void> {
   }
 }
 
+export async function loadDreamDiary(state: DreamingState): Promise<void> {
+  if (!state.client || !state.connected || state.dreamDiaryLoading) {
+    return;
+  }
+  state.dreamDiaryLoading = true;
+  state.dreamDiaryError = null;
+  try {
+    const payload = await state.client.request<DoctorMemoryDreamDiaryPayload>(
+      "doctor.memory.dreamDiary",
+      {},
+    );
+    const path = normalizeTrimmedString(payload?.path) ?? DEFAULT_DREAM_DIARY_PATH;
+    const found = payload?.found === true;
+    if (found) {
+      state.dreamDiaryPath = path;
+      state.dreamDiaryContent = typeof payload?.content === "string" ? payload.content : "";
+    } else {
+      state.dreamDiaryPath = path;
+      state.dreamDiaryContent = null;
+    }
+  } catch (err) {
+    state.dreamDiaryError = String(err);
+  } finally {
+    state.dreamDiaryLoading = false;
+  }
+}
+
 async function writeDreamingPatch(
   state: DreamingState,
   patch: Record<string, unknown>,
@@ -248,20 +268,13 @@ export async function updateDreamingEnabled(
   state: DreamingState,
   enabled: boolean,
 ): Promise<boolean> {
-  return updateDreamingMode(state, enabled ? "core" : "off");
-}
-
-export async function updateDreamingMode(
-  state: DreamingState,
-  mode: DreamingMode,
-): Promise<boolean> {
   const ok = await writeDreamingPatch(state, {
     plugins: {
       entries: {
         "memory-core": {
           config: {
             dreaming: {
-              mode,
+              enabled,
             },
           },
         },
@@ -271,8 +284,7 @@ export async function updateDreamingMode(
   if (ok && state.dreamingStatus) {
     state.dreamingStatus = {
       ...state.dreamingStatus,
-      mode,
-      enabled: mode !== "off",
+      enabled,
     };
   }
   return ok;

@@ -261,6 +261,8 @@ importers:
         specifier: 0.18.0
         version: 0.18.0(zod@4.3.6)
 
+  extensions/alibaba: {}
+
   extensions/amazon-bedrock:
     dependencies:
       '@aws-sdk/client-bedrock':
@@ -614,6 +616,8 @@ importers:
         version: link:../..
 
   extensions/qwen: {}
+
+  extensions/runway: {}
 
   extensions/searxng: {}
 

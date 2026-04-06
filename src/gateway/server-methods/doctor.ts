@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -17,15 +17,10 @@ import { formatError } from "../server-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
-const MANAGED_LIGHT_SLEEP_CRON_NAME = "Memory Light Dreaming";
-const MANAGED_LIGHT_SLEEP_CRON_TAG = "[managed-by=memory-core.dreaming.light]";
-const LIGHT_SLEEP_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const MANAGED_DEEP_SLEEP_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DEEP_SLEEP_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
 const DEEP_SLEEP_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
-const MANAGED_REM_SLEEP_CRON_NAME = "Memory REM Dreaming";
-const MANAGED_REM_SLEEP_CRON_TAG = "[managed-by=memory-core.dreaming.rem]";
-const REM_SLEEP_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
+const DREAM_DIARY_FILE_NAMES = ["DREAMS.md", "dreams.md"] as const;
 
 type DoctorMemoryDreamingPhasePayload = {
   enabled: boolean;
@@ -81,6 +76,14 @@ export type DoctorMemoryStatusPayload = {
     error?: string;
   };
   dreaming?: DoctorMemoryDreamingPayload;
+};
+
+export type DoctorMemoryDreamDiaryPayload = {
+  agentId: string;
+  found: boolean;
+  path: string;
+  content?: string;
+  updatedAtMs?: number;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -366,31 +369,60 @@ async function resolveManagedDreamingCronStatus(params: {
 async function resolveAllManagedDreamingCronStatuses(context: {
   cron?: { list?: (opts?: { includeDisabled?: boolean }) => Promise<unknown[]> };
 }): Promise<Record<"light" | "deep" | "rem", ManagedDreamingCronStatus>> {
+  const sweepStatus = await resolveManagedDreamingCronStatus({
+    context,
+    match: {
+      name: MANAGED_DEEP_SLEEP_CRON_NAME,
+      tag: MANAGED_DEEP_SLEEP_CRON_TAG,
+      payloadText: DEEP_SLEEP_SYSTEM_EVENT_TEXT,
+    },
+  });
   return {
-    light: await resolveManagedDreamingCronStatus({
-      context,
-      match: {
-        name: MANAGED_LIGHT_SLEEP_CRON_NAME,
-        tag: MANAGED_LIGHT_SLEEP_CRON_TAG,
-        payloadText: LIGHT_SLEEP_SYSTEM_EVENT_TEXT,
-      },
-    }),
-    deep: await resolveManagedDreamingCronStatus({
-      context,
-      match: {
-        name: MANAGED_DEEP_SLEEP_CRON_NAME,
-        tag: MANAGED_DEEP_SLEEP_CRON_TAG,
-        payloadText: DEEP_SLEEP_SYSTEM_EVENT_TEXT,
-      },
-    }),
-    rem: await resolveManagedDreamingCronStatus({
-      context,
-      match: {
-        name: MANAGED_REM_SLEEP_CRON_NAME,
-        tag: MANAGED_REM_SLEEP_CRON_TAG,
-        payloadText: REM_SLEEP_SYSTEM_EVENT_TEXT,
-      },
-    }),
+    light: sweepStatus,
+    deep: sweepStatus,
+    rem: sweepStatus,
+  };
+}
+
+async function readDreamDiary(
+  workspaceDir: string,
+): Promise<Omit<DoctorMemoryDreamDiaryPayload, "agentId">> {
+  for (const name of DREAM_DIARY_FILE_NAMES) {
+    const filePath = path.join(workspaceDir, name);
+    let stat;
+    try {
+      stat = await fs.lstat(filePath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT") {
+        continue;
+      }
+      return {
+        found: false,
+        path: name,
+      };
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      continue;
+    }
+    try {
+      const content = await fs.readFile(filePath, "utf-8");
+      return {
+        found: true,
+        path: name,
+        content,
+        updatedAtMs: Math.floor(stat.mtimeMs),
+      };
+    } catch {
+      return {
+        found: false,
+        path: name,
+      };
+    }
+  }
+  return {
+    found: false,
+    path: DREAM_DIARY_FILE_NAMES[0],
   };
 }
 
@@ -480,5 +512,16 @@ export const doctorHandlers: GatewayRequestHandlers = {
     } finally {
       await manager.close?.().catch(() => {});
     }
+  },
+  "doctor.memory.dreamDiary": async ({ respond }) => {
+    const cfg = loadConfig();
+    const agentId = resolveDefaultAgentId(cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const dreamDiary = await readDreamDiary(workspaceDir);
+    const payload: DoctorMemoryDreamDiaryPayload = {
+      agentId,
+      ...dreamDiary,
+    };
+    respond(true, payload, undefined);
   },
 };

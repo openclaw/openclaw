@@ -1,50 +1,120 @@
 import { html, nothing } from "lit";
-import type { DreamingMode } from "../controllers/dreaming.ts";
+
+// ── Diary entry parser ─────────────────────────────────────────────────
+
+type DiaryEntry = {
+  date: string;
+  body: string;
+};
+
+const DIARY_START_RE = /<!--\s*openclaw:dreaming:diary:start\s*-->/;
+const DIARY_END_RE = /<!--\s*openclaw:dreaming:diary:end\s*-->/;
+
+function parseDiaryEntries(raw: string): DiaryEntry[] {
+  // Extract content between diary markers, or use full content.
+  let content = raw;
+  const startMatch = DIARY_START_RE.exec(raw);
+  const endMatch = DIARY_END_RE.exec(raw);
+  if (startMatch && endMatch && endMatch.index > startMatch.index) {
+    content = raw.slice(startMatch.index + startMatch[0].length, endMatch.index);
+  }
+
+  const entries: DiaryEntry[] = [];
+  // Split on --- separators.
+  const blocks = content.split(/\n---\n/).filter((b) => b.trim().length > 0);
+
+  for (const block of blocks) {
+    const lines = block.trim().split("\n");
+    let date = "";
+    const bodyLines: string[] = [];
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      // Date lines are wrapped in *asterisks* like: *April 5, 2026, 3:00 AM*
+      if (!date && trimmed.startsWith("*") && trimmed.endsWith("*") && trimmed.length > 2) {
+        date = trimmed.slice(1, -1);
+        continue;
+      }
+      // Skip heading lines and HTML comments.
+      if (trimmed.startsWith("#") || trimmed.startsWith("<!--")) {
+        continue;
+      }
+      if (trimmed.length > 0) {
+        bodyLines.push(trimmed);
+      }
+    }
+
+    if (bodyLines.length > 0) {
+      entries.push({ date, body: bodyLines.join("\n") });
+    }
+  }
+
+  return entries;
+}
 
 export type DreamingProps = {
   active: boolean;
-  mode: DreamingMode;
   shortTermCount: number;
   longTermCount: number;
   promotedCount: number;
   dreamingOf: string | null;
   nextCycle: string | null;
   timezone: string | null;
-  modes: Array<{
-    id: DreamingMode;
-    label: string;
-    detail: string;
-  }>;
   statusLoading: boolean;
   statusError: string | null;
   modeSaving: boolean;
+  dreamDiaryLoading: boolean;
+  dreamDiaryError: string | null;
+  dreamDiaryPath: string | null;
+  dreamDiaryContent: string | null;
   onRefresh: () => void;
-  onSelectMode: (mode: DreamingMode) => void;
+  onRefreshDiary: () => void;
+  onToggleEnabled: (enabled: boolean) => void;
+  onRequestUpdate?: () => void;
 };
 
 const DREAM_PHRASES = [
-  "consolidating memories…",
-  "tidying the knowledge graph…",
-  "replaying today's conversations…",
-  "weaving short-term into long-term…",
-  "defragmenting the mind palace…",
-  "filing away loose thoughts…",
-  "connecting distant dots…",
-  "composting old context windows…",
-  "alphabetizing the subconscious…",
-  "promoting promising hunches…",
-  "forgetting what doesn't matter…",
-  "dreaming in embeddings…",
-  "reorganizing the memory attic…",
-  "softly indexing the day…",
-  "nurturing fledgling insights…",
-  "simmering half-formed ideas…",
-  "whispering to the vector store…",
+  "consolidating memories\u2026",
+  "tidying the knowledge graph\u2026",
+  "replaying today's conversations\u2026",
+  "weaving short-term into long-term\u2026",
+  "defragmenting the mind palace\u2026",
+  "filing away loose thoughts\u2026",
+  "connecting distant dots\u2026",
+  "composting old context windows\u2026",
+  "alphabetizing the subconscious\u2026",
+  "promoting promising hunches\u2026",
+  "forgetting what doesn't matter\u2026",
+  "dreaming in embeddings\u2026",
+  "reorganizing the memory attic\u2026",
+  "softly indexing the day\u2026",
+  "nurturing fledgling insights\u2026",
+  "simmering half-formed ideas\u2026",
+  "whispering to the vector store\u2026",
 ];
 
 let _dreamIndex = Math.floor(Math.random() * DREAM_PHRASES.length);
 let _dreamLastSwap = 0;
 const DREAM_SWAP_MS = 6_000;
+
+// ── Sub-tab state ─────────────────────────────────────────────────────
+
+type DreamSubTab = "scene" | "diary";
+let _subTab: DreamSubTab = "scene";
+
+export function setDreamSubTab(tab: DreamSubTab): void {
+  _subTab = tab;
+}
+
+// ── Diary pagination state ─────────────────────────────────────────────
+
+let _diaryPage = 0;
+let _diaryEntryCount = 0;
+
+/** Navigate to a specific diary page. Triggers a re-render via Lit's reactive cycle. */
+export function setDiaryPage(page: number): void {
+  _diaryPage = Math.max(0, Math.min(page, Math.max(0, _diaryEntryCount - 1)));
+}
 
 function currentDreamPhrase(): string {
   const now = Date.now();
@@ -117,6 +187,38 @@ export function renderDreaming(props: DreamingProps) {
   const dreamText = props.dreamingOf ?? currentDreamPhrase();
 
   return html`
+    <div class="dreams-page">
+      <!-- ── Sub-tab bar ── -->
+      <nav class="dreams__tabs">
+        <button
+          class="dreams__tab ${_subTab === "scene" ? "dreams__tab--active" : ""}"
+          @click=${() => {
+            _subTab = "scene";
+            props.onRequestUpdate?.();
+          }}
+        >
+          Scene
+        </button>
+        <button
+          class="dreams__tab ${_subTab === "diary" ? "dreams__tab--active" : ""}"
+          @click=${() => {
+            _subTab = "diary";
+            props.onRequestUpdate?.();
+          }}
+        >
+          Diary
+        </button>
+      </nav>
+
+      ${_subTab === "scene" ? renderScene(props, idle, dreamText) : renderDiarySection(props)}
+    </div>
+  `;
+}
+
+// ── Scene renderer ────────────────────────────────────────────────────
+
+function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
+  return html`
     <section class="dreams ${idle ? "dreams--idle" : ""}">
       ${STARS.map(
         (s) => html`
@@ -160,13 +262,13 @@ export function renderDreaming(props: DreamingProps) {
 
       <div class="dreams__status">
         <span class="dreams__status-label"
-          >${props.active ? "Dreaming Active" : "Dreaming Idle"} · ${props.mode.toUpperCase()}</span
+          >${props.active ? "Dreaming Active" : "Dreaming Idle"}</span
         >
         <div class="dreams__status-detail">
           <div class="dreams__status-dot"></div>
           <span>
             ${props.promotedCount} promoted
-            ${props.nextCycle ? html`· next run ${props.nextCycle}` : nothing}
+            ${props.nextCycle ? html`· next sweep ${props.nextCycle}` : nothing}
             ${props.timezone ? html`· ${props.timezone}` : nothing}
           </span>
         </div>
@@ -195,63 +297,133 @@ export function renderDreaming(props: DreamingProps) {
         </div>
       </div>
 
-      <div class="dreams__controls">
-        <div class="dreams__controls-head">
-          <div>
-            <div class="dreams__controls-title">Dreaming Modes</div>
-            <div class="dreams__controls-subtitle">
-              Pick a cadence and threshold profile for durable promotion.
-            </div>
+      ${props.statusError
+        ? html`<div class="dreams__controls-error">${props.statusError}</div>`
+        : nothing}
+    </section>
+  `;
+}
+
+// ── Diary section renderer ────────────────────────────────────────────
+
+function renderDiarySection(props: DreamingProps) {
+  if (props.dreamDiaryError) {
+    return html`
+      <section class="dreams-diary">
+        <div class="dreams-diary__error">${props.dreamDiaryError}</div>
+      </section>
+    `;
+  }
+
+  if (typeof props.dreamDiaryContent !== "string") {
+    return html`
+      <section class="dreams-diary">
+        <div class="dreams-diary__empty">
+          <div class="dreams-diary__empty-moon">
+            <svg viewBox="0 0 32 32" fill="none" width="32" height="32">
+              <circle
+                cx="16"
+                cy="16"
+                r="14"
+                stroke="currentColor"
+                stroke-width="0.5"
+                opacity="0.2"
+              />
+              <path
+                d="M20 8a10 10 0 0 1 0 16 10 10 0 1 0 0-16z"
+                fill="currentColor"
+                opacity="0.08"
+              />
+            </svg>
           </div>
-          <div class="dreams__controls-actions">
-            <button
-              class="btn btn--subtle btn--sm"
-              ?disabled=${props.modeSaving}
-              @click=${props.onRefresh}
-            >
-              ${props.statusLoading ? "Refreshing…" : "Refresh"}
-            </button>
+          <div class="dreams-diary__empty-text">No dreams yet</div>
+          <div class="dreams-diary__empty-hint">
+            Dreams will appear here after the first dreaming cycle runs.
           </div>
         </div>
-        <div class="dreams__phase-grid">
-          ${props.modes.map(
-            (mode) => html`
-              <article
-                class="dreams__phase ${props.mode === mode.id ? "dreams__phase--active" : ""}"
-              >
-                <div class="dreams__phase-top">
-                  <div>
-                    <div class="dreams__phase-label">${mode.label}</div>
-                    <div class="dreams__phase-detail">${mode.detail}</div>
-                  </div>
-                  <button
-                    class="btn btn--subtle btn--sm"
-                    ?disabled=${props.modeSaving || props.mode === mode.id}
-                    @click=${() => props.onSelectMode(mode.id)}
-                  >
-                    ${props.mode === mode.id ? "Active" : "Set"}
-                  </button>
-                </div>
-                <div class="dreams__phase-meta">
-                  <span>${props.mode === mode.id ? "selected" : "available"}</span>
-                  <span>
-                    ${mode.id === "off"
-                      ? "no background runs"
-                      : mode.id === "core"
-                        ? "nightly cadence"
-                        : mode.id === "deep"
-                          ? "every 12 hours"
-                          : "every 6 hours"}
-                  </span>
-                </div>
-              </article>
-            `,
-          )}
+      </section>
+    `;
+  }
+
+  const entries = parseDiaryEntries(props.dreamDiaryContent);
+  _diaryEntryCount = entries.length;
+
+  if (entries.length === 0) {
+    return html`
+      <section class="dreams-diary">
+        <div class="dreams-diary__empty">
+          <div class="dreams-diary__empty-text">The diary is waiting</div>
+          <div class="dreams-diary__empty-hint">
+            Narrative entries will appear after the next dreaming cycle.
+          </div>
         </div>
-        ${props.statusError
-          ? html`<div class="dreams__controls-error">${props.statusError}</div>`
-          : nothing}
+      </section>
+    `;
+  }
+
+  // Show most recent entries first (reverse chronological).
+  const reversed = [...entries].toReversed();
+  // Clamp page.
+  const page = Math.max(0, Math.min(_diaryPage, reversed.length - 1));
+  const entry = reversed[page];
+  const hasPrev = page > 0;
+  const hasNext = page < reversed.length - 1;
+
+  return html`
+    <section class="dreams-diary">
+      <div class="dreams-diary__header">
+        <span class="dreams-diary__title">Dream Diary</span>
+        <div class="dreams-diary__nav">
+          <button
+            class="dreams-diary__nav-btn"
+            ?disabled=${!hasNext}
+            @click=${() => {
+              setDiaryPage(page + 1);
+              props.onRequestUpdate?.();
+            }}
+            title="Older"
+          >
+            ‹
+          </button>
+          <span class="dreams-diary__page">${page + 1} / ${reversed.length}</span>
+          <button
+            class="dreams-diary__nav-btn"
+            ?disabled=${!hasPrev}
+            @click=${() => {
+              setDiaryPage(page - 1);
+              props.onRequestUpdate?.();
+            }}
+            title="Newer"
+          >
+            ›
+          </button>
+        </div>
+        <button
+          class="btn btn--subtle btn--sm"
+          ?disabled=${props.modeSaving || props.dreamDiaryLoading}
+          @click=${() => {
+            _diaryPage = 0;
+            props.onRefreshDiary();
+          }}
+        >
+          ${props.dreamDiaryLoading ? "\u2026" : "Reload"}
+        </button>
       </div>
+
+      <article class="dreams-diary__entry" key="${page}">
+        <div class="dreams-diary__accent"></div>
+        ${entry.date ? html`<time class="dreams-diary__date">${entry.date}</time>` : nothing}
+        <div class="dreams-diary__prose">
+          ${entry.body
+            .split("\n")
+            .map(
+              (para, i) =>
+                html`<p class="dreams-diary__para" style="animation-delay: ${0.3 + i * 0.15}s;">
+                  ${para}
+                </p>`,
+            )}
+        </div>
+      </article>
     </section>
   `;
 }
