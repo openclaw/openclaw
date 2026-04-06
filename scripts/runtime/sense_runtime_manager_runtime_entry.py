@@ -44,6 +44,10 @@ def build_decision_trace_id() -> str:
     return f'rtx-{timestamp}-{uuid4().hex[:6]}'
 
 
+def build_span_id(prefix: str) -> str:
+    return f'{prefix}-{uuid4().hex[:4]}'
+
+
 def run_entry(script_dir: Path, args: argparse.Namespace, runtime_args: list[str]) -> dict:
     cmd = [str(script_dir / 'sense-runtime-manager-entry.sh'), *runtime_args]
     if args.handoff_json:
@@ -213,6 +217,22 @@ def build_path_codes(path_tags: list[str]) -> list[str]:
     return codes
 
 
+def normalize_error_code(runtime_entry_state: str, error_text: str | None) -> str:
+    if runtime_entry_state == 'stopped':
+        return 'EXECUTOR_STOPPED'
+    if isinstance(error_text, str):
+        lowered = error_text.lower()
+        if 'unauthorized' in lowered or 'status=401' in lowered:
+            return 'UNAUTHORIZED'
+        if 'timeout' in lowered:
+            return 'TIMEOUT'
+        if 'submit failed' in lowered:
+            return 'RUNTIME_SUBMIT_FAILED'
+    if runtime_entry_state == 'failed':
+        return 'EXECUTOR_FAILED'
+    return 'NONE'
+
+
 def build_layer_statuses(entry_result: dict | None, bridge_result: dict | None, dispatch_result: dict | None) -> dict:
     entry_status = 'completed' if isinstance(entry_result, dict) else None
     bridge_status = None
@@ -231,6 +251,18 @@ def build_layer_statuses(entry_result: dict | None, bridge_result: dict | None, 
         'dispatch_status': dispatch_status,
         'executor_status': executor_status,
     }
+
+
+def attach_trace_to_dispatch_result(dispatch_result: dict | None, decision_trace_id: str, dispatch_trace_span_id: str) -> str | None:
+    if not isinstance(dispatch_result, dict):
+        return None
+    dispatch_result['decision_trace_id'] = decision_trace_id
+    dispatch_result['dispatch_trace_span_id'] = dispatch_trace_span_id
+    dispatch_payload = dispatch_result.get('dispatch_result')
+    if isinstance(dispatch_payload, dict):
+        executor_trace_span_id = dispatch_payload.get('executor_trace_span_id')
+        return executor_trace_span_id if isinstance(executor_trace_span_id, str) else None
+    return None
 
 
 def extract_loop_convergence(dispatch_result: dict) -> dict | None:
@@ -318,6 +350,7 @@ def build_feedback_memory(entry_result: dict, dispatch_result: dict, feedback_su
         'last_decision_quality': feedback_summary.get('decision_quality'),
         'last_primary_issue': last_primary_issue,
         'last_success_action': extract_last_success_action(dispatch_result),
+        'last_path_codes': manager_handoff.get('path_codes', []),
     }
 
 
@@ -326,30 +359,41 @@ def main() -> int:
     script_dir = Path(__file__).resolve().parent
     runtime_args = build_runtime_args(args)
     decision_trace_id = build_decision_trace_id()
+    entry_trace_span_id = build_span_id('entry')
+    dispatch_trace_span_id = build_span_id('dispatch')
     entry_result: dict | None = None
     bridge_result: dict | None = None
     dispatch_result: dict | None = None
     entry_duration_sec: float | None = None
     dispatch_duration_sec: float | None = None
     executor_duration_sec: float | None = None
+    executor_trace_span_id: str | None = None
 
     try:
         started = time.perf_counter()
         entry_result = run_entry(script_dir, args, runtime_args)
         entry_duration_sec = round(time.perf_counter() - started, 6)
         entry_result['decision_trace_id'] = decision_trace_id
+        entry_result['entry_trace_span_id'] = entry_trace_span_id
 
         started = time.perf_counter()
         bridge_result = run_bridge(script_dir, entry_result, args.handoff_json)
         dispatch_duration_sec = round(time.perf_counter() - started, 6)
+        if isinstance(bridge_result, dict):
+            bridge_result['dispatch_trace_span_id'] = dispatch_trace_span_id
 
         if bridge_result.get('bridge_used') is True:
             manager_policy_outcome = bridge_result.get('manager_policy_outcome') or {}
             manager_policy_outcome['decision_trace_id'] = decision_trace_id
+            manager_policy_outcome['dispatch_trace_span_id'] = dispatch_trace_span_id
+            executor_trace_span_id = build_span_id('executor')
+            manager_policy_outcome['executor_trace_span_id'] = executor_trace_span_id
             started = time.perf_counter()
             executor_result = run_executor(script_dir, manager_policy_outcome, runtime_args)
             executor_duration_sec = round(time.perf_counter() - started, 6)
             dispatch_result = {
+                'decision_trace_id': decision_trace_id,
+                'dispatch_trace_span_id': dispatch_trace_span_id,
                 'dispatch_mode': 'shortcut_executor',
                 'shortcut_used': True,
                 'dispatch_reason': 'lightweight policy bridge promoted the handoff shortcut into a direct executor path',
@@ -359,6 +403,11 @@ def main() -> int:
             started = time.perf_counter()
             dispatch_result = run_dispatch(script_dir, entry_result, runtime_args)
             dispatch_duration_sec = round(time.perf_counter() - started, 6)
+            executor_trace_span_id = attach_trace_to_dispatch_result(
+                dispatch_result,
+                decision_trace_id,
+                dispatch_trace_span_id,
+            )
 
         runtime_entry_state = infer_runtime_entry_state(dispatch_result)
         feedback_summary = build_feedback_summary(entry_result, dispatch_result)
@@ -368,12 +417,16 @@ def main() -> int:
         layer_statuses = build_layer_statuses(entry_result, bridge_result, dispatch_result)
         output = {
             'decision_trace_id': decision_trace_id,
+            'entry_trace_span_id': entry_trace_span_id,
+            'dispatch_trace_span_id': dispatch_trace_span_id,
+            'executor_trace_span_id': executor_trace_span_id,
             'entry_decision': entry_result.get('entry_decision'),
             'dispatch_mode': dispatch_result.get('dispatch_mode'),
             'runtime_entry_state': runtime_entry_state,
             'path_taken': path_summary.get('path_taken'),
             'path_tags': path_tags,
             'path_codes': build_path_codes(path_tags),
+            'error_code': normalize_error_code(runtime_entry_state, None),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),
@@ -406,12 +459,16 @@ def main() -> int:
             layer_statuses['entry_status'] = 'failed'
         output = {
             'decision_trace_id': decision_trace_id,
+            'entry_trace_span_id': entry_trace_span_id,
+            'dispatch_trace_span_id': dispatch_trace_span_id,
+            'executor_trace_span_id': executor_trace_span_id,
             'entry_decision': entry_decision,
             'dispatch_mode': dispatch_result.get('dispatch_mode') if isinstance(dispatch_result, dict) else None,
             'runtime_entry_state': runtime_entry_state,
             'path_taken': path_summary.get('path_taken'),
             'path_tags': path_tags,
             'path_codes': build_path_codes(path_tags),
+            'error_code': normalize_error_code(runtime_entry_state, str(exc)),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),

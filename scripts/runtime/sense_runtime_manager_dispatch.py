@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,6 +43,10 @@ def build_runtime_args(args: argparse.Namespace) -> list[str]:
     if args.input:
         runtime_args.extend(['--input', args.input])
     return runtime_args
+
+
+def build_span_id(prefix: str) -> str:
+    return f'{prefix}-{uuid4().hex[:4]}'
 
 
 def run_policy(script_dir: Path, evaluator_result: dict) -> dict:
@@ -128,10 +133,14 @@ def main() -> int:
     entry_payload = load_entry(args)
     runtime_args = build_runtime_args(args)
     script_dir = Path(__file__).resolve().parent
+    dispatch_trace_span_id = build_span_id('dispatch')
 
     shortcut_policy = build_shortcut_policy(entry_payload)
     if shortcut_policy is not None:
+        shortcut_policy['dispatch_trace_span_id'] = dispatch_trace_span_id
         output = {
+            'decision_trace_id': entry_payload.get('decision_trace_id'),
+            'dispatch_trace_span_id': dispatch_trace_span_id,
             'dispatch_mode': 'shortcut_executor',
             'shortcut_used': True,
             'dispatch_reason': 'high-confidence shortcut manager plan was sent directly to the thin manager executor',
@@ -143,6 +152,8 @@ def main() -> int:
     evaluator_result = extract_evaluator_result(entry_payload)
     if evaluator_result is None:
         output = {
+            'decision_trace_id': entry_payload.get('decision_trace_id'),
+            'dispatch_trace_span_id': dispatch_trace_span_id,
             'dispatch_mode': 'full_evaluator',
             'shortcut_used': False,
             'dispatch_reason': 'entry payload did not contain a usable shortcut or evaluator result',
@@ -153,7 +164,10 @@ def main() -> int:
 
     policy_payload = run_policy(script_dir, evaluator_result)
     policy_payload['decision_trace_id'] = entry_payload.get('decision_trace_id')
+    policy_payload['dispatch_trace_span_id'] = dispatch_trace_span_id
     output = {
+        'decision_trace_id': entry_payload.get('decision_trace_id'),
+        'dispatch_trace_span_id': dispatch_trace_span_id,
         'dispatch_mode': 'full_evaluator',
         'shortcut_used': False,
         'dispatch_reason': 'shortcut was unavailable, so the manager policy and executor followed the evaluator path',

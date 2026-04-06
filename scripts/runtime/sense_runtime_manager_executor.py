@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from uuid import uuid4
 
 from sense_runtime_manager_signal_classifier import classify_manager_signal
 
@@ -36,6 +37,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--poll-interval', type=float)
     parser.add_argument('--input')
     return parser
+
+
+def compact_path_codes(executor_state: str | None, policy: dict) -> list[str]:
+    codes: list[str] = []
+    policy_trace = policy.get('policy_trace') if isinstance(policy.get('policy_trace'), dict) else {}
+    rule_id = str(policy_trace.get('rule_id') or '')
+    policy_version = str(policy.get('policy_table_version') or '')
+    if 'entry_shortcut' in rule_id or policy_version.endswith('shortcut'):
+        codes.extend(['HANDOFF', 'SHORTCUT'])
+    elif rule_id:
+        codes.append('FULL_EVAL')
+    if policy.get('manager_action'):
+        codes.append('EXECUTOR')
+    if executor_state == 'failed':
+        codes.append('FAILED')
+    elif executor_state == 'stopped':
+        codes.append('STOPPED')
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for code in codes:
+        if code not in seen:
+            deduped.append(code)
+            seen.add(code)
+    return deduped
 
 
 def load_policy(args: argparse.Namespace) -> dict:
@@ -475,6 +500,14 @@ def build_manager_handoff(report: dict) -> dict:
     return {
         'handoff_version': 'v1',
         'decision_trace_id': report.get('decision_trace_id'),
+        'path_codes': compact_path_codes(
+            report.get('executor_state'),
+            {
+                'policy_trace': report.get('policy_trace', {}),
+                'policy_table_version': report.get('policy_table_version'),
+                'manager_action': (report.get('main_action') or {}).get('action') if isinstance(report.get('main_action'), dict) else None,
+            },
+        ),
         'source': 'sense_runtime_manager_executor',
         'executor_state': report.get('executor_state'),
         'loop_convergence_state': convergence.get('state'),
@@ -650,6 +683,8 @@ def main() -> int:
     args = build_parser().parse_args()
     policy = load_policy(args)
     decision_trace_id = policy.get('decision_trace_id')
+    dispatch_trace_span_id = policy.get('dispatch_trace_span_id')
+    executor_trace_span_id = policy.get('executor_trace_span_id') or f'executor-{uuid4().hex[:4]}'
     script_dir = Path(__file__).resolve().parent
     runtime_args = build_runtime_args(args)
 
@@ -682,6 +717,9 @@ def main() -> int:
         }
         output = {
             'decision_trace_id': decision_trace_id,
+            'dispatch_trace_span_id': dispatch_trace_span_id,
+            'executor_trace_span_id': executor_trace_span_id,
+            'policy_table_version': policy.get('policy_table_version'),
             'executor_state': 'stopped',
             'stop_reason': 'confidence gate requested fallback handling' if confidence_gate_applied else f'manager action {manager_action} is non-executing',
             'secondary_gate_decision': 'stop_secondary',
@@ -721,6 +759,9 @@ def main() -> int:
     if main_error:
         output = {
             'decision_trace_id': decision_trace_id,
+            'dispatch_trace_span_id': dispatch_trace_span_id,
+            'executor_trace_span_id': executor_trace_span_id,
+            'policy_table_version': policy.get('policy_table_version'),
             'executor_state': 'failed',
             'secondary_gate_decision': 'skip_secondary',
             'secondary_gate_reason': 'main action returned an error payload',
@@ -745,6 +786,9 @@ def main() -> int:
     if main_exit_code is not None and main_exit_code != 0:
         output = {
             'decision_trace_id': decision_trace_id,
+            'dispatch_trace_span_id': dispatch_trace_span_id,
+            'executor_trace_span_id': executor_trace_span_id,
+            'policy_table_version': policy.get('policy_table_version'),
             'executor_state': 'partial_failure',
             'secondary_gate_decision': 'skip_secondary',
             'secondary_gate_reason': 'main action failed with non-zero exit_code',
@@ -787,6 +831,9 @@ def main() -> int:
         if secondary_result.get('executed') and isinstance(secondary_result.get('result'), dict) and secondary_result['result'].get('error'):
             output = {
                 'decision_trace_id': decision_trace_id,
+                'dispatch_trace_span_id': dispatch_trace_span_id,
+                'executor_trace_span_id': executor_trace_span_id,
+                'policy_table_version': policy.get('policy_table_version'),
                 'executor_state': 'failed',
                 'secondary_gate_decision': secondary_gate_decision,
                 'secondary_gate_reason': secondary_gate_reason,
@@ -812,6 +859,9 @@ def main() -> int:
         if secondary_exit_code is not None and secondary_exit_code != 0:
             output = {
                 'decision_trace_id': decision_trace_id,
+                'dispatch_trace_span_id': dispatch_trace_span_id,
+                'executor_trace_span_id': executor_trace_span_id,
+                'policy_table_version': policy.get('policy_table_version'),
                 'executor_state': 'partial_failure',
                 'secondary_gate_decision': secondary_gate_decision,
                 'secondary_gate_reason': secondary_gate_reason,
@@ -835,6 +885,9 @@ def main() -> int:
 
     output = {
         'decision_trace_id': decision_trace_id,
+        'dispatch_trace_span_id': dispatch_trace_span_id,
+        'executor_trace_span_id': executor_trace_span_id,
+        'policy_table_version': policy.get('policy_table_version'),
         'executor_state': 'completed_with_warning' if main_warnings else 'completed',
         'secondary_gate_decision': secondary_gate_decision,
         'secondary_gate_reason': secondary_gate_reason,

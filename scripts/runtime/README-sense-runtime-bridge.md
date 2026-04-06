@@ -830,6 +830,12 @@ Additional top-level observability fields are also included:
 
 - `decision_trace_id`
   - short per-run trace identifier for joining entry, dispatch, and executor logs
+- `entry_trace_span_id`
+  - span id for the manager entry layer
+- `dispatch_trace_span_id`
+  - span id for the dispatch layer
+- `executor_trace_span_id`
+  - span id for the executor layer
 - `entry_duration_sec`
   - time spent in manager entry
 - `dispatch_duration_sec`
@@ -840,6 +846,8 @@ Additional top-level observability fields are also included:
   - short machine-friendly tags such as `handoff`, `triage:use_handoff`, `shortcut`, `bridge`, `executor`, `full_evaluator`, `failed`, or `stopped`
 - `path_codes`
   - short uppercase machine-readable codes such as `HANDOFF`, `TRIAGE_USE`, `SHORTCUT`, `BRIDGE`, `FULL_EVAL`, `EXECUTOR`, `FAILED`, or `STOPPED`
+- `error_code`
+  - normalized top-level code such as `NONE`, `UNAUTHORIZED`, `TIMEOUT`, `RUNTIME_SUBMIT_FAILED`, `EXECUTOR_STOPPED`, or `EXECUTOR_FAILED`
 - `entry_status`
   - status of the manager entry layer
 - `bridge_status`
@@ -851,7 +859,7 @@ Additional top-level observability fields are also included:
 
 These fields are for observability and aggregation only. They do not change runtime behavior.
 
-The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, so one runtime pass can be joined across layers without creating another loop.
+The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id`. `manager_handoff` and `feedback_memory` also carry compact `path_codes` for lightweight aggregation.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
@@ -865,6 +873,7 @@ The runtime entrypoint now also emits a lightweight feedback layer for the next 
   - `last_decision_quality`
   - `last_primary_issue`
   - `last_success_action`
+  - `last_path_codes`
 
 This feedback is observational only. It does not add retries or a new loop. The manager entry can read `feedback_memory` and apply lightweight gating rules at the next turn:
 
