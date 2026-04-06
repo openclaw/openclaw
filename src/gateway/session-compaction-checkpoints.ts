@@ -99,7 +99,7 @@ export function captureCompactionCheckpointSnapshot(params: {
   }
   return {
     sessionId: getSessionId(),
-    sessionFile,
+    sessionFile: snapshotFile,
     leafId,
   };
 }
