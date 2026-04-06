@@ -331,7 +331,6 @@ export async function runPreflightCompactionIfNeeded(params: {
     cfg: params.cfg,
     provider: params.followupRun.run.provider,
     model: params.followupRun.run.model ?? params.defaultModel,
-    modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
@@ -498,7 +497,6 @@ export async function runMemoryFlushIfNeeded(params: {
     cfg: params.cfg,
     provider: params.followupRun.run.provider,
     model: params.followupRun.run.model ?? params.defaultModel,
-    modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
 
