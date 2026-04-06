@@ -3,6 +3,7 @@ import { resolveManifestContractPluginIds } from "../manifest-registry.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  MusicGenerationProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
@@ -39,13 +40,19 @@ export type VideoGenerationProviderContractEntry = {
   provider: VideoGenerationProviderPlugin;
 };
 
+export type MusicGenerationProviderContractEntry = {
+  pluginId: string;
+  provider: MusicGenerationProviderPlugin;
+};
+
 type ManifestContractKey =
   | "imageGenerationProviders"
   | "speechProviders"
   | "mediaUnderstandingProviders"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
-  | "videoGenerationProviders";
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
 
 function loadVitestCapabilityContractEntries<T>(params: {
   contract: ManifestContractKey;
@@ -129,6 +136,17 @@ export function loadVitestVideoGenerationProviderContractRegistry(): VideoGenera
     contract: "videoGenerationProviders",
     pickEntries: (registry) =>
       registry.videoGenerationProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
+  });
+}
+
+export function loadVitestMusicGenerationProviderContractRegistry(): MusicGenerationProviderContractEntry[] {
+  return loadVitestCapabilityContractEntries({
+    contract: "musicGenerationProviders",
+    pickEntries: (registry) =>
+      registry.musicGenerationProviders.map((entry) => ({
         pluginId: entry.pluginId,
         provider: entry.provider,
       })),

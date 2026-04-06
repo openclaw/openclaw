@@ -19,7 +19,6 @@ import type {
   VideoGenerationResolution,
   VideoGenerationSourceAsset,
 } from "../../video-generation/types.js";
-import { normalizeProviderId } from "../provider-id.js";
 import {
   ToolInputError,
   readNumberParam,
@@ -29,16 +28,11 @@ import {
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   applyVideoGenerationModelConfigDefaults,
+  findCapabilityProviderById,
+  resolveCapabilityModelConfigForTool,
   resolveMediaToolLocalRoots,
 } from "./media-tool-shared.js";
-import {
-  buildToolModelConfigFromCandidates,
-  coerceToolModelConfig,
-  hasAuthForProvider,
-  hasToolModelConfig,
-  resolveDefaultModelRef,
-  type ToolModelConfig,
-} from "./model-config.helpers.js";
+import { type ToolModelConfig } from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -148,97 +142,16 @@ const VideoGenerateToolSchema = Type.Object({
   ),
 });
 
-function resolveVideoGenerationModelCandidates(params: {
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-}): Array<string | undefined> {
-  const providerDefaults = new Map<string, string>();
-  for (const provider of listRuntimeVideoGenerationProviders({ config: params.cfg })) {
-    const providerId = provider.id.trim();
-    const modelId = provider.defaultModel?.trim();
-    if (
-      !providerId ||
-      !modelId ||
-      providerDefaults.has(providerId) ||
-      !isVideoGenerationProviderConfigured({
-        provider,
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-      })
-    ) {
-      continue;
-    }
-    providerDefaults.set(providerId, `${providerId}/${modelId}`);
-  }
-
-  const primaryProvider = resolveDefaultModelRef(params.cfg).provider;
-  const orderedProviders = [
-    primaryProvider,
-    ...[...providerDefaults.keys()]
-      .filter((providerId) => providerId !== primaryProvider)
-      .toSorted(),
-  ];
-  const orderedRefs: string[] = [];
-  const seen = new Set<string>();
-  for (const providerId of orderedProviders) {
-    const ref = providerDefaults.get(providerId);
-    if (!ref || seen.has(ref)) {
-      continue;
-    }
-    seen.add(ref);
-    orderedRefs.push(ref);
-  }
-  return orderedRefs;
-}
-
 export function resolveVideoGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
 }): ToolModelConfig | null {
-  const explicit = coerceToolModelConfig(params.cfg?.agents?.defaults?.videoGenerationModel);
-  if (hasToolModelConfig(explicit)) {
-    return explicit;
-  }
-  return buildToolModelConfigFromCandidates({
-    explicit,
+  return resolveCapabilityModelConfigForTool({
+    cfg: params.cfg,
     agentDir: params.agentDir,
-    candidates: resolveVideoGenerationModelCandidates(params),
-    isProviderConfigured: (providerId) =>
-      isVideoGenerationProviderConfigured({
-        providerId,
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-      }),
+    modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
+    providers: listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
-}
-
-function isVideoGenerationProviderConfigured(params: {
-  provider?: VideoGenerationProvider;
-  providerId?: string;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-}): boolean {
-  const provider =
-    params.provider ??
-    listRuntimeVideoGenerationProviders({ config: params.cfg }).find((candidate) => {
-      const normalizedId = normalizeProviderId(params.providerId ?? "");
-      return (
-        normalizeProviderId(candidate.id) === normalizedId ||
-        (candidate.aliases ?? []).some((alias) => normalizeProviderId(alias) === normalizedId)
-      );
-    });
-  if (!provider) {
-    return params.providerId
-      ? hasAuthForProvider({ provider: params.providerId, agentDir: params.agentDir })
-      : false;
-  }
-  if (provider.isConfigured) {
-    return provider.isConfigured({
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-    });
-  }
-  return hasAuthForProvider({ provider: provider.id, agentDir: params.agentDir });
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
@@ -333,12 +246,10 @@ function resolveSelectedVideoGenerationProvider(params: {
   if (!selectedRef) {
     return undefined;
   }
-  const selectedProvider = normalizeProviderId(selectedRef.provider);
-  return listRuntimeVideoGenerationProviders({ config: params.config }).find(
-    (provider) =>
-      normalizeProviderId(provider.id) === selectedProvider ||
-      (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === selectedProvider),
-  );
+  return findCapabilityProviderById({
+    providers: listRuntimeVideoGenerationProviders({ config: params.config }),
+    providerId: selectedRef.provider,
+  });
 }
 
 function validateVideoGenerationCapabilities(params: {

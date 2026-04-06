@@ -1,26 +1,15 @@
-import crypto from "node:crypto";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  completeTaskRunByRunId,
-  createRunningTaskRun,
-  failTaskRunByRunId,
-  recordTaskRunProgressByRunId,
-} from "../../tasks/task-executor.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
-import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
 import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
+import {
+  completeMediaGenerationTaskRun,
+  createMediaGenerationTaskRun,
+  failMediaGenerationTaskRun,
+  recordMediaGenerationTaskProgress,
+  wakeMediaGenerationTaskCompletion,
+  type MediaGenerationTaskHandle,
+} from "./media-generate-background-shared.js";
 
-const log = createSubsystemLogger("agents/tools/video-generate-background");
-
-export type VideoGenerationTaskHandle = {
-  taskId: string;
-  runId: string;
-  requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
-  taskLabel: string;
-};
+export type VideoGenerationTaskHandle = MediaGenerationTaskHandle;
 
 export function createVideoGenerationTaskRun(params: {
   sessionKey?: string;
@@ -28,45 +17,16 @@ export function createVideoGenerationTaskRun(params: {
   prompt: string;
   providerId?: string;
 }): VideoGenerationTaskHandle | null {
-  const sessionKey = params.sessionKey?.trim();
-  if (!sessionKey) {
-    return null;
-  }
-  const runId = `tool:video_generate:${crypto.randomUUID()}`;
-  try {
-    const task = createRunningTaskRun({
-      runtime: "cli",
-      taskKind: VIDEO_GENERATION_TASK_KIND,
-      sourceId: params.providerId ? `video_generate:${params.providerId}` : "video_generate",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      requesterOrigin: params.requesterOrigin,
-      childSessionKey: sessionKey,
-      runId,
-      label: "Video generation",
-      task: params.prompt,
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: Date.now(),
-      lastEventAt: Date.now(),
-      progressSummary: "Queued video generation",
-    });
-    return {
-      taskId: task.taskId,
-      runId,
-      requesterSessionKey: sessionKey,
-      requesterOrigin: params.requesterOrigin,
-      taskLabel: params.prompt,
-    };
-  } catch (error) {
-    log.warn("Failed to create video generation task ledger record", {
-      sessionKey,
-      providerId: params.providerId,
-      error,
-    });
-    return null;
-  }
+  return createMediaGenerationTaskRun({
+    sessionKey: params.sessionKey,
+    requesterOrigin: params.requesterOrigin,
+    prompt: params.prompt,
+    providerId: params.providerId,
+    toolName: "video_generate",
+    taskKind: VIDEO_GENERATION_TASK_KIND,
+    label: "Video generation",
+    queuedProgressSummary: "Queued video generation",
+  });
 }
 
 export function recordVideoGenerationTaskProgress(params: {
@@ -74,17 +34,7 @@ export function recordVideoGenerationTaskProgress(params: {
   progressSummary: string;
   eventSummary?: string;
 }) {
-  if (!params.handle) {
-    return;
-  }
-  recordTaskRunProgressByRunId({
-    runId: params.handle.runId,
-    runtime: "cli",
-    sessionKey: params.handle.requesterSessionKey,
-    lastEventAt: Date.now(),
-    progressSummary: params.progressSummary,
-    eventSummary: params.eventSummary,
-  });
+  recordMediaGenerationTaskProgress(params);
 }
 
 export function completeVideoGenerationTaskRun(params: {
@@ -94,19 +44,9 @@ export function completeVideoGenerationTaskRun(params: {
   count: number;
   paths: string[];
 }) {
-  if (!params.handle) {
-    return;
-  }
-  const endedAt = Date.now();
-  const target = params.count === 1 ? params.paths[0] : `${params.count} files`;
-  completeTaskRunByRunId({
-    runId: params.handle.runId,
-    runtime: "cli",
-    sessionKey: params.handle.requesterSessionKey,
-    endedAt,
-    lastEventAt: endedAt,
-    progressSummary: `Generated ${params.count} video${params.count === 1 ? "" : "s"}`,
-    terminalSummary: `Generated ${params.count} video${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
+  completeMediaGenerationTaskRun({
+    ...params,
+    generatedLabel: "video",
   });
 }
 
@@ -114,37 +54,10 @@ export function failVideoGenerationTaskRun(params: {
   handle: VideoGenerationTaskHandle | null;
   error: unknown;
 }) {
-  if (!params.handle) {
-    return;
-  }
-  const endedAt = Date.now();
-  const errorText = params.error instanceof Error ? params.error.message : String(params.error);
-  failTaskRunByRunId({
-    runId: params.handle.runId,
-    runtime: "cli",
-    sessionKey: params.handle.requesterSessionKey,
-    endedAt,
-    lastEventAt: endedAt,
-    error: errorText,
+  failMediaGenerationTaskRun({
+    ...params,
     progressSummary: "Video generation failed",
-    terminalSummary: errorText,
   });
-}
-
-function buildVideoGenerationReplyInstruction(status: "ok" | "error"): string {
-  if (status === "ok") {
-    return [
-      "A completed video generation task is ready for user delivery.",
-      "Reply in your normal assistant voice and post the finished video to the original message channel now.",
-      "If the result includes MEDIA: lines, include those exact MEDIA: lines in your reply so OpenClaw attaches the video.",
-      "Keep internal task/session details private and do not copy the internal event text verbatim.",
-    ].join(" ");
-  }
-  return [
-    "A video generation task failed.",
-    "Reply in your normal assistant voice with the failure summary now.",
-    "Keep internal task/session details private and do not copy the internal event text verbatim.",
-  ].join(" ");
 }
 
 export async function wakeVideoGenerationTaskCompletion(params: {
@@ -154,53 +67,15 @@ export async function wakeVideoGenerationTaskCompletion(params: {
   result: string;
   statsLine?: string;
 }) {
-  if (!params.handle) {
-    return;
-  }
-  const internalEvents: AgentInternalEvent[] = [
-    {
-      type: "task_completion",
-      source: "video_generation",
-      childSessionKey: `video_generate:${params.handle.taskId}`,
-      childSessionId: params.handle.taskId,
-      announceType: "video generation task",
-      taskLabel: params.handle.taskLabel,
-      status: params.status,
-      statusLabel: params.statusLabel,
-      result: params.result,
-      ...(params.statsLine?.trim() ? { statsLine: params.statsLine } : {}),
-      replyInstruction: buildVideoGenerationReplyInstruction(params.status),
-    },
-  ];
-  const triggerMessage =
-    formatAgentInternalEventsForPrompt(internalEvents) ||
-    "A video generation task finished. Process the completion update now.";
-  const announceId = `video-generate:${params.handle.taskId}:${params.status}`;
-  const delivery = await deliverSubagentAnnouncement({
-    requesterSessionKey: params.handle.requesterSessionKey,
-    targetRequesterSessionKey: params.handle.requesterSessionKey,
-    announceId,
-    triggerMessage,
-    steerMessage: triggerMessage,
-    internalEvents,
-    summaryLine: params.handle.taskLabel,
-    requesterSessionOrigin: params.handle.requesterOrigin,
-    requesterOrigin: params.handle.requesterOrigin,
-    completionDirectOrigin: params.handle.requesterOrigin,
-    directOrigin: params.handle.requesterOrigin,
-    sourceSessionKey: `video_generate:${params.handle.taskId}`,
-    sourceChannel: INTERNAL_MESSAGE_CHANNEL,
-    sourceTool: "video_generate",
-    requesterIsSubagent: false,
-    expectsCompletionMessage: true,
-    bestEffortDeliver: true,
-    directIdempotencyKey: announceId,
+  await wakeMediaGenerationTaskCompletion({
+    handle: params.handle,
+    status: params.status,
+    statusLabel: params.statusLabel,
+    result: params.result,
+    statsLine: params.statsLine,
+    eventSource: "video_generation",
+    announceType: "video generation task",
+    toolName: "video_generate",
+    completionLabel: "video",
   });
-  if (!delivery.delivered && delivery.error) {
-    log.warn("Video generation completion wake failed", {
-      taskId: params.handle.taskId,
-      runId: params.handle.runId,
-      error: delivery.error,
-    });
-  }
 }

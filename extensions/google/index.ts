@@ -12,6 +12,7 @@ import {
   resolveGoogleGenerativeAiTransport,
 } from "./api.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { buildGoogleMusicGenerationProvider } from "./music-generation-provider.js";
 import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
@@ -166,6 +167,7 @@ export default definePluginEntry({
     });
     api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
+    api.registerMusicGenerationProvider(buildGoogleMusicGenerationProvider());
     api.registerVideoGenerationProvider(buildGoogleVideoGenerationProvider());
     api.registerWebSearchProvider(createGeminiWebSearchProvider());
   },

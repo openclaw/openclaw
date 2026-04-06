@@ -86,6 +86,10 @@ export type PluginRuntimeCore = {
     generate: typeof import("../../video-generation/runtime.js").generateVideo;
     listProviders: typeof import("../../video-generation/runtime.js").listRuntimeVideoGenerationProviders;
   };
+  musicGeneration: {
+    generate: typeof import("../../music-generation/runtime.js").generateMusic;
+    listProviders: typeof import("../../music-generation/runtime.js").listRuntimeMusicGenerationProviders;
+  };
   webSearch: {
     listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;
     search: typeof import("../../web-search/runtime.js").runWebSearch;
