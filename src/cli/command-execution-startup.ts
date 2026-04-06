@@ -1,6 +1,6 @@
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getCommandPathWithRootOptions } from "./argv.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { ensureCliCommandBootstrap } from "./command-bootstrap.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
 
@@ -12,8 +12,10 @@ export function resolveCliExecutionStartupContext(params: {
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
 }) {
-  const commandPath = getCommandPathWithRootOptions(params.argv, 2);
+  const invocation = resolveCliArgvInvocation(params.argv);
+  const { commandPath } = invocation;
   return {
+    invocation,
     commandPath,
     startupPolicy: resolveCliStartupPolicy({
       commandPath,

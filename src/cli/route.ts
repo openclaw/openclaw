@@ -1,6 +1,7 @@
 import { isTruthyEnvValue } from "../infra/env.js";
 import { defaultRuntime } from "../runtime.js";
-import { getCommandPathWithRootOptions, hasFlag, hasHelpOrVersion } from "./argv.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { hasFlag } from "./argv.js";
 import {
   applyCliExecutionStartupPresentation,
   ensureCliExecutionBootstrap,
@@ -41,18 +42,21 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_ROUTE_FIRST)) {
     return false;
   }
-  if (hasHelpOrVersion(argv)) {
+  const invocation = resolveCliArgvInvocation(argv);
+  if (invocation.hasHelpOrVersion) {
     return false;
   }
-
-  const path = getCommandPathWithRootOptions(argv, 2);
-  if (!path[0]) {
+  if (!invocation.commandPath[0]) {
     return false;
   }
-  const route = findRoutedCommand(path);
+  const route = findRoutedCommand(invocation.commandPath);
   if (!route) {
     return false;
   }
-  await prepareRoutedCommand({ argv, commandPath: path, loadPlugins: route.loadPlugins });
+  await prepareRoutedCommand({
+    argv,
+    commandPath: invocation.commandPath,
+    loadPlugins: route.loadPlugins,
+  });
   return route.run(argv);
 }

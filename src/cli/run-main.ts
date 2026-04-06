@@ -12,12 +12,7 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
-import {
-  getCommandPathWithRootOptions,
-  getPrimaryCommand,
-  hasHelpOrVersion,
-  isRootHelpInvocation,
-} from "./argv.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
   shouldRegisterPrimaryCommandOnly,
   shouldSkipPluginCommandRegistration,
@@ -52,14 +47,15 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
 }
 
 export function shouldEnsureCliPath(argv: string[]): boolean {
-  if (hasHelpOrVersion(argv)) {
+  const invocation = resolveCliArgvInvocation(argv);
+  if (invocation.hasHelpOrVersion) {
     return false;
   }
-  return shouldEnsureCliPathForCommandPath(getCommandPathWithRootOptions(argv, 2));
+  return shouldEnsureCliPathForCommandPath(invocation.commandPath);
 }
 
 export function shouldUseRootHelpFastPath(argv: string[]): boolean {
-  return isRootHelpInvocation(argv);
+  return resolveCliArgvInvocation(argv).isRootHelpInvocation;
 }
 
 export function resolveMissingPluginCommandMessage(
@@ -171,9 +167,10 @@ export async function runCli(argv: string[] = process.argv) {
     });
 
     const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
+    const invocation = resolveCliArgvInvocation(parseArgv);
     // Register the primary command (builtin or subcli) so help and command parsing
     // are correct even with lazy command registration.
-    const primary = getPrimaryCommand(parseArgv);
+    const { primary } = invocation;
     if (primary && shouldRegisterPrimaryCommandOnly(parseArgv)) {
       const { getProgramContext } = await import("./program/program-context.js");
       const ctx = getProgramContext(program);

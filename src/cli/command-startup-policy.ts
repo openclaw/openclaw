@@ -1,36 +1,18 @@
 import { isTruthyEnvValue } from "../infra/env.js";
-
-const PLUGIN_REQUIRED_COMMANDS = new Set([
-  "agent",
-  "message",
-  "channels",
-  "directory",
-  "agents",
-  "configure",
-  "status",
-  "health",
-]);
-
-const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["backup", "doctor", "completion", "secrets"]);
+import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
 
 export function shouldBypassConfigGuardForCommandPath(commandPath: string[]): boolean {
-  const [primary, secondary] = commandPath;
-  if (!primary) {
-    return false;
-  }
-  if (CONFIG_GUARD_BYPASS_COMMANDS.has(primary)) {
-    return true;
-  }
-  return primary === "config" && (secondary === "validate" || secondary === "schema");
+  return resolveCliCommandPathPolicy(commandPath).bypassConfigGuard;
 }
 
 export function shouldSkipRouteConfigGuardForCommandPath(params: {
   commandPath: string[];
   suppressDoctorStdout: boolean;
 }): boolean {
+  const routeConfigGuard = resolveCliCommandPathPolicy(params.commandPath).routeConfigGuard;
   return (
-    (params.commandPath[0] === "status" && params.suppressDoctorStdout) ||
-    (params.commandPath[0] === "gateway" && params.commandPath[1] === "status")
+    routeConfigGuard === "always" ||
+    (routeConfigGuard === "when-suppressed" && params.suppressDoctorStdout)
   );
 }
 
@@ -38,14 +20,8 @@ export function shouldLoadPluginsForCommandPath(params: {
   commandPath: string[];
   jsonOutputMode: boolean;
 }): boolean {
-  const [primary, secondary] = params.commandPath;
-  if (!primary || !PLUGIN_REQUIRED_COMMANDS.has(primary)) {
-    return false;
-  }
-  if ((primary === "status" || primary === "health") && params.jsonOutputMode) {
-    return false;
-  }
-  return !(primary === "onboard" || (primary === "channels" && secondary === "add"));
+  const loadPlugins = resolveCliCommandPathPolicy(params.commandPath).loadPlugins;
+  return loadPlugins === "always" || (loadPlugins === "text-only" && !params.jsonOutputMode);
 }
 
 export function shouldHideCliBannerForCommandPath(
@@ -54,27 +30,12 @@ export function shouldHideCliBannerForCommandPath(
 ): boolean {
   return (
     isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER) ||
-    commandPath[0] === "update" ||
-    commandPath[0] === "completion" ||
-    (commandPath[0] === "plugins" && commandPath[1] === "update")
+    resolveCliCommandPathPolicy(commandPath).hideBanner
   );
 }
 
 export function shouldEnsureCliPathForCommandPath(commandPath: string[]): boolean {
-  const [primary, secondary] = commandPath;
-  if (!primary) {
-    return true;
-  }
-  if (primary === "status" || primary === "health" || primary === "sessions") {
-    return false;
-  }
-  if (primary === "config" && (secondary === "get" || secondary === "unset")) {
-    return false;
-  }
-  if (primary === "models" && (secondary === "list" || secondary === "status")) {
-    return false;
-  }
-  return true;
+  return commandPath.length === 0 || resolveCliCommandPathPolicy(commandPath).ensureCliPath;
 }
 
 export function resolveCliStartupPolicy(params: {

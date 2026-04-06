@@ -33,6 +33,13 @@ describe("command-execution-startup", () => {
         routeMode: true,
       }),
     ).toEqual({
+      invocation: {
+        argv: ["node", "openclaw", "status", "--json"],
+        commandPath: ["status"],
+        primary: "status",
+        hasHelpOrVersion: false,
+        isRootHelpInvocation: false,
+      },
       commandPath: ["status"],
       startupPolicy: {
         suppressDoctorStdout: true,
