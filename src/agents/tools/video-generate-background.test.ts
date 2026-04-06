@@ -96,6 +96,7 @@ describe("video generate background helpers", () => {
       status: "ok",
       statusLabel: "completed successfully",
       result: "Generated 1 video.\nMEDIA:/tmp/generated-lobster.mp4",
+      mediaUrls: ["/tmp/generated-lobster.mp4"],
     });
 
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
@@ -112,6 +113,7 @@ describe("video generate background helpers", () => {
             announceType: "video generation task",
             status: "ok",
             result: expect.stringContaining("MEDIA:/tmp/generated-lobster.mp4"),
+            mediaUrls: ["/tmp/generated-lobster.mp4"],
             replyInstruction: expect.stringContaining("include those exact MEDIA: lines"),
           }),
         ],

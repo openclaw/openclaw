@@ -19,6 +19,7 @@ export type AgentTaskCompletionInternalEvent = {
   status: AgentInternalEventStatus;
   statusLabel: string;
   result: string;
+  mediaUrls?: string[];
   statsLine?: string;
   replyInstruction: string;
 };

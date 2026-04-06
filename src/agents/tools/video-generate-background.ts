@@ -65,6 +65,7 @@ export async function wakeVideoGenerationTaskCompletion(params: {
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  mediaUrls?: string[];
   statsLine?: string;
 }) {
   await wakeMediaGenerationTaskCompletion({
@@ -72,6 +73,7 @@ export async function wakeVideoGenerationTaskCompletion(params: {
     status: params.status,
     statusLabel: params.statusLabel,
     result: params.result,
+    mediaUrls: params.mediaUrls,
     statsLine: params.statsLine,
     eventSource: "video_generation",
     announceType: "video generation task",
