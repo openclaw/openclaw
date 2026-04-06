@@ -175,8 +175,11 @@ actor TalkModeRuntime {
         self.recognitionGeneration &+= 1
         let generation = self.recognitionGeneration
 
-        let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
+        let (locale, selectedMicID) = await MainActor.run { (AppStateStore.shared.voiceWakeLocaleID, AppStateStore.shared.voiceWakeMicID) }
         self.recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
+        if !selectedMicID.isEmpty {
+            _ = AudioInputDeviceObserver.setDefaultInputDeviceUID(selectedMicID)
+        }
         guard let recognizer, recognizer.isAvailable else {
             self.logger.error("talk recognizer unavailable")
             return
@@ -332,6 +335,27 @@ actor TalkModeRuntime {
         await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
         await self.stopRecognition()
         await self.sendAndSpeak(text)
+    }
+
+    func handleExternalTranscript(_ transcript: String) async -> Bool {
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+
+        let wasEnabled = self.isEnabled
+
+        if !wasEnabled {
+            await MainActor.run {
+                AppStateStore.shared.talkEnabled = true
+                TalkOverlayController.shared.present()
+            }
+            self.isEnabled = true
+            self.isPaused = false
+        }
+
+        self.phase = .thinking
+        await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
+        await self.sendAndSpeak(trimmed)
+        return true
     }
 
     // MARK: - Gateway + TTS
@@ -810,9 +834,11 @@ extension TalkModeRuntime {
 
     private func fetchTalkConfig() async -> TalkModeGatewayConfigState {
         let env = ProcessInfo.processInfo.environment
-        let envVoice = env["ELEVENLABS_VOICE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let envVoice = (env["ELEVENLABS_VOICE_ID"] ?? Self.readGatewayEnvLocal("ELEVENLABS_VOICE_ID"))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let sagVoice = env["SAG_VOICE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let envApiKey = env["ELEVENLABS_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let envApiKey = (env["ELEVENLABS_API_KEY"] ?? Self.readGatewayEnvLocal("ELEVENLABS_API_KEY"))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
             let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
@@ -884,13 +910,15 @@ extension TalkModeRuntime {
 
     private func shouldInterrupt(transcript: String, hasConfidence: Bool) async -> Bool {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 3 else { return false }
+        guard trimmed.count >= 2 else { return false }
         if self.isLikelyEcho(of: trimmed) { return false }
         let now = Date()
-        if let lastSpeechEnergyAt, now.timeIntervalSince(lastSpeechEnergyAt) > 0.35 {
-            return false
+        guard let lastSpeechEnergyAt else { return hasConfidence }
+        let recentSpeech = now.timeIntervalSince(lastSpeechEnergyAt) <= 1.0
+        if recentSpeech, trimmed.count >= 4 {
+            return true
         }
-        return hasConfidence
+        return hasConfidence && recentSpeech
     }
 
     private func isLikelyEcho(of transcript: String) -> Bool {
@@ -900,6 +928,20 @@ extension TalkModeRuntime {
             return spoken.contains(probe)
         }
         return spoken.contains(probe)
+    }
+
+    private static func readGatewayEnvLocal(_ key: String) -> String? {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".openclaw/secrets/gateway-env.local")
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        for rawLine in text.split(whereSeparator: \Character.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            guard line.hasPrefix("\(key)=") else { continue }
+            let value = String(line.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        }
+        return nil
     }
 
     private static func resolveSpeed(speed: Double?, rateWPM: Int?, logger: Logger) -> Double? {

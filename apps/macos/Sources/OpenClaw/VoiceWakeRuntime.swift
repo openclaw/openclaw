@@ -160,6 +160,10 @@ actor VoiceWakeRuntime {
             self.recognitionRequest?.taskHint = .dictation
             guard let request = self.recognitionRequest else { return }
 
+            if let micID = config.micID, !micID.isEmpty {
+                _ = AudioInputDeviceObserver.setDefaultInputDeviceUID(micID)
+            }
+
             // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
             if self.audioEngine == nil {
                 self.audioEngine = AVAudioEngine()

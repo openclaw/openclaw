@@ -45,6 +45,11 @@ enum VoiceWakeForwarder {
         transcript: String,
         options: ForwardOptions = ForwardOptions()) async -> Result<Void, VoiceWakeForwardError>
     {
+        if await TalkModeRuntime.shared.handleExternalTranscript(transcript) {
+            self.logger.info("voice wake handoff to talk runtime ok")
+            return .success(())
+        }
+
         let payload = Self.prefixedTranscript(transcript)
         let deliver = options.channel.shouldDeliver(options.deliver)
         let result = await GatewayConnection.shared.sendAgent(GatewayAgentInvocation(

@@ -13,6 +13,11 @@ final class AudioInputDeviceObserver {
         return self.deviceUID(for: deviceID)
     }
 
+    static func setDefaultInputDeviceUID(_ uid: String) -> Bool {
+        guard let deviceID = self.deviceID(forUID: uid) else { return false }
+        return self.setDefaultInputDeviceID(deviceID)
+    }
+
     static func aliveInputDeviceUIDs() -> Set<String> {
         let systemObject = AudioObjectID(kAudioObjectSystemObject)
         var address = AudioObjectPropertyAddress(
@@ -74,6 +79,41 @@ final class AudioInputDeviceObserver {
             &deviceID)
         guard status == noErr, deviceID != 0 else { return nil }
         return deviceID
+    }
+
+    private static func setDefaultInputDeviceID(_ deviceID: AudioObjectID) -> Bool {
+        let systemObject = AudioObjectID(kAudioObjectSystemObject)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var newID = deviceID
+        let size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let status = AudioObjectSetPropertyData(systemObject, &address, 0, nil, size, &newID)
+        return status == noErr
+    }
+
+    private static func deviceID(forUID uid: String) -> AudioObjectID? {
+        let systemObject = AudioObjectID(kAudioObjectSystemObject)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(systemObject, &address, 0, nil, &size)
+        guard status == noErr, size > 0 else { return nil }
+
+        let count = Int(size) / MemoryLayout<AudioObjectID>.size
+        var deviceIDs = [AudioObjectID](repeating: 0, count: count)
+        status = AudioObjectGetPropertyData(systemObject, &address, 0, nil, &size, &deviceIDs)
+        guard status == noErr else { return nil }
+
+        for deviceID in deviceIDs {
+            if self.deviceUID(for: deviceID) == uid {
+                return deviceID
+            }
+        }
+        return nil
     }
 
     func start(onChange: @escaping @Sendable () -> Void) {

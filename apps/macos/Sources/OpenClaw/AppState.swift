@@ -251,7 +251,7 @@ final class AppState {
         self.launchAtLogin = false
         self.onboardingSeen = onboardingSeen
         self.debugPaneEnabled = UserDefaults.standard.bool(forKey: debugPaneEnabledKey)
-        let savedVoiceWake = UserDefaults.standard.bool(forKey: swabbleEnabledKey)
+        let savedVoiceWake = UserDefaults.standard.object(forKey: swabbleEnabledKey) as? Bool ?? true
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
         self.swabbleTriggerWords = UserDefaults.standard
             .stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
@@ -327,13 +327,6 @@ final class AppState {
                 let current = await LaunchAgentManager.status()
                 await MainActor.run { [weak self] in self?.launchAtLogin = current }
             }
-        }
-
-        if self.swabbleEnabled, !PermissionManager.voiceWakePermissionsGranted() {
-            self.swabbleEnabled = false
-        }
-        if self.talkEnabled, !PermissionManager.voiceWakePermissionsGranted() {
-            self.talkEnabled = false
         }
 
         if !self.isPreview {
