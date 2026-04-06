@@ -580,6 +580,36 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(result).toBeUndefined();
   });
 
+  it("falls back to final delivery when direct media block delivery fails", async () => {
+    const onBlockReply = vi.fn(async () => {
+      throw new Error("transient media send failure");
+    });
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({
+        text: "caption",
+        mediaUrls: ["/tmp/output.png"],
+      });
+      return {
+        payloads: [{ text: "caption", mediaUrls: ["/tmp/output.png"] }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      blockStreamingEnabled: false,
+      opts: { onBlockReply },
+    });
+    const result = await run();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([
+      expect.objectContaining({
+        text: "caption",
+        mediaUrls: ["/tmp/output.png"],
+      }),
+    ]);
+  });
+
   it("handles typing for normal and silent tool results", async () => {
     const cases = [
       {

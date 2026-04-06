@@ -126,9 +126,13 @@ export function createBlockReplyDeliveryHandler(params: {
     if (params.blockStreamingEnabled && params.blockReplyPipeline) {
       params.blockReplyPipeline.enqueue(blockPayload);
     } else if (blockHasMedia) {
-      // Track sent key to avoid duplicate delivery from the later final payload pass.
-      params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
-      await params.onBlockReply(blockPayload);
+      try {
+        await params.onBlockReply(blockPayload);
+        // Track sent key to avoid duplicate delivery from the later final payload pass.
+        params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
+      } catch (err) {
+        logVerbose(`block reply delivery failed: ${String(err)}`);
+      }
     }
     // When streaming is disabled entirely, text-only blocks are accumulated in the
     // final payload instead of being delivered incrementally.
