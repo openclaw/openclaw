@@ -728,7 +728,7 @@ async function appendConfigAuditRecord(
       mode: 0o600,
     });
   } catch (err) {
-    deps.logger.warn(`Config audit write failed: ${err instanceof Error ? err.message : err}`);
+    if (process.env.OPENCLAW_DEBUG) deps.logger.warn("Config audit write failed:", err);
   }
 }
 
@@ -744,7 +744,7 @@ function appendConfigAuditRecordSync(
       mode: 0o600,
     });
   } catch (err) {
-    deps.logger.warn(`Config audit sync write failed: ${err instanceof Error ? err.message : err}`);
+    if (process.env.OPENCLAW_DEBUG) deps.logger.warn("Config audit sync write failed:", err);
   }
 }
 
@@ -782,7 +782,7 @@ async function writeConfigHealthState(
       mode: 0o600,
     });
   } catch (err) {
-    deps.logger.warn(`Config health state write failed: ${err instanceof Error ? err.message : err}`);
+    if (process.env.OPENCLAW_DEBUG) deps.logger.warn("Config health state write failed:", err);
   }
 }
 
@@ -795,7 +795,7 @@ function writeConfigHealthStateSync(deps: Required<ConfigIoDeps>, state: ConfigH
       mode: 0o600,
     });
   } catch (err) {
-    deps.logger.warn(`Config health state sync write failed: ${err instanceof Error ? err.message : err}`);
+    if (process.env.OPENCLAW_DEBUG) deps.logger.warn("Config health state sync write failed:", err);
   }
 }
 
@@ -1024,7 +1024,7 @@ async function maybeRecoverSuspiciousConfigRead(params: {
     restoredFromBackup = true;
   } catch (err) {
     // Keep serving the backup payload for this read even if write-back fails.
-    params.deps.logger.warn(`Config backup restore failed for ${params.configPath}: ${err instanceof Error ? err.message : err}`);
+    if (process.env.OPENCLAW_DEBUG) params.deps.logger.warn("Config backup restore failed for", params.configPath, ":", err);
   }
 
   params.deps.logger.warn(
@@ -1155,7 +1155,7 @@ function maybeRecoverSuspiciousConfigReadSync(params: {
     restoredFromBackup = true;
   } catch (err) {
     // Keep serving the backup payload for this read even if write-back fails.
-    params.deps.logger.warn(`Config backup sync restore failed for ${params.configPath}: ${err instanceof Error ? err.message : err}`);
+    if (process.env.OPENCLAW_DEBUG) params.deps.logger.warn("Config backup sync restore failed for", params.configPath, ":", err);
   }
 
   params.deps.logger.warn(
@@ -2173,7 +2173,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
     } catch (err) {
       // If reading the current file fails, write cfg as-is (no env restoration)
-      deps.logger.warn(`Config env-restore read failed for ${configPath}: ${err instanceof Error ? err.message : err}`);
+      if (process.env.OPENCLAW_DEBUG) deps.logger.warn("Config env-restore read failed for", configPath, ":", err);
     }
 
     const dir = path.dirname(configPath);
@@ -2406,7 +2406,7 @@ function notifyConfigWriteListeners(event: ConfigWriteNotification): void {
       listener(event);
     } catch (err) {
       // Best-effort observer path only; successful writes must still complete.
-      console.error(`[config:io] Config write listener threw:`, err);
+      if (process.env.OPENCLAW_DEBUG) console.error(`[config:io] Config write listener threw:`, err);
     }
   }
 }
