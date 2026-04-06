@@ -100,14 +100,7 @@ Add to your `~/.openclaw/config.json`:
 
 > **Note:** Setting `ERNIE_API_KEY` makes the provider available but does not change your default model. Use `--model` to select ERNIE, or run onboarding / update your config to set it as the default.
 
-### Start a Chat Session
-
-```bash
-# Specify ERNIE model
-openclaw agent --model ernie/ernie-5.0-thinking-preview
-```
-
-### Send a Single Message
+### Send a Message
 
 ```bash
 openclaw agent --model ernie/ernie-5.0-thinking-preview --message "Hello, ERNIE!"
