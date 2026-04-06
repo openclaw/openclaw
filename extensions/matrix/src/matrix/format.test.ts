@@ -99,6 +99,13 @@ describe("markdownToMatrixHtml", () => {
     expect(result.mentions).toEqual({ user_ids: ["@alice:example.org"] });
   });
 
+  it("preserves paragraph wrappers for multi-paragraph list items", () => {
+    const html = markdownToMatrixHtml("1. First sentence.\n\n   Second sentence in the same item.");
+    expect(html).toContain("<li>");
+    expect(html).toContain("<p>First sentence.</p>");
+    expect(html).toContain("<p>Second sentence in the same item.</p>");
+  });
+
   it("renders qualified Matrix user mentions as matrix.to links and m.mentions metadata", async () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "hello @alice:example.org",
