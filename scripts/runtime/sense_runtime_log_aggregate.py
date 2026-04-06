@@ -294,6 +294,9 @@ def main() -> int:
             str(item.get('bucket') or ''),
         )
     )
+    priority_heatmap_compact = [
+        item for item in priority_heatmap if int(item.get('score', 0)) > 0
+    ]
 
     output = {
         'total_records': len(filtered_records),
@@ -302,6 +305,7 @@ def main() -> int:
         'owner_bucket_actionable_summary': actionable_summary_output,
         'owner_bucket_priority_summary': priority_summary_output,
         'priority_heatmap': priority_heatmap,
+        'priority_heatmap_compact': priority_heatmap_compact,
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
