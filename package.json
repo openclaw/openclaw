@@ -1240,6 +1240,7 @@
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.6.205",
     "playwright-core": "1.59.1",
+    "proxy-agent": "^8.0.0",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
     "sqlite-vec": "0.1.9",

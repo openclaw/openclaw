@@ -95,7 +95,7 @@ export async function monitorWebSocket({
   const error = runtime?.error ?? console.error;
   log(`feishu[${accountId}]: starting WebSocket connection...`);
 
-  const wsClient = createFeishuWSClient(account);
+  const wsClient = await createFeishuWSClient(account);
   wsClients.set(accountId, wsClient);
 
   return new Promise((resolve, reject) => {
