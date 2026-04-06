@@ -163,6 +163,7 @@ export async function runPreparedReply(
     perMessageQueueOptions,
     typing,
     opts,
+    defaultProvider,
     defaultModel,
     timeoutMs,
     isNewSession,
@@ -445,9 +446,7 @@ export async function runPreparedReply(
     const aborted = abortEmbeddedPiRun(activeSessionId ?? preparedSessionState.sessionId);
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
-const queueKey = sessionKey ?? sessionIdFinal;
-  const isActive = isEmbeddedPiRunActive(sessionIdFinal);
-  const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
+  const queueKey = sessionKey ?? sessionIdFinal;
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
     resolvedQueue.mode === "followup" ||
