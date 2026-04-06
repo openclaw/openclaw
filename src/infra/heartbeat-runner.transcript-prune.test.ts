@@ -95,13 +95,14 @@ describe("heartbeat transcript append-only (#39609)", () => {
     });
   });
 
-  it("does not truncate transcript when heartbeat returns meaningful content", async () => {
+  it("prunes transcript even when heartbeat returns meaningful content", async () => {
     await runTranscriptScenario({
       sessionId: "test-session-content",
       reply: {
         text: "Alert: Something needs your attention!",
         usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
       },
+      expectPruned: true,
     });
   });
 });

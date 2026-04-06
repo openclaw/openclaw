@@ -1213,6 +1213,13 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
+    // Prune heartbeat transcript after successful delivery to prevent
+    // unbounded context growth.  Heartbeat runs are stateless — each run
+    // reads HEARTBEAT.md + preprocess output fresh, so historical turns
+    // add cost without information value.  The lastHeartbeatText dedupe
+    // (stored in the session store, not the transcript) still works.
+    await pruneHeartbeatTranscript(transcriptState);
+
     emitHeartbeatEvent({
       status: "sent",
       to: delivery.to,
