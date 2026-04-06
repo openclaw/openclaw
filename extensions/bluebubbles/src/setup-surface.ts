@@ -135,21 +135,23 @@ const dmPolicy: ChannelSetupDmPolicy = {
   channel,
   policyKey: "channels.bluebubbles.dmPolicy",
   allowFromKey: "channels.bluebubbles.allowFrom",
-  resolveConfigKeys: (_cfg, accountId) =>
-    accountId && accountId !== DEFAULT_ACCOUNT_ID
+  resolveConfigKeys: (cfg, accountId) =>
+    (accountId ?? resolveDefaultBlueBubblesAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
       ? {
-          policyKey: `channels.bluebubbles.accounts.${accountId}.dmPolicy`,
-          allowFromKey: `channels.bluebubbles.accounts.${accountId}.allowFrom`,
+          policyKey: `channels.bluebubbles.accounts.${accountId ?? resolveDefaultBlueBubblesAccountId(cfg)}.dmPolicy`,
+          allowFromKey: `channels.bluebubbles.accounts.${accountId ?? resolveDefaultBlueBubblesAccountId(cfg)}.allowFrom`,
         }
       : {
           policyKey: "channels.bluebubbles.dmPolicy",
           allowFromKey: "channels.bluebubbles.allowFrom",
         },
   getCurrent: (cfg, accountId) =>
-    resolveBlueBubblesAccount({ cfg, accountId: accountId ?? DEFAULT_ACCOUNT_ID }).config
-      .dmPolicy ?? "pairing",
+    resolveBlueBubblesAccount({
+      cfg,
+      accountId: accountId ?? resolveDefaultBlueBubblesAccountId(cfg),
+    }).config.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) =>
-    setBlueBubblesDmPolicy(cfg, accountId ?? DEFAULT_ACCOUNT_ID, policy),
+    setBlueBubblesDmPolicy(cfg, accountId ?? resolveDefaultBlueBubblesAccountId(cfg), policy),
   promptAllowFrom: promptBlueBubblesAllowFrom,
 };
 
@@ -167,10 +169,7 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
       unconfiguredScore: 0,
       includeStatusLine: true,
       resolveConfigured: ({ cfg, accountId }) =>
-        (accountId ? [accountId] : listBlueBubblesAccountIds(cfg)).some((resolvedAccountId) => {
-          const account = resolveBlueBubblesAccount({ cfg, accountId: resolvedAccountId });
-          return account.configured;
-        }),
+        resolveBlueBubblesAccount({ cfg, accountId }).configured,
     }),
     resolveSelectionHint: ({ configured }) =>
       configured ? "configured" : "iMessage via BlueBubbles app",

@@ -54,3 +54,28 @@ describe("discordSetupWizard.dmPolicy", () => {
     expect(next?.channels?.discord?.accounts?.alerts?.allowFrom).toEqual(["123", "*"]);
   });
 });
+
+describe("discordSetupWizard.status", () => {
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const configured = await discordSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          discord: {
+            defaultAccount: "work",
+            token: "discord-root-token",
+            accounts: {
+              alerts: {
+                token: "discord-alerts-token",
+              },
+              work: {
+                token: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
+  });
+});

@@ -1,5 +1,5 @@
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/main-session.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { logWarn, logError } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -17,18 +18,8 @@ import type { RunCronAgentTurnResult } from "./run.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
-  const channelLower = channel.trim().toLowerCase();
   const toTrimmed = to.trim();
-  if (channelLower === "feishu" || channelLower === "lark") {
-    const lowered = toTrimmed.toLowerCase();
-    if (lowered.startsWith("user:")) {
-      return toTrimmed.slice("user:".length).trim();
-    }
-    if (lowered.startsWith("chat:")) {
-      return toTrimmed.slice("chat:".length).trim();
-    }
-  }
-  return toTrimmed;
+  return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
 
 export function matchesMessagingToolDeliveryTarget(
@@ -379,6 +370,37 @@ export async function dispatchCronDelivery(
       deliveryAttempted,
       ...params.telemetry,
     });
+  const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
+    if (!params.job.deleteAfterRun) {
+      return;
+    }
+    try {
+      const { callGateway } = await loadGatewayCallRuntime();
+      await callGateway({
+        method: "sessions.delete",
+        params: {
+          key: params.agentSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        },
+        timeoutMs: 10_000,
+      });
+    } catch {
+      // Best-effort; direct delivery result should still be returned.
+    }
+  };
+  const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
+    deliveryAttempted = true;
+    await cleanupDirectCronSessionIfNeeded();
+    return params.withRunSession({
+      status: "ok",
+      summary,
+      outputText,
+      delivered: false,
+      deliveryAttempted: true,
+      ...params.telemetry,
+    });
+  };
 
   const deliverViaDirect = async (
     delivery: SuccessfulDeliveryTarget,
@@ -396,14 +418,18 @@ export async function dispatchCronDelivery(
       delivery,
     });
     try {
-      const payloadsForDelivery =
+      const rawPayloads =
         deliveryPayloads.length > 0
           ? deliveryPayloads
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [];
+      // Suppress NO_REPLY sentinel so it never leaks to external channels.
+      const payloadsForDelivery = rawPayloads.filter(
+        (p) => !isSilentReplyText(p.text, SILENT_REPLY_TOKEN),
+      );
       if (payloadsForDelivery.length === 0) {
-        return null;
+        return await finishSilentReplyDelivery();
       }
       if (params.isAborted()) {
         return params.withRunSession({
@@ -535,26 +561,6 @@ export async function dispatchCronDelivery(
   const finalizeTextDelivery = async (
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
-    const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
-      if (!params.job.deleteAfterRun) {
-        return;
-      }
-      try {
-        const { callGateway } = await loadGatewayCallRuntime();
-        await callGateway({
-          method: "sessions.delete",
-          params: {
-            key: params.agentSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: false,
-          },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // Best-effort; direct delivery result should still be returned.
-      }
-    };
-
     if (!synthesizedText) {
       return null;
     }
@@ -625,7 +631,7 @@ export async function dispatchCronDelivery(
       hadDescendants &&
       synthesizedText.trim() === initialSynthesizedText &&
       isLikelyInterimCronMessage(initialSynthesizedText) &&
-      initialSynthesizedText.toUpperCase() !== SILENT_REPLY_TOKEN.toUpperCase()
+      !isSilentReplyText(initialSynthesizedText, SILENT_REPLY_TOKEN)
     ) {
       // Descendants existed but no post-orchestration synthesis arrived AND
       // no descendant fallback reply was available. Suppress stale parent
@@ -640,15 +646,8 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
-      await cleanupDirectCronSessionIfNeeded();
-      return params.withRunSession({
-        status: "ok",
-        summary,
-        outputText,
-        delivered: false,
-        ...params.telemetry,
-      });
+    if (isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN)) {
+      return await finishSilentReplyDelivery();
     }
     if (params.isAborted()) {
       return params.withRunSession({

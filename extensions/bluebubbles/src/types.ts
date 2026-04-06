@@ -11,6 +11,25 @@ export type BlueBubblesGroupConfig = {
   tools?: { allow?: string[]; deny?: string[] };
 };
 
+export type BlueBubblesActionConfig = {
+  reactions?: boolean;
+  edit?: boolean;
+  unsend?: boolean;
+  reply?: boolean;
+  sendWithEffect?: boolean;
+  renameGroup?: boolean;
+  setGroupIcon?: boolean;
+  addParticipant?: boolean;
+  removeParticipant?: boolean;
+  leaveGroup?: boolean;
+  sendAttachment?: boolean;
+};
+
+export type BlueBubblesNetworkConfig = {
+  /** Dangerous opt-in for same-host or trusted private/internal BlueBubbles deployments. */
+  dangerouslyAllowPrivateNetwork?: boolean;
+};
+
 export type BlueBubblesAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -18,8 +37,6 @@ export type BlueBubblesAccountConfig = {
   capabilities?: string[];
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
-  /** Per-action tool gating (default: true for all). */
-  actions?: BlueBubblesActionConfig;
   /** If false, do not start this BlueBubbles account. Default: true. */
   enabled?: boolean;
   /** Base URL for the BlueBubbles API. */
@@ -59,38 +76,26 @@ export type BlueBubblesAccountConfig = {
   mediaLocalRoots?: string[];
   /** Send read receipts for incoming messages (default: true). */
   sendReadReceipts?: boolean;
-  /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for same-host BlueBubbles setups. */
-  allowPrivateNetwork?: boolean;
+  /** Network policy overrides for same-host or trusted private/internal BlueBubbles deployments. */
+  network?: BlueBubblesNetworkConfig;
   /** Per-group configuration keyed by chat GUID or identifier. */
   groups?: Record<string, BlueBubblesGroupConfig>;
+  /** Per-action tool gating (default: true for all). */
+  actions?: BlueBubblesActionConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: {
     enabled?: boolean;
   };
 };
 
-export type BlueBubblesActionConfig = {
-  reactions?: boolean;
-  edit?: boolean;
-  unsend?: boolean;
-  reply?: boolean;
-  sendWithEffect?: boolean;
-  renameGroup?: boolean;
-  setGroupIcon?: boolean;
-  addParticipant?: boolean;
-  removeParticipant?: boolean;
-  leaveGroup?: boolean;
-  sendAttachment?: boolean;
-};
-
-export type BlueBubblesConfig = {
+export type BlueBubblesConfig = Omit<BlueBubblesAccountConfig, "actions"> & {
   /** Optional per-account BlueBubbles configuration (multi-account). */
   accounts?: Record<string, BlueBubblesAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: BlueBubblesActionConfig;
-} & BlueBubblesAccountConfig;
+};
 
 export type BlueBubblesSendTarget =
   | { kind: "chat_id"; chatId: number }

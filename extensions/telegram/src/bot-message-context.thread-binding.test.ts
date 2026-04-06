@@ -4,15 +4,18 @@ import { buildTelegramMessageContextForTest } from "./bot-message-context.test-h
 const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./bot-message-context.session.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./bot-message-context.session.runtime.js")>();
+vi.mock("./bot-message-context.session.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./bot-message-context.session.runtime.js")>(
+    "./bot-message-context.session.runtime.js",
+  );
   return {
     ...actual,
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
   };
 });
-vi.mock("./conversation-route.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./conversation-route.js")>();
+vi.mock("./conversation-route.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./conversation-route.js")>("./conversation-route.js");
   return {
     ...actual,
     resolveTelegramConversationRoute: (...args: unknown[]) =>

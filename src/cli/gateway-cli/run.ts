@@ -15,11 +15,12 @@ import { resolveGatewayAuth } from "../../gateway/auth.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
+import { resolveControlUiRootSync } from "../../infra/control-ui-assets.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
-import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
+import { setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -48,8 +49,6 @@ type GatewayRunOpts = {
   allowUnconfigured?: boolean;
   force?: boolean;
   verbose?: boolean;
-  cliBackendLogs?: boolean;
-  claudeCliLogs?: boolean;
   wsLog?: unknown;
   compact?: boolean;
   rawStream?: boolean;
@@ -79,8 +78,6 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "reset",
   "force",
   "verbose",
-  "cliBackendLogs",
-  "claudeCliLogs",
   "compact",
   "rawStream",
 ] as const;
@@ -139,6 +136,27 @@ function formatModeErrorList<T extends string>(modes: readonly T[]): string {
     return `${quoted[0]} or ${quoted[1]}`;
   }
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
+}
+
+function maybeLogPendingControlUiBuild(cfg: ReturnType<typeof loadConfig>): void {
+  if (cfg.gateway?.controlUi?.enabled === false) {
+    return;
+  }
+  if (toOptionString(cfg.gateway?.controlUi?.root)) {
+    return;
+  }
+  if (
+    resolveControlUiRootSync({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    })
+  ) {
+    return;
+  }
+  gatewayLog.info(
+    "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. Prebuild with `pnpm ui:build` for a faster first boot.",
+  );
 }
 
 function getGatewayStartGuardErrors(params: {
@@ -219,10 +237,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
 
   setVerbose(Boolean(opts.verbose));
-  if (opts.cliBackendLogs || opts.claudeCliLogs) {
-    setConsoleSubsystemFilter(["agent/cli-backend"]);
-    process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT = "1";
-  }
   const wsLogRaw = (opts.compact ? "compact" : opts.wsLog) as string | undefined;
   const wsLogStyle: GatewayWsLogStyle =
     wsLogRaw === "compact" ? "compact" : wsLogRaw === "full" ? "full" : "auto";
@@ -261,6 +275,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
   gatewayLog.info("loading configuration…");
   const cfg = loadConfig();
+  maybeLogPendingControlUiBuild(cfg);
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error("Invalid port");
@@ -576,12 +591,6 @@ export function addGatewayRunCommand(cmd: Command): Command {
     )
     .option("--force", "Kill any existing listener on the target port before starting", false)
     .option("--verbose", "Verbose logging to stdout/stderr", false)
-    .option(
-      "--cli-backend-logs",
-      "Only show CLI backend logs in the console (includes stdout/stderr)",
-      false,
-    )
-    .option("--claude-cli-logs", "Deprecated alias for --cli-backend-logs", false)
     .option("--ws-log <style>", 'WebSocket log style ("auto"|"full"|"compact")', "auto")
     .option("--compact", 'Alias for "--ws-log compact"', false)
     .option("--raw-stream", "Log raw model stream events to jsonl", false)

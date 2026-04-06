@@ -15,6 +15,7 @@ import {
   type PluginManifest,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
+  type PluginManifestModelSupport,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
@@ -27,6 +28,18 @@ import type {
   PluginKind,
   PluginOrigin,
 } from "./types.js";
+
+type PluginManifestContractListKey =
+  | "speechProviders"
+  | "mediaUnderstandingProviders"
+  | "realtimeVoiceProviders"
+  | "realtimeTranscriptionProviders"
+  | "imageGenerationProviders"
+  | "videoGenerationProviders"
+  | "musicGenerationProviders"
+  | "memoryEmbeddingProviders"
+  | "webFetchProviders"
+  | "webSearchProviders";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -56,7 +69,7 @@ export type PluginManifestRecord = {
   kind?: PluginKind | PluginKind[];
   channels: string[];
   providers: string[];
-  cliBackends: string[];
+  modelSupport?: PluginManifestModelSupport;
   providerAuthEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   skills: string[];
@@ -94,6 +107,63 @@ const DEFAULT_MANIFEST_CACHE_MS = 1000;
 
 export function clearPluginManifestRegistryCache(): void {
   registryCache.clear();
+}
+
+function listContractValues(
+  plugin: PluginManifestRecord,
+  contract: PluginManifestContractListKey,
+): readonly string[] {
+  return plugin.contracts?.[contract] ?? [];
+}
+
+export function resolveManifestContractPluginIds(params: {
+  contract: PluginManifestContractListKey;
+  origin?: PluginOrigin;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: readonly string[];
+}): string[] {
+  const onlyPluginIdSet =
+    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
+  return loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })
+    .plugins.filter(
+      (plugin) =>
+        (!params.origin || plugin.origin === params.origin) &&
+        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
+        listContractValues(plugin, params.contract).length > 0,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resolveManifestContractOwnerPluginId(params: {
+  contract: PluginManifestContractListKey;
+  value: string | undefined;
+  origin?: PluginOrigin;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const normalizedValue = params.value?.trim().toLowerCase();
+  if (!normalizedValue) {
+    return undefined;
+  }
+  return loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  }).plugins.find(
+    (plugin) =>
+      (!params.origin || plugin.origin === params.origin) &&
+      listContractValues(plugin, params.contract).some(
+        (candidate) => candidate.trim().toLowerCase() === normalizedValue,
+      ),
+  )?.id;
 }
 
 function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
@@ -216,7 +286,7 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
-    cliBackends: params.manifest.cliBackends ?? [],
+    modelSupport: params.manifest.modelSupport,
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
     skills: params.manifest.skills ?? [],
@@ -279,7 +349,6 @@ function buildBundleRecord(params: {
     bundleCapabilities: params.manifest.capabilities,
     channels: [],
     providers: [],
-    cliBackends: [],
     skills: params.manifest.skills ?? [],
     settingsFiles: params.manifest.settingsFiles ?? [],
     hooks: params.manifest.hooks ?? [],

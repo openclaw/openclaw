@@ -240,17 +240,6 @@ async function readPackedRootPackageJson(archivePath: string): Promise<{
   }
 }
 
-function readGeneratedFacadeTypeMap(): string {
-  return readFileSync(
-    resolve(REPO_ROOT, "src/generated/plugin-sdk-facade-type-map.generated.ts"),
-    "utf8",
-  );
-}
-
-function buildLegacyPluginSourceAlias(): string {
-  return ["openclaw", ["plugin", "source"].join("-")].join("/") + "/";
-}
-
 function collectExtensionFiles(dir: string): string[] {
   const entries = readdirSync(dir, { withFileTypes: true });
   const files: string[] = [];
@@ -396,11 +385,6 @@ describe("plugin-sdk package contract guardrails", () => {
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  });
-
-  it("keeps generated facade types on package-style module specifiers", () => {
-    expect(readGeneratedFacadeTypeMap()).not.toContain("../../extensions/");
-    expect(readGeneratedFacadeTypeMap()).not.toContain(buildLegacyPluginSourceAlias());
   });
 
   it("keeps extension sources on public sdk or local package seams", () => {

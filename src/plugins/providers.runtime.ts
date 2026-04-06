@@ -1,16 +1,24 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withActivatedPluginIds } from "./activation-context.js";
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
-import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
+import {
+  loadOpenClawPlugins,
+  resolveRuntimePluginRegistry,
+  type PluginLoadOptions,
+} from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import {
+  resolveDiscoveredProviderPluginIds,
   resolveEnabledProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
+  resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForModelRefs,
   withBundledProviderVitestCompat,
 } from "./providers.js";
+import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
-
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -19,16 +27,91 @@ export function resolvePluginProviders(params: {
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
+  providerRefs?: readonly string[];
+  modelRefs?: readonly string[];
   activate?: boolean;
   cache?: boolean;
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
+  mode?: "runtime" | "setup";
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
+  const providerOwnedPluginIds = params.providerRefs?.length
+    ? [
+        ...new Set(
+          params.providerRefs.flatMap(
+            (provider) =>
+              resolveOwningPluginIdsForProvider({
+                provider,
+                config: params.config,
+                workspaceDir,
+                env,
+              }) ?? [],
+          ),
+        ),
+      ]
+    : [];
+  const modelOwnedPluginIds = params.modelRefs?.length
+    ? resolveOwningPluginIdsForModelRefs({
+        models: params.modelRefs,
+        config: params.config,
+        workspaceDir,
+        env,
+      })
+    : [];
+  const requestedPluginIds =
+    params.onlyPluginIds ||
+    params.providerRefs?.length ||
+    params.modelRefs?.length ||
+    providerOwnedPluginIds.length > 0 ||
+    modelOwnedPluginIds.length > 0
+      ? [
+          ...new Set([
+            ...(params.onlyPluginIds ?? []),
+            ...providerOwnedPluginIds,
+            ...modelOwnedPluginIds,
+          ]),
+        ].toSorted((left, right) => left.localeCompare(right))
+      : undefined;
+  const runtimeConfig = withActivatedPluginIds({
+    config: params.config,
+    pluginIds: [...providerOwnedPluginIds, ...modelOwnedPluginIds],
+  });
+  if (params.mode === "setup") {
+    const providerPluginIds = resolveDiscoveredProviderPluginIds({
+      config: runtimeConfig,
+      workspaceDir,
+      env,
+      onlyPluginIds: requestedPluginIds,
+    });
+    if (providerPluginIds.length === 0) {
+      return [];
+    }
+    const registry = loadOpenClawPlugins({
+      config: withActivatedPluginIds({
+        config: runtimeConfig,
+        pluginIds: providerPluginIds,
+      }),
+      activationSourceConfig: runtimeConfig,
+      autoEnabledReasons: {},
+      workspaceDir,
+      env,
+      onlyPluginIds: providerPluginIds,
+      pluginSdkResolution: params.pluginSdkResolution,
+      cache: params.cache ?? false,
+      activate: params.activate ?? false,
+      logger: createPluginLoaderLogger(log),
+    });
+    return registry.providers.map((entry) => ({
+      ...entry.provider,
+      pluginId: entry.pluginId,
+    }));
+  }
   const activation = resolveBundledPluginCompatibleActivationInputs({
-    rawConfig: params.config,
+    rawConfig: runtimeConfig,
     env,
-    workspaceDir: params.workspaceDir,
-    onlyPluginIds: params.onlyPluginIds,
+    workspaceDir,
+    onlyPluginIds: requestedPluginIds,
     applyAutoEnable: true,
     compatMode: {
       allowlist: params.bundledProviderAllowlistCompat,
@@ -46,15 +129,15 @@ export function resolvePluginProviders(params: {
     : activation.config;
   const providerPluginIds = resolveEnabledProviderPluginIds({
     config,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     env,
-    onlyPluginIds: params.onlyPluginIds,
+    onlyPluginIds: requestedPluginIds,
   });
   const registry = resolveRuntimePluginRegistry({
     config,
     activationSourceConfig: activation.activationSourceConfig,
     autoEnabledReasons: activation.autoEnabledReasons,
-    workspaceDir: params.workspaceDir,
+    workspaceDir,
     env,
     onlyPluginIds: providerPluginIds,
     pluginSdkResolution: params.pluginSdkResolution,

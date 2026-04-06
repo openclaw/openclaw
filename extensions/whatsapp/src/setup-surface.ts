@@ -30,25 +30,27 @@ export const whatsappSetupWizard: ChannelSetupWizard = {
     resolveStatusLines: async ({ cfg, accountId, configured }) => {
       const linkedAccountId = (
         await Promise.all(
-          (accountId ? [accountId] : listWhatsAppAccountIds(cfg)).map(async (resolvedAccountId) => ({
-            accountId: resolvedAccountId,
-            linked: await detectWhatsAppLinked(cfg, resolvedAccountId),
-          })),
+          (accountId ? [accountId] : listWhatsAppAccountIds(cfg)).map(
+            async (resolvedAccountId) => ({
+              accountId: resolvedAccountId,
+              linked: await detectWhatsAppLinked(cfg, resolvedAccountId),
+            }),
+          ),
         )
       ).find((entry) => entry.linked)?.accountId;
-      const label = linkedAccountId
-        ? `WhatsApp (${linkedAccountId === DEFAULT_ACCOUNT_ID ? "default" : linkedAccountId})`
+      const labelAccountId = accountId ?? linkedAccountId;
+      const label = labelAccountId
+        ? `WhatsApp (${labelAccountId === DEFAULT_ACCOUNT_ID ? "default" : labelAccountId})`
         : "WhatsApp";
       return [`${label}: ${configured ? "linked" : "not linked"}`];
     },
   },
-  resolveShouldPromptAccountIds: ({ options, shouldPromptAccountIds }) =>
-    Boolean(shouldPromptAccountIds || options?.promptWhatsAppAccountId),
+  resolveShouldPromptAccountIds: ({ shouldPromptAccountIds }) => Boolean(shouldPromptAccountIds),
   credentials: [],
   finalize: async ({ cfg, accountId, forceAllowFrom, prompter, runtime }) =>
     await finalizeWhatsAppSetup({ cfg, accountId, forceAllowFrom, prompter, runtime }),
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
   onAccountRecorded: (accountId, options) => {
-    options?.onWhatsAppAccountId?.(accountId);
+    options?.onAccountId?.(channel, accountId);
   },
 };

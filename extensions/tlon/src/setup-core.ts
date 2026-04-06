@@ -23,7 +23,7 @@ export type TlonSetupInput = ChannelSetupInput & {
   ship?: string;
   url?: string;
   code?: string;
-  allowPrivateNetwork?: boolean;
+  dangerouslyAllowPrivateNetwork?: boolean;
   groupChannels?: string[];
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
@@ -135,7 +135,9 @@ export async function resolveTlonSetupConfigured(
   }
   const accountIds = listTlonAccountIds(cfg);
   return accountIds.length > 0
-    ? accountIds.some((resolvedAccountId) => isConfigured(resolveTlonAccount(cfg, resolvedAccountId)))
+    ? accountIds.some((resolvedAccountId) =>
+        isConfigured(resolveTlonAccount(cfg, resolvedAccountId)),
+      )
     : isConfigured(resolveTlonAccount(cfg, DEFAULT_ACCOUNT_ID));
 }
 

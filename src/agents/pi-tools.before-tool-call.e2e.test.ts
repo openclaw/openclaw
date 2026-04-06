@@ -14,8 +14,10 @@ import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loo
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
-vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/hook-runner-global.js")>();
+vi.mock("../plugins/hook-runner-global.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
+    "../plugins/hook-runner-global.js",
+  );
   return {
     ...actual,
     getGlobalHookRunner: vi.fn(),
@@ -386,6 +388,22 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Blocked by security plugin");
     expect(mockCallGateway).not.toHaveBeenCalled();
+  });
+
+  it("blocks when before_tool_call hook execution throws", async () => {
+    hookRunner.runBeforeToolCall.mockRejectedValueOnce(new Error("hook crashed"));
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "ls" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty(
+      "reason",
+      "Tool call blocked because before_tool_call hook failed",
+    );
   });
 
   it("calls gateway RPC and unblocks on allow-once", async () => {

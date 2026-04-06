@@ -182,6 +182,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "qa",
+    description: "Run QA scenarios and launch the private QA debugger UI",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../qa-cli.js");
+      mod.registerQaCli(program);
+    },
+  },
+  {
     name: "hooks",
     description: "Manage internal agent hooks",
     hasSubcommands: true,

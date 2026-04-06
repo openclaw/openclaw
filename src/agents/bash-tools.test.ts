@@ -410,6 +410,38 @@ const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoop
   expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, label);
 };
 
+describe("tool descriptions", () => {
+  it("adds cron-specific deferred follow-up guidance only when cron is available", () => {
+    const execWithCron = createTestExecTool({ hasCronTool: true });
+    const processWithCron = createProcessTool({ hasCronTool: true });
+
+    expect(execWithCron.description).toContain(
+      "rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention.",
+    );
+    expect(processWithCron.description).toContain(
+      "completion confirmation when automatic completion wake is unavailable.",
+    );
+    expect(processWithCron.description).toContain(
+      "Use write/send-keys/submit/paste/kill for input or intervention.",
+    );
+    expect(execWithCron.description).toContain(
+      "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead.",
+    );
+    expect(processWithCron.description).toContain(
+      "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups.",
+    );
+    expect(execTool.description).not.toContain("use cron instead");
+    expect(processTool.description).not.toContain("scheduled follow-ups");
+    expect(execTool.description).toContain("otherwise use process to confirm completion");
+    expect(processTool.description).toContain(
+      "completion confirmation when automatic completion wake is unavailable",
+    );
+    expect(processTool.description).toContain(
+      "Use write/send-keys/submit/paste/kill for input or intervention.",
+    );
+  });
+});
+
 beforeEach(() => {
   callIdCounter = 0;
   resetProcessRegistryForTests();
@@ -531,12 +563,12 @@ describe("exec notifyOnExit", () => {
       wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
     );
     try {
-      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
 
       await expect
         .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
         .toMatchObject({
-          reason: `exec:${sessionId}:exit`,
+          reason: "exec-event",
           sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
         });
     } finally {
@@ -551,12 +583,12 @@ describe("exec notifyOnExit", () => {
       wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
     );
     try {
-      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
 
       await expect
         .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
         .toEqual({
-          reason: `exec:${sessionId}:exit`,
+          reason: "exec-event",
         });
     } finally {
       dispose();

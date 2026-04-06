@@ -74,6 +74,10 @@ function memoryPluginBody(id: string) {
   return `module.exports = { id: ${JSON.stringify(id)}, kind: "memory", register() {} };`;
 }
 
+const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
+const RESERVED_ADMIN_SCOPE_WARNING =
+  "gateway method scope coerced to operator.admin for reserved core namespace";
+
 function writeBundledPlugin(params: {
   id: string;
   body?: string;
@@ -731,7 +735,7 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      name: "loads bundled channel plugins when channels.<id>.enabled=true even if plugins.allow excludes them",
+      name: "lets explicit bundled channel enablement bypass restrictive allowlists",
       config: {
         channels: {
           telegram: {
@@ -743,7 +747,10 @@ describe("loadOpenClawPlugins", () => {
         },
       } satisfies PluginLoadConfig,
       assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-        expectTelegramLoaded(registry);
+        const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+        expect(telegram?.status).toBe("loaded");
+        expect(telegram?.error).toBeUndefined();
+        expect(telegram?.explicitlyEnabled).toBe(true);
       },
     },
     {
@@ -959,6 +966,47 @@ describe("loadOpenClawPlugins", () => {
         const loaded = registry.plugins.find((entry) => entry.id === "allowed-config-path");
         expect(loaded?.status).toBe("loaded");
         expect(Object.keys(registry.gatewayHandlers)).toContain("allowed-config-path.ping");
+      },
+    },
+    {
+      label: "coerces reserved gateway method namespaces to operator.admin",
+      run: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "reserved-gateway-scope",
+          filename: "reserved-gateway-scope.cjs",
+          body: `module.exports = {
+  id: "reserved-gateway-scope",
+  register(api) {
+    api.registerGatewayMethod(
+      ${JSON.stringify(RESERVED_ADMIN_PLUGIN_METHOD)},
+      ({ respond }) => respond(true, { ok: true }),
+      { scope: "operator.read" },
+    );
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["reserved-gateway-scope"],
+            },
+          },
+        });
+
+        expect(Object.keys(registry.gatewayHandlers)).toContain(RESERVED_ADMIN_PLUGIN_METHOD);
+        expect(registry.gatewayMethodScopes?.[RESERVED_ADMIN_PLUGIN_METHOD]).toBe("operator.admin");
+        expect(
+          registry.diagnostics.some((diag) =>
+            String(diag.message).includes(
+              `${RESERVED_ADMIN_SCOPE_WARNING}: ${RESERVED_ADMIN_PLUGIN_METHOD}`,
+            ),
+          ),
+        ).toBe(true);
       },
     },
     {
@@ -1259,7 +1307,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
 
     expect(active.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
-    expect(getPluginCommandSpecs("telegram")).toEqual([
+    expect(getPluginCommandSpecs()).toEqual([
       {
         name: "pair",
         description: "Pair device",
@@ -2082,21 +2130,6 @@ module.exports = { id: "throws-after-import", register() {} };`,
           });
         },
       },
-      {
-        label: "requires cli backend ids",
-        pluginId: "cli-backend-missing-id",
-        body: `module.exports = { id: "cli-backend-missing-id", register(api) {
-  api.registerCliBackend({ id: "   ", config: { command: "claude" } });
-} };`,
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-          expect(registry.cliBackends).toHaveLength(0);
-          expectRegistryErrorDiagnostic({
-            registry,
-            pluginId: "cli-backend-missing-id",
-            message: "cli backend registration missing id",
-          });
-        },
-      },
     ] as const;
 
     runSinglePluginRegistryScenarios(scenarios);
@@ -2188,22 +2221,6 @@ module.exports = { id: "throws-after-import", register() {} };`,
         duplicateMessage: "cli command already registered: shared-cli (cli-owner-a)",
         assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           expect(registry.cliRegistrars[0]?.pluginId).toBe("cli-owner-a");
-        },
-        assert: expectDuplicateRegistrationResult,
-      },
-      {
-        label: "plugin cli backend ids",
-        ownerA: "cli-backend-owner-a",
-        ownerB: "cli-backend-owner-b",
-        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
-  api.registerCliBackend({ id: "shared-cli-backend", config: { command: "backend-${ownerId}" } });
-} };`,
-        selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
-          registry.cliBackends?.length ?? 0,
-        duplicateMessage:
-          "cli backend already registered: shared-cli-backend (cli-backend-owner-a)",
-        assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-          expect(registry.cliBackends?.[0]?.pluginId).toBe("cli-backend-owner-a");
         },
         assert: expectDuplicateRegistrationResult,
       },
@@ -3632,6 +3649,43 @@ module.exports = {
     } finally {
       delete (globalThis as Record<string, unknown>)[seenKey];
     }
+  });
+
+  it("suppresses trust warning logs for non-activating snapshot loads", () => {
+    useNoBundledPlugins();
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const globalDir = path.join(stateDir, "extensions", "rogue");
+      mkdirSafe(globalDir);
+      writePlugin({
+        id: "rogue",
+        body: simplePluginBody("rogue"),
+        dir: globalDir,
+        filename: "index.cjs",
+      });
+
+      const warnings: string[] = [];
+      const registry = loadOpenClawPlugins({
+        activate: false,
+        cache: false,
+        logger: createWarningLogger(warnings),
+        config: {
+          plugins: {
+            enabled: true,
+          },
+        },
+      });
+
+      expect(warnings).toEqual([]);
+      expect(
+        registry.diagnostics.some(
+          (diag) =>
+            diag.level === "warn" &&
+            diag.pluginId === "rogue" &&
+            diag.message.includes("loaded without install/load-path provenance"),
+        ),
+      ).toBe(true);
+    });
   });
 
   it("loads source TypeScript plugins that route through local runtime shims", () => {

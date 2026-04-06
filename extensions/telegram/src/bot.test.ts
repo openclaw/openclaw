@@ -1,10 +1,13 @@
 import { rm } from "node:fs/promises";
-import type { PluginInteractiveTelegramHandlerContext } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
+import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "./test-support/inbound-context-contract.js";
 const {
   answerCallbackQuerySpy,
   commandSpy,
@@ -350,6 +353,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
+          botToken: "tok",
           dmPolicy: "open",
           allowFrom: ["*"],
           capabilities: ["vision"],
@@ -753,12 +757,18 @@ describe("createTelegramBot", () => {
     const [chatId, messageId, text, params] = editMessageTextSpy.mock.calls[0] ?? [];
     expect(chatId).toBe(1234);
     expect(messageId).toBe(12);
-    expect(String(text)).toContain(`${INFO_EMOJI} Commands`);
-    expect(params).toEqual(
-      expect.objectContaining({
-        reply_markup: expect.any(Object),
-      }),
-    );
+    expect(String(text)).toContain(`${INFO_EMOJI} Commands (2/`);
+    expect(params).toEqual({
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "◀ Prev", callback_data: "commands_page_1:main" },
+            { text: "2/5", callback_data: "commands_page_noop:main" },
+            { text: "Next ▶", callback_data: "commands_page_3:main" },
+          ],
+        ],
+      },
+    });
   });
 
   it("falls back to default agent for pagination callbacks without agent suffix", async () => {
@@ -840,7 +850,7 @@ describe("createTelegramBot", () => {
 
     const modelId = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
     const storePath = `/tmp/openclaw-telegram-model-compact-${process.pid}-${Date.now()}.json`;
-    const config = {
+    const config: OpenClawConfig = {
       agents: {
         defaults: {
           model: `bedrock/${modelId}`,
@@ -905,30 +915,32 @@ describe("createTelegramBot", () => {
     editMessageTextSpy.mockClear();
 
     const storePath = `/tmp/openclaw-telegram-model-default-${process.pid}-${Date.now()}.json`;
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "claude-opus-4-6",
+          models: {
+            "anthropic/claude-opus-4-6": {},
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+      session: {
+        store: storePath,
+      },
+    };
 
     await rm(storePath, { force: true });
     try {
+      loadConfig.mockReturnValue(config);
       createTelegramBot({
         token: "tok",
-        config: {
-          agents: {
-            defaults: {
-              model: "claude-opus-4-6",
-              models: {
-                "anthropic/claude-opus-4-6": {},
-              },
-            },
-          },
-          channels: {
-            telegram: {
-              dmPolicy: "open",
-              allowFrom: ["*"],
-            },
-          },
-          session: {
-            store: storePath,
-          },
-        },
+        config,
       });
       const callbackHandler = onSpy.mock.calls.find(
         (call) => call[0] === "callback_query",
@@ -1816,12 +1828,12 @@ describe("createTelegramBot", () => {
     registerPluginInteractiveHandler("codex-plugin", {
       channel: "telegram",
       namespace: "codexapp",
-      handler: async ({ respond, callback }: PluginInteractiveTelegramHandlerContext) => {
+      handler: (async ({ respond, callback }: TelegramInteractiveHandlerContext) => {
         await respond.editMessage({
           text: `Handled ${callback.payload}`,
         });
         return { handled: true };
-      },
+      }) as never,
     });
 
     createTelegramBot({
@@ -1863,7 +1875,7 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     getChatSpy.mockResolvedValue({ id: -100123456789, type: "supergroup", is_forum: true });
     const handler = vi.fn(
-      async ({ respond, conversationId, threadId }: PluginInteractiveTelegramHandlerContext) => {
+      async ({ respond, conversationId, threadId }: TelegramInteractiveHandlerContext) => {
         expect(conversationId).toBe("-100123456789:topic:1");
         expect(threadId).toBe(1);
         await respond.editMessage({
@@ -1875,7 +1887,7 @@ describe("createTelegramBot", () => {
     registerPluginInteractiveHandler("codex-plugin", {
       channel: "telegram",
       namespace: "codexapp",
-      handler,
+      handler: handler as never,
     });
 
     createTelegramBot({

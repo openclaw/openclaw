@@ -29,7 +29,7 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
     responsePrefix: undefined,
   },
 } as const;
-export const mockLoadConfig = loadConfigMock;
+export const mockLoadConfig: typeof loadConfigMock = loadConfigMock;
 export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
 export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 

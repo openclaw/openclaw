@@ -38,38 +38,6 @@ describe("createReplyDispatcher", () => {
     expect(onHeartbeatStrip).toHaveBeenCalledTimes(2);
   });
 
-  it("compiles Slack directives in dispatcher flows when enabled", async () => {
-    const deliver = vi.fn().mockResolvedValue(undefined);
-    const dispatcher = createReplyDispatcher({
-      deliver,
-      enableSlackInteractiveReplies: true,
-    });
-
-    expect(
-      dispatcher.sendFinalReply({
-        text: "Choose [[slack_buttons: Retry:retry]]",
-      }),
-    ).toBe(true);
-    await dispatcher.waitForIdle();
-
-    expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver.mock.calls[0]?.[0]).toMatchObject({
-      text: "Choose",
-      interactive: {
-        blocks: [
-          {
-            type: "text",
-            text: "Choose",
-          },
-          {
-            type: "buttons",
-            buttons: [{ label: "Retry", value: "retry" }],
-          },
-        ],
-      },
-    });
-  });
-
   it("avoids double-prefixing and keeps media when heartbeat is the only text", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({

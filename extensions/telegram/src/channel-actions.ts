@@ -168,6 +168,19 @@ function describeTelegramMessageTool({
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
+  resolveCliActionRequest: ({ action, args }) => {
+    if (action !== "thread-create") {
+      return { action, args };
+    }
+    const { threadName, ...rest } = args;
+    return {
+      action: "topic-create",
+      args: {
+        ...rest,
+        name: typeof threadName === "string" ? threadName : undefined,
+      },
+    };
+  },
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },

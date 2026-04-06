@@ -11,6 +11,7 @@ function buildApprovalCapabilityFromLegacyPlugin(
     !authorizeActorAction &&
     !getActionAvailabilityState &&
     !resolveApproveCommandBehavior &&
+    !approvals?.describeExecApprovalSetup &&
     !approvals?.delivery &&
     !approvals?.render &&
     !approvals?.native
@@ -21,6 +22,7 @@ function buildApprovalCapabilityFromLegacyPlugin(
     authorizeActorAction,
     getActionAvailabilityState,
     resolveApproveCommandBehavior,
+    describeExecApprovalSetup: approvals?.describeExecApprovalSetup,
     delivery: approvals?.delivery,
     render: approvals?.render,
     native: approvals?.native,
@@ -44,6 +46,8 @@ export function resolveChannelApprovalCapability(
       capability.getActionAvailabilityState ?? legacyCapability.getActionAvailabilityState,
     resolveApproveCommandBehavior:
       capability.resolveApproveCommandBehavior ?? legacyCapability.resolveApproveCommandBehavior,
+    describeExecApprovalSetup:
+      capability.describeExecApprovalSetup ?? legacyCapability.describeExecApprovalSetup,
     delivery: capability.delivery ?? legacyCapability.delivery,
     render: capability.render ?? legacyCapability.render,
     native: capability.native ?? legacyCapability.native,
@@ -61,6 +65,7 @@ export function resolveChannelApprovalAdapter(
     return undefined;
   }
   return {
+    describeExecApprovalSetup: capability.describeExecApprovalSetup,
     delivery: capability.delivery,
     render: capability.render,
     native: capability.native,

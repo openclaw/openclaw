@@ -718,6 +718,15 @@ describe("resolveMatrixConfig", () => {
       "Matrix homeserver must use https:// unless it targets a private or loopback host",
     );
   });
+
+  it("accepts internal http hostnames when the private-network opt-in is explicit", async () => {
+    await expect(
+      resolveValidatedMatrixHomeserverUrl("http://localhost.localdomain:8008", {
+        dangerouslyAllowPrivateNetwork: true,
+        lookupFn: createLookupFn([{ address: "127.0.0.1", family: 4 }]),
+      }),
+    ).resolves.toBe("http://localhost.localdomain:8008");
+  });
 });
 
 describe("resolveMatrixAuth", () => {
@@ -1124,10 +1133,7 @@ describe("resolveMatrixAuth", () => {
         env: {} as NodeJS.ProcessEnv,
       });
 
-      expect(matrixDoRequestMock).toHaveBeenCalledWith(
-        "GET",
-        "/_matrix/client/v3/account/whoami",
-      );
+      expect(matrixDoRequestMock).toHaveBeenCalledWith("GET", "/_matrix/client/v3/account/whoami");
       expect(auth).toMatchObject({
         accountId: "default",
         homeserver: "https://matrix.example.org",

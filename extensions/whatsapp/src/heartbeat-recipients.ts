@@ -1,3 +1,4 @@
+import { resolveDefaultWhatsAppAccountId, resolveWhatsAppAccount } from "./accounts.js";
 import {
   DEFAULT_ACCOUNT_ID,
   loadSessionStore,
@@ -7,7 +8,6 @@ import {
   resolveStorePath,
   type OpenClawConfig,
 } from "./heartbeat-recipients.runtime.js";
-import { resolveWhatsAppAccount } from "./accounts.js";
 
 type HeartbeatRecipientsResult = { recipients: string[]; source: string };
 type HeartbeatRecipientsOpts = { to?: string; all?: boolean; accountId?: string };
@@ -56,11 +56,13 @@ export function resolveWhatsAppHeartbeatRecipients(
   }
 
   const sessionRecipients = getSessionRecipients(cfg);
-  const resolvedAccountId = opts.accountId?.trim() || DEFAULT_ACCOUNT_ID;
-  const configuredAllowFrom =
-    (resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? [])
-      .filter((value) => value !== "*")
-      .map(normalizeE164);
+  const resolvedAccountId =
+    opts.accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg) || DEFAULT_ACCOUNT_ID;
+  const configuredAllowFrom = (
+    resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? []
+  )
+    .filter((value) => value !== "*")
+    .map(normalizeE164);
   const storeAllowFrom = readChannelAllowFromStoreSync(
     "whatsapp",
     process.env,

@@ -20,19 +20,12 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import {
-  mergeInboundPathRoots,
-  resolveIMessageAttachmentRoots,
-} from "../media/inbound-path-policy.js";
+import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
+import { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
-import {
-  AUTO_AUDIO_KEY_PROVIDERS,
-  AUTO_IMAGE_KEY_PROVIDERS,
-  AUTO_VIDEO_KEY_PROVIDERS,
-  DEFAULT_IMAGE_MODELS,
-} from "./defaults.js";
+import { resolveAutoMediaKeyProviders, resolveDefaultMediaModel } from "./defaults.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { extractGeminiResponse } from "./output-extract.js";
@@ -154,7 +147,11 @@ async function resolveAutoImageModelId(params: {
   if (configuredModel) {
     return configuredModel;
   }
-  const defaultModel = DEFAULT_IMAGE_MODELS[params.providerId];
+  const defaultModel = resolveDefaultMediaModel({
+    cfg: params.cfg,
+    providerId: params.providerId,
+    capability: "image",
+  });
   if (defaultModel) {
     return defaultModel;
   }
@@ -178,10 +175,7 @@ export function resolveMediaAttachmentLocalRoots(params: {
 }): readonly string[] {
   return mergeInboundPathRoots(
     getDefaultMediaLocalRoots(),
-    resolveIMessageAttachmentRoots({
-      cfg: params.cfg,
-      accountId: params.ctx.AccountId,
-    }),
+    resolveChannelInboundAttachmentRoots(params),
   );
 }
 
@@ -475,7 +469,11 @@ async function resolveKeyEntry(params: {
       cfg,
       providerRegistry,
       capability,
-      fallbackProviders: AUTO_IMAGE_KEY_PROVIDERS,
+      fallbackProviders: resolveAutoMediaKeyProviders({
+        cfg,
+        capability,
+        providerRegistry,
+      }),
     })) {
       const entry = await checkProvider(providerId);
       if (entry) {
@@ -497,7 +495,11 @@ async function resolveKeyEntry(params: {
       cfg,
       providerRegistry,
       capability,
-      fallbackProviders: AUTO_VIDEO_KEY_PROVIDERS,
+      fallbackProviders: resolveAutoMediaKeyProviders({
+        cfg,
+        capability,
+        providerRegistry,
+      }),
     })) {
       const entry = await checkProvider(providerId, undefined);
       if (entry) {
@@ -518,7 +520,11 @@ async function resolveKeyEntry(params: {
     cfg,
     providerRegistry,
     capability,
-    fallbackProviders: AUTO_AUDIO_KEY_PROVIDERS,
+    fallbackProviders: resolveAutoMediaKeyProviders({
+      cfg,
+      capability,
+      providerRegistry,
+    }),
   })) {
     const entry = await checkProvider(providerId, undefined);
     if (entry) {

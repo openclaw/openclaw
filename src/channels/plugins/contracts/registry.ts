@@ -1,17 +1,9 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import {
-  listLineAccountIds,
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-} from "../../../plugin-sdk/line.js";
 import { listBundledChannelPlugins, setBundledChannelRuntime } from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
 import { channelPluginSurfaceKeys, type ChannelPluginSurface } from "./manifest.js";
-
-function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
-  return ["..", "..", "..", "..", "extensions", pluginId, artifactBasename].join("/");
-}
+import { importBundledChannelContractArtifact } from "./runtime-artifacts.js";
 
 type SurfaceContractEntry = {
   id: string;
@@ -49,20 +41,29 @@ const sendMessageMatrixMock = vi.hoisted(() =>
     roomId: to.replace(/^room:/, ""),
   })),
 );
+const matrixRuntimeApiModuleId = new URL(
+  "../../../../extensions/matrix/runtime-api.js",
+  import.meta.url,
+).href;
+
+const lineContractApi = await importBundledChannelContractArtifact<{
+  listLineAccountIds: () => string[];
+  resolveDefaultLineAccountId: (cfg: OpenClawConfig) => string | undefined;
+  resolveLineAccount: (params: { cfg: OpenClawConfig; accountId?: string }) => unknown;
+}>("line", "contract-api");
 
 setBundledChannelRuntime("line", {
   channel: {
     line: {
-      listLineAccountIds,
-      resolveDefaultLineAccountId,
+      listLineAccountIds: lineContractApi.listLineAccountIds,
+      resolveDefaultLineAccountId: lineContractApi.resolveDefaultLineAccountId,
       resolveLineAccount: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
-        resolveLineAccount({ cfg, accountId }),
+        lineContractApi.resolveLineAccount({ cfg, accountId }),
     },
   },
 } as never);
 
-vi.mock(buildBundledPluginModuleId("matrix", "runtime-api.js"), async () => {
-  const matrixRuntimeApiModuleId = buildBundledPluginModuleId("matrix", "runtime-api.js");
+vi.mock(matrixRuntimeApiModuleId, async () => {
   const actual = await vi.importActual(matrixRuntimeApiModuleId);
   return {
     ...actual,

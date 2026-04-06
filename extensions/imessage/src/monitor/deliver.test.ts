@@ -17,31 +17,13 @@ vi.mock("../send.js", () => ({
     sendMessageIMessageMock(to, message, opts),
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig: () => ({}),
-    resolveMarkdownTableMode: () => resolveMarkdownTableModeMock(),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    chunkTextWithMode: (text: string) => chunkTextWithModeMock(text),
-    resolveChunkMode: () => resolveChunkModeMock(),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
-  return {
-    ...actual,
-    convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
-  };
-});
+vi.mock("./deliver.runtime.js", () => ({
+  loadConfig: vi.fn(() => ({})),
+  resolveMarkdownTableMode: vi.fn(() => resolveMarkdownTableModeMock()),
+  chunkTextWithMode: (text: string) => chunkTextWithModeMock(text),
+  resolveChunkMode: vi.fn(() => resolveChunkModeMock()),
+  convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
+}));
 
 let deliverReplies: typeof import("./deliver.js").deliverReplies;
 

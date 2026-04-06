@@ -1,4 +1,5 @@
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -183,6 +184,93 @@ describe("bluebubbles setup surface", () => {
       policyKey: "channels.bluebubbles.accounts.work.dmPolicy",
       allowFromKey: "channels.bluebubbles.accounts.work.allowFrom",
     });
+  });
+
+  it("uses configured defaultAccount for omitted DM policy account context", async () => {
+    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
+
+    const cfg = {
+      channels: {
+        bluebubbles: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["user@example.com"],
+          accounts: {
+            work: {
+              serverUrl: "http://localhost:1234",
+              password: "secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(blueBubblesSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
+    expect(blueBubblesSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.bluebubbles.accounts.work.dmPolicy",
+      allowFromKey: "channels.bluebubbles.accounts.work.allowFrom",
+    });
+
+    const next = blueBubblesSetupWizard.dmPolicy?.setPolicy(cfg, "open");
+    expect(next?.channels?.bluebubbles?.dmPolicy).toBe("disabled");
+    expect(next?.channels?.bluebubbles?.accounts?.work?.dmPolicy).toBe("open");
+  });
+
+  it("uses configured defaultAccount when accountId is omitted in account resolution", async () => {
+    const { resolveBlueBubblesAccount } = await import("./accounts.js");
+
+    const resolved = resolveBlueBubblesAccount({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            defaultAccount: "work",
+            serverUrl: "http://localhost:3000",
+            password: "top-secret",
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:1234",
+                password: "secret",
+                name: "Work",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(resolved.accountId).toBe("work");
+    expect(resolved.name).toBe("Work");
+    expect(resolved.baseUrl).toBe("http://localhost:1234");
+    expect(resolved.configured).toBe(true);
+  });
+
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
+
+    const configured = await blueBubblesSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            defaultAccount: "work",
+            serverUrl: "http://localhost:3000",
+            password: "top-secret",
+            accounts: {
+              alerts: {
+                serverUrl: "http://localhost:4000",
+                password: "alerts-secret",
+              },
+              work: {
+                serverUrl: "",
+                password: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {

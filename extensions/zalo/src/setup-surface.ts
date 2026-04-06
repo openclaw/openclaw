@@ -185,19 +185,18 @@ export const zaloSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 10,
     includeStatusLine: true,
-    resolveConfigured: ({ cfg, accountId }) =>
-      (accountId ? [accountId] : listZaloAccountIds(cfg)).some((resolvedAccountId) => {
-        const account = resolveZaloAccount({
-          cfg,
-          accountId: resolvedAccountId,
-          allowUnresolvedSecretRef: true,
-        });
-        return (
-          Boolean(account.token) ||
-          hasConfiguredSecretInput(account.config.botToken) ||
-          Boolean(account.config.tokenFile?.trim())
-        );
-      }),
+    resolveConfigured: ({ cfg, accountId }) => {
+      const account = resolveZaloAccount({
+        cfg,
+        accountId,
+        allowUnresolvedSecretRef: true,
+      });
+      return (
+        Boolean(account.token) ||
+        hasConfiguredSecretInput(account.config.botToken) ||
+        Boolean(account.config.tokenFile?.trim())
+      );
+    },
   }),
   credentials: [],
   finalize: async ({ cfg, accountId, forceAllowFrom, options, prompter }) => {

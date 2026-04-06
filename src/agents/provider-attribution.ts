@@ -96,6 +96,7 @@ export type ProviderRequestCompatibilityFamily = "moonshot";
 export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
   isKnownNativeEndpoint: boolean;
   allowsOpenAIServiceTier: boolean;
+  supportsOpenAIReasoningCompatPayload: boolean;
   allowsAnthropicServiceTier: boolean;
   supportsResponsesStoreField: boolean;
   allowsResponsesStore: boolean;
@@ -294,6 +295,8 @@ function resolveKnownProviderFamily(provider: string | undefined): string {
     case "moonshot":
     case "kimi":
       return "moonshot";
+    case "qwen":
+    case "qwencloud":
     case "modelstudio":
     case "dashscope":
       return "modelstudio";
@@ -574,6 +577,18 @@ export function resolveProviderRequestCapabilities(
       (provider === "openai-codex" &&
         (api === "openai-codex-responses" || api === "openai-responses") &&
         endpointClass === "openai-codex"),
+    supportsOpenAIReasoningCompatPayload:
+      provider !== undefined &&
+      api !== undefined &&
+      !policy.usesExplicitProxyLikeEndpoint &&
+      (provider === "openai" ||
+        provider === "openai-codex" ||
+        provider === "azure-openai" ||
+        provider === "azure-openai-responses") &&
+      (api === "openai-completions" ||
+        api === "openai-responses" ||
+        api === "openai-codex-responses" ||
+        api === "azure-openai-responses"),
     allowsAnthropicServiceTier:
       provider === "anthropic" &&
       api === "anthropic-messages" &&
@@ -591,9 +606,10 @@ export function resolveProviderRequestCapabilities(
       policy.usesKnownNativeOpenAIEndpoint,
     shouldStripResponsesPromptCache:
       api !== undefined && OPENAI_RESPONSES_APIS.has(api) && policy.usesExplicitProxyLikeEndpoint,
+    // Native endpoint class is the real signal here. Users can point a generic
+    // provider key at Moonshot or DashScope and still need streaming usage.
     supportsNativeStreamingUsageCompat:
-      (provider === "moonshot" && endpointClass === "moonshot-native") ||
-      (provider === "modelstudio" && endpointClass === "modelstudio-native"),
+      endpointClass === "moonshot-native" || endpointClass === "modelstudio-native",
     compatibilityFamily,
   };
 }

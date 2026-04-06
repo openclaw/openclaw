@@ -1,5 +1,5 @@
 import os from "node:os";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
@@ -38,7 +38,7 @@ function createConfigOverride(overrides?: Record<string, unknown>) {
 }
 
 describe("spawnSubagentDirect seam flow", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
       loadConfig: () => hoisted.configOverride,
@@ -50,7 +50,11 @@ describe("spawnSubagentDirect seam flow", () => {
       resolveSubagentSpawnModelSelection: () => "openai-codex/gpt-5.4",
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
+      resetModules: false,
     }));
+  });
+
+  beforeEach(() => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
     hoisted.updateSessionStoreMock.mockReset();

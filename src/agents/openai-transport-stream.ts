@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
   calculateCost,
@@ -18,28 +19,25 @@ import type {
   ResponseInput,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { resolveOpenAICompletionsCompatDefaultsFromCapabilities } from "./openai-completions-compat.js";
-import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../plugins/types.js";
+import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
+import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
-  buildProviderRequestDispatcherPolicy,
-  getModelProviderRequestTransport,
-  resolveProviderRequestPolicyConfig,
-} from "./provider-request-config.js";
+  applyOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesPayloadPolicy,
+} from "./openai-responses-payload-policy.js";
+import {
+  normalizeOpenAIStrictToolParameters,
+  resolveOpenAIStrictToolFlagForInventory,
+  resolveOpenAIStrictToolSetting,
+} from "./openai-tool-schema.js";
+import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
+import { transformTransportMessages } from "./transport-message-transform.js";
+import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
-
-const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
-  "openai-responses",
-  "openai-completions",
-  "azure-openai-responses",
-]);
-
-const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
-  "openai-responses": "openclaw-openai-responses-transport",
-  "openai-completions": "openclaw-openai-completions-transport",
-  "azure-openai-responses": "openclaw-azure-openai-responses-transport",
-};
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -96,12 +94,7 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
-export function sanitizeTransportPayloadText(text: string): string {
-  return text.replace(
-    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
-    "",
-  );
-}
+export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 function stringifyUnknown(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
@@ -163,164 +156,6 @@ function shortHash(value: string): string {
     hash = (hash * 31 + value.charCodeAt(i)) | 0;
   }
   return Math.abs(hash).toString(36);
-}
-
-function inferCopilotInitiator(messages: Context["messages"]): "agent" | "user" {
-  const last = messages[messages.length - 1];
-  return last && last.role !== "user" ? "agent" : "user";
-}
-
-function hasCopilotVisionInput(messages: Context["messages"]): boolean {
-  return messages.some((message) => {
-    if (message.role === "user" && Array.isArray(message.content)) {
-      return message.content.some((item) => item.type === "image");
-    }
-    if (message.role === "toolResult" && Array.isArray(message.content)) {
-      return message.content.some((item) => item.type === "image");
-    }
-    return false;
-  });
-}
-
-function buildCopilotDynamicHeaders(params: {
-  messages: Context["messages"];
-  hasImages: boolean;
-}): Record<string, string> {
-  return {
-    "X-Initiator": inferCopilotInitiator(params.messages),
-    "Openai-Intent": "conversation-edits",
-    ...(params.hasImages ? { "Copilot-Vision-Request": "true" } : {}),
-  };
-}
-
-function transformMessages(
-  messages: Context["messages"],
-  model: Model<Api>,
-  normalizeToolCallId?: (
-    id: string,
-    targetModel: Model<Api>,
-    source: { provider: string; api: Api; model: string },
-  ) => string,
-): Context["messages"] {
-  const toolCallIdMap = new Map<string, string>();
-  const transformed = messages.map((msg) => {
-    if (msg.role === "user") {
-      return msg;
-    }
-    if (msg.role === "toolResult") {
-      const normalizedId = toolCallIdMap.get(msg.toolCallId);
-      return normalizedId && normalizedId !== msg.toolCallId
-        ? { ...msg, toolCallId: normalizedId }
-        : msg;
-    }
-    if (msg.role !== "assistant") {
-      return msg;
-    }
-    const isSameModel =
-      msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
-    const content: typeof msg.content = [];
-    for (const block of msg.content) {
-      if (block.type === "thinking") {
-        if (block.redacted) {
-          if (isSameModel) {
-            content.push(block);
-          }
-          continue;
-        }
-        if (isSameModel && block.thinkingSignature) {
-          content.push(block);
-          continue;
-        }
-        if (!block.thinking.trim()) {
-          continue;
-        }
-        content.push(isSameModel ? block : { type: "text", text: block.thinking });
-        continue;
-      }
-      if (block.type === "text") {
-        content.push(isSameModel ? block : { type: "text", text: block.text });
-        continue;
-      }
-      if (block.type !== "toolCall") {
-        content.push(block);
-        continue;
-      }
-      let normalizedToolCall = block;
-      if (!isSameModel && block.thoughtSignature) {
-        normalizedToolCall = { ...normalizedToolCall };
-        delete normalizedToolCall.thoughtSignature;
-      }
-      if (!isSameModel && normalizeToolCallId) {
-        const normalizedId = normalizeToolCallId(block.id, model, msg);
-        if (normalizedId !== block.id) {
-          toolCallIdMap.set(block.id, normalizedId);
-          normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
-        }
-      }
-      content.push(normalizedToolCall);
-    }
-    return { ...msg, content };
-  });
-
-  const result: Context["messages"] = [];
-  let pendingToolCalls: Array<{ id: string; name: string }> = [];
-  let existingToolResultIds = new Set<string>();
-  for (const msg of transformed) {
-    if (msg.role === "assistant") {
-      if (pendingToolCalls.length > 0) {
-        for (const toolCall of pendingToolCalls) {
-          if (!existingToolResultIds.has(toolCall.id)) {
-            result.push({
-              role: "toolResult",
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
-              content: [{ type: "text", text: "No result provided" }],
-              isError: true,
-              timestamp: Date.now(),
-            });
-          }
-        }
-        pendingToolCalls = [];
-        existingToolResultIds = new Set();
-      }
-      if (msg.stopReason === "error" || msg.stopReason === "aborted") {
-        continue;
-      }
-      const toolCalls = msg.content.filter(
-        (block): block is Extract<(typeof msg.content)[number], { type: "toolCall" }> =>
-          block.type === "toolCall",
-      );
-      if (toolCalls.length > 0) {
-        pendingToolCalls = toolCalls.map((block) => ({ id: block.id, name: block.name }));
-        existingToolResultIds = new Set();
-      }
-      result.push(msg);
-      continue;
-    }
-    if (msg.role === "toolResult") {
-      existingToolResultIds.add(msg.toolCallId);
-      result.push(msg);
-      continue;
-    }
-    if (pendingToolCalls.length > 0) {
-      for (const toolCall of pendingToolCalls) {
-        if (!existingToolResultIds.has(toolCall.id)) {
-          result.push({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: "No result provided" }],
-            isError: true,
-            timestamp: Date.now(),
-          });
-        }
-      }
-      pendingToolCalls = [];
-      existingToolResultIds = new Set();
-    }
-    result.push(msg);
-  }
-  return result;
 }
 
 function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
@@ -386,12 +221,16 @@ function convertResponsesMessages(
     }
     return `${normalizedCallId}|${normalizedItemId}`;
   };
-  const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+  const transformedMessages = transformTransportMessages(
+    context.messages,
+    model,
+    normalizeToolCallId,
+  );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push({
       role: model.reasoning && options?.supportsDeveloperRole !== false ? "developer" : "system",
-      content: sanitizeTransportPayloadText(context.systemPrompt),
+      content: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
     });
   }
   let msgIndex = 0;
@@ -497,12 +336,20 @@ function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
   options?: { strict?: boolean | null },
 ): FunctionTool[] {
-  const strict = options?.strict === undefined ? false : options.strict;
+  const strict = resolveOpenAIStrictToolFlagForInventory(tools, options?.strict);
+  if (strict === undefined) {
+    return tools.map((tool) => ({
+      type: "function",
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    })) as unknown as FunctionTool[];
+  }
   return tools.map((tool) => ({
     type: "function",
     name: tool.name,
     description: tool.description,
-    parameters: tool.parameters,
+    parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict),
     strict,
   }));
 }
@@ -718,137 +565,11 @@ function mapResponsesStopReason(status: string | undefined): string {
   }
 }
 
-function hasTransportOverrides(model: Model<Api>): boolean {
-  const request = getModelProviderRequestTransport(model);
-  return Boolean(request?.proxy || request?.tls);
-}
-
-export function isTransportAwareApiSupported(api: Api): boolean {
-  return SUPPORTED_TRANSPORT_APIS.has(api);
-}
-
-export function resolveTransportAwareSimpleApi(api: Api): Api | undefined {
-  return SIMPLE_TRANSPORT_API_ALIAS[api];
-}
-
-export function createTransportAwareStreamFnForModel(model: Model<Api>): StreamFn | undefined {
-  if (!hasTransportOverrides(model)) {
-    return undefined;
-  }
-  if (!isTransportAwareApiSupported(model.api)) {
-    throw new Error(
-      `Model-provider request.proxy/request.tls is not yet supported for api "${model.api}"`,
-    );
-  }
-  switch (model.api) {
-    case "openai-responses":
-      return createOpenAIResponsesTransportStreamFn();
-    case "openai-completions":
-      return createOpenAICompletionsTransportStreamFn();
-    case "azure-openai-responses":
-      return createAzureOpenAIResponsesTransportStreamFn();
-    default:
-      return undefined;
-  }
-}
-
-function resolveModelRequestPolicy(model: Model<Api>) {
-  return resolveProviderRequestPolicyConfig({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    capability: "llm",
-    transport: "stream",
-    request: getModelProviderRequestTransport(model),
-  });
-}
-
-function buildManagedResponse(response: Response, release: () => Promise<void>): Response {
-  if (!response.body) {
-    void release();
-    return response;
-  }
-  const source = response.body;
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let released = false;
-  const finalize = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    await release().catch(() => undefined);
-  };
-  const wrappedBody = new ReadableStream<Uint8Array>({
-    start() {
-      reader = source.getReader();
-    },
-    async pull(controller) {
-      try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
-          controller.close();
-          await finalize();
-          return;
-        }
-        controller.enqueue(chunk.value);
-      } catch (error) {
-        controller.error(error);
-        await finalize();
-      }
-    },
-    async cancel(reason) {
-      try {
-        await reader?.cancel(reason);
-      } finally {
-        await finalize();
-      }
-    },
-  });
-  return new Response(wrappedBody, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
-
-function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
-  const requestConfig = resolveModelRequestPolicy(model);
-  const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
-  return async (input, init) => {
-    const request = input instanceof Request ? new Request(input, init) : undefined;
-    const url =
-      request?.url ??
-      (input instanceof URL
-        ? input.toString()
-        : typeof input === "string"
-          ? input
-          : (() => {
-              throw new Error("Unsupported fetch input for transport-aware model request");
-            })());
-    const requestInit =
-      request &&
-      ({
-        method: request.method,
-        headers: request.headers,
-        body: request.body ?? undefined,
-        redirect: request.redirect,
-        signal: request.signal,
-        ...(request.body ? ({ duplex: "half" } as const) : {}),
-      } satisfies RequestInit & { duplex?: "half" });
-    const result = await fetchWithSsrFGuard({
-      url,
-      init: requestInit ?? init,
-      dispatcherPolicy,
-      ...(requestConfig.allowPrivateNetwork ? { policy: { allowPrivateNetwork: true } } : {}),
-    });
-    return buildManagedResponse(result.response, result.release);
-  };
-}
-
 function buildOpenAIClientHeaders(
   model: Model<Api>,
   context: Context,
   optionHeaders?: Record<string, string>,
+  turnHeaders?: Record<string, string>,
 ): Record<string, string> {
   const headers = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -863,7 +584,33 @@ function buildOpenAIClientHeaders(
   if (optionHeaders) {
     Object.assign(headers, optionHeaders);
   }
+  if (turnHeaders) {
+    Object.assign(headers, turnHeaders);
+  }
   return headers;
+}
+
+function resolveProviderTransportTurnState(
+  model: Model<Api>,
+  params: {
+    sessionId?: string;
+    turnId: string;
+    attempt: number;
+    transport: "stream" | "websocket";
+  },
+) {
+  return resolveProviderTransportTurnStateWithPlugin({
+    provider: model.provider,
+    context: {
+      provider: model.provider,
+      modelId: model.id,
+      model: model as ProviderRuntimeModel,
+      sessionId: params.sessionId,
+      turnId: params.turnId,
+      attempt: params.attempt,
+      transport: params.transport,
+    },
+  });
 }
 
 function createOpenAIResponsesClient(
@@ -871,17 +618,18 @@ function createOpenAIResponsesClient(
   context: Context,
   apiKey: string,
   optionHeaders?: Record<string, string>,
+  turnHeaders?: Record<string, string>,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     fetch: buildGuardedModelFetch(model),
   });
 }
 
-function createOpenAIResponsesTransportStreamFn(): StreamFn {
+export function createOpenAIResponsesTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
@@ -905,12 +653,30 @@ function createOpenAIResponsesTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const client = createOpenAIResponsesClient(model, context, apiKey, options?.headers);
-        let params = buildOpenAIResponsesParams(model, context, options as OpenAIResponsesOptions);
+        const turnState = resolveProviderTransportTurnState(model, {
+          sessionId: options?.sessionId,
+          turnId: randomUUID(),
+          attempt: 1,
+          transport: "stream",
+        });
+        const client = createOpenAIResponsesClient(
+          model,
+          context,
+          apiKey,
+          options?.headers,
+          turnState?.headers,
+        );
+        let params = buildOpenAIResponsesParams(
+          model,
+          context,
+          options as OpenAIResponsesOptions,
+          turnState?.metadata,
+        );
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
+        params = mergeTransportMetadata(params, turnState?.metadata);
         const responseStream = (await client.responses.create(
           params as never,
           options?.signal ? { signal: options.signal } : undefined,
@@ -963,6 +729,7 @@ export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
   options: OpenAIResponsesOptions | undefined,
+  metadata?: Record<string, string>,
 ) {
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
@@ -974,13 +741,16 @@ export function buildOpenAIResponsesParams(
     { supportsDeveloperRole },
   );
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
+    storeMode: "disable",
+  });
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
     stream: true,
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
-    store: false,
+    ...(metadata ? { metadata } : {}),
   };
   if (options?.maxTokens) {
     params.max_output_tokens = options.maxTokens;
@@ -988,11 +758,15 @@ export function buildOpenAIResponsesParams(
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
   }
-  if (options?.serviceTier !== undefined) {
+  if (options?.serviceTier !== undefined && payloadPolicy.allowsServiceTier) {
     params.service_tier = options.serviceTier;
   }
   if (context.tools) {
-    params.tools = convertResponsesTools(context.tools);
+    params.tools = convertResponsesTools(context.tools, {
+      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
+        transport: "stream",
+      }),
+    });
   }
   if (model.reasoning) {
     if (options?.reasoningEffort || options?.reasoningSummary) {
@@ -1005,10 +779,11 @@ export function buildOpenAIResponsesParams(
       params.reasoning = { effort: "none" };
     }
   }
+  applyOpenAIResponsesPayloadPolicy(params as Record<string, unknown>, payloadPolicy);
   return params;
 }
 
-function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
+export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
@@ -1032,18 +807,32 @@ function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const client = createAzureOpenAIClient(model, context, apiKey, options?.headers);
+        const turnState = resolveProviderTransportTurnState(model, {
+          sessionId: options?.sessionId,
+          turnId: randomUUID(),
+          attempt: 1,
+          transport: "stream",
+        });
+        const client = createAzureOpenAIClient(
+          model,
+          context,
+          apiKey,
+          options?.headers,
+          turnState?.headers,
+        );
         const deploymentName = resolveAzureDeploymentName(model);
         let params = buildAzureOpenAIResponsesParams(
           model,
           context,
           options as OpenAIResponsesOptions | undefined,
           deploymentName,
+          turnState?.metadata,
         );
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
+        params = mergeTransportMetadata(params, turnState?.metadata);
         const responseStream = (await client.responses.create(
           params as never,
           options?.signal ? { signal: options.signal } : undefined,
@@ -1091,12 +880,13 @@ function createAzureOpenAIClient(
   context: Context,
   apiKey: string,
   optionHeaders?: Record<string, string>,
+  turnHeaders?: Record<string, string>,
 ) {
   return new AzureOpenAI({
     apiKey,
     apiVersion: resolveAzureOpenAIApiVersion(),
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     baseURL: normalizeAzureBaseUrl(model.baseUrl),
     fetch: buildGuardedModelFetch(model),
   });
@@ -1107,8 +897,9 @@ function buildAzureOpenAIResponsesParams(
   context: Context,
   options: OpenAIResponsesOptions | undefined,
   deploymentName: string,
+  metadata?: Record<string, string>,
 ) {
-  const params = buildOpenAIResponsesParams(model, context, options);
+  const params = buildOpenAIResponsesParams(model, context, options, metadata);
   params.model = deploymentName;
   delete params.store;
   return params;
@@ -1137,7 +928,7 @@ function createOpenAICompletionsClient(
   });
 }
 
-function createOpenAICompletionsTransportStreamFn(): StreamFn {
+export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
     const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
@@ -1328,30 +1119,9 @@ async function processOpenAICompletionsStream(
 
 function detectCompat(model: OpenAIModeModel) {
   const provider = model.provider;
-  const capabilities = resolveProviderRequestCapabilities({
-    provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    capability: "llm",
-    transport: "stream",
-    modelId: model.id,
-    compat:
-      model.compat && typeof model.compat === "object"
-        ? (model.compat as { supportsStore?: boolean })
-        : undefined,
-  });
+  const { capabilities, defaults: compatDefaults } = detectOpenAICompletionsCompat(model);
   const endpointClass = capabilities.endpointClass;
   const isDefaultRoute = endpointClass === "default";
-  const compatDefaults = resolveOpenAICompletionsCompatDefaultsFromCapabilities({
-    provider,
-    ...capabilities,
-  });
-  const isMistral =
-    capabilities.knownProviderFamily === "mistral" || endpointClass === "mistral-public";
-  const isZai = endpointClass === "zai-native" || (isDefaultRoute && provider === "zai");
-  const useMaxTokens =
-    endpointClass === "chutes-native" || (isDefaultRoute && provider === "chutes") || isMistral;
-  const isGrok = endpointClass === "xai-native" || (isDefaultRoute && provider === "xai");
   const isGroq = endpointClass === "groq-native" || (isDefaultRoute && provider === "groq");
   const reasoningEffortMap: Record<string, string> =
     isGroq && model.id === "qwen/qwen3-32b"
@@ -1364,37 +1134,16 @@ function detectCompat(model: OpenAIModeModel) {
         }
       : {};
   return {
-    supportsStore:
-      endpointClass !== "cerebras-native" &&
-      endpointClass !== "chutes-native" &&
-      endpointClass !== "deepseek-native" &&
-      !isMistral &&
-      endpointClass !== "opencode-native" &&
-      endpointClass !== "xai-native" &&
-      !isZai &&
-      !(
-        isDefaultRoute &&
-        (provider === "cerebras" ||
-          provider === "chutes" ||
-          provider === "deepseek" ||
-          provider === "opencode" ||
-          provider === "xai")
-      ),
+    supportsStore: compatDefaults.supportsStore,
     supportsDeveloperRole: compatDefaults.supportsDeveloperRole,
-    supportsReasoningEffort: !isGrok && !isMistral && !isZai,
+    supportsReasoningEffort: compatDefaults.supportsReasoningEffort,
     reasoningEffortMap,
     supportsUsageInStreaming: compatDefaults.supportsUsageInStreaming,
-    maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
+    maxTokensField: compatDefaults.maxTokensField,
     requiresToolResultName: false,
     requiresAssistantAfterToolResult: false,
     requiresThinkingAsText: false,
-    thinkingFormat: isZai
-      ? "zai"
-      : provider === "openrouter" ||
-          capabilities.endpointClass === "openrouter" ||
-          capabilities.attributionProvider === "openrouter"
-        ? "openrouter"
-        : "openai",
+    thinkingFormat: compatDefaults.thinkingFormat,
     openRouterRouting: {},
     vercelGatewayRouting: {},
     supportsStrictMode: compatDefaults.supportsStrictMode,
@@ -1458,6 +1207,7 @@ type OpenAIResponsesRequestParams = {
   stream: true;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
+  metadata?: Record<string, string>;
   store?: boolean;
   max_output_tokens?: number;
   temperature?: number;
@@ -1476,14 +1226,25 @@ function mapReasoningEffort(effort: string, reasoningEffortMap: Record<string, s
   return reasoningEffortMap[effort] ?? effort;
 }
 
-function convertTools(tools: NonNullable<Context["tools"]>, compat: ReturnType<typeof getCompat>) {
+function convertTools(
+  tools: NonNullable<Context["tools"]>,
+  compat: ReturnType<typeof getCompat>,
+  model: OpenAIModeModel,
+) {
+  const strict = resolveOpenAIStrictToolFlagForInventory(
+    tools,
+    resolveOpenAIStrictToolSetting(model, {
+      transport: "stream",
+      supportsStrictMode: compat?.supportsStrictMode,
+    }),
+  );
   return tools.map((tool) => ({
     type: "function",
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters,
-      ...(compat.supportsStrictMode ? { strict: false } : {}),
+      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true),
+      ...(strict === undefined ? {} : { strict }),
     },
   }));
 }
@@ -1494,9 +1255,15 @@ export function buildOpenAICompletionsParams(
   options: OpenAICompletionsOptions | undefined,
 ) {
   const compat = getCompat(model);
+  const completionsContext = context.systemPrompt
+    ? {
+        ...context,
+        systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
+      }
+    : context;
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertMessages(model as never, context, compat as never),
+    messages: convertMessages(model as never, completionsContext, compat as never),
     stream: true,
   };
   if (compat.supportsUsageInStreaming) {
@@ -1516,7 +1283,7 @@ export function buildOpenAICompletionsParams(
     params.temperature = options.temperature;
   }
   if (context.tools) {
-    params.tools = convertTools(context.tools, compat);
+    params.tools = convertTools(context.tools, compat, model);
   } else if (hasToolHistory(context.messages)) {
     params.tools = [];
   }
@@ -1579,20 +1346,4 @@ function mapStopReason(reason: string | null) {
         errorMessage: `Provider finish_reason: ${reason}`,
       };
   }
-}
-
-export function prepareTransportAwareSimpleModel<TApi extends Api>(model: Model<TApi>): Model<Api> {
-  const streamFn = createTransportAwareStreamFnForModel(model as Model<Api>);
-  const alias = resolveTransportAwareSimpleApi(model.api);
-  if (!streamFn || !alias) {
-    return model;
-  }
-  return {
-    ...model,
-    api: alias,
-  };
-}
-
-export function buildTransportAwareSimpleStreamFn(model: Model<Api>): StreamFn | undefined {
-  return createTransportAwareStreamFnForModel(model);
 }
