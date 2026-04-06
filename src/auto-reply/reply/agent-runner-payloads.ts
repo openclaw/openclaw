@@ -205,8 +205,12 @@ export async function buildReplyPayloads(params: {
       })
     : dedupedPayloads;
   // Filter out payloads already sent via pipeline or directly during tool flush.
+  // When block streaming succeeded, only drop payloads that were actually streamed
+  // (not ALL final payloads) — new content generated after tool calls must still be delivered.
   const filteredPayloads = shouldDropFinalPayloads
-    ? []
+    ? mediaFilteredPayloads.filter(
+        (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
+      )
     : params.blockStreamingEnabled
       ? mediaFilteredPayloads.filter(
           (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
