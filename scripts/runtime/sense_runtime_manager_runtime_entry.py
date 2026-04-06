@@ -465,6 +465,16 @@ def build_recovery_vector(
     }
 
 
+def build_recovery_signature(recovery_vector: dict | None) -> str:
+    vector = recovery_vector if isinstance(recovery_vector, dict) else {}
+    bucket = str(vector.get('bucket') or 'none')
+    owner = str(vector.get('owner') or 'none')
+    actionable = 'true' if vector.get('actionable') is True else 'false'
+    rank = vector.get('rank')
+    rank_value = rank if isinstance(rank, int) else 0
+    return f'{bucket}:{owner}:{actionable}:{rank_value}'
+
+
 def build_layer_statuses(entry_result: dict | None, bridge_result: dict | None, dispatch_result: dict | None) -> dict:
     entry_status = 'completed' if isinstance(entry_result, dict) else None
     bridge_status = None
@@ -594,6 +604,7 @@ def build_feedback_memory(entry_result: dict, dispatch_result: dict, feedback_su
         'last_recovery_owner': manager_handoff.get('recovery_owner'),
         'last_recovery_actionable': manager_handoff.get('recovery_actionable'),
         'last_recovery_vector': manager_handoff.get('recovery_vector'),
+        'last_recovery_signature': manager_handoff.get('recovery_signature'),
     }
 
 
@@ -673,6 +684,12 @@ def main() -> int:
             recovery_priority,
             recovery_bucket,
         )
+        recovery_vector = build_recovery_vector(
+            recovery_bucket,
+            recovery_owner,
+            recovery_actionable,
+            recovery_rank,
+        )
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_trace_span_id': entry_trace_span_id,
@@ -696,12 +713,8 @@ def main() -> int:
             'recovery_bucket': recovery_bucket,
             'recovery_owner': recovery_owner,
             'recovery_actionable': recovery_actionable,
-            'recovery_vector': build_recovery_vector(
-                recovery_bucket,
-                recovery_owner,
-                recovery_actionable,
-                recovery_rank,
-            ),
+            'recovery_vector': recovery_vector,
+            'recovery_signature': build_recovery_signature(recovery_vector),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),
@@ -755,6 +768,12 @@ def main() -> int:
             recovery_priority,
             recovery_bucket,
         )
+        recovery_vector = build_recovery_vector(
+            recovery_bucket,
+            recovery_owner,
+            recovery_actionable,
+            recovery_rank,
+        )
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_trace_span_id': entry_trace_span_id,
@@ -778,12 +797,8 @@ def main() -> int:
             'recovery_bucket': recovery_bucket,
             'recovery_owner': recovery_owner,
             'recovery_actionable': recovery_actionable,
-            'recovery_vector': build_recovery_vector(
-                recovery_bucket,
-                recovery_owner,
-                recovery_actionable,
-                recovery_rank,
-            ),
+            'recovery_vector': recovery_vector,
+            'recovery_signature': build_recovery_signature(recovery_vector),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),

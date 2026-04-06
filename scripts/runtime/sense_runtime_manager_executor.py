@@ -327,6 +327,16 @@ def build_recovery_vector(
     }
 
 
+def build_recovery_signature(recovery_vector: dict | None) -> str:
+    vector = recovery_vector if isinstance(recovery_vector, dict) else {}
+    bucket = str(vector.get('bucket') or 'none')
+    owner = str(vector.get('owner') or 'none')
+    actionable = 'true' if vector.get('actionable') is True else 'false'
+    rank = vector.get('rank')
+    rank_value = rank if isinstance(rank, int) else 0
+    return f'{bucket}:{owner}:{actionable}:{rank_value}'
+
+
 def finalize_output(output: dict) -> dict:
     output['error_code'] = normalize_executor_error_code(output)
     output['error_detail_code'] = normalize_executor_error_detail_code(output)
@@ -366,6 +376,7 @@ def finalize_output(output: dict) -> dict:
         output.get('recovery_actionable'),
         output.get('recovery_rank'),
     )
+    output['recovery_signature'] = build_recovery_signature(output.get('recovery_vector'))
     output['manager_handoff'] = build_manager_handoff(output)
     return output
 
@@ -829,6 +840,7 @@ def build_manager_handoff(report: dict) -> dict:
         'recovery_owner': report.get('recovery_owner'),
         'recovery_actionable': report.get('recovery_actionable'),
         'recovery_vector': report.get('recovery_vector'),
+        'recovery_signature': report.get('recovery_signature'),
         'loop_convergence_state': convergence.get('state'),
         'primary_remaining_issue': summary.get('primary_remaining_issue'),
         'secondary_remaining_issues': summary.get('secondary_remaining_issues', []),
