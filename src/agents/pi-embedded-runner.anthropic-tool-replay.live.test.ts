@@ -36,7 +36,7 @@ function buildLiveAnthropicModel(): {
       provider: "anthropic",
       baseUrl: "https://api.anthropic.com/v1",
       reasoning: true,
-      input: ["text"] as const,
+      input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200_000,
       maxTokens: 8_192,
