@@ -55,7 +55,30 @@ function writeTempOxlintConfig(repoRoot, configPath) {
 
   delete config.$schema;
 
+  if (Array.isArray(config.ignorePatterns)) {
+    const extensionsIgnorePattern = config.ignorePatterns.find((pattern) =>
+      isTopLevelExtensionsIgnorePattern(pattern),
+    );
+    if (extensionsIgnorePattern) {
+      throw new Error(
+        `Refusing to run extension oxlint with .oxlintrc.json ignore pattern ${JSON.stringify(
+          extensionsIgnorePattern,
+        )}. Remove the top-level extensions ignore so root and focused lint agree.`,
+      );
+    }
+  }
+
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
+function isTopLevelExtensionsIgnorePattern(pattern) {
+  const normalized = pattern
+    .trim()
+    .replaceAll("\\", "/")
+    .replaceAll(/^\.?\//g, "");
+  return (
+    normalized === "extensions" || normalized === "extensions/" || normalized === "extensions/**"
+  );
 }
 
 function collectTypeScriptFiles(directoryPath) {
