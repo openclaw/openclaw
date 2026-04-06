@@ -126,6 +126,126 @@ function applyRtlIsolation(text: string): string {
     .join("\n");
 }
 
+/**
+ * Apply long-token normalization only to regions outside fenced code blocks.
+ * Code blocks are meant to be copy-pasted verbatim — inserting spaces into long
+ * tokens (e.g. package names such as "ubuntu-budgie-desktop-environment") would
+ * corrupt the content and break pasted commands or identifiers.
+ *
+ * Both backtick fences (```) and tilde fences (~~~) are recognized.
+ *
+ * Per CommonMark spec, a closing fence must:
+ *   - use the same character as the opening fence (backtick or tilde)
+ *   - have at least as many characters as the opening fence
+ *   - contain only fence characters and optional trailing whitespace (no info string)
+ * This is implemented with a line-by-line scanner to avoid the backreference
+ * limitation of JS regexes (which can only match exact strings, not "same char,
+ * >= count" patterns).
+ */
+
+// Regex to detect the start of a fenced code block per CommonMark:
+//   - optional leading spaces (up to 3)
+//   - backtick fence: 3+ backticks followed by an info string with no backticks
+//   - tilde fence: 3+ tildes followed by any info string
+// Group 1: leading indent  Group 2: fence run (chars only, no info string)
+const FENCE_OPEN_RE = /^( {0,3})(`{3,})(?:[^`\n]*)$|^( {0,3})(~{3,})(?:[^\n]*)$/;
+
+// Regex to detect a closing fence line: optional leading spaces (up to 3),
+// then fence characters and optional trailing whitespace only.
+// Group 1: fence character  Group 2: fence run
+const FENCE_CLOSE_RE = /^( {0,3})(`+|~+)[ \t]*$/;
+
+/**
+ * Find all fenced code block regions in `text` per CommonMark rules and return
+ * an array of [start, end] character-index pairs (inclusive of the fence lines).
+ */
+function findCodeFenceRegions(text: string): Array<[number, number]> {
+  const regions: Array<[number, number]> = [];
+  const lines = text.split("\n");
+
+  let i = 0;
+  let charPos = 0; // character offset of the start of lines[i]
+
+  while (i < lines.length) {
+    const line = lines[i];
+    // Strip a trailing \r so that CRLF input (\r\n line endings) is handled
+    // correctly — FENCE_OPEN_RE and FENCE_CLOSE_RE use `$` which does not
+    // match a literal \r left over after splitting on \n.
+    const lineNormalized = line.replace(/\r$/, "");
+    const openMatch = FENCE_OPEN_RE.exec(lineNormalized);
+    if (openMatch) {
+      // Group 2 matches backtick fence run; group 4 matches tilde fence run.
+      const fenceRun = openMatch[2] ?? openMatch[4]; // e.g. "```" or "~~~~"
+      const fenceChar = fenceRun[0]; // ` or ~
+      const fenceLen = fenceRun.length; // minimum closing length
+      const blockStart = charPos;
+
+      // Advance past the opening fence line
+      i++;
+      charPos += line.length + 1; // +1 for the '\n'
+
+      // Scan for a valid closing fence
+      let closed = false;
+      while (i < lines.length) {
+        const inner = lines[i];
+        // Strip trailing \r for CRLF compatibility (same as opening fence)
+        const innerNormalized = inner.replace(/\r$/, "");
+        const closeMatch = FENCE_CLOSE_RE.exec(innerNormalized);
+        if (closeMatch && closeMatch[2][0] === fenceChar && closeMatch[2].length >= fenceLen) {
+          // Found the closing fence — record the region
+          const blockEnd = charPos + inner.length;
+          regions.push([blockStart, blockEnd]);
+          charPos += inner.length + 1;
+          i++;
+          closed = true;
+          break;
+        }
+        charPos += inner.length + 1;
+        i++;
+      }
+
+      if (!closed) {
+        // Unclosed fence: treat the rest of the text as a code region
+        // (CommonMark: an unclosed fence extends to the end of the document)
+        regions.push([blockStart, text.length]);
+      }
+    } else {
+      charPos += line.length + 1;
+      i++;
+    }
+  }
+
+  return regions;
+}
+
+function normalizeTokensOutsideCodeFences(text: string): string {
+  if (!LONG_TOKEN_TEST_RE.test(text)) {
+    return text;
+  }
+
+  const regions = findCodeFenceRegions(text);
+
+  if (regions.length === 0) {
+    return text.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay);
+  }
+
+  const parts: string[] = [];
+  let lastIndex = 0;
+
+  for (const [start, end] of regions) {
+    // Normalize prose before the code fence region
+    parts.push(text.slice(lastIndex, start).replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay));
+    // Preserve the code fence region verbatim
+    parts.push(text.slice(start, end + 1));
+    lastIndex = end + 1;
+  }
+
+  // Normalize any trailing prose after the last code fence
+  parts.push(text.slice(lastIndex).replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay));
+
+  return parts.join("");
+}
+
 export function sanitizeRenderableText(text: string): string {
   if (!text) {
     return text;
@@ -147,9 +267,7 @@ export function sanitizeRenderableText(text: string): string {
         .map((line) => redactBinaryLikeLine(line))
         .join("\n")
     : withoutControlChars;
-  const tokenSafe = LONG_TOKEN_TEST_RE.test(redacted)
-    ? redacted.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay)
-    : redacted;
+  const tokenSafe = normalizeTokensOutsideCodeFences(redacted);
   return applyRtlIsolation(tokenSafe);
 }
 
