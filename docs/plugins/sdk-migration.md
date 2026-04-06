@@ -263,6 +263,8 @@ Current bundled provider examples:
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types and registry helpers |
   | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types and registry helpers |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
+  | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |
+  | `plugin-sdk/music-generation-core` | Shared music-generation core | Music-generation types, failover helpers, provider lookup, and model-ref parsing |
   | `plugin-sdk/video-generation` | Video-generation helpers | Video-generation provider/request/result types |
   | `plugin-sdk/video-generation-core` | Shared video-generation core | Video-generation types, failover helpers, provider lookup, and model-ref parsing |
   | `plugin-sdk/interactive-runtime` | Interactive reply helpers | Interactive reply payload normalization/reduction |
