@@ -6,7 +6,7 @@ export const CHANNEL_TARGET_DESCRIPTION =
 export const CHANNEL_TARGETS_DESCRIPTION =
   "Recipient/channel targets (same format as --target); accepts ids or names when the directory is available.";
 
-function hasNonEmptyString(value: unknown): value is string {
+export function hasNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 

@@ -1,4 +1,5 @@
 import { shouldLogVerbose } from "../../globals.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { requestHeartbeatNow as requestHeartbeatNowImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
@@ -6,13 +7,14 @@ import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
 import { prependBootstrapPromptWarning } from "../bootstrap-budget.js";
-import { parseCliOutput, type CliOutput } from "../cli-output.js";
+import { createCliJsonlStreamingParser, parseCliOutput, type CliOutput } from "../cli-output.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import {
   appendImagePathsToPrompt,
   buildCliSupervisorScopeKey,
   buildCliArgs,
+  resolveCliRunQueueKey,
   enqueueCliRun,
   loadPromptRefImages,
   resolveCliNoOutputTimeoutMs,
@@ -36,6 +38,12 @@ const executeDeps = {
 
 export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
   Object.assign(executeDeps, overrides);
+}
+
+function createCliAbortError(): Error {
+  const error = new Error("CLI run aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 function buildCliLogArgs(params: {
@@ -86,6 +94,9 @@ export async function executePreparedCliRun(
   cliSessionIdToUse?: string,
 ): Promise<CliOutput> {
   const params = context.params;
+  if (params.abortSignal?.aborted) {
+    throw createCliAbortError();
+  }
   const backend = context.preparedBackend.backend;
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
@@ -113,7 +124,9 @@ export async function executePreparedCliRun(
     const imagePayload = await writeCliImages(resolvedImages);
     imagePaths = imagePayload.paths;
     cleanupImages = imagePayload.cleanup;
-    if (!backend.imageArg) {
+    // Some stdin-driven CLIs still need the hydrated file paths mentioned in the
+    // prompt even when we also pass explicit image args.
+    if (!backend.imageArg || backend.input === "stdin") {
       prompt = appendImagePathsToPrompt(prompt, imagePaths);
     }
   }
@@ -138,10 +151,13 @@ export async function executePreparedCliRun(
     useResume,
   });
 
-  const serialize = backend.serialize ?? true;
-  const queueKey = serialize
-    ? context.backendResolved.id
-    : `${context.backendResolved.id}:${params.runId}`;
+  const queueKey = resolveCliRunQueueKey({
+    backendId: context.backendResolved.id,
+    serialize: backend.serialize,
+    runId: params.runId,
+    workspaceDir: context.workspaceDir,
+    cliSessionId: useResume ? resolvedSessionId : undefined,
+  });
 
   try {
     return await enqueueCliRun(queueKey, async () => {
@@ -166,12 +182,22 @@ export async function executePreparedCliRun(
       const env = (() => {
         const next = sanitizeHostExecEnv({
           baseEnv: process.env,
-          overrides: backend.env,
           blockPathOverrides: true,
         });
         for (const key of backend.clearEnv ?? []) {
           delete next[key];
         }
+        if (backend.env && Object.keys(backend.env).length > 0) {
+          Object.assign(
+            next,
+            sanitizeHostExecEnv({
+              baseEnv: {},
+              overrides: backend.env,
+              blockPathOverrides: true,
+            }),
+          );
+        }
+        Object.assign(next, context.preparedBackend.env);
         return next;
       })();
       const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
@@ -179,6 +205,23 @@ export async function executePreparedCliRun(
         timeoutMs: params.timeoutMs,
         useResume,
       });
+      const streamingParser =
+        backend.output === "jsonl"
+          ? createCliJsonlStreamingParser({
+              backend,
+              providerId: context.backendResolved.id,
+              onAssistantDelta: ({ text, delta }) => {
+                emitAgentEvent({
+                  runId: params.runId,
+                  stream: "assistant",
+                  data: {
+                    text,
+                    delta,
+                  },
+                });
+              },
+            })
+          : null;
       const supervisor = executeDeps.getProcessSupervisor();
       const scopeKey = buildCliSupervisorScopeKey({
         backend,
@@ -198,8 +241,40 @@ export async function executePreparedCliRun(
         cwd: context.workspaceDir,
         env,
         input: stdinPayload,
+        onStdout: streamingParser ? (chunk: string) => streamingParser.push(chunk) : undefined,
       });
-      const result = await managedRun.wait();
+      const replyBackendHandle = params.replyOperation
+        ? {
+            kind: "cli" as const,
+            cancel: () => {
+              managedRun.cancel("manual-cancel");
+            },
+            isStreaming: () => false,
+          }
+        : undefined;
+      if (replyBackendHandle) {
+        params.replyOperation?.attachBackend(replyBackendHandle);
+      }
+      const abortManagedRun = () => {
+        managedRun.cancel("manual-cancel");
+      };
+      params.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
+      if (params.abortSignal?.aborted) {
+        abortManagedRun();
+      }
+      let result: Awaited<ReturnType<typeof managedRun.wait>>;
+      try {
+        result = await managedRun.wait();
+      } finally {
+        if (replyBackendHandle) {
+          params.replyOperation?.detachBackend(replyBackendHandle);
+        }
+        params.abortSignal?.removeEventListener("abort", abortManagedRun);
+      }
+      streamingParser?.finish();
+      if (params.abortSignal?.aborted && result.reason === "manual-cancel") {
+        throw createCliAbortError();
+      }
 
       const stdout = result.stdout.trim();
       const stderr = result.stderr.trim();
@@ -254,7 +329,7 @@ export async function executePreparedCliRun(
           });
         }
         const err = stderr || stdout || "CLI failed.";
-        const reason = classifyFailoverReason(err) ?? "unknown";
+        const reason = classifyFailoverReason(err, { provider: params.provider }) ?? "unknown";
         const status = resolveFailoverStatus(reason);
         throw new FailoverError(err, {
           reason,

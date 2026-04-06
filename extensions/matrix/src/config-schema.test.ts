@@ -31,13 +31,25 @@ describe("MatrixConfigSchema SecretInput", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts dm sessionScope overrides", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      dm: {
+        policy: "pairing",
+        sessionScope: "per-room",
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts room-level account assignments", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
       accessToken: "token",
       groups: {
         "!room:example.org": {
-          allow: true,
+          enabled: true,
           account: "axis",
         },
       },
@@ -55,7 +67,7 @@ describe("MatrixConfigSchema SecretInput", () => {
       accessToken: "token",
       rooms: {
         "!room:example.org": {
-          allow: true,
+          enabled: true,
           account: "axis",
         },
       },
@@ -65,5 +77,14 @@ describe("MatrixConfigSchema SecretInput", () => {
       throw new Error("expected schema parse to succeed");
     }
     expect(result.data.rooms?.["!room:example.org"]?.account).toBe("axis");
+  });
+
+  it("accepts quiet Matrix streaming mode", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      streaming: "quiet",
+    });
+    expect(result.success).toBe(true);
   });
 });

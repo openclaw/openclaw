@@ -1,10 +1,6 @@
 import { type RoutePeer } from "openclaw/plugin-sdk/routing";
-import {
-  looksLikeUuid,
-  resolveSignalPeerId,
-  resolveSignalRecipient,
-  resolveSignalSender,
-} from "./identity.js";
+import { resolveSignalPeerId, resolveSignalRecipient, resolveSignalSender } from "./identity.js";
+import { looksLikeUuid } from "./uuid.js";
 
 export type ResolvedSignalOutboundTarget = {
   peer: RoutePeer;

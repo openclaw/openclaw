@@ -1,3 +1,4 @@
+import type { ChannelStatusIssue } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   parseChatTargetPrefixesOrThrow,
@@ -24,6 +25,7 @@ type BlueBubblesFacadeModule = {
     accountId?: string;
     cfg: OpenClawConfig;
   }) => BlueBubblesConversationBindingManager;
+  collectBlueBubblesStatusIssues: (accounts: unknown[]) => ChannelStatusIssue[];
 };
 
 function loadBlueBubblesFacadeModule(): BlueBubblesFacadeModule {
@@ -263,6 +265,10 @@ export function resolveBlueBubblesConversationIdFromTarget(target: string): stri
   return normalizeBlueBubblesAcpConversationId(target)?.conversationId;
 }
 
+export function collectBlueBubblesStatusIssues(accounts: unknown[]): ChannelStatusIssue[] {
+  return loadBlueBubblesFacadeModule().collectBlueBubblesStatusIssues(accounts);
+}
+
 export { resolveAckReaction } from "../agents/identity.js";
 export {
   createActionGate,
@@ -305,7 +311,6 @@ export {
   patchScopedAccountConfig,
 } from "../channels/plugins/setup-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
-export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
 export type {
   BaseProbeResult,
   ChannelAccountSnapshot,

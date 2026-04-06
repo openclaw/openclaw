@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
@@ -38,7 +37,6 @@ import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js"
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -64,6 +62,31 @@ function resolveExplicitSessionEndReason(
   matchedResetTriggerLower?: string,
 ): PluginHookSessionEndReason {
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
+}
+
+function resolveSessionDefaultAccountId(params: {
+  cfg: OpenClawConfig;
+  channelRaw?: string;
+  accountIdRaw?: string;
+  persistedLastAccountId?: string;
+}): string | undefined {
+  const explicit = params.accountIdRaw?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const persisted = params.persistedLastAccountId?.trim();
+  if (persisted) {
+    return persisted;
+  }
+  const channel = params.channelRaw?.trim().toLowerCase();
+  if (!channel) {
+    return undefined;
+  }
+  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
+  const configuredDefault = channels?.[channel]?.defaultAccount;
+  return typeof configuredDefault === "string" && configuredDefault.trim()
+    ? configuredDefault.trim()
+    : undefined;
 }
 
 function resolveStaleSessionEndReason(params: {
@@ -153,32 +176,6 @@ function resolveSessionConversationBindingContext(
       ? { parentConversationId: bindingContext.parentConversationId }
       : {}),
   };
-}
-
-function resolveBoundAcpSessionForReset(params: {
-  cfg: OpenClawConfig;
-  ctx: MsgContext;
-  bindingContext?: {
-    channel: string;
-    accountId: string;
-    conversationId: string;
-    parentConversationId?: string;
-  } | null;
-}): string | undefined {
-  const activeSessionKey = normalizeConversationText(params.ctx.SessionKey);
-  const bindingContext =
-    params.bindingContext ?? resolveSessionConversationBindingContext(params.cfg, params.ctx);
-  return resolveEffectiveResetTargetSessionKey({
-    cfg: params.cfg,
-    channel: bindingContext?.channel,
-    accountId: bindingContext?.accountId,
-    conversationId: bindingContext?.conversationId,
-    parentConversationId: bindingContext?.parentConversationId,
-    activeSessionKey,
-    allowNonAcpBindingSessionKey: false,
-    skipConfiguredFallbackWhenActiveSessionNonAcp: true,
-    fallbackToActiveAcpWhenUnbound: false,
-  });
 }
 
 function resolveBoundConversationSessionKey(params: {
@@ -280,9 +277,6 @@ export async function initSessionState(params: {
   let persistedAuthProfileOverride: string | undefined;
   let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
   let persistedAuthProfileOverrideCompactionCount: number | undefined;
-  let persistedCliSessionIds: SessionEntry["cliSessionIds"];
-  let persistedCliSessionBindings: SessionEntry["cliSessionBindings"];
-  let persistedClaudeCliSessionId: string | undefined;
   let persistedLabel: string | undefined;
   let persistedSpawnedBy: SessionEntry["spawnedBy"];
   let persistedSpawnedWorkspaceDir: SessionEntry["spawnedWorkspaceDir"];
@@ -318,17 +312,6 @@ export async function initSessionState(params: {
   const strippedForReset = isGroup
     ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
     : triggerBodyNormalized;
-  const shouldUseAcpInPlaceReset = Boolean(
-    resolveBoundAcpSessionForReset({
-      cfg,
-      ctx: sessionCtxForState,
-      bindingContext: conversationBindingContext,
-    }),
-  );
-  const shouldBypassAcpResetForTrigger = (triggerLower: string): boolean =>
-    shouldUseAcpInPlaceReset &&
-    DEFAULT_RESET_TRIGGERS.some((defaultTrigger) => defaultTrigger.toLowerCase() === triggerLower);
-
   // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
   const trimmedBodyLower = trimmedBody.toLowerCase();
@@ -344,12 +327,6 @@ export async function initSessionState(params: {
     }
     const triggerLower = trigger.toLowerCase();
     if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
-      if (shouldBypassAcpResetForTrigger(triggerLower)) {
-        // ACP-bound conversations handle /new and /reset in command handling
-        // so the bound ACP runtime can be reset in place without rotating the
-        // normal OpenClaw session/transcript.
-        break;
-      }
       isNewSession = true;
       bodyStripped = "";
       resetTriggered = true;
@@ -361,9 +338,6 @@ export async function initSessionState(params: {
       trimmedBodyLower.startsWith(triggerPrefixLower) ||
       strippedForResetLower.startsWith(triggerPrefixLower)
     ) {
-      if (shouldBypassAcpResetForTrigger(triggerLower)) {
-        break;
-      }
       isNewSession = true;
       bodyStripped = strippedForReset.slice(trigger.length).trimStart();
       resetTriggered = true;
@@ -476,9 +450,8 @@ export async function initSessionState(params: {
       persistedAuthProfileOverride = entry.authProfileOverride;
       persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
-      persistedCliSessionIds = entry.cliSessionIds;
-      persistedCliSessionBindings = entry.cliSessionBindings;
-      persistedClaudeCliSessionId = entry.claudeCliSessionId;
+      // Explicit /new and /reset should rotate the underlying CLI conversation too.
+      // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
       persistedLabel = entry.label;
       persistedSpawnedBy = entry.spawnedBy;
       persistedSpawnedWorkspaceDir = entry.spawnedWorkspaceDir;
@@ -507,7 +480,12 @@ export async function initSessionState(params: {
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
   });
-  const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
+  const lastAccountIdRaw = resolveSessionDefaultAccountId({
+    cfg,
+    channelRaw: lastChannelRaw,
+    accountIdRaw: ctx.AccountId,
+    persistedLastAccountId: baseEntry?.lastAccountId,
+  });
   // Only fall back to persisted threadId for thread sessions.  Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
   // previous interaction that happened inside a topic/thread.
@@ -543,9 +521,9 @@ export async function initSessionState(params: {
       persistedAuthProfileOverrideSource ?? baseEntry?.authProfileOverrideSource,
     authProfileOverrideCompactionCount:
       persistedAuthProfileOverrideCompactionCount ?? baseEntry?.authProfileOverrideCompactionCount,
-    cliSessionIds: persistedCliSessionIds ?? baseEntry?.cliSessionIds,
-    cliSessionBindings: persistedCliSessionBindings ?? baseEntry?.cliSessionBindings,
-    claudeCliSessionId: persistedClaudeCliSessionId ?? baseEntry?.claudeCliSessionId,
+    cliSessionIds: baseEntry?.cliSessionIds,
+    cliSessionBindings: baseEntry?.cliSessionBindings,
+    claudeCliSessionId: baseEntry?.claudeCliSessionId,
     label: persistedLabel ?? baseEntry?.label,
     spawnedBy: persistedSpawnedBy ?? baseEntry?.spawnedBy,
     spawnedWorkspaceDir: persistedSpawnedWorkspaceDir ?? baseEntry?.spawnedWorkspaceDir,

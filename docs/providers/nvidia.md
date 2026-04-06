@@ -45,12 +45,15 @@ If you still pass `--token`, remember it lands in shell history and `ps` output;
 
 ## Model IDs
 
-- `nvidia/nemotron-3-super-120b-a12b` (default)
-- `moonshotai/kimi-k2.5`
-- `minimaxai/minimax-m2.5`
-- `z-ai/glm5`
+| Model ref                                            | Name                                     | Context | Max output |
+| ---------------------------------------------------- | ---------------------------------------- | ------- | ---------- |
+| `nvidia/nnvidia/nemotron-3-super-120b-a12b`          | NVIDIA Nemotron 3 Super 120B             | 262,144 | 8,192      |
+| `nvidia/moonshotai/kimi-k2.5`                        | Kimi K2.5                                | 262,144 | 8,192      |
+| `nvidia/minimaxai/minimax-m2.5`                      | Minimax M2.5                             | 196,608 | 8,192      |
+| `nvidia/z-ai/glm5`                                   | GLM 5                                    | 202,752 | 8,192      |
 
 ## Notes
 
 - OpenAI-compatible `/v1` endpoint; use an API key from [build.nvidia.com](https://build.nvidia.com/).
 - Provider auto-enables when `NVIDIA_API_KEY` is set.
+- The bundled catalog is static; costs default to `0` in source.

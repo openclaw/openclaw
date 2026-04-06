@@ -1,11 +1,13 @@
 import type { Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createPiAiStreamSimpleMock } from "./extra-params.pi-ai-mock.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) =>
-  createPiAiStreamSimpleMock(() => importOriginal<typeof import("@mariozechner/pi-ai")>()),
+vi.mock("@mariozechner/pi-ai", async () =>
+  createPiAiStreamSimpleMock(() =>
+    vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai"),
+  ),
 );
 
 type ToolStreamCase = {

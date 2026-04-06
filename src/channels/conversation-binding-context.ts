@@ -55,6 +55,22 @@ function getLoadedChannelPlugin(rawChannel: string): ChannelPlugin | undefined {
     ?.plugin;
 }
 
+function shouldDefaultParentConversationToSelf(plugin?: ChannelPlugin): boolean {
+  return plugin?.bindings?.selfParentConversationByDefault === true;
+}
+
+function resolveBindingAccountId(params: {
+  rawAccountId?: string | null;
+  plugin?: ChannelPlugin;
+  cfg: OpenClawConfig;
+}): string {
+  return (
+    normalizeText(params.rawAccountId) ||
+    normalizeText(params.plugin?.config.defaultAccountId?.(params.cfg)) ||
+    "default"
+  );
+}
+
 function resolveChannelTargetId(params: {
   channel: string;
   target?: string | null;
@@ -120,9 +136,13 @@ export function resolveConversationBindingContext(
   if (!channel) {
     return null;
   }
-  const accountId = normalizeText(params.accountId) || "default";
-  const threadId = normalizeText(params.threadId != null ? String(params.threadId) : undefined);
   const loadedPlugin = getLoadedChannelPlugin(channel);
+  const accountId = resolveBindingAccountId({
+    rawAccountId: params.accountId,
+    plugin: loadedPlugin,
+    cfg: params.cfg,
+  });
+  const threadId = normalizeText(params.threadId != null ? String(params.threadId) : undefined);
 
   const resolvedByProvider = loadedPlugin?.bindings?.resolveCommandConversation?.({
     accountId,
@@ -137,7 +157,9 @@ export function resolveConversationBindingContext(
   });
   if (resolvedByProvider?.conversationId) {
     const resolvedParentConversationId =
-      channel === "telegram" && !threadId && !resolvedByProvider.parentConversationId
+      shouldDefaultParentConversationToSelf(loadedPlugin) &&
+      !threadId &&
+      !resolvedByProvider.parentConversationId
         ? resolvedByProvider.conversationId
         : resolvedByProvider.parentConversationId;
     return {
@@ -201,7 +223,7 @@ export function resolveConversationBindingContext(
     return null;
   }
   const normalizedParentConversationId =
-    channel === "telegram" && !threadId && !parentConversationId
+    shouldDefaultParentConversationToSelf(loadedPlugin) && !threadId && !parentConversationId
       ? conversationId
       : parentConversationId;
   return {

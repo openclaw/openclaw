@@ -1,10 +1,23 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import { createRuntimeEnv } from "./runtime-env.js";
 
 export type { WizardPrompter } from "../../../src/wizard/prompts.js";
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type QueuedWizardPrompter = {
+  intro: AsyncUnknownMock;
+  outro: AsyncUnknownMock;
+  note: AsyncUnknownMock;
+  select: AsyncUnknownMock;
+  multiselect: AsyncUnknownMock;
+  text: AsyncUnknownMock;
+  confirm: AsyncUnknownMock;
+  progress: Mock<() => { update: UnknownMock; stop: UnknownMock }>;
+  prompter: WizardPrompter;
+};
 
 export async function selectFirstWizardOption<T>(params: {
   options: Array<{ value: T }>;
@@ -34,7 +47,7 @@ export function createQueuedWizardPrompter(params?: {
   selectValues?: string[];
   textValues?: string[];
   confirmValues?: boolean[];
-}) {
+}): QueuedWizardPrompter {
   const selectValues = [...(params?.selectValues ?? [])];
   const textValues = [...(params?.textValues ?? [])];
   const confirmValues = [...(params?.confirmValues ?? [])];

@@ -20,9 +20,9 @@ export async function runModelDirectiveText(
     makeWhatsAppDirectiveConfig(
       home,
       {
-        model: { primary: "anthropic/claude-opus-4-5" },
+        model: { primary: "anthropic/claude-opus-4-6" },
         models: {
-          "anthropic/claude-opus-4-5": {},
+          "anthropic/claude-opus-4-6": {},
           "openai/gpt-4.1-mini": {},
         },
         ...options.defaults,

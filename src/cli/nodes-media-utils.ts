@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-
-export function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
+export { asRecord } from "../shared/record-coerce.js";
 
 export function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;

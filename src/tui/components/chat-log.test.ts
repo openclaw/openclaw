@@ -89,4 +89,72 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("BTW: what is 17 * 19?");
     expect(chatLog.hasVisibleBtw()).toBe(false);
   });
+
+  it("preserves pending user messages across history rebuilds", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "queued hello");
+    chatLog.clearAll({ preservePendingUsers: true });
+    chatLog.addSystem("session agent:main:main");
+    chatLog.restorePendingUsers();
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("queued hello");
+    expect(chatLog.countPendingUsers()).toBe(1);
+  });
+
+  it("does not append the same pending component twice when it is already mounted", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "queued hello");
+    chatLog.restorePendingUsers();
+
+    expect(chatLog.children.length).toBe(1);
+    expect(chatLog.render(120).join("\n")).toContain("queued hello");
+  });
+
+  it("stops counting a pending user message once the run is committed", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "hello");
+    expect(chatLog.countPendingUsers()).toBe(1);
+
+    expect(chatLog.commitPendingUser("run-1")).toBe(true);
+    expect(chatLog.countPendingUsers()).toBe(0);
+    expect(chatLog.render(120).join("\n")).toContain("hello");
+  });
+
+  it("reconciles pending users against rebuilt history using timestamps", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "queued hello", 2_000);
+
+    expect(
+      chatLog.reconcilePendingUsers([
+        { text: "queued hello", timestamp: 2_100 },
+        { text: "older", timestamp: 1_000 },
+      ]),
+    ).toEqual(["run-1"]);
+    expect(chatLog.countPendingUsers()).toBe(0);
+  });
+
+  it("reconciles pending users when the gateway clock is slightly behind the client", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "queued hello", 65_000);
+
+    expect(chatLog.reconcilePendingUsers([{ text: "queued hello", timestamp: 20_000 }])).toEqual([
+      "run-1",
+    ]);
+    expect(chatLog.countPendingUsers()).toBe(0);
+  });
+
+  it("does not hide a new repeated prompt when only older history matches", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "continue", 5_000);
+
+    expect(chatLog.reconcilePendingUsers([{ text: "continue", timestamp: -56_000 }])).toEqual([]);
+    expect(chatLog.countPendingUsers()).toBe(1);
+  });
 });

@@ -118,17 +118,6 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
   return derived.length > 0 ? derived : [];
 }
 
-function resolveFallbackProviderMentionStripRegexes(providerId?: string | null): RegExp[] {
-  switch (providerId?.trim().toLowerCase()) {
-    case "discord":
-      return [/<@!?\d+>/gi];
-    case "slack":
-      return [/<@[^>\s]+>/gi];
-    default:
-      return [];
-  }
-}
-
 export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: string): RegExp[] {
   const patterns = normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId));
   return compileMentionPatternsCached({
@@ -230,9 +219,7 @@ export function stripMentions(
       cache: mentionStripRegexCompileCache,
       warnRejected: false,
     });
-  const fallbackProviderRegexes =
-    providerRegexes.length > 0 ? [] : resolveFallbackProviderMentionStripRegexes(providerId);
-  for (const re of [...configRegexes, ...providerRegexes, ...fallbackProviderRegexes]) {
+  for (const re of [...configRegexes, ...providerRegexes]) {
     result = result.replace(re, " ");
   }
   if (providerMentions?.stripMentions) {

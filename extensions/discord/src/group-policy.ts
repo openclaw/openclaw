@@ -4,7 +4,7 @@ import {
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
-import { normalizeAtHashSlug } from "openclaw/plugin-sdk/core";
+import { normalizeAtHashSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
 import type { DiscordConfig } from "./runtime-api.js";
 
 function normalizeDiscordSlug(value?: string | null) {
@@ -76,10 +76,11 @@ function resolveSenderToolsEntry(
 }
 
 function resolveDiscordPolicyContext(params: ChannelGroupContext) {
-  const guildEntry = resolveDiscordGuildEntry(
-    params.cfg.channels?.discord?.guilds,
-    params.groupSpace,
-  );
+  const guilds =
+    (params.accountId
+      ? params.cfg.channels?.discord?.accounts?.[params.accountId]?.guilds
+      : undefined) ?? params.cfg.channels?.discord?.guilds;
+  const guildEntry = resolveDiscordGuildEntry(guilds, params.groupSpace);
   const channelEntries = guildEntry?.channels;
   const channelEntry =
     channelEntries && Object.keys(channelEntries).length > 0

@@ -26,6 +26,11 @@ type CompletionRuntimeCredential = {
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 
+export type SimpleCompletionModelOptions = {
+  maxTokens?: number;
+  signal?: AbortSignal;
+};
+
 export type PreparedSimpleCompletionModel =
   | {
       model: Model<Api>;
@@ -236,7 +241,7 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   model: Model<Api>;
   auth: ResolvedProviderAuth;
   context: Parameters<typeof complete>[1];
-  options?: Omit<Parameters<typeof complete>[2], "apiKey">;
+  options?: SimpleCompletionModelOptions;
 }) {
   return await complete(params.model, params.context, {
     ...params.options,

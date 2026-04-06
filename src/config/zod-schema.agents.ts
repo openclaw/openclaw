@@ -70,42 +70,6 @@ const AcpBindingSchema = z
       });
       return;
     }
-    const channel = value.match.channel.trim().toLowerCase();
-    if (channel !== "discord" && channel !== "telegram" && channel !== "feishu") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["match", "channel"],
-        message:
-          'ACP bindings currently support only "discord", "telegram", and "feishu" channels.',
-      });
-      return;
-    }
-    if (channel === "telegram" && !/^-\d+:topic:\d+$/.test(peerId)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["match", "peer", "id"],
-        message:
-          "Telegram ACP bindings require canonical topic IDs in the form -1001234567890:topic:42.",
-      });
-    }
-    if (channel === "feishu") {
-      const peerKind = value.match.peer?.kind;
-      const isDirectId =
-        (peerKind === "direct" || peerKind === "dm") &&
-        /^[^:]+$/.test(peerId) &&
-        !peerId.startsWith("oc_") &&
-        !peerId.startsWith("on_");
-      const isTopicId =
-        peerKind === "group" && /^oc_[^:]+:topic:[^:]+(?::sender:ou_[^:]+)?$/.test(peerId);
-      if (!isDirectId && !isTopicId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["match", "peer", "id"],
-          message:
-            "Feishu ACP bindings require direct peer IDs for DMs or topic IDs in the form oc_group:topic:om_root[:sender:ou_xxx].",
-        });
-      }
-    }
   });
 
 export const BindingsSchema = z.array(z.union([RouteBindingSchema, AcpBindingSchema])).optional();
