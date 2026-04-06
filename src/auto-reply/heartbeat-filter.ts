@@ -1,5 +1,8 @@
 import { stripHeartbeatToken } from "./heartbeat.js";
-import { HEARTBEAT_TOKEN } from "./tokens.js";
+
+const HEARTBEAT_TASK_PROMPT_PREFIX =
+  "Run the following periodic tasks (only those due based on their intervals):";
+const HEARTBEAT_TASK_PROMPT_ACK = "After completing all due tasks, reply HEARTBEAT_OK.";
 
 function resolveMessageText(content: unknown): { text: string; hasNonTextContent: boolean } {
   if (typeof content === "string") {
@@ -30,14 +33,24 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
   return { text, hasNonTextContent };
 }
 
-export function isHeartbeatUserMessage(message: { role: string; content?: unknown }): boolean {
+export function isHeartbeatUserMessage(
+  message: { role: string; content?: unknown },
+  heartbeatPrompt?: string,
+): boolean {
   if (message.role !== "user") {
     return false;
   }
   const { text } = resolveMessageText(message.content);
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const normalizedHeartbeatPrompt = heartbeatPrompt?.trim();
+  if (normalizedHeartbeatPrompt && trimmed.startsWith(normalizedHeartbeatPrompt)) {
+    return true;
+  }
   return (
-    text.includes(HEARTBEAT_TOKEN) &&
-    /(?:reply|respond|return|say|output|answer)\s+(?:with\s+)?HEARTBEAT_OK/i.test(text)
+    trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) && trimmed.includes(HEARTBEAT_TASK_PROMPT_ACK)
   );
 }
 
@@ -58,6 +71,7 @@ export function isHeartbeatOkResponse(
 export function filterHeartbeatPairs<T extends { role: string; content?: unknown }>(
   messages: T[],
   ackMaxChars?: number,
+  heartbeatPrompt?: string,
 ): T[] {
   if (messages.length < 2) {
     return messages;
@@ -68,7 +82,7 @@ export function filterHeartbeatPairs<T extends { role: string; content?: unknown
   while (i < messages.length) {
     if (
       i + 1 < messages.length &&
-      isHeartbeatUserMessage(messages[i]) &&
+      isHeartbeatUserMessage(messages[i], heartbeatPrompt) &&
       isHeartbeatOkResponse(messages[i + 1], ackMaxChars)
     ) {
       i += 2;

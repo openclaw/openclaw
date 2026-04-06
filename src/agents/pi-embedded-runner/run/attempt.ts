@@ -6,12 +6,6 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import {
-  isOllamaCompatProvider,
-  resolveOllamaCompatNumCtxEnabled,
-  shouldInjectOllamaCompatNumCtx,
-  wrapOllamaCompatNumCtx,
-} from "../../../../extensions/ollama/runtime-api.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
@@ -22,6 +16,12 @@ import {
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../../../plugin-sdk/ollama-runtime.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { resolveProviderSystemPromptContribution } from "../../../plugins/provider-runtime.js";
@@ -1667,11 +1667,14 @@ export async function runEmbeddedAttempt(
             activeSession.agent.state.messages = activeSession.messages;
           }
 
+          const heartbeatSummary =
+            params.config && sessionAgentId
+              ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
+              : undefined;
           const filteredMessages = filterHeartbeatPairs(
             activeSession.messages,
-            params.config
-              ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId).ackMaxChars
-              : undefined,
+            heartbeatSummary?.ackMaxChars,
+            heartbeatSummary?.prompt,
           );
           if (filteredMessages.length < activeSession.messages.length) {
             activeSession.agent.state.messages = filteredMessages;

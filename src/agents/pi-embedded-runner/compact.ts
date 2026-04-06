@@ -1005,10 +1005,14 @@ export async function compactEmbeddedPiSessionDirect(
           // Truncate session file to remove compacted entries (#39953)
           if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction) {
             try {
+              const heartbeatSummary = resolveHeartbeatSummaryForAgent(
+                params.config,
+                sessionAgentId,
+              );
               const truncResult = await truncateSessionAfterCompaction({
                 sessionFile: params.sessionFile,
-                ackMaxChars: resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
-                  .ackMaxChars,
+                ackMaxChars: heartbeatSummary.ackMaxChars,
+                heartbeatPrompt: heartbeatSummary.prompt,
               });
               if (truncResult.truncated) {
                 log.info(

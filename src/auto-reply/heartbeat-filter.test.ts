@@ -4,21 +4,25 @@ import {
   isHeartbeatOkResponse,
   isHeartbeatUserMessage,
 } from "./heartbeat-filter.js";
+import { HEARTBEAT_PROMPT } from "./heartbeat.js";
 
 describe("isHeartbeatUserMessage", () => {
   it("matches heartbeat prompts", () => {
     expect(
-      isHeartbeatUserMessage({
-        role: "user",
-        content:
-          "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. If nothing needs attention, reply HEARTBEAT_OK.",
-      }),
+      isHeartbeatUserMessage(
+        {
+          role: "user",
+          content: `${HEARTBEAT_PROMPT}\nWhen reading HEARTBEAT.md, use workspace file /tmp/HEARTBEAT.md (exact case). Do not read docs/heartbeat.md.`,
+        },
+        HEARTBEAT_PROMPT,
+      ),
     ).toBe(true);
 
     expect(
       isHeartbeatUserMessage({
         role: "user",
-        content: "return HEARTBEAT_OK if nothing is needed",
+        content:
+          "Run the following periodic tasks (only those due based on their intervals):\n\n- email-check: Check for urgent unread emails\n\nAfter completing all due tasks, reply HEARTBEAT_OK.",
       }),
     ).toBe(true);
   });
@@ -27,7 +31,7 @@ describe("isHeartbeatUserMessage", () => {
     expect(
       isHeartbeatUserMessage({
         role: "user",
-        content: "What does HEARTBEAT_OK mean? I keep seeing it in logs.",
+        content: "Please reply HEARTBEAT_OK so I can test something.",
       }),
     ).toBe(false);
 
@@ -91,13 +95,13 @@ describe("filterHeartbeatPairs", () => {
     const messages = [
       { role: "user", content: "Hello" },
       { role: "assistant", content: "Hi there!" },
-      { role: "user", content: "reply HEARTBEAT_OK if nothing." },
+      { role: "user", content: HEARTBEAT_PROMPT },
       { role: "assistant", content: "HEARTBEAT_OK" },
       { role: "user", content: "What time is it?" },
       { role: "assistant", content: "It is 3pm." },
     ];
 
-    expect(filterHeartbeatPairs(messages)).toEqual([
+    expect(filterHeartbeatPairs(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
       { role: "user", content: "Hello" },
       { role: "assistant", content: "Hi there!" },
       { role: "user", content: "What time is it?" },
@@ -107,18 +111,31 @@ describe("filterHeartbeatPairs", () => {
 
   it("keeps meaningful heartbeat results and non-text assistant turns", () => {
     const meaningfulMessages = [
-      { role: "user", content: "reply HEARTBEAT_OK if nothing." },
+      { role: "user", content: HEARTBEAT_PROMPT },
       { role: "assistant", content: "Status HEARTBEAT_OK due to watchdog failure" },
     ];
-    expect(filterHeartbeatPairs(meaningfulMessages)).toEqual(meaningfulMessages);
+    expect(filterHeartbeatPairs(meaningfulMessages, undefined, HEARTBEAT_PROMPT)).toEqual(
+      meaningfulMessages,
+    );
 
     const nonTextMessages = [
-      { role: "user", content: "reply HEARTBEAT_OK if nothing." },
+      { role: "user", content: HEARTBEAT_PROMPT },
       {
         role: "assistant",
         content: [{ type: "tool_use", id: "tool-1", name: "search", input: {} }],
       },
     ];
-    expect(filterHeartbeatPairs(nonTextMessages)).toEqual(nonTextMessages);
+    expect(filterHeartbeatPairs(nonTextMessages, undefined, HEARTBEAT_PROMPT)).toEqual(
+      nonTextMessages,
+    );
+  });
+
+  it("keeps ordinary chats that mention the token", () => {
+    const messages = [
+      { role: "user", content: "Please reply HEARTBEAT_OK so I can test something." },
+      { role: "assistant", content: "HEARTBEAT_OK" },
+    ];
+
+    expect(filterHeartbeatPairs(messages, undefined, HEARTBEAT_PROMPT)).toEqual(messages);
   });
 });
