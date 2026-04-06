@@ -72,6 +72,9 @@ Schema tooling notes:
 
 - `openclaw config schema` prints the same JSON Schema family used by Control UI
   and config validation.
+- The stable hosted schema lives at `https://docs.openclaw.ai/schema/openclaw.json`.
+- Newly created configs default `$schema` to that hosted URL when the field is
+  missing.
 - Field `title` and `description` values are carried into the schema output for
   editor and form tooling.
 - Nested object, wildcard (`*`), and array-item (`[]`) entries inherit the same

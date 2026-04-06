@@ -53,6 +53,7 @@ Print the generated JSON schema for `openclaw.json` to stdout as JSON.
 What it includes:
 
 - The current root config schema, plus a root `$schema` string field for editor tooling
+- A stable hosted copy at `https://docs.openclaw.ai/schema/openclaw.json`
 - Field `title` and `description` docs metadata used by the Control UI
 - Nested object, wildcard (`*`), and array-item (`[]`) nodes inherit the same `title` / `description` metadata when matching field documentation exists
 - `anyOf` / `oneOf` / `allOf` branches inherit the same docs metadata too when matching field documentation exists
@@ -75,6 +76,8 @@ Pipe it into a file when you want to inspect or validate it with other tools:
 ```bash
 openclaw config schema > openclaw.schema.json
 ```
+
+New configs created by setup/onboarding and other first-write flows also default `$schema` to `https://docs.openclaw.ai/schema/openclaw.json` when the field is missing, so editor autocomplete works without an extra manual step.
 
 ### Paths
 

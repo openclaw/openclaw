@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { PUBLIC_CONFIG_SCHEMA_URL } from "./editor-schema.js";
 import { createConfigIO } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -210,6 +211,40 @@ describe("config io write", () => {
       expect(persisted).not.toHaveProperty("agents.defaults");
       expect(persisted).not.toHaveProperty("messages.ackReaction");
       expect(persisted).not.toHaveProperty("sessions.persistence");
+    });
+  });
+
+  it("defaults new configs to the hosted docs schema URL", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      await io.writeConfigFile({ gateway: { mode: "local" } });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $schema?: string;
+      };
+      expect(persisted.$schema).toBe(PUBLIC_CONFIG_SCHEMA_URL);
+    });
+  });
+
+  it("does not backfill the hosted docs schema URL into existing configs", async () => {
+    await withSuiteHome(async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: { gateway: { mode: "local" } },
+      });
+
+      await writeTokenAuthAndReadConfig({ io, snapshot, configPath });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $schema?: string;
+      };
+      expect(persisted.$schema).toBeUndefined();
     });
   });
 

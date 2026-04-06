@@ -19,6 +19,7 @@ export type ConfigSchema = Record<string, unknown>;
 type JsonSchemaNode = Record<string, unknown>;
 
 type JsonSchemaObject = JsonSchemaNode & {
+  $defs?: Record<string, unknown>;
   type?: string | string[];
   properties?: Record<string, JsonSchemaObject>;
   required?: string[];
@@ -28,6 +29,11 @@ type JsonSchemaObject = JsonSchemaNode & {
 
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
   asSchemaObject<JsonSchemaObject>(value);
+
+const asJsonSchemaDefs = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 
 const FORBIDDEN_LOOKUP_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 const LOOKUP_SCHEMA_STRING_KEYS = new Set([
@@ -91,6 +97,26 @@ function mergeObjectSchema(base: JsonSchemaObject, extension: JsonSchemaObject):
     merged.additionalProperties = additional;
   }
   return merged;
+}
+
+function hoistNestedRootDefs(rootSchema: JsonSchemaObject, schemaNode: JsonSchemaObject): void {
+  const nestedDefs = asJsonSchemaDefs(schemaNode.$defs);
+  if (!nestedDefs || Object.keys(nestedDefs).length === 0) {
+    return;
+  }
+
+  const rootDefs = { ...asJsonSchemaDefs(rootSchema.$defs) };
+  for (const [key, value] of Object.entries(nestedDefs)) {
+    const current = rootDefs[key];
+    if (current !== undefined && JSON.stringify(current) !== JSON.stringify(value)) {
+      throw new Error(`Conflicting config schema $defs entry: ${key}`);
+    }
+    if (current === undefined) {
+      rootDefs[key] = structuredClone(value);
+    }
+  }
+  rootSchema.$defs = rootDefs;
+  delete schemaNode.$defs;
 }
 
 export type ConfigSchemaResponse = {
@@ -347,6 +373,10 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
       isObjectSchema(pluginSchema)
         ? mergeObjectSchema(baseConfigSchema, pluginSchema)
         : cloneSchema(plugin.configSchema);
+    const nextConfigObject = asJsonSchemaObject(nextConfigSchema);
+    if (root && nextConfigObject) {
+      hoistNestedRootDefs(root, nextConfigObject);
+    }
 
     entryObject.properties = {
       ...entryObject.properties,
@@ -375,9 +405,19 @@ function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]
     const existing = asJsonSchemaObject(channelProps[channel.id]);
     const incoming = asJsonSchemaObject(channel.configSchema);
     if (existing && incoming && isObjectSchema(existing) && isObjectSchema(incoming)) {
-      channelProps[channel.id] = mergeObjectSchema(existing, incoming);
+      const merged = mergeObjectSchema(existing, incoming);
+      const mergedObject = asJsonSchemaObject(merged);
+      if (root && mergedObject) {
+        hoistNestedRootDefs(root, mergedObject);
+      }
+      channelProps[channel.id] = merged;
     } else {
-      channelProps[channel.id] = cloneSchema(channel.configSchema);
+      const cloned = cloneSchema(channel.configSchema);
+      const clonedObject = asJsonSchemaObject(cloned);
+      if (root && clonedObject) {
+        hoistNestedRootDefs(root, clonedObject);
+      }
+      channelProps[channel.id] = cloned;
     }
   }
 

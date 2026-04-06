@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { buildEditorConfigSchemaDocument } from "./editor-schema.js";
 import { FIELD_HELP } from "./schema.help.js";
 import type { ConfigSchemaResponse } from "./schema.js";
 import { schemaHasChildren } from "./schema.shared.js";
@@ -61,6 +62,7 @@ export type ConfigDocBaselineArtifacts = {
   core: string;
   channel: string;
   plugin: string;
+  schema: string;
 };
 
 export type ConfigDocBaselineArtifactsRender = {
@@ -73,6 +75,7 @@ export type ConfigDocBaselineArtifactPaths = {
   core: string;
   channel: string;
   plugin: string;
+  schema: string;
 };
 
 export type ConfigDocBaselineArtifactsWriteResult = {
@@ -87,6 +90,7 @@ const DEFAULT_COMBINED_OUTPUT = "docs/.generated/config-baseline.json";
 const DEFAULT_CORE_OUTPUT = "docs/.generated/config-baseline.core.json";
 const DEFAULT_CHANNEL_OUTPUT = "docs/.generated/config-baseline.channel.json";
 const DEFAULT_PLUGIN_OUTPUT = "docs/.generated/config-baseline.plugin.json";
+const DEFAULT_SCHEMA_OUTPUT = "docs/schema/openclaw.json";
 const DEFAULT_HASH_OUTPUT = "docs/.generated/config-baseline.sha256";
 let cachedConfigDocBaselinePromise: Promise<ConfigDocBaseline> | null = null;
 let cachedDocBaselineRuntimePromise: Promise<typeof import("./doc-baseline.runtime.js")> | null =
@@ -577,11 +581,13 @@ export async function renderConfigDocBaselineArtifacts(
   const start = Date.now();
   logConfigDocBaselineDebug("render artifacts start");
   const resolvedBaseline = baseline ? await baseline : await buildConfigDocBaseline();
+  const response = await loadBundledConfigSchemaResponse();
   const json: ConfigDocBaselineArtifacts = {
     combined: `${JSON.stringify(resolvedBaseline, null, 2)}\n`,
     core: renderKindBaseline("core", resolvedBaseline.coreEntries),
     channel: renderKindBaseline("channel", resolvedBaseline.channelEntries),
     plugin: renderKindBaseline("plugin", resolvedBaseline.pluginEntries),
+    schema: `${JSON.stringify(buildEditorConfigSchemaDocument(response), null, 2)}\n`,
   };
   logConfigDocBaselineDebug(`render artifacts done elapsedMs=${Date.now() - start}`);
   return {
@@ -614,6 +620,7 @@ export function computeConfigBaselineHashFileContent(json: ConfigDocBaselineArti
     `${sha256(json.core)}  config-baseline.core.json`,
     `${sha256(json.channel)}  config-baseline.channel.json`,
     `${sha256(json.plugin)}  config-baseline.plugin.json`,
+    `${sha256(json.schema)}  schema/openclaw.json`,
   ];
   return `${lines.join("\n")}\n`;
 }
@@ -625,6 +632,7 @@ function resolveBaselineArtifactPaths(
     corePath?: string;
     channelPath?: string;
     pluginPath?: string;
+    schemaPath?: string;
   },
 ): ConfigDocBaselineArtifactPaths {
   return {
@@ -632,6 +640,7 @@ function resolveBaselineArtifactPaths(
     core: path.resolve(repoRoot, params?.corePath ?? DEFAULT_CORE_OUTPUT),
     channel: path.resolve(repoRoot, params?.channelPath ?? DEFAULT_CHANNEL_OUTPUT),
     plugin: path.resolve(repoRoot, params?.pluginPath ?? DEFAULT_PLUGIN_OUTPUT),
+    schema: path.resolve(repoRoot, params?.schemaPath ?? DEFAULT_SCHEMA_OUTPUT),
   };
 }
 
@@ -642,6 +651,7 @@ export async function writeConfigDocBaselineArtifacts(params?: {
   corePath?: string;
   channelPath?: string;
   pluginPath?: string;
+  schemaPath?: string;
   hashPath?: string;
   rendered?: ConfigDocBaselineArtifactsRender | Promise<ConfigDocBaselineArtifactsRender>;
 }): Promise<ConfigDocBaselineArtifactsWriteResult> {

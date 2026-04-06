@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { buildEditorConfigSchemaDocument } from "../config/editor-schema.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
@@ -1230,17 +1231,7 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
 }
 
 async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
-  const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
-    properties?: Record<string, unknown>;
-    required?: string[];
-  };
-
-  schema.properties = {
-    $schema: { type: "string" },
-    ...schema.properties,
-  };
-
-  return schema;
+  return buildEditorConfigSchemaDocument(await readBestEffortRuntimeConfigSchema());
 }
 
 export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {

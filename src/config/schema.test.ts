@@ -177,6 +177,48 @@ describe("config schema", () => {
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
   });
 
+  it("hoists nested plugin config $defs to the schema root", () => {
+    const res = buildConfigSchema({
+      plugins: [
+        {
+          id: "qqbot",
+          configSchema: {
+            type: "object",
+            $defs: {
+              account: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                },
+              },
+            },
+            properties: {
+              account: { $ref: "#/$defs/account" },
+            },
+          },
+        },
+      ],
+    });
+
+    const schema = res.schema as {
+      $defs?: Record<string, unknown>;
+      properties?: Record<string, unknown>;
+    };
+    const pluginsNode = schema.properties?.plugins as Record<string, unknown> | undefined;
+    const entriesNode = pluginsNode?.properties as Record<string, unknown> | undefined;
+    const entryProps = (entriesNode?.entries as Record<string, unknown> | undefined)?.properties as
+      | Record<string, unknown>
+      | undefined;
+    const qqbotEntry = entryProps?.qqbot as Record<string, unknown> | undefined;
+    const qqbotConfig = (qqbotEntry?.properties as Record<string, unknown> | undefined)?.config as
+      | { $defs?: Record<string, unknown>; properties?: Record<string, unknown> }
+      | undefined;
+
+    expect(schema.$defs?.account).toBeTruthy();
+    expect(qqbotConfig?.$defs).toBeUndefined();
+    expect(qqbotConfig?.properties?.account).toEqual({ $ref: "#/$defs/account" });
+  });
+
   it("looks up plugin config paths for slash-delimited plugin ids", () => {
     const res = buildConfigSchema({
       plugins: [

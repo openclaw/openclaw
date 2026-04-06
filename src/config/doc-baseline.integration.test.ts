@@ -46,6 +46,16 @@ describe("config doc baseline integration", () => {
     expect(second.json.core).toBe(first.json.core);
     expect(second.json.channel).toBe(first.json.channel);
     expect(second.json.plugin).toBe(first.json.plugin);
+    expect(second.json.schema).toBe(first.json.schema);
+  });
+
+  it("renders a published editor schema artifact with a root $schema field", async () => {
+    const { json } = await getSharedRendered();
+    const schema = JSON.parse(json.schema) as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(schema.properties?.$schema).toEqual({ type: "string" });
   });
 
   it("includes core, channel, and plugin config metadata", async () => {
@@ -130,6 +140,9 @@ describe("config doc baseline integration", () => {
       rendered,
     });
     expect(initial.wrote).toBe(true);
+    await expect(
+      fs.readFile(path.join(tempRoot, "docs/schema/openclaw.json"), "utf8"),
+    ).resolves.toBe((await rendered).json.schema);
 
     const current = await writeConfigDocBaselineArtifacts({
       repoRoot: tempRoot,

@@ -26,7 +26,7 @@ if (checkOnly) {
     [
       "Config baseline drift detected.",
       `Hash mismatch: ${path.relative(repoRoot, result.hashPath)}`,
-      "If this config-surface change is intentional, run `pnpm config:docs:gen` and commit the updated hash file.",
+      "If this config-surface change is intentional, run `pnpm config:docs:gen` and commit the updated hash file plus docs/schema/openclaw.json.",
       "If not intentional, treat this as docs drift or a possible breaking config change and fix the schema/help changes first.",
     ].join("\n"),
   );
@@ -36,6 +36,7 @@ if (checkOnly) {
 console.log(
   [
     `Wrote ${path.relative(repoRoot, result.hashPath)}`,
+    `Wrote ${path.relative(repoRoot, result.jsonPaths.schema)} (tracked docs schema)`,
     `Wrote ${path.relative(repoRoot, result.jsonPaths.combined)} (gitignored, local only)`,
     `Wrote ${path.relative(repoRoot, result.jsonPaths.core)} (gitignored, local only)`,
     `Wrote ${path.relative(repoRoot, result.jsonPaths.channel)} (gitignored, local only)`,
