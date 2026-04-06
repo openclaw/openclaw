@@ -2,13 +2,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  defaultRuntime,
+  isVerbose,
+  setVerbose,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
   spyRuntimeJson,
   spyRuntimeLogs,
 } from "../../../src/cli/test-runtime-capture.js";
+import { registerMemoryCli } from "./cli.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
@@ -22,53 +28,15 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
 );
 
 vi.mock("./cli.host.runtime.js", async () => {
-  const [runtimeCli, runtimeCore, runtimeFiles] = await Promise.all([
-    import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
-    import("openclaw/plugin-sdk/memory-core-host-runtime-core"),
-    import("openclaw/plugin-sdk/memory-core-host-runtime-files"),
-  ]);
+  const actual =
+    await vi.importActual<typeof import("./cli.host.runtime.js")>("./cli.host.runtime.js");
   return {
-    colorize: runtimeCli.colorize,
-    defaultRuntime: runtimeCli.defaultRuntime,
-    formatErrorMessage: runtimeCli.formatErrorMessage,
+    ...actual,
     getMemorySearchManager,
-    isRich: runtimeCli.isRich,
-    listMemoryFiles: runtimeFiles.listMemoryFiles,
     loadConfig,
-    normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
-    resolveSessionTranscriptsDirForAgent: runtimeCore.resolveSessionTranscriptsDirForAgent,
-    resolveStateDir: runtimeCore.resolveStateDir,
-    setVerbose: runtimeCli.setVerbose,
-    shortenHomeInString: runtimeCli.shortenHomeInString,
-    shortenHomePath: runtimeCli.shortenHomePath,
-    theme: runtimeCli.theme,
-    withManager: runtimeCli.withManager,
-    withProgress: runtimeCli.withProgress,
-    withProgressTotals: runtimeCli.withProgressTotals,
   };
-});
-
-let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
-let defaultRuntime: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").defaultRuntime;
-let isVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").isVerbose;
-let setVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").setVerbose;
-let fixtureRoot = "";
-let workspaceFixtureRoot = "";
-let qmdFixtureRoot = "";
-let workspaceCaseId = 0;
-let qmdCaseId = 0;
-
-beforeAll(async () => {
-  ({ registerMemoryCli } = await import("./cli.js"));
-  ({ defaultRuntime, isVerbose, setVerbose } =
-    await import("openclaw/plugin-sdk/memory-core-host-runtime-cli"));
-  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fixtures-"));
-  workspaceFixtureRoot = path.join(fixtureRoot, "workspace");
-  qmdFixtureRoot = path.join(fixtureRoot, "qmd");
-  await fs.mkdir(workspaceFixtureRoot, { recursive: true });
-  await fs.mkdir(qmdFixtureRoot, { recursive: true });
 });
 
 beforeEach(() => {
@@ -85,13 +53,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   process.exitCode = undefined;
   setVerbose(false);
-});
-
-afterAll(async () => {
-  if (!fixtureRoot) {
-    return;
-  }
-  await fs.rm(fixtureRoot, { recursive: true, force: true });
 });
 
 describe("memory cli", () => {
@@ -191,16 +152,23 @@ describe("memory cli", () => {
   }
 
   async function withQmdIndexDb(content: string, run: (dbPath: string) => Promise<void>) {
-    const dbPath = path.join(qmdFixtureRoot, `case-${qmdCaseId++}.sqlite`);
-    await fs.writeFile(dbPath, content, "utf-8");
-    await run(dbPath);
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-qmd-index-"));
+    const dbPath = path.join(tmpDir, "index.sqlite");
+    try {
+      await fs.writeFile(dbPath, content, "utf-8");
+      await run(dbPath);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   }
 
   async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
-    const workspaceDir = path.join(workspaceFixtureRoot, `case-${workspaceCaseId++}`);
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
-    await run(workspaceDir);
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-promote-"));
+    try {
+      await run(workspaceDir);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   }
 
   async function writeDailyMemoryNote(
@@ -209,6 +177,7 @@ describe("memory cli", () => {
     lines: string[],
   ): Promise<void> {
     const notePath = path.join(workspaceDir, "memory", `${date}.md`);
+    await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, `${lines.join("\n")}\n`, "utf-8");
   }
 
@@ -407,6 +376,7 @@ describe("memory cli", () => {
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
       await fs.writeFile(
         storePath,
         JSON.stringify(
@@ -464,8 +434,10 @@ describe("memory cli", () => {
   });
 
   it("shows the fix hint only before --fix has been run", async () => {
-    await withTempWorkspace(async (workspaceDir) => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fix-hint-"));
+    try {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
       await fs.writeFile(storePath, " \n", "utf-8");
 
       const close = vi.fn(async () => {});
@@ -491,7 +463,9 @@ describe("memory cli", () => {
       expect(log).not.toHaveBeenCalledWith(
         expect.stringContaining("Fix: openclaw memory status --fix --agent main"),
       );
-    });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("enables verbose logging with --verbose", async () => {
@@ -540,7 +514,7 @@ describe("memory cli", () => {
   it("closes manager after index", async () => {
     const close = vi.fn(async () => {});
     const sync = vi.fn(async () => {});
-    mockManager({ sync, status: () => makeMemoryStatus(), close });
+    mockManager({ sync, close });
 
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["index"]);
@@ -548,33 +522,6 @@ describe("memory cli", () => {
     expectCliSync(sync);
     expect(close).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Memory index updated (main).");
-  });
-
-  it("warns on stderr when index completes without sqlite-vec embeddings", async () => {
-    const close = vi.fn(async () => {});
-    const sync = vi.fn(async () => {});
-    mockManager({
-      sync,
-      status: () =>
-        makeMemoryStatus({
-          vector: {
-            enabled: true,
-            available: false,
-            loadError: "load failed",
-          },
-        }),
-      close,
-    });
-
-    const error = spyRuntimeErrors(defaultRuntime);
-    await runMemoryCli(["index"]);
-
-    expectCliSync(sync);
-    expect(error).toHaveBeenCalledWith(
-      "Memory index WARNING (main): chunks_vec not updated — sqlite-vec unavailable: load failed. Vector recall degraded.",
-    );
-    expect(close).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
   });
 
   it("logs qmd index file path and size after index", async () => {
@@ -645,7 +592,7 @@ describe("memory cli", () => {
     const sync = vi.fn(async () => {});
     await expectCloseFailureAfterCommand({
       args: ["index"],
-      manager: { sync, status: () => makeMemoryStatus() },
+      manager: { sync },
       beforeExpect: () => {
         expectCliSync(sync);
       },

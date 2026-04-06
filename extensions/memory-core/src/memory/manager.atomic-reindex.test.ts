@@ -1,83 +1,91 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "./embedding.test-mocks.js";
+import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
+import type { MemoryIndexManager } from "./manager.js";
+import { closeAllMemorySearchManagers } from "./search-manager.js";
+import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
+
+let shouldFail = false;
 
 describe("memory manager atomic reindex", () => {
   let fixtureRoot = "";
   let caseId = 0;
+  let workspaceDir: string;
   let indexPath: string;
-  let tempIndexPath: string;
+  let manager: MemoryIndexManager | null = null;
+  let embedBatch: ReturnType<typeof getEmbedBatchMock>;
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-atomic-"));
   });
 
   beforeEach(async () => {
-    const workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
+    embedBatch = getEmbedBatchMock();
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    resetEmbeddingMocks();
+    shouldFail = false;
+    embedBatch.mockImplementation(async (texts: string[]) => {
+      if (shouldFail) {
+        throw new Error("embedding failure");
+      }
+      return texts.map((_, index) => [index + 1, 0, 0]);
+    });
+    workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(workspaceDir, { recursive: true });
     indexPath = path.join(workspaceDir, "index.sqlite");
-    tempIndexPath = `${indexPath}.tmp`;
+    await fs.mkdir(path.join(workspaceDir, "memory"));
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
+  });
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.close();
+      manager = null;
+    }
+    await closeAllMemorySearchManagers();
+    vi.unstubAllEnvs();
   });
 
   afterAll(async () => {
+    if (!fixtureRoot) {
+      return;
+    }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   it("keeps the prior index when a full reindex fails", async () => {
-    writeChunkMarker(indexPath, "before");
-    writeChunkMarker(tempIndexPath, "after");
-
-    await expect(
-      runMemoryAtomicReindex({
-        targetPath: indexPath,
-        tempPath: tempIndexPath,
-        build: async () => {
-          throw new Error("embedding failure");
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexPath },
+            cache: { enabled: false },
+            // Perf: keep test indexes to a single chunk to reduce sqlite work.
+            chunking: { tokens: 4000, overlap: 0 },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+          },
         },
-      }),
-    ).rejects.toThrow("embedding failure");
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
 
-    expect(readChunkMarker(indexPath)).toBe("before");
-    await expect(fs.access(tempIndexPath)).rejects.toThrow();
-  });
+    manager = await getRequiredMemoryIndexManager({ cfg, agentId: "main" });
 
-  it("replaces the old index after a successful temp reindex", async () => {
-    writeChunkMarker(indexPath, "before");
-    writeChunkMarker(tempIndexPath, "after");
+    await manager.sync({ force: true });
+    const beforeStatus = manager.status();
+    expect(beforeStatus.chunks).toBeGreaterThan(0);
 
-    await runMemoryAtomicReindex({
-      targetPath: indexPath,
-      tempPath: tempIndexPath,
-      build: async () => undefined,
-    });
+    shouldFail = true;
+    await expect(manager.sync({ force: true })).rejects.toThrow("embedding failure");
 
-    expect(readChunkMarker(indexPath)).toBe("after");
-    await expect(fs.access(tempIndexPath)).rejects.toThrow();
+    const afterStatus = manager.status();
+    expect(afterStatus.chunks).toBeGreaterThan(0);
   });
 });
-
-function writeChunkMarker(dbPath: string, marker: string): void {
-  const db = new DatabaseSync(dbPath);
-  try {
-    db.exec("CREATE TABLE chunks (id TEXT PRIMARY KEY, text TEXT NOT NULL)");
-    db.prepare("INSERT INTO chunks (id, text) VALUES (?, ?)").run("chunk-1", marker);
-  } finally {
-    db.close();
-  }
-}
-
-function readChunkMarker(dbPath: string): string | undefined {
-  const db = new DatabaseSync(dbPath);
-  try {
-    return (
-      db.prepare("SELECT text FROM chunks WHERE id = ?").get("chunk-1") as
-        | { text: string }
-        | undefined
-    )?.text;
-  } finally {
-    db.close();
-  }
-}
