@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 - Discord/forwarding: recover forwarded referenced message text and attachments when Discord omits snapshot payloads, so forwarded-message relays keep the original content. (#61670) Thanks @artwalker.
 - Plugins/install: preserve plugin-schema defaults during fresh-install raw config validation so bundled plugin installs stop failing when required fields rely on schema defaults. (#61856) Thanks @SuperMarioYL.
 - Slack/threading: keep legacy thread stickiness for real replies when older callers omit `isThreadReply`, while still honoring `replyToMode` for Slack's auto-created top-level `thread_ts`. (#61835) Thanks @kaonash.
+- Agents/message tool: add a `read` plus `threadId` discoverability hint when the configured channel actions support threaded message reads.
 - Docs/i18n: remove the zh-CN homepage redirect override so Mintlify can resolve the localized Chinese homepage without self-redirecting `/zh-CN/index`.
 - Agents/heartbeat: stop truncating live session transcripts after no-op heartbeat acks, move heartbeat cleanup to prompt assembly and compaction, and keep post-filter context-engine ingestion aligned with the real session baseline. (#60998) Thanks @nxmxbbd.
 - macOS/gateway version: strip trailing commit metadata from CLI version output before semver parsing so the Mac app recognizes installed gateway versions like `OpenClaw 2026.4.2 (d74a122)` again. (#61111) Thanks @oliviareid-svg.
