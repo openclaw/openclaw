@@ -91,6 +91,46 @@ function resolveConfiguredAimlapiCredentialValue(config?: OpenClawConfig): unkno
     : undefined;
 }
 
+function hasReusableAimlapiProviderAuthMetadata(config: OpenClawConfig): boolean {
+  return Object.entries(config.auth?.profiles ?? {}).some(
+    ([profileId, profile]) =>
+      profileId === "aimlapi:default" ||
+      profileId.startsWith("aimlapi:") ||
+      (typeof profile === "object" && profile !== null && profile.provider === "aimlapi"),
+  );
+}
+
+async function hasReusableAimlapiProviderAuth(config: OpenClawConfig): Promise<boolean> {
+  if (!hasReusableAimlapiProviderAuthMetadata(config)) {
+    return false;
+  }
+
+  try {
+    const resolved = await resolveApiKeyForProvider({
+      provider: "aimlapi",
+      cfg: config,
+    });
+    const apiKey = resolved?.apiKey?.trim();
+    if (!apiKey) {
+      return false;
+    }
+
+    const response = await fetch("https://api.aimlapi.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: "",
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    return response.ok || response.status === 400;
+  } catch {
+    return false;
+  }
+}
+
 function resolveAimlapiBaseUrl(aimlapi?: AimlapiConfig): string {
   const baseUrl = typeof aimlapi?.baseUrl === "string" ? aimlapi.baseUrl.trim() : "";
   return baseUrl || DEFAULT_AIMLAPI_BASE_URL;
@@ -379,6 +419,8 @@ export function createAimlapiWebSearchProvider(): WebSearchProviderPlugin {
       setScopedCredentialValue(searchConfigTarget, "aimlapi", value);
     },
     getConfiguredCredentialValue: (config) => resolveConfiguredAimlapiCredentialValue(config),
+    hasReusableProviderAuthMetadata: ({ config }) => hasReusableAimlapiProviderAuthMetadata(config),
+    hasReusableProviderAuth: async ({ config }) => await hasReusableAimlapiProviderAuth(config),
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "aimlapi", "apiKey", value);
     },
@@ -391,6 +433,8 @@ export const __testing = {
   resolveAimlapiConfig,
   resolveAimlapiApiKey,
   resolveConfiguredAimlapiCredentialValue,
+  hasReusableAimlapiProviderAuthMetadata,
+  hasReusableAimlapiProviderAuth,
   resolveAimlapiBaseUrl,
   resolveAimlapiModel,
   extractAimlapiCitations,

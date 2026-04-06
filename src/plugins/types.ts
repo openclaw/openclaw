@@ -1578,6 +1578,10 @@ export type WebSearchProviderSetupContext = {
   secretInputMode?: SecretInputMode;
 };
 
+export type WebSearchProviderReusableAuthContext = {
+  config: OpenClawConfig;
+};
+
 export type WebFetchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
 
 export type WebFetchRuntimeMetadataContext = {
@@ -1618,6 +1622,10 @@ export type WebSearchProviderPlugin = {
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  hasReusableProviderAuthMetadata?: (ctx: WebSearchProviderReusableAuthContext) => boolean;
+  hasReusableProviderAuth?: (
+    ctx: WebSearchProviderReusableAuthContext,
+  ) => boolean | Promise<boolean>;
   runSetup?: (ctx: WebSearchProviderSetupContext) => OpenClawConfig | Promise<OpenClawConfig>;
   resolveRuntimeMetadata?: (
     ctx: WebSearchRuntimeMetadataContext,

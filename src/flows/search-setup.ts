@@ -1,5 +1,6 @@
 import type { SecretInputMode } from "../commands/onboard-types.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
@@ -119,7 +120,10 @@ function providerNeedsCredential(
 
 function providerIsReady(
   config: OpenClawConfig,
-  entry: Pick<PluginWebSearchProviderEntry, "id" | "envVars" | "requiresCredential">,
+  entry: Pick<
+    PluginWebSearchProviderEntry,
+    "id" | "envVars" | "requiresCredential" | "hasReusableProviderAuthMetadata"
+  >,
 ): boolean {
   if (!providerNeedsCredential(entry)) {
     return true;
@@ -127,54 +131,32 @@ function providerIsReady(
   return (
     hasExistingKey(config, entry.id) ||
     hasKeyInEnv(entry) ||
-    hasImplicitProviderAuthMetadata(config, entry.id)
-  );
-}
-
-function hasImplicitProviderAuthMetadata(
-  config: OpenClawConfig,
-  provider: string,
-): boolean {
-  if (provider !== "aimlapi") {
-    return false;
-  }
-  return Object.entries(config.auth?.profiles ?? {}).some(
-    ([profileId, profile]) =>
-      profileId === "aimlapi:default" ||
-      profileId.startsWith("aimlapi:") ||
-      (typeof profile === "object" && profile !== null && profile.provider === "aimlapi"),
+    (entry.hasReusableProviderAuthMetadata?.({ config }) ?? false)
   );
 }
 
 async function hasImplicitProviderAuth(
   config: OpenClawConfig,
-  provider: string,
+  entry: Pick<
+    PluginWebSearchProviderEntry,
+    "pluginId" | "hasReusableProviderAuthMetadata" | "hasReusableProviderAuth"
+  >,
 ): Promise<boolean> {
-  if (provider !== "aimlapi" || !hasImplicitProviderAuthMetadata(config, provider)) {
+  if (entry.hasReusableProviderAuth) {
+    return await entry.hasReusableProviderAuth({ config });
+  }
+
+  if (!(entry.hasReusableProviderAuthMetadata?.({ config }) ?? false)) {
     return false;
   }
 
   try {
     const resolved = await resolveApiKeyForProvider({
-      provider: "aimlapi",
+      provider: entry.pluginId,
       cfg: config,
     });
     const apiKey = resolved?.apiKey?.trim();
-    if (!apiKey) {
-      return false;
-    }
-
-    const response = await fetch("https://api.aimlapi.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: "",
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    return response.ok || response.status === 400;
+    return Boolean(apiKey && !isNonSecretApiKeyMarker(apiKey));
   } catch {
     return false;
   }
@@ -456,7 +438,7 @@ export async function runSearchSetupFlow(
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
-  const implicitAuthAvailable = await hasImplicitProviderAuth(config, choice);
+  const implicitAuthAvailable = await hasImplicitProviderAuth(config, entry);
   const needsCredential = providerNeedsCredential(entry);
 
   if (opts?.quickstartDefaults && (keyConfigured || envAvailable || implicitAuthAvailable)) {

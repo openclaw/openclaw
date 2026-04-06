@@ -43,6 +43,12 @@ const mockGrokProvider = vi.hoisted(() => ({
     const webSearch = (xaiConfig.webSearch ??= {}) as Record<string, unknown>;
     webSearch.apiKey = value;
   },
+  hasReusableProviderAuthMetadata: undefined as
+    | ((ctx: { config: Record<string, unknown> }) => boolean)
+    | undefined,
+  hasReusableProviderAuth: undefined as
+    | ((ctx: { config: Record<string, unknown> }) => boolean | Promise<boolean>)
+    | undefined,
   runSetup: async ({
     config,
     prompter,
@@ -97,6 +103,39 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 describe("runSearchSetupFlow", () => {
+  it("quickstart reuses provider-owned implicit auth without prompting for a duplicate key", async () => {
+    mockGrokProvider.hasReusableProviderAuthMetadata = () => true;
+    mockGrokProvider.hasReusableProviderAuth = vi.fn().mockResolvedValue(true);
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("grok")
+      .mockResolvedValueOnce("yes")
+      .mockResolvedValueOnce("grok-4-1-fast");
+    const text = vi.fn();
+    const prompter = createWizardPrompter({
+      select: select as never,
+      text: text as never,
+    });
+
+    const config = { plugins: { allow: ["xai"] } };
+    const next = await runSearchSetupFlow(
+      config,
+      createNonExitingRuntime(),
+      prompter,
+      { quickstartDefaults: true },
+    );
+
+    expect(next.tools?.web?.search).toMatchObject({
+      provider: "grok",
+      enabled: true,
+    });
+    expect(text).not.toHaveBeenCalled();
+    expect(mockGrokProvider.hasReusableProviderAuth).toHaveBeenCalledWith({ config });
+
+    mockGrokProvider.hasReusableProviderAuthMetadata = undefined;
+    mockGrokProvider.hasReusableProviderAuth = undefined;
+  });
+
   it("runs provider-owned setup after selecting Grok web search", async () => {
     const select = vi
       .fn()
