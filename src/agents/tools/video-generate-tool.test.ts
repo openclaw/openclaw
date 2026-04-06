@@ -5,6 +5,10 @@ import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import * as videoGenerateBackground from "./video-generate-background.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
 
+const taskRuntimeInternalMocks = vi.hoisted(() => ({
+  listTasksForOwnerKey: vi.fn(),
+}));
+
 const taskExecutorMocks = vi.hoisted(() => ({
   createRunningTaskRun: vi.fn(),
   completeTaskRunByRunId: vi.fn(),
@@ -12,6 +16,7 @@ const taskExecutorMocks = vi.hoisted(() => ({
   recordTaskRunProgressByRunId: vi.fn(),
 }));
 
+vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/task-executor.js", () => taskExecutorMocks);
 
 function asConfig(value: unknown): OpenClawConfig {
@@ -22,6 +27,8 @@ describe("createVideoGenerateTool", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
     taskExecutorMocks.createRunningTaskRun.mockReset();
     taskExecutorMocks.completeTaskRunByRunId.mockReset();
     taskExecutorMocks.failTaskRunByRunId.mockReset();
@@ -181,7 +188,8 @@ describe("createVideoGenerateTool", () => {
     const result = await tool.execute("call-1", { prompt: "friendly lobster surfing" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
-    expect(text).toContain("Started video generation task task-123 in the background.");
+    expect(text).toContain("Background task started for video generation (task-123).");
+    expect(text).toContain("Do not call video_generate again for this request.");
     expect(result.details).toMatchObject({
       async: true,
       status: "started",
@@ -211,6 +219,112 @@ describe("createVideoGenerateTool", () => {
         result: expect.stringContaining("MEDIA:/tmp/generated-lobster.mp4"),
       }),
     );
+  });
+
+  it("returns active task status instead of starting a duplicate generation", async () => {
+    const generateSpy = vi.spyOn(videoGenerationRuntime, "generateVideo");
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-active",
+        runtime: "cli",
+        sourceId: "video_generate:openai",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        runId: "tool:video_generate:active",
+        task: "friendly lobster surfing",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: Date.now(),
+        progressSummary: "Generating video",
+      },
+    ]);
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "openai/sora-2" },
+          },
+        },
+      }),
+      agentSessionKey: "agent:main:discord:direct:123",
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    const result = await tool.execute("call-dup", { prompt: "friendly lobster surfing" });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("Video generation task task-active is already running with openai.");
+    expect(text).toContain("Do not call video_generate again for this request.");
+    expect(result.details).toMatchObject({
+      action: "status",
+      duplicateGuard: true,
+      active: true,
+      existingTask: true,
+      status: "running",
+      provider: "openai",
+      task: {
+        taskId: "task-active",
+        runId: "tool:video_generate:active",
+      },
+      progressSummary: "Generating video",
+    });
+    expect(taskExecutorMocks.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(generateSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports active task status when action=status is requested", async () => {
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-active",
+        runtime: "cli",
+        sourceId: "video_generate:google",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        runId: "tool:video_generate:active",
+        task: "friendly lobster surfing",
+        status: "queued",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: Date.now(),
+        progressSummary: "Queued video generation",
+      },
+    ]);
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "google/veo-3.1-fast-generate-preview" },
+          },
+        },
+      }),
+      agentSessionKey: "agent:main:discord:direct:123",
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    const result = await tool.execute("call-status", { action: "status" });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("Video generation task task-active is already queued with google.");
+    expect(result.details).toMatchObject({
+      action: "status",
+      active: true,
+      existingTask: true,
+      status: "queued",
+      provider: "google",
+      task: {
+        taskId: "task-active",
+      },
+      progressSummary: "Queued video generation",
+    });
   });
 
   it("surfaces provider generation failures inline when there is no detached session", async () => {

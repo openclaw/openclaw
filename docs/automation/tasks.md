@@ -83,6 +83,8 @@ Main-session cron tasks use `silent` notify policy by default — they create re
 
 Session-backed `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake so the agent can write the follow-up message and attach the finished video itself.
 
+While a session-backed `video_generate` task is still active, the tool also acts as a guardrail: repeated `video_generate` calls in that same session return the active task status instead of starting a second concurrent generation. Use `action: "status"` when you want an explicit progress/status lookup from the agent side.
+
 **What does not create tasks:**
 
 - Heartbeat turns — main-session; see [Heartbeat](/gateway/heartbeat)
