@@ -1,5 +1,5 @@
 import { Type, type TSchema } from "@sinclair/typebox";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
@@ -552,6 +552,29 @@ function resolveAgentAccountId(value?: string): string | undefined {
   return normalizeAccountId(trimmed);
 }
 
+/**
+ * Returns true if the given channel uses threadId for the read action,
+ * false if it uses messageId (or has no read support).
+ * This is used to decide whether to add threadId-based hint in the tool description.
+ */
+function channelUsesThreadIdForRead(channel: string): boolean {
+  const plugin = getChannelPlugin(channel);
+  if (!plugin) {
+    return false;
+  }
+  const aliases = plugin.actions?.messageActionTargetAliases?.read?.aliases;
+  // If aliases include threadId, the channel uses threadId for read
+  if (aliases?.includes("threadId")) {
+    return true;
+  }
+  // If aliases include messageId, the channel uses messageId for read (e.g. Feishu)
+  if (aliases?.includes("messageId")) {
+    return false;
+  }
+  // Default: assume threadId-based if no aliases defined (e.g. Slack)
+  return true;
+}
+
 function buildMessageToolDescription(options?: {
   config?: OpenClawConfig;
   currentChannel?: string;
@@ -587,6 +610,10 @@ function buildMessageToolDescription(options?: {
       const allActions = new Set(["send", ...channelActions]);
       const actionList = Array.from(allActions).toSorted().join(", ");
       let desc = `${baseDescription} Current channel (${currentChannel}) supports: ${actionList}.`;
+      if (allActions.has("read") && channelUsesThreadIdForRead(currentChannel)) {
+        desc +=
+          " Use `read` with `threadId` to fetch prior messages in a thread when you need context you don't have.";
+      }
 
       // Include other configured channels so cron/isolated agents can discover them
       const otherChannels: string[] = [];
@@ -620,6 +647,8 @@ function buildMessageToolDescription(options?: {
   }
 
   // Fallback to generic description with all configured actions
+  // Note: we don't add threadId hint here because we don't know which channel will be used.
+  // Some channels (like Feishu) use messageId for read, not threadId.
   if (resolvedOptions.config) {
     const actions = listChannelMessageActions(resolvedOptions.config);
     if (actions.length > 0) {
