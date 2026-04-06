@@ -13,7 +13,14 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
+import {
+  createPluginActivationSource,
+  normalizePluginsConfig,
+  resolvePluginActivationState,
+} from "../../plugins/config-state.js";
+import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agent-scope.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
@@ -130,16 +137,37 @@ function isPluginDangerousFlagActive(
   config: Record<string, unknown>,
   flag: `plugins.entries.${string}.config.${string}`,
 ): boolean {
-  if ((config.plugins as { enabled?: unknown } | undefined)?.enabled === false) {
-    return false;
-  }
+  const rootConfig = config as OpenClawConfig;
   const pluginId = getPluginIdFromDangerousFlag(flag, config);
-  const pluginEntry = (config.plugins as { entries?: Record<string, unknown> } | undefined)
+  const pluginEntry = (rootConfig.plugins as { entries?: Record<string, unknown> } | undefined)
     ?.entries?.[pluginId];
   if (!pluginEntry || typeof pluginEntry !== "object" || Array.isArray(pluginEntry)) {
     return false;
   }
-  return (pluginEntry as { enabled?: unknown }).enabled !== false;
+  const workspaceDir = resolveAgentWorkspaceDir(rootConfig, resolveDefaultAgentId(rootConfig));
+  const manifestRecord = loadPluginManifestRegistry({
+    config: rootConfig,
+    workspaceDir,
+    env: process.env,
+    cache: true,
+  }).plugins.find((plugin) => plugin.id === pluginId);
+  if (!manifestRecord) {
+    return (pluginEntry as { enabled?: unknown }).enabled !== false;
+  }
+
+  const normalizedPlugins = normalizePluginsConfig(rootConfig.plugins);
+  const activationSource = createPluginActivationSource({
+    config: rootConfig,
+    plugins: normalizedPlugins,
+  });
+  return resolvePluginActivationState({
+    id: pluginId,
+    origin: manifestRecord.origin,
+    config: normalizedPlugins,
+    rootConfig,
+    enabledByDefault: manifestRecord.enabledByDefault,
+    activationSource,
+  }).activated;
 }
 
 type DangerousFlagToken = {
