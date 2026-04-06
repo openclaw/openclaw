@@ -53,6 +53,13 @@ type ActiveTaskWaiter = {
   timeout?: ReturnType<typeof setTimeout>;
 };
 
+type QueueState = {
+  gatewayDraining: boolean;
+  lanes: Map<string, LaneState>;
+  activeTaskWaiters: Set<ActiveTaskWaiter>;
+  nextTaskId: number;
+};
+
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return err instanceof Error && err.name === "LiveSessionModelSwitchError";
 }
@@ -63,13 +70,38 @@ function isExpectedNonErrorLaneFailure(err: unknown): boolean {
  */
 const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
 
-function getQueueState() {
-  return resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
+function createQueueState(): QueueState {
+  return {
     gatewayDraining: false,
     lanes: new Map<string, LaneState>(),
     activeTaskWaiters: new Set<ActiveTaskWaiter>(),
     nextTaskId: 1,
-  }));
+  };
+}
+
+function getQueueState(): QueueState {
+  const state = resolveGlobalSingleton(
+    COMMAND_QUEUE_STATE_KEY,
+    createQueueState,
+  ) as Partial<QueueState>;
+
+  // The command queue singleton is shared across bundled entrypoints on globalThis.
+  // If a restart or mixed-runtime edge case leaves this object partially corrupted,
+  // repair the top-level containers in place instead of crashing the gateway.
+  if (!(state.lanes instanceof Map)) {
+    state.lanes = new Map<string, LaneState>();
+  }
+  if (!(state.activeTaskWaiters instanceof Set)) {
+    state.activeTaskWaiters = new Set<ActiveTaskWaiter>();
+  }
+  if (typeof state.gatewayDraining !== "boolean") {
+    state.gatewayDraining = false;
+  }
+  if (!Number.isSafeInteger(state.nextTaskId) || (state.nextTaskId ?? 0) < 1) {
+    state.nextTaskId = 1;
+  }
+
+  return state as QueueState;
 }
 
 function normalizeLane(lane: string): string {

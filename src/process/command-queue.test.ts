@@ -413,4 +413,39 @@ describe("command queue", () => {
       commandQueueA.resetAllLanes();
     }
   });
+
+  it("repairs corrupted global queue waiters before draining active tasks", async () => {
+    const queueStateKey = Symbol.for("openclaw.commandQueueState");
+    (
+      globalThis as typeof globalThis & {
+        [queueStateKey]?: unknown;
+      }
+    )[queueStateKey] = {
+      gatewayDraining: false,
+      lanes: new Map(),
+      activeTaskWaiters: undefined,
+      nextTaskId: 1,
+    };
+
+    const freshQueue = await importFreshModule<typeof import("./command-queue.js")>(
+      import.meta.url,
+      "./command-queue.js?scope=corrupted-waiters",
+    );
+
+    let release!: () => void;
+    const blocker = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const task = freshQueue.enqueueCommand(async () => {
+      await blocker;
+      return "done";
+    });
+
+    const drainPromise = freshQueue.waitForActiveTasks(1000);
+    release();
+
+    await expect(drainPromise).resolves.toEqual({ drained: true });
+    await expect(task).resolves.toBe("done");
+  });
 });
