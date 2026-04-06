@@ -8,8 +8,8 @@ const watchMock = vi.fn(() => ({
 }));
 
 const pluginSkillDirsMock = vi.hoisted(() => ({
-  resolvePluginSkillDirs: vi.fn(() => []),
-  resolvePluginSkillWatchDirs: vi.fn(() => []),
+  resolvePluginSkillDirs: vi.fn((): string[] => []),
+  resolvePluginSkillWatchDirs: vi.fn((): string[] => []),
 }));
 
 let refreshModule: typeof import("./refresh.js");
