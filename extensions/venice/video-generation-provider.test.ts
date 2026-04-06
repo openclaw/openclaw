@@ -10,34 +10,34 @@ describe("Venice video generation provider", () => {
   });
 
   it("has a default model", () => {
-    expect(provider.defaultModel).toBe("wan-2.5-preview-image-to-video");
+    expect(provider.defaultModel).toBe("wan-2.7-image-to-video");
   });
 
-  it("lists expected image-to-video models", () => {
+  it("lists WAN models", () => {
+    expect(provider.models).toContain("wan-2.7-image-to-video");
+    expect(provider.models).toContain("wan-2.7-text-to-video");
+    expect(provider.models).toContain("wan-2.6-image-to-video");
     expect(provider.models).toContain("wan-2.5-preview-image-to-video");
-    expect(provider.models).toContain("wan-2.6-720p-image-to-video");
-    expect(provider.models).toContain("wan-2.6-1080p-image-to-video");
-    expect(provider.models).toContain("kling-2.1-master-image-to-video");
-    expect(provider.models).toContain("kling-2.1-pro-image-to-video");
-    expect(provider.models).toContain("hunyuan-image-to-video");
-    expect(provider.models).toContain("minimax-image-to-video");
-    expect(provider.models).toContain("luma-ray-2-image-to-video");
-    expect(provider.models).toContain("seedance-1-image-to-video");
-    expect(provider.models).toContain("vidu-2-image-to-video");
   });
 
-  it("lists expected text-to-video models", () => {
-    expect(provider.models).toContain("kling-2.1-master-text-to-video");
-    expect(provider.models).toContain("kling-2.1-pro-text-to-video");
-    expect(provider.models).toContain("minimax-text-to-video");
-    expect(provider.models).toContain("luma-ray-2-text-to-video");
-    expect(provider.models).toContain("seedance-1-text-to-video");
-    expect(provider.models).toContain("vidu-2-text-to-video");
+  it("lists Kling models", () => {
+    expect(provider.models).toContain("kling-2.6-pro-image-to-video");
+    expect(provider.models).toContain("kling-2.6-pro-text-to-video");
+    expect(provider.models).toContain("kling-2.5-turbo-pro-image-to-video");
+    expect(provider.models).toContain("kling-2.5-turbo-pro-text-to-video");
   });
 
-  it("lists video upscale models", () => {
-    expect(provider.models).toContain("video-upscale-topaz");
-    expect(provider.models).toContain("video-upscale-standard");
+  it("lists Seedance models", () => {
+    expect(provider.models).toContain("seedance-2-0-image-to-video");
+    expect(provider.models).toContain("seedance-2-0-text-to-video");
+    expect(provider.models).toContain("seedance-1-5-pro-image-to-video");
+    expect(provider.models).toContain("seedance-1-5-pro-text-to-video");
+  });
+
+  it("lists Vidu and OVI models", () => {
+    expect(provider.models).toContain("vidu-q3-image-to-video");
+    expect(provider.models).toContain("vidu-q3-text-to-video");
+    expect(provider.models).toContain("ovi-image-to-video");
   });
 
   it("has expected capabilities", () => {

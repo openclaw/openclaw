@@ -13,7 +13,7 @@ import type {
 } from "openclaw/plugin-sdk/video-generation";
 import { VENICE_BASE_URL } from "./models.js";
 
-const DEFAULT_VENICE_VIDEO_MODEL = "wan-2.5-preview-image-to-video";
+const DEFAULT_VENICE_VIDEO_MODEL = "wan-2.7-image-to-video";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 180;
@@ -140,44 +140,34 @@ export function buildVeniceVideoGenerationProvider(): VideoGenerationProvider {
     label: "Venice",
     defaultModel: DEFAULT_VENICE_VIDEO_MODEL,
     models: [
-      // WAN models (Image-to-Video)
+      // WAN models (Image-to-Video and Text-to-Video)
+      "wan-2.7-image-to-video",
+      "wan-2.7-text-to-video",
+      "wan-2.6-image-to-video",
       "wan-2.5-preview-image-to-video",
-      "wan-2.6-720p-image-to-video",
-      "wan-2.6-1080p-image-to-video",
-      // Kling models (Image-to-Video)
-      "kling-2.1-master-image-to-video",
-      "kling-2.1-pro-image-to-video",
-      "kling-2.1-standard-image-to-video",
-      "kling-1.6-pro-image-to-video",
-      "kling-1.6-standard-image-to-video",
-      "kling-1.5-pro-image-to-video",
-      // Kling O3 models (Reference-to-Video with elements support)
-      "kling-o3-r2v",
-      // Hunyuan (Image-to-Video)
-      "hunyuan-image-to-video",
-      // MiniMax (Image-to-Video and Text-to-Video)
-      "minimax-image-to-video",
-      "minimax-text-to-video",
-      // Luma Ray models (Image-to-Video and Text-to-Video)
-      "luma-ray-2-image-to-video",
-      "luma-ray-2-text-to-video",
-      "luma-ray-flash-2-image-to-video",
-      "luma-ray-flash-2-text-to-video",
-      // Seedance (Image-to-Video and Text-to-Video)
-      "seedance-1-image-to-video",
-      "seedance-1-text-to-video",
-      // Vidu (Image-to-Video and Text-to-Video)
-      "vidu-2-image-to-video",
-      "vidu-2-text-to-video",
-      // Kling models (Text-to-Video)
-      "kling-2.1-master-text-to-video",
-      "kling-2.1-pro-text-to-video",
-      "kling-2.1-standard-text-to-video",
-      "kling-1.6-pro-text-to-video",
-      "kling-1.6-standard-text-to-video",
-      // Video upscale models
-      "video-upscale-topaz",
-      "video-upscale-standard",
+
+      // Kling 2.6 models
+      "kling-2.6-pro-image-to-video",
+      "kling-2.6-pro-text-to-video",
+
+      // Kling 2.5 Turbo models
+      "kling-2.5-turbo-pro-image-to-video",
+      "kling-2.5-turbo-pro-text-to-video",
+
+      // Seedance 2.0 models (Pro users)
+      "seedance-2-0-image-to-video",
+      "seedance-2-0-text-to-video",
+
+      // Seedance 1.5 Pro models
+      "seedance-1-5-pro-image-to-video",
+      "seedance-1-5-pro-text-to-video",
+
+      // Vidu Q3 models
+      "vidu-q3-image-to-video",
+      "vidu-q3-text-to-video",
+
+      // OVI (MiniMax) model
+      "ovi-image-to-video",
     ],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
@@ -227,7 +217,7 @@ export function buildVeniceVideoGenerationProvider(): VideoGenerationProvider {
       // Validate: if an I2V model is explicitly chosen but no image is provided, error early
       if (!req.model && !hasInputImage && !hasInputVideo) {
         // Auto-select text-to-video model if no image/video provided
-        model = "kling-2.1-pro-text-to-video";
+        model = "wan-2.7-text-to-video";
       } else if (req.model && isImageToVideoModel(req.model) && !hasInputImage) {
         throw new Error(
           `Model "${req.model}" requires a reference image. Either provide an image via inputImages or use a text-to-video model.`,
