@@ -43,6 +43,11 @@ export type McpOAuthProvider = OAuthClientProvider & {
   waitForAuthorizationCode: () => Promise<string>;
 };
 
+type McpOAuthCallbackSession = {
+  redirectUrl: string;
+  promise: Promise<string>;
+};
+
 function toSafeFilename(name: string): string {
   const safe = name.replace(/[^a-zA-Z0-9_-]/g, "_");
   const hash = createHash("sha1").update(name).digest("hex").slice(0, 8);
@@ -81,9 +86,7 @@ export function saveMcpOAuthState(serverName: string, state: McpOAuthPersistedSt
 // OAuth provider + callback server
 // ---------------------------------------------------------------------------
 
-const CALLBACK_PORT = 8093;
 const CALLBACK_PATH = "/mcp/callback";
-const REDIRECT_URI = `http://127.0.0.1:${CALLBACK_PORT}${CALLBACK_PATH}`;
 
 /**
  * OAuthClientProvider implementation for remote MCP servers.
@@ -94,11 +97,7 @@ const REDIRECT_URI = `http://127.0.0.1:${CALLBACK_PORT}${CALLBACK_PATH}`;
 export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAuthProvider {
   let state: McpOAuthPersistedState = {};
   let stateLoaded = false;
-  let pendingAuthorizationCode:
-    | {
-        promise: Promise<string>;
-      }
-    | undefined;
+  let pendingAuthorizationCode: McpOAuthCallbackSession | undefined;
 
   async function ensureState(): Promise<McpOAuthPersistedState> {
     if (!stateLoaded) {
@@ -112,14 +111,31 @@ export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAu
     await options.saveState(state);
   }
 
+  async function ensureCallbackSession(): Promise<McpOAuthCallbackSession> {
+    if (pendingAuthorizationCode) {
+      return pendingAuthorizationCode;
+    }
+    const session = await createMcpOAuthCallbackSession({
+      serverName: options.serverName,
+      getExpectedState: async () => (await ensureState()).csrfState,
+    });
+    pendingAuthorizationCode = {
+      ...session,
+      promise: session.promise.finally(() => {
+        pendingAuthorizationCode = undefined;
+      }),
+    };
+    return pendingAuthorizationCode;
+  }
+
   return {
-    get redirectUrl(): string {
-      return REDIRECT_URI;
+    get redirectUrl(): string | undefined {
+      return pendingAuthorizationCode?.redirectUrl;
     },
 
     get clientMetadata(): OAuthClientMetadata {
       return {
-        redirect_uris: [REDIRECT_URI],
+        redirect_uris: pendingAuthorizationCode ? [pendingAuthorizationCode.redirectUrl] : [],
         token_endpoint_auth_method: "none",
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
@@ -128,6 +144,7 @@ export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAu
     },
 
     async state(): Promise<string> {
+      await ensureCallbackSession();
       await ensureState();
       const csrfState = randomUUID();
       state.csrfState = csrfState;
@@ -137,6 +154,9 @@ export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAu
 
     async clientInformation() {
       const s = await ensureState();
+      if (!s.clientInfo) {
+        await ensureCallbackSession();
+      }
       return s.clientInfo;
     },
 
@@ -156,14 +176,7 @@ export function createMcpOAuthProvider(options: McpOAuthProviderOptions): McpOAu
     },
 
     async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
-      pendingAuthorizationCode ??= {
-        promise: waitForOAuthCallback({
-          serverName: options.serverName,
-          getExpectedState: async () => (await ensureState()).csrfState,
-        }).finally(() => {
-          pendingAuthorizationCode = undefined;
-        }),
-      };
+      await ensureCallbackSession();
       const opened = await openUrl(authorizationUrl.toString());
       if (opened) {
         logDebug(`bundle-mcp: "${options.serverName}": opened browser for OAuth authorization`);
@@ -224,11 +237,26 @@ export function waitForOAuthCallback(params: {
   timeoutMs?: number;
   getExpectedState?: () => string | undefined | Promise<string | undefined>;
 }): Promise<string> {
+  return createMcpOAuthCallbackSession(params).then((session) => session.promise);
+}
+
+export function createMcpOAuthCallbackSession(params: {
+  serverName: string;
+  timeoutMs?: number;
+  getExpectedState?: () => string | undefined | Promise<string | undefined>;
+}): Promise<McpOAuthCallbackSession> {
   const timeoutMs = params.timeoutMs ?? 120_000;
 
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<McpOAuthCallbackSession>((resolveSession, rejectSession) => {
     let timeout: NodeJS.Timeout | null = null;
     let server: Server | null = null;
+    let sessionResolved = false;
+    let resolveCode: ((code: string) => void) | undefined;
+    let rejectCode: ((error: Error) => void) | undefined;
+    const promise = new Promise<string>((resolve, reject) => {
+      resolveCode = resolve;
+      rejectCode = reject;
+    });
 
     function finish(result: string | Error) {
       if (timeout) {
@@ -240,14 +268,14 @@ export function waitForOAuthCallback(params: {
         server = null;
       }
       if (result instanceof Error) {
-        reject(result);
+        rejectCode?.(result);
       } else {
-        resolve(result);
+        resolveCode?.(result);
       }
     }
 
     server = createServer((req, res) => {
-      const requestUrl = new URL(req.url ?? "/", `http://127.0.0.1:${CALLBACK_PORT}`);
+      const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
       if (requestUrl.pathname !== CALLBACK_PATH) {
         res.statusCode = 404;
         res.setHeader("Content-Type", "text/plain");
@@ -277,7 +305,18 @@ export function waitForOAuthCallback(params: {
 
       Promise.resolve(params.getExpectedState?.())
         .then((expectedState) => {
-          if (expectedState && returnedState !== expectedState) {
+          if (!expectedState) {
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "text/plain");
+            res.end("Missing expected OAuth state");
+            finish(
+              new Error(
+                `MCP OAuth callback for "${params.serverName}" missing expected state validation context`,
+              ),
+            );
+            return;
+          }
+          if (returnedState !== expectedState) {
             res.statusCode = 400;
             res.setHeader("Content-Type", "text/plain");
             res.end("OAuth state mismatch");
@@ -308,15 +347,35 @@ export function waitForOAuthCallback(params: {
     });
 
     server.on("error", (err) => {
-      finish(
-        new Error(`MCP OAuth callback server error for "${params.serverName}": ${err.message}`),
+      const error = new Error(
+        `MCP OAuth callback server error for "${params.serverName}": ${err.message}`,
       );
+      if (!sessionResolved) {
+        rejectSession(error);
+        return;
+      }
+      finish(error);
     });
 
-    server.listen(CALLBACK_PORT, "127.0.0.1", () => {
+    server.listen(0, "127.0.0.1", () => {
+      const address = server?.address();
+      if (!address || typeof address === "string") {
+        rejectSession(
+          new Error(
+            `MCP OAuth callback server did not expose a TCP port for "${params.serverName}"`,
+          ),
+        );
+        return;
+      }
+      const redirectUrl = `http://127.0.0.1:${address.port}${CALLBACK_PATH}`;
+      sessionResolved = true;
       logDebug(
-        `bundle-mcp: "${params.serverName}": OAuth callback server listening on ${REDIRECT_URI}`,
+        `bundle-mcp: "${params.serverName}": OAuth callback server listening on ${redirectUrl}`,
       );
+      resolveSession({
+        redirectUrl,
+        promise,
+      });
     });
 
     timeout = setTimeout(() => {

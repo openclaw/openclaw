@@ -13,6 +13,7 @@ const serverState = vi.hoisted(() => ({
   errorHandler: undefined as ((error: Error) => void) | undefined,
   listenHost: undefined as string | undefined,
   listenPort: undefined as number | undefined,
+  boundPort: 43123,
   closed: false,
 }));
 
@@ -54,6 +55,13 @@ vi.mock("node:http", () => ({
         serverState.listenHost = host;
         callback?.();
       },
+      address() {
+        return {
+          address: "127.0.0.1",
+          family: "IPv4",
+          port: serverState.listenPort === 0 ? serverState.boundPort : serverState.listenPort,
+        };
+      },
     };
   }),
 }));
@@ -84,6 +92,7 @@ describe("mcp-oauth-provider", () => {
     serverState.errorHandler = undefined;
     serverState.listenHost = undefined;
     serverState.listenPort = undefined;
+    serverState.boundPort = 43123;
     serverState.closed = false;
   });
 
@@ -128,28 +137,50 @@ describe("mcp-oauth-provider", () => {
     expect(persistedState?.csrfState).toBe(csrfState);
   });
 
+  it("prepares a callback redirect URL before first-time client registration metadata is read", async () => {
+    const { createMcpOAuthProvider } = await import("./mcp-oauth-provider.js");
+
+    const provider = createMcpOAuthProvider({
+      serverName: "remote",
+      loadState: () => undefined,
+      saveState: () => undefined,
+    });
+
+    expect(provider.redirectUrl).toBeUndefined();
+    await provider.clientInformation();
+
+    expect(provider.redirectUrl).toBe(`http://127.0.0.1:${serverState.boundPort}/mcp/callback`);
+    expect(provider.clientMetadata.redirect_uris).toEqual([
+      `http://127.0.0.1:${serverState.boundPort}/mcp/callback`,
+    ]);
+  });
+
   it("does not start the callback listener until authorization begins", async () => {
     const { createMcpOAuthProvider } = await import("./mcp-oauth-provider.js");
 
     const provider = createMcpOAuthProvider({
       serverName: "remote",
-      loadState: () => ({ csrfState: "expected-state" }),
+      loadState: () => undefined,
       saveState: () => undefined,
     });
 
     expect(serverState.listenPort).toBeUndefined();
+    expect(provider.redirectUrl).toBeUndefined();
 
-    await provider.redirectToAuthorization(new URL("https://example.com/oauth/start"));
+    await provider.state?.();
 
     expect(serverState.listenHost).toBe("127.0.0.1");
-    expect(serverState.listenPort).toBe(8093);
+    expect(serverState.listenPort).toBe(0);
+    expect(provider.redirectUrl).toBe(`http://127.0.0.1:${serverState.boundPort}/mcp/callback`);
+
+    await provider.redirectToAuthorization(new URL("https://example.com/oauth/start"));
     expect(openUrlMock).toHaveBeenCalledWith("https://example.com/oauth/start");
   });
 
   it("rejects callback requests with the wrong csrf state", async () => {
-    const { waitForOAuthCallback } = await import("./mcp-oauth-provider.js");
+    const { createMcpOAuthCallbackSession } = await import("./mcp-oauth-provider.js");
 
-    const callbackPromise = waitForOAuthCallback({
+    const callbackSession = await createMcpOAuthCallbackSession({
       serverName: "remote",
       timeoutMs: 5_000,
       getExpectedState: () => "expected-state",
@@ -159,17 +190,38 @@ describe("mcp-oauth-provider", () => {
     await serverState.handler?.({ url: "/mcp/callback?code=test-code&state=wrong-state" }, res);
 
     expect(serverState.listenHost).toBe("127.0.0.1");
-    expect(serverState.listenPort).toBe(8093);
+    expect(serverState.listenPort).toBe(0);
+    expect(callbackSession.redirectUrl).toBe(
+      `http://127.0.0.1:${serverState.boundPort}/mcp/callback`,
+    );
     expect(res.statusCode).toBe(400);
     expect(res.body).toContain("state mismatch");
-    await expect(callbackPromise).rejects.toThrow(/state validation/i);
+    await expect(callbackSession.promise).rejects.toThrow(/state validation/i);
+    expect(serverState.closed).toBe(true);
+  });
+
+  it("rejects callback requests when expected csrf state is unavailable", async () => {
+    const { createMcpOAuthCallbackSession } = await import("./mcp-oauth-provider.js");
+
+    const callbackSession = await createMcpOAuthCallbackSession({
+      serverName: "remote",
+      timeoutMs: 5_000,
+      getExpectedState: () => undefined,
+    });
+
+    const res = createResponse();
+    await serverState.handler?.({ url: "/mcp/callback?code=test-code&state=unexpected" }, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toContain("Missing expected OAuth state");
+    await expect(callbackSession.promise).rejects.toThrow(/missing expected state/i);
     expect(serverState.closed).toBe(true);
   });
 
   it("accepts callback requests with the expected csrf state", async () => {
-    const { waitForOAuthCallback } = await import("./mcp-oauth-provider.js");
+    const { createMcpOAuthCallbackSession } = await import("./mcp-oauth-provider.js");
 
-    const callbackPromise = waitForOAuthCallback({
+    const callbackSession = await createMcpOAuthCallbackSession({
       serverName: "remote",
       timeoutMs: 5_000,
       getExpectedState: () => "expected-state",
@@ -179,7 +231,10 @@ describe("mcp-oauth-provider", () => {
     await serverState.handler?.({ url: "/mcp/callback?code=test-code&state=expected-state" }, res);
 
     expect(res.statusCode).toBe(200);
-    await expect(callbackPromise).resolves.toBe("test-code");
+    expect(callbackSession.redirectUrl).toBe(
+      `http://127.0.0.1:${serverState.boundPort}/mcp/callback`,
+    );
+    await expect(callbackSession.promise).resolves.toBe("test-code");
     expect(serverState.closed).toBe(true);
   });
 });

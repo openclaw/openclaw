@@ -171,6 +171,30 @@ describe("createSessionMcpRuntime OAuth", () => {
     await runtime.dispose();
   });
 
+  it("does not wait for an authorization code when the initial OAuth connection succeeds", async () => {
+    const transport = new FakeStreamableHTTPClientTransport();
+    resolveMcpTransportMock.mockReturnValue({
+      transport,
+      description: "https://mcp.example.com/http",
+      transportType: "streamable-http",
+      connectionTimeoutMs: 5_000,
+      auth: "oauth",
+    });
+    connectMock.mockResolvedValueOnce(undefined);
+
+    const runtime = createSessionMcpRuntime({
+      sessionId: "oauth-session-reuse",
+      workspaceDir: "/tmp/openclaw-oauth-runtime",
+    });
+
+    const catalog = await runtime.getCatalog();
+
+    expect(waitForAuthorizationCodeMock).not.toHaveBeenCalled();
+    expect(catalog.tools).toHaveLength(1);
+
+    await runtime.dispose();
+  });
+
   it("closes the client before retrying an OAuth SSE connection", async () => {
     const transport = new FakeSSEClientTransport();
     resolveMcpTransportMock.mockReturnValue({
