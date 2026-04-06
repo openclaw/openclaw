@@ -811,7 +811,15 @@ The runtime entrypoint now also emits a lightweight feedback layer for the next 
   - `last_primary_issue`
   - `last_success_action`
 
-This feedback is observational only. It does not add retries or a new loop. The manager entry can read `feedback_memory` and prefer the full evaluator when the previous decision quality was `poor`.
+This feedback is observational only. It does not add retries or a new loop. The manager entry can read `feedback_memory` and apply lightweight gating rules at the next turn:
+
+- `poor`
+  - reroute to the full evaluator
+- `good + same primary issue`
+  - keep the shortcut path
+  - add `feedback_gate_mode = annotate_only`
+- `degraded + same action repeated`
+  - reroute to the full evaluator to avoid repeating the same shortcut path
 
 Current convergence states are:
 

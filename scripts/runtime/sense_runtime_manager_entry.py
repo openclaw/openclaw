@@ -131,16 +131,38 @@ def main() -> int:
     suggested_next_step = triage.get('suggested_next_step')
     summary_confidence = triage.get('summary_confidence')
     feedback_gate_applied = False
+    feedback_gate_mode = 'none'
     feedback_gate_reason = None
+    if decision == 'use_handoff' and isinstance(feedback, dict):
+        last_decision_quality = str(feedback.get('last_decision_quality') or '').lower()
+        last_primary_issue = feedback.get('last_primary_issue')
+        last_success_action = feedback.get('last_success_action')
+        current_last_main_action = handoff.get('last_main_action') if isinstance(handoff, dict) else None
 
-    if (
-        decision == 'use_handoff'
-        and isinstance(feedback, dict)
-        and str(feedback.get('last_decision_quality') or '').lower() == 'poor'
-    ):
-        decision = 'rerun_full_evaluator'
-        feedback_gate_applied = True
-        feedback_gate_reason = 'last decision quality was poor, so full evaluator was preferred over shortcut reuse'
+        if last_decision_quality == 'poor':
+            decision = 'rerun_full_evaluator'
+            feedback_gate_applied = True
+            feedback_gate_mode = 'reroute_to_full_evaluator'
+            feedback_gate_reason = 'last decision quality was poor, so full evaluator was preferred over shortcut reuse'
+        elif (
+            last_decision_quality == 'degraded'
+            and isinstance(current_last_main_action, str)
+            and current_last_main_action.strip()
+            and current_last_main_action == last_success_action
+        ):
+            decision = 'rerun_full_evaluator'
+            feedback_gate_applied = True
+            feedback_gate_mode = 'reroute_to_full_evaluator'
+            feedback_gate_reason = 'degraded outcome repeated with the same action; bypassing shortcut'
+        elif (
+            last_decision_quality == 'good'
+            and isinstance(primary_remaining_issue, str)
+            and primary_remaining_issue.strip()
+            and primary_remaining_issue == last_primary_issue
+        ):
+            feedback_gate_applied = False
+            feedback_gate_mode = 'annotate_only'
+            feedback_gate_reason = 'same primary issue repeated after a previously good resolution path'
 
     if decision == 'use_handoff':
         seed_result = run_handoff_seed(script_dir, handoff)
@@ -165,6 +187,7 @@ def main() -> int:
             'primary_remaining_issue': primary_remaining_issue,
             'summary_confidence': summary_confidence,
             'feedback_gate_applied': feedback_gate_applied,
+            'feedback_gate_mode': feedback_gate_mode,
             'feedback_gate_reason': feedback_gate_reason,
             'entry_result': entry_result,
         }
@@ -188,6 +211,7 @@ def main() -> int:
             'primary_remaining_issue': primary_remaining_issue,
             'summary_confidence': summary_confidence,
             'feedback_gate_applied': feedback_gate_applied,
+            'feedback_gate_mode': feedback_gate_mode,
             'feedback_gate_reason': feedback_gate_reason,
             'entry_result': entry_result,
         }
@@ -201,6 +225,7 @@ def main() -> int:
         'primary_remaining_issue': primary_remaining_issue,
         'summary_confidence': summary_confidence,
         'feedback_gate_applied': feedback_gate_applied,
+        'feedback_gate_mode': feedback_gate_mode,
         'feedback_gate_reason': feedback_gate_reason,
         'entry_result': evaluator_result,
     }
