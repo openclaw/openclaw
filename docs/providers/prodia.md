@@ -54,11 +54,12 @@ openclaw config set agents.defaults.videoGenerationModel.primary "prodia/veo-fas
 | `veo-fast` (default) | `inference.veo.fast.txt2vid.v1`         | Text-to-video  |
 | `veo-fast`           | `inference.veo.fast.img2vid.v1`         | Image-to-video |
 | `wan2.2-lightning`   | `inference.wan2-2.lightning.txt2vid.v0` | Text-to-video  |
+| `wan2.2-lightning`   | `inference.wan2-2.lightning.img2vid.v0` | Image-to-video |
 | `seedance-lite`      | `inference.seedance.lite.img2vid.v1`    | Image-to-video |
 | `seedance-pro`       | `inference.seedance.pro.img2vid.v1`     | Image-to-video |
 
 - `veo-fast` supports both text-to-video and image-to-video.
-- `wan2.2-lightning` supports text-to-video with optional `resolution` (`480P`, `720P`, `1080P`).
+- `wan2.2-lightning` supports text-to-video and image-to-video with optional `resolution` (`480P`, `720P`, `1080P`).
 - `seedance-lite` and `seedance-pro` support image-to-video only.
 - Video-to-video is not supported by any Prodia model.
 

@@ -23,6 +23,7 @@ const TEXT_TO_VIDEO_TYPES: Record<string, string> = {
 
 const IMAGE_TO_VIDEO_TYPES: Record<string, string> = {
   "veo-fast": "inference.veo.fast.img2vid.v1",
+  "wan2.2-lightning": "inference.wan2-2.lightning.img2vid.v0",
   "seedance-lite": "inference.seedance.lite.img2vid.v1",
   "seedance-pro": "inference.seedance.pro.img2vid.v1",
 };
