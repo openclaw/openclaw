@@ -39,7 +39,7 @@ Prioritize signals that reveal meaningful shifts in:
 - AI governance and regulation
 - Data platform readiness
 
-Prefer primary sources: AI lab announcements, research papers, arXiv, GitHub trending, enterprise deployment stories.
+Prefer primary sources: AI lab announcements, research papers, arXiv, GitHub trending, enterprise deployment stories, 
 
 ---
 
