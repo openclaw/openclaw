@@ -2,44 +2,49 @@
  * Bridge OpenClaw's AgentTool format to the Copilot SDK's Tool format.
  *
  * OpenClaw AgentTool:
- *   { name, description, parameters (TSchema), label, execute(id, params, signal) → {content, details} }
+ *   { name, description, parameters, label, execute(id, params, signal) → {content, details} }
  *
  * Copilot SDK Tool:
- *   { name, description, parameters (JSON Schema), handler(args, invocation) → string | ToolResultObject }
- *
- * This module converts between the two so OpenClaw-specific tools (messaging,
- * media, cron, sessions, etc.) can be passed to the Copilot SDK session.
+ *   { name, description, parameters, handler(args, invocation) → ToolResultObject }
  */
-import type { Tool, ToolInvocation } from "@github/copilot-sdk";
+import type { Tool, ToolInvocation, ToolResultObject } from "@github/copilot-sdk";
 import type { AnyAgentTool } from "../pi-tools.types.js";
 
 /**
  * Convert an OpenClaw AgentTool into a Copilot SDK Tool definition.
  *
- * The SDK handler calls the AgentTool's execute() and converts the
- * AgentToolResult (content array) into the text string the SDK expects.
+ * Returns a structured ToolResultObject so errors are properly reported.
  */
 export function bridgeTool(agentTool: AnyAgentTool): Tool {
   return {
     name: agentTool.name,
     description: agentTool.description,
-    // The SDK accepts raw JSON Schema objects for parameters.
     parameters: agentTool.parameters as Record<string, unknown> | undefined,
-    handler: async (args: unknown, invocation: ToolInvocation) => {
+    handler: async (args: unknown, invocation: ToolInvocation): Promise<ToolResultObject> => {
       const preparedArgs = agentTool.prepareArguments ? agentTool.prepareArguments(args) : args;
 
-      const result = await agentTool.execute(
-        invocation.toolCallId,
-        preparedArgs,
-        undefined, // AbortSignal — not available from SDK invocation
-      );
+      try {
+        const result = await agentTool.execute(
+          invocation.toolCallId,
+          preparedArgs,
+          undefined, // AbortSignal — not available from SDK invocation
+        );
 
-      // Convert AgentToolResult.content[] → text string for the SDK.
-      const textParts = result.content
-        .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text);
+        const textParts = result.content
+          .filter((c): c is { type: "text"; text: string } => c.type === "text")
+          .map((c) => c.text);
 
-      return textParts.join("\n") || "OK";
+        return {
+          textResultForLlm: textParts.join("\n") || "OK",
+          resultType: "success",
+        };
+      } catch (err) {
+        return {
+          textResultForLlm: "",
+          resultType: "failure",
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
     },
   };
 }

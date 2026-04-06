@@ -43,7 +43,7 @@ describe("bridgeTool", () => {
     });
   });
 
-  it("handler calls execute and returns text", async () => {
+  it("handler calls execute and returns ToolResultObject", async () => {
     const agentTool = fakeAgentTool({
       execute: async () => ({
         content: [
@@ -59,7 +59,22 @@ describe("bridgeTool", () => {
       { sessionId: "s1", toolCallId: "tc1", toolName: "test_tool", arguments: {} },
     );
 
-    expect(result).toBe("Hello \nworld");
+    expect(result).toEqual({ textResultForLlm: "Hello \nworld", resultType: "success" });
+  });
+
+  it("returns failure ToolResultObject on execute error", async () => {
+    const agentTool = fakeAgentTool({
+      execute: async () => {
+        throw new Error("tool broke");
+      },
+    });
+    const sdkTool = bridgeTool(agentTool as never);
+    const result = await sdkTool.handler(
+      {},
+      { sessionId: "s1", toolCallId: "tc1", toolName: "test_tool", arguments: {} },
+    );
+
+    expect(result).toEqual({ textResultForLlm: "", resultType: "failure", error: "tool broke" });
   });
 
   it("returns OK when execute returns no text", async () => {
@@ -75,7 +90,7 @@ describe("bridgeTool", () => {
       { sessionId: "s1", toolCallId: "tc1", toolName: "test_tool", arguments: {} },
     );
 
-    expect(result).toBe("OK");
+    expect(result).toEqual({ textResultForLlm: "OK", resultType: "success" });
   });
 });
 

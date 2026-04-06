@@ -43,6 +43,14 @@ export type RunAccumulator = {
   hasContent: boolean;
   /** True until the first assistant.message_delta fires (per turn). */
   awaitingFirstDelta: boolean;
+  /** Whether the run was aborted by the caller. */
+  aborted: boolean;
+  /** Whether the run timed out. */
+  timedOut: boolean;
+  /** Stop reason from the last assistant turn. */
+  stopReason?: string;
+  /** Tool result text collected from tool.execution_complete events. */
+  lastToolResultText?: string;
   /** Error, if any. */
   error?: { kind: string; message: string };
 };
@@ -64,6 +72,8 @@ export function createRunAccumulator(opts: {
     toolCallCount: 0,
     hasContent: false,
     awaitingFirstDelta: true,
+    aborted: false,
+    timedOut: false,
   };
 }
 
@@ -177,10 +187,15 @@ export async function handleSessionEvent(
     case "tool.execution_complete": {
       acc.toolCallCount += 1;
       const toolName = typeof data.toolName === "string" ? data.toolName : undefined;
+      const toolOutput = typeof data.result === "string" ? data.result : undefined;
+      acc.lastToolResultText = toolOutput;
       callbacks.onAgentEvent?.({
         stream: "tool",
         data: { phase: "complete", name: toolName },
       });
+      if (toolOutput) {
+        await callbacks.onToolResult?.({ text: toolOutput });
+      }
       break;
     }
 
@@ -254,13 +269,22 @@ export function buildRunResult(acc: RunAccumulator, durationMs: number): Embedde
     lastCallUsage: acc.usage,
   };
 
+  // Map error kind: distinguish timeout vs session error vs generic.
+  const resolvedErrorKind = acc.error
+    ? acc.timedOut
+      ? ("retry_limit" as const)
+      : ("context_overflow" as const)
+    : undefined;
+
   const meta: EmbeddedPiRunMeta = {
     durationMs,
     agentMeta,
-    ...(acc.error
+    aborted: acc.aborted || undefined,
+    stopReason: acc.stopReason,
+    ...(acc.error && resolvedErrorKind
       ? {
           error: {
-            kind: "context_overflow" as const,
+            kind: resolvedErrorKind,
             message: acc.error.message,
           },
         }

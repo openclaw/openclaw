@@ -7,10 +7,10 @@
  * Internally delegates to the Copilot SDK (CopilotClient → CopilotSession)
  * instead of running pi-agent-core / pi-coding-agent in-process.
  */
-import type { CopilotSession, SessionEvent } from "@github/copilot-sdk";
+import type { CopilotSession, SessionConfig, SessionEvent } from "@github/copilot-sdk";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
-import { resolveSessionLane, resolveGlobalLane } from "../pi-embedded-runner/lanes.js";
+import { resolveGlobalLane, resolveSessionLane } from "../pi-embedded-runner/lanes.js";
 import type { RunEmbeddedPiAgentParams } from "../pi-embedded-runner/run/params.js";
 import type { EmbeddedPiRunResult } from "../pi-embedded-runner/types.js";
 import { createCopilotSession, isSessionExpired, resumeCopilotSession } from "./client.js";
@@ -22,18 +22,46 @@ import {
 } from "./events.js";
 import { bridgeTools } from "./tool-bridge.js";
 
-// ── Session cache ──────────────────────────────────────────────────────────
+// ── Session cache (LRU-bounded) ────────────────────────────────────────────
 
-/** Map of sessionKey → Copilot sessionId for resumption across runs. */
-const _sessionCache = new Map<string, string>();
+const MAX_CACHED_SESSIONS = 64;
+
+type CachedSession = { copilotSessionId: string; lastUsed: number };
+
+const _sessionCache = new Map<string, CachedSession>();
+
+function getCachedSessionId(key: string): string | undefined {
+  const entry = _sessionCache.get(key);
+  if (entry) {
+    entry.lastUsed = Date.now();
+    return entry.copilotSessionId;
+  }
+  return undefined;
+}
+
+function setCachedSessionId(key: string, sessionId: string): void {
+  _sessionCache.set(key, { copilotSessionId: sessionId, lastUsed: Date.now() });
+  if (_sessionCache.size > MAX_CACHED_SESSIONS) {
+    let oldestKey: string | undefined;
+    let oldestTime = Infinity;
+    for (const [k, v] of _sessionCache) {
+      if (v.lastUsed < oldestTime) {
+        oldestTime = v.lastUsed;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) {
+      _sessionCache.delete(oldestKey);
+    }
+  }
+}
+
+function removeCachedSession(key: string): void {
+  _sessionCache.delete(key);
+}
 
 // ── Main entry point ───────────────────────────────────────────────────────
 
-/**
- * Run an agent turn using the Copilot SDK.
- *
- * Same signature as `runEmbeddedPiAgent` so it's a drop-in replacement.
- */
 export async function runCopilotAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
@@ -71,6 +99,119 @@ export async function runCopilotAgent(
   });
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+/** Build a reusable session config from run params. */
+function buildSessionConfig(params: {
+  model: string;
+  workspaceDir: string;
+  extraSystemPrompt?: string;
+  tools: SessionConfig["tools"];
+}): Omit<SessionConfig, "onPermissionRequest"> {
+  return {
+    streaming: true,
+    model: params.model,
+    workingDirectory: params.workspaceDir,
+    ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
+    ...(params.extraSystemPrompt
+      ? {
+          systemMessage: {
+            mode: "append" as const,
+            content: params.extraSystemPrompt,
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * Wire event listeners to a CopilotSession and return a promise that
+ * resolves on session.idle or rejects on error/abort.
+ */
+function bindSessionListeners(
+  copilotSession: CopilotSession,
+  acc: ReturnType<typeof createRunAccumulator>,
+  callbacks: RunCallbacks,
+  abortSignal?: AbortSignal,
+): { idlePromise: Promise<void>; cleanup: () => void } {
+  let abortCleanup: (() => void) | undefined;
+
+  const idlePromise = new Promise<void>((resolve, reject) => {
+    const abortHandler = () => {
+      acc.aborted = true;
+      copilotSession.abort().catch(() => {});
+      const err = new Error("Operation aborted");
+      err.name = "AbortError";
+      reject(err);
+    };
+
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        abortHandler();
+        return;
+      }
+      abortSignal.addEventListener("abort", abortHandler, { once: true });
+      abortCleanup = () => abortSignal.removeEventListener("abort", abortHandler);
+    }
+
+    copilotSession.on(async (event: SessionEvent) => {
+      try {
+        await handleSessionEvent(event, acc, callbacks);
+      } catch {
+        // Callback errors should not kill the session listener.
+      }
+
+      if (event.type === "session.idle") {
+        abortCleanup?.();
+        resolve();
+      }
+      if (event.type === "session.error") {
+        abortCleanup?.();
+        const data = event.data as Record<string, unknown>;
+        const message = typeof data?.message === "string" ? data.message : "Copilot session error";
+        reject(new Error(message));
+      }
+    });
+  });
+
+  return {
+    idlePromise,
+    cleanup: () => abortCleanup?.(),
+  };
+}
+
+/** Wait for idle with optional timeout. On timeout, abort gracefully. */
+async function waitWithTimeout(
+  idlePromise: Promise<void>,
+  timeoutMs: number,
+  session: CopilotSession,
+  acc: ReturnType<typeof createRunAccumulator>,
+): Promise<void> {
+  if (timeoutMs <= 0) {
+    await idlePromise;
+    return;
+  }
+
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    acc.timedOut = true;
+    session.abort().catch(() => {});
+  }, timeoutMs);
+
+  try {
+    await idlePromise;
+  } catch (err) {
+    // Timeout-triggered abort is not a fatal error — return partial results.
+    if (timedOut) {
+      return;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ── Inner implementation ───────────────────────────────────────────────────
 
 async function runCopilotAgentInner(
@@ -81,7 +222,6 @@ async function runCopilotAgentInner(
   const provider = "copilot";
   const cacheKey = params.sessionKey ?? params.sessionId;
 
-  // Wire up callbacks from params → RunCallbacks.
   const callbacks: RunCallbacks = {
     onPartialReply: params.onPartialReply,
     onAssistantMessageStart: params.onAssistantMessageStart,
@@ -119,50 +259,42 @@ async function runCopilotAgentInner(
       });
   const sdkTools = bridgeTools(openclawTools);
 
-  // ── Obtain or create a CopilotSession ──
+  const sessionCfg = buildSessionConfig({
+    model,
+    workspaceDir: params.workspaceDir,
+    extraSystemPrompt: params.extraSystemPrompt,
+    tools: sdkTools,
+  });
 
-  let session: CopilotSession;
-  const cachedSessionId = _sessionCache.get(cacheKey);
+  // ── Obtain session (create or resume, with expiry recovery) ──
 
-  try {
-    if (cachedSessionId) {
-      session = await resumeCopilotSession({
-        sessionId: cachedSessionId,
-        model,
-        streaming: true,
-      });
-    } else {
-      session = await createCopilotSession({
-        model,
-        streaming: true,
-        workingDirectory: params.workspaceDir,
-        tools: sdkTools.length > 0 ? sdkTools : undefined,
-        systemMessage: params.extraSystemPrompt
-          ? {
-              mode: "append" as const,
-              content: params.extraSystemPrompt,
-            }
-          : undefined,
-      });
-      _sessionCache.set(cacheKey, session.sessionId);
-    }
-  } catch (err) {
-    if (cachedSessionId && isSessionExpired(err)) {
-      // Session evicted by CLI — create a fresh one.
-      _sessionCache.delete(cacheKey);
-      session = await createCopilotSession({
-        model,
-        streaming: true,
-        workingDirectory: params.workspaceDir,
-        tools: sdkTools.length > 0 ? sdkTools : undefined,
-      });
-      _sessionCache.set(cacheKey, session.sessionId);
-    } else {
+  const obtainSession = async (): Promise<CopilotSession> => {
+    const cachedSessionId = getCachedSessionId(cacheKey);
+    try {
+      if (cachedSessionId) {
+        return await resumeCopilotSession({
+          sessionId: cachedSessionId,
+          model,
+          streaming: true,
+        });
+      }
+      const s = await createCopilotSession(sessionCfg);
+      setCachedSessionId(cacheKey, s.sessionId);
+      return s;
+    } catch (err) {
+      if (cachedSessionId && isSessionExpired(err)) {
+        removeCachedSession(cacheKey);
+        const s = await createCopilotSession(sessionCfg);
+        setCachedSessionId(cacheKey, s.sessionId);
+        return s;
+      }
       throw err;
     }
-  }
+  };
 
-  // ── Set up event accumulator ──
+  let session = await obtainSession();
+
+  // ── Accumulator + listeners ──
 
   const acc = createRunAccumulator({
     sessionId: session.sessionId,
@@ -170,87 +302,35 @@ async function runCopilotAgentInner(
     provider,
   });
 
-  // ── Listen to events ──
+  let { idlePromise, cleanup } = bindSessionListeners(session, acc, callbacks, params.abortSignal);
 
-  const idlePromise = new Promise<void>((resolve, reject) => {
-    const abortHandler = () => {
-      session.abort().catch(() => {});
-      reject(new Error("Operation aborted"));
-    };
+  // ── Send prompt (with mid-send reconnect) ──
 
-    if (params.abortSignal) {
-      if (params.abortSignal.aborted) {
-        abortHandler();
-        return;
-      }
-      params.abortSignal.addEventListener("abort", abortHandler, { once: true });
-    }
+  try {
+    await session.send({ prompt: params.prompt });
+  } catch (err) {
+    if (isSessionExpired(err)) {
+      cleanup();
+      removeCachedSession(cacheKey);
+      session = await createCopilotSession(sessionCfg);
+      setCachedSessionId(cacheKey, session.sessionId);
+      acc.sessionId = session.sessionId;
 
-    session.on(async (event: SessionEvent) => {
-      try {
-        await handleSessionEvent(event, acc, callbacks);
-      } catch {
-        // Callback errors should not kill the session listener.
-      }
+      // Rebind listeners to the fresh session.
+      const fresh = bindSessionListeners(session, acc, callbacks, params.abortSignal);
+      idlePromise = fresh.idlePromise;
+      cleanup = fresh.cleanup;
 
-      if (event.type === "session.idle") {
-        params.abortSignal?.removeEventListener("abort", abortHandler);
-        resolve();
-      }
-      if (event.type === "session.error") {
-        params.abortSignal?.removeEventListener("abort", abortHandler);
-        reject(
-          new Error(
-            typeof (event.data as Record<string, unknown>)?.message === "string"
-              ? ((event.data as Record<string, unknown>).message as string)
-              : "Copilot session error",
-          ),
-        );
-      }
-    });
-  });
-
-  // ── Send prompt ──
-
-  const sendPromise = (async () => {
-    try {
       await session.send({ prompt: params.prompt });
-    } catch (err) {
-      // If the session expired mid-send, try once more with a fresh session.
-      if (isSessionExpired(err)) {
-        _sessionCache.delete(cacheKey);
-        const fresh = await createCopilotSession({
-          model,
-          streaming: true,
-          workingDirectory: params.workspaceDir,
-          tools: sdkTools.length > 0 ? sdkTools : undefined,
-        });
-        _sessionCache.set(cacheKey, fresh.sessionId);
-        acc.sessionId = fresh.sessionId;
-        await fresh.send({ prompt: params.prompt });
-      } else {
-        throw err;
-      }
+    } else {
+      throw err;
     }
-  })();
+  }
 
   // ── Wait for completion ──
 
-  // Apply timeout if configured.
-  const timeout = params.timeoutMs;
-  if (timeout > 0) {
-    const timer = setTimeout(() => {
-      session.abort().catch(() => {});
-    }, timeout);
-
-    try {
-      await Promise.race([idlePromise, sendPromise.then(() => idlePromise)]);
-    } finally {
-      clearTimeout(timer);
-    }
-  } else {
-    await Promise.all([sendPromise, idlePromise]);
-  }
+  await waitWithTimeout(idlePromise, params.timeoutMs, session, acc);
+  cleanup();
 
   return buildRunResult(acc, Date.now() - started);
 }
