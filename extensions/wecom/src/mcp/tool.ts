@@ -58,8 +58,8 @@ const errorResult = (err: unknown) => {
 // list 操作：列出某品类的所有 MCP 工具
 // ============================================================================
 
-const handleList = async (category: string): Promise<unknown> => {
-  const result = (await sendJsonRpc(category, "tools/list")) as
+const handleList = async (accountId: string, category: string): Promise<unknown> => {
+  const result = (await sendJsonRpc(accountId, category, "tools/list")) as
     | { tools?: McpToolInfo[] }
     | undefined;
 
@@ -86,11 +86,12 @@ const handleList = async (category: string): Promise<unknown> => {
 // ============================================================================
 
 const handleCall = async (
+  accountId: string,
   category: string,
   method: string,
   args: Record<string, unknown>,
 ): Promise<unknown> => {
-  const ctx = { category, method, args };
+  const ctx = { accountId, category, method, args };
   const callStart = performance.now();
 
   console.log(`[mcp] handleCall ${category}/${method} 入参: ${JSON.stringify(args)}`);
@@ -111,6 +112,7 @@ const handleCall = async (
 
   // 2. Execute MCP call
   const result = await sendJsonRpc(
+    accountId,
     category,
     "tools/call",
     {
@@ -176,9 +178,12 @@ const parseArgs = (args: string | Record<string, unknown> | undefined): Record<s
 // ============================================================================
 
 /**
- * 创建 wecom_mcp Agent Tool 定义
+ * Create the wecom_mcp Agent Tool definition
+ *
+ * @param accountId - Account ID used to scope the WSClient lookup and MCP cache.
+ *                    Defaults to "default" for single-account setups.
  */
-export function createWeComMcpTool() {
+export function createWeComMcpTool(accountId = "default") {
   return {
     name: "wecom_mcp",
     label: "企业微信 MCP 工具",
@@ -231,7 +236,7 @@ export function createWeComMcpTool() {
         let result: ReturnType<typeof textResult>;
         switch (p.action) {
           case "list":
-            result = textResult(await handleList(p.category));
+            result = textResult(await handleList(accountId, p.category));
             break;
           case "call": {
             if (!p.method) {
@@ -239,7 +244,7 @@ export function createWeComMcpTool() {
               break;
             }
             const args = parseArgs(p.args);
-            result = textResult(await handleCall(p.category, p.method, args));
+            result = textResult(await handleCall(accountId, p.category, p.method, args));
             break;
           }
           default:

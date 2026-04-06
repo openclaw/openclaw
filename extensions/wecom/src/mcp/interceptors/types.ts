@@ -14,6 +14,8 @@ import type { SendJsonRpcOptions } from "../transport.js";
 
 /** Context of an MCP call invocation */
 export interface CallContext {
+  /** Account ID used to scope the WSClient and MCP cache */
+  accountId: string;
   /** MCP category, corresponding to mcpConfig keys, e.g., doc, contact */
   category: string;
   /** MCP method name being called */

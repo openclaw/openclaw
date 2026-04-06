@@ -12,7 +12,6 @@
 
 import { generateReqId } from "@wecom/aibot-node-sdk";
 import { MCP_GET_CONFIG_CMD, MCP_CONFIG_FETCH_TIMEOUT_MS } from "../const.js";
-import { DEFAULT_ACCOUNT_ID } from "../openclaw-compat.js";
 import { getWeComWebSocket } from "../state-manager.js";
 import { withTimeout } from "../timeout.js";
 import { PLUGIN_VERSION } from "../version.js";
@@ -114,17 +113,22 @@ export class McpHttpError extends Error {
  */
 const CACHE_CLEAR_ERROR_CODES = new Set([-32001, -32002, -32003]);
 
-/** MCP config cache: category → response.body (full config) */
+/** MCP config cache: "accountId:category" → response.body (full config) */
 const mcpConfigCache = new Map<string, Record<string, unknown>>();
 
-/** Streamable HTTP session cache: category → session */
+/** Streamable HTTP session cache: "accountId:category" → session */
 const mcpSessionCache = new Map<string, McpSession>();
 
-/** Set of confirmed stateless MCP Server categories (skip subsequent handshakes) */
+/** Set of confirmed stateless MCP Server keys ("accountId:category") */
 const statelessCategories = new Set<string>();
 
-/** In-flight initialize requests (prevents concurrent duplicate initialization), keyed by category */
+/** In-flight initialize requests (prevents concurrent duplicate initialization), keyed by "accountId:category" */
 const inflightInitRequests = new Map<string, Promise<McpSession>>();
+
+/** Build a composite cache key scoped by account and category */
+function cacheKey(accountId: string, category: string): string {
+  return `${accountId}:${category}`;
+}
 
 // ============================================================================
 // MCP Config Fetching & Caching
@@ -133,13 +137,17 @@ const inflightInitRequests = new Map<string, Promise<McpSession>>();
 /**
  * Fetch the complete MCP config for a specified category via WSClient
  *
+ * @param accountId - Account ID used to look up the WSClient
  * @param category - MCP category name, e.g., doc, contact
  * @returns Complete response.body config object (containing at least a url field)
  */
-async function fetchMcpConfig(category: string): Promise<Record<string, unknown>> {
-  const wsClient = getWeComWebSocket(DEFAULT_ACCOUNT_ID);
+async function fetchMcpConfig(
+  accountId: string,
+  category: string,
+): Promise<Record<string, unknown>> {
+  const wsClient = getWeComWebSocket(accountId);
   if (!wsClient) {
-    throw new Error("WSClient 未连接，无法拉取 MCP 配置");
+    throw new Error(`WSClient not connected for account "${accountId}", cannot fetch MCP config`);
   }
 
   const reqId = generateReqId("mcp_config");
@@ -174,19 +182,22 @@ async function fetchMcpConfig(category: string): Promise<Record<string, unknown>
  *
  * Reads from memory cache first; fetches via WSClient and caches on miss.
  *
+ * @param accountId - Account ID
  * @param category - MCP category name
  * @returns MCP Server URL
  */
-async function getMcpUrl(category: string): Promise<string> {
+async function getMcpUrl(accountId: string, category: string): Promise<string> {
+  const key = cacheKey(accountId, category);
+
   // Check memory cache
-  const cached = mcpConfigCache.get(category);
+  const cached = mcpConfigCache.get(key);
   if (cached) return cached.url as string;
 
   // Cache miss, fetch via WSClient
-  const body = await fetchMcpConfig(category);
+  const body = await fetchMcpConfig(accountId, category);
 
   // Write to cache
-  mcpConfigCache.set(category, body);
+  mcpConfigCache.set(key, body);
 
   console.log(`${LOG_TAG} getMcpUrl ${category}: ${body.url}`);
 
@@ -288,7 +299,7 @@ async function sendRawJsonRpc(
  * Sends initialize → receives serverInfo → sends initialized notification.
  * If the server does not return Mcp-Session-Id, marks as stateless mode and skips session management for subsequent requests.
  */
-async function initializeSession(url: string, category: string): Promise<McpSession> {
+async function initializeSession(url: string, category: string, key: string): Promise<McpSession> {
   const session: McpSession = { sessionId: null, initialized: false, stateless: false };
 
   console.log(`${LOG_TAG} 开始 initialize 握手 (category="${category}")`);
@@ -317,8 +328,8 @@ async function initializeSession(url: string, category: string): Promise<McpSess
   if (!session.sessionId) {
     session.stateless = true;
     session.initialized = true;
-    statelessCategories.add(category);
-    mcpSessionCache.set(category, session);
+    statelessCategories.add(key);
+    mcpSessionCache.set(key, session);
     console.log(`${LOG_TAG} 无状态 Server 确认 (category="${category}")`);
     return session;
   }
@@ -337,7 +348,7 @@ async function initializeSession(url: string, category: string): Promise<McpSess
   }
 
   session.initialized = true;
-  mcpSessionCache.set(category, session);
+  mcpSessionCache.set(key, session);
   console.log(
     `${LOG_TAG} 有状态 Session 建立成功 (category="${category}", sessionId="${session.sessionId}")`,
   );
@@ -351,25 +362,25 @@ async function initializeSession(url: string, category: string): Promise<McpSess
  * - Existing usable stateful session: return cached directly
  * - Other cases: perform initialize handshake, concurrent requests are merged
  */
-async function getOrCreateSession(url: string, category: string): Promise<McpSession> {
+async function getOrCreateSession(url: string, category: string, key: string): Promise<McpSession> {
   // Confirmed stateless Server, return empty session directly to skip handshake
-  if (statelessCategories.has(category)) {
-    const cached = mcpSessionCache.get(category);
+  if (statelessCategories.has(key)) {
+    const cached = mcpSessionCache.get(key);
     if (cached) return cached;
     // First time found cleared (theoretically shouldn't reach here), re-run handshake detection
   }
 
-  const cached = mcpSessionCache.get(category);
+  const cached = mcpSessionCache.get(key);
   if (cached?.initialized) return cached;
 
   // Prevent concurrent duplicate initialization
-  const inflight = inflightInitRequests.get(category);
+  const inflight = inflightInitRequests.get(key);
   if (inflight) return inflight;
 
-  const promise = initializeSession(url, category).finally(() => {
-    inflightInitRequests.delete(category);
+  const promise = initializeSession(url, category, key).finally(() => {
+    inflightInitRequests.delete(key);
   });
-  inflightInitRequests.set(category, promise);
+  inflightInitRequests.set(key, promise);
   return promise;
 }
 
@@ -436,19 +447,21 @@ async function parseSseResponse(response: Response): Promise<unknown> {
 // ============================================================================
 
 /**
- * Clear all MCP caches for a specified category (config, session, stateless flag)
+ * Clear all MCP caches for a specified account + category (config, session, stateless flag)
  *
  * Called when MCP Server returns specific error codes to ensure the next request
  * re-fetches config and rebuilds the session.
  *
+ * @param accountId - Account ID
  * @param category - MCP category name
  */
-export function clearCategoryCache(category: string): void {
-  console.log(`${LOG_TAG} 清理缓存 (category="${category}")`);
-  mcpConfigCache.delete(category);
-  mcpSessionCache.delete(category);
-  statelessCategories.delete(category);
-  inflightInitRequests.delete(category);
+export function clearCategoryCache(accountId: string, category: string): void {
+  const key = cacheKey(accountId, category);
+  console.log(`${LOG_TAG} clearing cache (account="${accountId}", category="${category}")`);
+  mcpConfigCache.delete(key);
+  mcpSessionCache.delete(key);
+  statelessCategories.delete(key);
+  inflightInitRequests.delete(key);
 }
 
 /** Tool description returned by tools/list */
@@ -471,6 +484,7 @@ export interface SendJsonRpcOptions {
  * - Stateless Server: skip session management, send request directly
  * - Stateful Server: perform initialize handshake on first call, auto-rebuild and retry on session invalidation (404)
  *
+ * @param accountId - Account ID used to look up the WSClient and scope caches
  * @param category - MCP category name
  * @param method - JSON-RPC method name
  * @param params - JSON-RPC parameters
@@ -478,12 +492,14 @@ export interface SendJsonRpcOptions {
  * @returns JSON-RPC result
  */
 export async function sendJsonRpc(
+  accountId: string,
   category: string,
   method: string,
   params?: Record<string, unknown>,
   options?: SendJsonRpcOptions,
 ): Promise<unknown> {
-  const url = await getMcpUrl(category);
+  const key = cacheKey(accountId, category);
+  const url = await getMcpUrl(accountId, category);
   const timeoutMs = options?.timeoutMs;
 
   const body: JsonRpcRequest = {
@@ -493,11 +509,10 @@ export async function sendJsonRpc(
     ...(params !== undefined ? { params } : {}),
   };
 
-  let session = await getOrCreateSession(url, category);
+  let session = await getOrCreateSession(url, category, key);
 
   try {
     const { rpcResult, newSessionId } = await sendRawJsonRpc(url, session, body, timeoutMs);
-    // 用最新的 sessionId 更新 session
     if (newSessionId) {
       session.sessionId = newSessionId;
     }
@@ -505,20 +520,17 @@ export async function sendJsonRpc(
   } catch (err) {
     // Specific JSON-RPC error codes trigger cache cleanup (handled uniformly in transport layer; upper layers don't need to care)
     if (err instanceof McpRpcError && CACHE_CLEAR_ERROR_CODES.has(err.code)) {
-      clearCategoryCache(category);
+      clearCategoryCache(accountId, category);
     }
 
-    // 无状态 Server 不存在 session 失效问题，直接抛出错误
     if (session.stateless) throw err;
 
-    // 有状态 Server：session 失效时服务端返回 404，需要重新初始化并重试一次
-    // 使用 McpHttpError.statusCode 精确匹配，避免字符串匹配 "404" 导致误判
+    // Stateful Server: session invalidation returns 404; re-initialize and retry once
     if (err instanceof McpHttpError && err.statusCode === 404) {
-      console.log(`${LOG_TAG} Session 失效 (category="${category}")，开始重建...`);
-      mcpSessionCache.delete(category);
+      console.log(`${LOG_TAG} Session invalidated (category="${category}"), rebuilding...`);
+      mcpSessionCache.delete(key);
 
-      // 使用 rebuildSession 合并并发的 session 重建请求，避免竞态条件
-      session = await rebuildSession(url, category);
+      session = await rebuildSession(url, category, key);
       const { rpcResult, newSessionId } = await sendRawJsonRpc(url, session, body, timeoutMs);
       if (newSessionId) {
         session.sessionId = newSessionId;
@@ -526,9 +538,8 @@ export async function sendJsonRpc(
       return rpcResult;
     }
 
-    // 其他错误记录日志后抛出
     console.error(
-      `${LOG_TAG} RPC 请求失败 (category="${category}", method="${method}"): ${err instanceof Error ? err.message : String(err)}`,
+      `${LOG_TAG} RPC request failed (category="${category}", method="${method}"): ${err instanceof Error ? err.message : String(err)}`,
     );
     throw err;
   }
@@ -540,13 +551,13 @@ export async function sendJsonRpc(
  * Similar to getOrCreateSession, uses inflightInitRequests to prevent
  * multiple concurrent requests from simultaneously encountering 404 and duplicating initialize handshakes.
  */
-async function rebuildSession(url: string, category: string): Promise<McpSession> {
-  const inflight = inflightInitRequests.get(category);
+async function rebuildSession(url: string, category: string, key: string): Promise<McpSession> {
+  const inflight = inflightInitRequests.get(key);
   if (inflight) return inflight;
 
-  const promise = initializeSession(url, category).finally(() => {
-    inflightInitRequests.delete(category);
+  const promise = initializeSession(url, category, key).finally(() => {
+    inflightInitRequests.delete(key);
   });
-  inflightInitRequests.set(category, promise);
+  inflightInitRequests.set(key, promise);
   return promise;
 }

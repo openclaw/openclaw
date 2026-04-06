@@ -37,7 +37,7 @@ export const bizErrorInterceptor: CallInterceptor = {
 
   /** Check return result for business error codes; clear cache if necessary */
   afterCall(ctx: CallContext, result: unknown): unknown {
-    checkBizErrorAndClearCache(result, ctx.category);
+    checkBizErrorAndClearCache(result, ctx.accountId, ctx.category);
     // Don't modify result; pass through to the next interceptor
     return result;
   },
@@ -50,7 +50,7 @@ export const bizErrorInterceptor: CallInterceptor = {
 /**
  * Check if tools/call return result contains business error codes that require cache cleanup
  */
-function checkBizErrorAndClearCache(result: unknown, category: string): void {
+function checkBizErrorAndClearCache(result: unknown, accountId: string, category: string): void {
   if (!result || typeof result !== "object") return;
 
   const { content } = result as { content?: Array<{ type: string; text?: string }> };
@@ -62,7 +62,7 @@ function checkBizErrorAndClearCache(result: unknown, category: string): void {
       const parsed = JSON.parse(item.text) as Record<string, unknown>;
       if (typeof parsed.errcode === "number" && BIZ_CACHE_CLEAR_ERROR_CODES.has(parsed.errcode)) {
         console.log(`[mcp] 检测到业务错误码 ${parsed.errcode} (category="${category}")，清理缓存`);
-        clearCategoryCache(category);
+        clearCategoryCache(accountId, category);
         return;
       }
     } catch {

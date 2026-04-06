@@ -58,10 +58,18 @@ const messageStates = new Map<string, MessageStateEntry>();
 /** Periodic cleanup timer */
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
+/** Reference count of active accounts relying on the cleanup timer */
+let cleanupRefCount = 0;
+
 /**
  * Start periodic message state cleanup (automatic TTL cleanup + capacity limit)
+ *
+ * Uses reference counting so that the timer is only created on the first call
+ * and only destroyed when the last account calls stopMessageStateCleanup().
  */
 export function startMessageStateCleanup(): void {
+  cleanupRefCount++;
+
   if (cleanupTimer) return;
 
   cleanupTimer = setInterval(() => {
@@ -76,9 +84,14 @@ export function startMessageStateCleanup(): void {
 
 /**
  * Stop periodic message state cleanup
+ *
+ * Decrements the reference count. The timer is only destroyed when the count
+ * reaches zero (i.e., no active accounts remain).
  */
 export function stopMessageStateCleanup(): void {
-  if (cleanupTimer) {
+  if (cleanupRefCount > 0) cleanupRefCount--;
+
+  if (cleanupRefCount === 0 && cleanupTimer) {
     clearInterval(cleanupTimer);
     cleanupTimer = null;
   }
@@ -251,7 +264,8 @@ export async function cleanupAccount(accountId: string): Promise<void> {
  * Clean up all resources (for process exit)
  */
 export async function cleanupAll(): Promise<void> {
-  // Stop periodic cleanup
+  // Force-stop periodic cleanup regardless of ref count
+  cleanupRefCount = 0;
   stopMessageStateCleanup();
 
   // Clean up all WSClient instances
