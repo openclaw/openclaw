@@ -481,10 +481,22 @@ export async function runReplyAgent(params: {
       }
     }
 
-    const payloadArray = runResult.payloads ?? [];
+    const rawPayloadArray = runResult.payloads ?? [];
+
+    // When the run ends with an error, intermediate reasoning text (e.g.
+    // "数据开跑。", "Now let me execute Tasks 1-3") is mixed into payloads
+    // alongside the error payload.  Keep only error payloads to prevent
+    // leaking internal reasoning to the channel.
+    const runHasError =
+      rawPayloadArray.some((p) => p.isError) || runResult.meta?.error != null;
+    const payloadArray = runHasError
+      ? rawPayloadArray.filter((p) => p.isError)
+      : rawPayloadArray;
 
     if (blockReplyPipeline) {
-      await blockReplyPipeline.flush({ force: true });
+      if (!runHasError) {
+        await blockReplyPipeline.flush({ force: true });
+      }
       blockReplyPipeline.stop();
     }
     if (pendingToolTasks.size > 0) {
