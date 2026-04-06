@@ -138,7 +138,6 @@ Docs: https://docs.openclaw.ai
 - Memory: keep `memory-core` builtin embedding registration on the already-registered path so selecting `memory-core` no longer recurses through plugin discovery and crashes during startup. (#61402) Thanks @ngutman.
 - Agents/tool results: keep large `read` outputs visible longer, preserve the latest `read` output when older tool output can absorb the overflow budget, and fall back to Pi's normal overflow compaction/retry path before replacing a fresh `read` with a compacted stub. Thanks @vincentkoc.
 - Memory/QMD: prefer modern `qmd collection add --glob`, accept newer single-line JSON hit metadata while keeping legacy line fields, refresh QMD docs/doctor install guidance and model-override guidance, and keep older QMD releases working. Thanks @vincentkoc.
-- Agents/exec: stop streaming `tool_execution_update` events after an exec session backgrounds, preventing delayed background output from hitting a stale listener and crashing the gateway while keeping the output available through `process poll/log`. (#61627) Thanks @openperf.
 - MS Teams: download inline DM images via Graph API and preserve channel reply threading in proactive fallback. (#52212, #55198) Thanks @Ted-developer and @hyojin.
 - MS Teams: replace the deprecated Teams SDK HttpPlugin stub with `httpServerAdapter` so recurring gateway deprecation warnings stop firing and the Express 5 compatibility workaround stays on the supported SDK path. (#60939) Thanks @coolramukaka-sys.
 - Matrix/exec approvals: anchor seeded approval reactions to the primary Matrix prompt event, resolve them from event metadata instead of prompt text, and clean up chunked approval prompts correctly. (#60931) Thanks @gumadeiras.
@@ -243,6 +242,7 @@ Docs: https://docs.openclaw.ai
 - Matrix: keep direct transport requests on the pinned dispatcher by routing them through undici runtime fetch, so Matrix clients resume syncing on newer runtimes without dropping the validated address binding. (#61595) Thanks @gumadeiras.
 - Plugins/facades: resolve globally installed bundled-plugin runtime facades from registry roots so bundled channels like LINE still boot when the winning plugin install lives under the global extensions directory with an encoded scoped folder name. (#61297) Thanks @openperf.
 - Matrix: avoid failing startup when token auth already knows the user ID but still needs optional device metadata, retry transient auth bootstrap requests, and backfill missing device IDs after startup while keeping unknown-device storage reuse conservative until metadata is repaired. (#61383) Thanks @gumadeiras.
+- Agents/exec: stop streaming `tool_execution_update` events after an exec session backgrounds, preventing delayed background output from hitting a stale listener and crashing the gateway while keeping the output available through `process poll/log`. (#61627) Thanks @openperf.
 
 ## 2026.4.2
 
