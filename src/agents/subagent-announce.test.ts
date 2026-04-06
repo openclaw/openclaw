@@ -395,6 +395,18 @@ describe("subagent announce seam flow", () => {
         }),
       }),
     );
+    const announceCall = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        channel?: string;
+        to?: string;
+        threadId?: string;
+        message?: string;
+      };
+    };
+    expect(announceCall.params?.channel).toBeUndefined();
+    expect(announceCall.params?.to).toBeUndefined();
+    expect(announceCall.params?.threadId).toBeUndefined();
+    expect(announceCall.params?.message).toContain("[Internal task completion event]");
   });
 
   it("keeps nested subagent completion announces channel-less in session-only mode", async () => {
