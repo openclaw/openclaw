@@ -62,6 +62,13 @@ type SelectedConnectAuth = {
   signatureToken?: string;
   resolvedDeviceToken?: string;
   storedToken?: string;
+  storedScopes?: string[];
+  usingStoredDeviceToken?: boolean;
+};
+
+type StoredDeviceAuth = {
+  token?: string;
+  scopes?: string[];
 };
 
 class GatewayClientRequestError extends Error {
@@ -417,6 +424,8 @@ export class GatewayClient {
       signatureToken,
       resolvedDeviceToken,
       storedToken,
+      storedScopes,
+      usingStoredDeviceToken,
     } = this.selectConnectAuth(role);
     if (this.pendingDeviceTokenRetry && authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
@@ -431,7 +440,10 @@ export class GatewayClient {
           }
         : undefined;
     const signedAtMs = Date.now();
-    const scopes = this.opts.scopes ?? ["operator.admin"];
+    const scopes = this.resolveConnectScopes({
+      usingStoredDeviceToken,
+      storedScopes,
+    });
     const platform = this.opts.platform ?? process.platform;
     const device = (() => {
       if (!this.opts.deviceIdentity) {
@@ -531,6 +543,39 @@ export class GatewayClient {
       });
   }
 
+  private resolveConnectScopes(params: {
+    usingStoredDeviceToken?: boolean;
+    storedScopes?: string[];
+  }): string[] {
+    // Reuse cached scopes only when the client is reusing the cached device token.
+    // Explicit device tokens should keep the caller-requested scope set.
+    if (
+      params.usingStoredDeviceToken &&
+      Array.isArray(params.storedScopes) &&
+      params.storedScopes.length > 0
+    ) {
+      return params.storedScopes;
+    }
+    return this.opts.scopes ?? ["operator.admin"];
+  }
+
+  private loadStoredDeviceAuth(role: string): StoredDeviceAuth | null {
+    if (!this.opts.deviceIdentity) {
+      return null;
+    }
+    const storedAuth = loadDeviceAuthToken({
+      deviceId: this.opts.deviceIdentity.deviceId,
+      role,
+    });
+    if (!storedAuth) {
+      return null;
+    }
+    return {
+      token: storedAuth.token,
+      scopes: storedAuth.scopes,
+    };
+  }
+
   private shouldPauseReconnectAfterAuthFailure(detailCode: string | null): boolean {
     if (!detailCode) {
       return false;
@@ -617,9 +662,9 @@ export class GatewayClient {
     const explicitBootstrapToken = this.opts.bootstrapToken?.trim() || undefined;
     const explicitDeviceToken = this.opts.deviceToken?.trim() || undefined;
     const authPassword = this.opts.password?.trim() || undefined;
-    const storedToken = this.opts.deviceIdentity
-      ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
-      : null;
+    const storedAuth = this.loadStoredDeviceAuth(role);
+    const storedToken = storedAuth?.token ?? null;
+    const storedScopes = storedAuth?.scopes;
     const shouldUseDeviceRetryToken =
       this.pendingDeviceTokenRetry &&
       !explicitDeviceToken &&
@@ -632,6 +677,11 @@ export class GatewayClient {
       (!(explicitGatewayToken || authPassword) && (!explicitBootstrapToken || Boolean(storedToken)))
         ? (storedToken ?? undefined)
         : undefined);
+    const reusingStoredDeviceToken =
+      Boolean(resolvedDeviceToken) &&
+      !explicitDeviceToken &&
+      Boolean(storedToken) &&
+      resolvedDeviceToken === storedToken;
     // Legacy compatibility: keep `auth.token` populated for device-token auth when
     // no explicit shared token is present.
     const authToken = explicitGatewayToken ?? resolvedDeviceToken;
@@ -645,6 +695,8 @@ export class GatewayClient {
       signatureToken: authToken ?? authBootstrapToken ?? undefined,
       resolvedDeviceToken,
       storedToken: storedToken ?? undefined,
+      storedScopes,
+      usingStoredDeviceToken: reusingStoredDeviceToken,
     };
   }
 
@@ -727,12 +779,18 @@ export class GatewayClient {
 
   private armConnectChallengeTimeout() {
     const connectChallengeTimeoutMs = resolveGatewayClientConnectChallengeTimeoutMs(this.opts);
+    const armedAt = Date.now();
     this.clearConnectChallengeTimeout();
     this.connectTimer = setTimeout(() => {
       if (this.connectSent || this.ws?.readyState !== WebSocket.OPEN) {
         return;
       }
-      this.opts.onConnectError?.(new Error("gateway connect challenge timeout"));
+      const elapsedMs = Date.now() - armedAt;
+      this.opts.onConnectError?.(
+        new Error(
+          `gateway connect challenge timeout (waited ${elapsedMs}ms, limit ${connectChallengeTimeoutMs}ms)`,
+        ),
+      );
       this.ws?.close(1008, "connect challenge timeout");
     }, connectChallengeTimeoutMs);
   }

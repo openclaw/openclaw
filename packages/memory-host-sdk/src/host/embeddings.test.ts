@@ -1,7 +1,39 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as authModule from "../../../../src/agents/model-auth.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
+import * as nodeLlamaModule from "./node-llama.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
+
+const { createOllamaEmbeddingProviderMock } = vi.hoisted(() => ({
+  createOllamaEmbeddingProviderMock: vi.fn(async () => {
+    throw new Error("Unexpected ollama provider in embeddings.test.ts");
+  }),
+}));
+
+vi.mock("../../../../src/infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: async (params: {
+    url: string;
+    init?: RequestInit;
+    fetchImpl?: typeof fetch;
+  }) => {
+    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+    if (!fetchImpl) {
+      throw new Error("fetch is not available");
+    }
+    const response = await fetchImpl(params.url, params.init);
+    return {
+      response,
+      finalUrl: params.url,
+      release: async () => {},
+    };
+  },
+}));
+
+vi.mock("./embeddings-ollama.js", () => ({
+  createOllamaEmbeddingProvider: createOllamaEmbeddingProviderMock,
+}));
 
 const createFetchMock = () =>
   vi.fn(async (_input?: unknown, _init?: unknown) => ({
@@ -17,27 +49,24 @@ const createGeminiFetchMock = () =>
     json: async () => ({ embedding: { values: [1, 2, 3] } }),
   }));
 
+function installFetchMock(fetchMock: typeof globalThis.fetch) {
+  vi.stubGlobal("fetch", fetchMock);
+}
+
 function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {
   const [url, init] = fetchMock.mock.calls[0] ?? [];
   return { url, init: init as RequestInit | undefined };
 }
 
-type EmbeddingsModule = typeof import("./embeddings.js");
-type AuthModule = typeof import("../../../../src/agents/model-auth.js");
-type ResolvedProviderAuth = Awaited<ReturnType<AuthModule["resolveApiKeyForProvider"]>>;
+type ResolvedProviderAuth = Awaited<ReturnType<typeof authModule.resolveApiKeyForProvider>>;
 
-let authModule: AuthModule;
-let nodeLlamaModule: typeof import("./node-llama.js");
-let createEmbeddingProvider: EmbeddingsModule["createEmbeddingProvider"];
-let DEFAULT_LOCAL_MODEL: EmbeddingsModule["DEFAULT_LOCAL_MODEL"];
-
-beforeEach(async () => {
-  vi.resetModules();
-  authModule = await import("../../../../src/agents/model-auth.js");
-  nodeLlamaModule = await import("./node-llama.js");
+beforeEach(() => {
   vi.spyOn(authModule, "resolveApiKeyForProvider");
   vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp");
-  ({ createEmbeddingProvider, DEFAULT_LOCAL_MODEL } = await import("./embeddings.js"));
+});
+
+beforeEach(() => {
+  vi.useRealTimers();
 });
 
 afterEach(() => {
@@ -45,7 +74,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function requireProvider(result: Awaited<ReturnType<EmbeddingsModule["createEmbeddingProvider"]>>) {
+function requireProvider(result: Awaited<ReturnType<typeof createEmbeddingProvider>>) {
   if (!result.provider) {
     throw new Error("Expected embedding provider");
   }
@@ -78,7 +107,7 @@ function createLocalProvider(options?: { fallback?: "none" | "openai" }) {
 }
 
 function expectAutoSelectedProvider(
-  result: Awaited<ReturnType<EmbeddingsModule["createEmbeddingProvider"]>>,
+  result: Awaited<ReturnType<typeof createEmbeddingProvider>>,
   expectedId: "openai" | "gemini" | "mistral",
 ) {
   expect(result.requestedProvider).toBe("auto");
@@ -99,7 +128,7 @@ function createAutoProvider(model = "") {
 describe("embedding provider remote overrides", () => {
   it("uses remote baseUrl/apiKey and merges headers", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
@@ -149,7 +178,7 @@ describe("embedding provider remote overrides", () => {
 
   it("falls back to resolved api key when remote apiKey is blank", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
@@ -185,7 +214,7 @@ describe("embedding provider remote overrides", () => {
 
   it("builds Gemini embeddings requests with api key header", async () => {
     const fetchMock = createGeminiFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
@@ -237,7 +266,7 @@ describe("embedding provider remote overrides", () => {
 
   it("uses GEMINI_API_KEY env indirection for Gemini remote apiKey", async () => {
     const fetchMock = createGeminiFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     vi.stubEnv("GEMINI_API_KEY", "env-gemini-key");
 
@@ -261,7 +290,7 @@ describe("embedding provider remote overrides", () => {
 
   it("builds Mistral embeddings requests with bearer auth", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
@@ -304,7 +333,7 @@ describe("embedding provider auto selection", () => {
       status: 200,
       json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
     }));
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
@@ -392,7 +421,7 @@ describe("embedding provider auto selection", () => {
       vi.resetAllMocks();
       vi.unstubAllGlobals();
       const fetchMock = testCase.fetchMockFactory();
-      vi.stubGlobal("fetch", fetchMock);
+      installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
       mockPublicPinnedHostname();
       vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) =>
         testCase.resolveApiKey(provider),
@@ -412,7 +441,7 @@ describe("embedding provider local fallback", () => {
     mockMissingLocalEmbeddingDependency();
 
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
 
     mockResolvedProviderKey("provider-key");
 
@@ -547,16 +576,6 @@ describe("local embedding normalization", () => {
 });
 
 describe("local embedding ensureContext concurrency", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.doUnmock("./node-llama.js");
-  });
-
-  afterEach(() => {
-    vi.resetModules();
-    vi.doUnmock("./node-llama.js");
-  });
-
   async function setupLocalProviderWithMockedInit(params?: {
     initializationDelayMs?: number;
     failFirstGetLlama?: boolean;
@@ -566,7 +585,6 @@ describe("local embedding ensureContext concurrency", () => {
     const createContextSpy = vi.fn();
     let shouldFail = params?.failFirstGetLlama ?? false;
 
-    const nodeLlamaModule = await import("./node-llama.js");
     vi.spyOn(nodeLlamaModule, "importNodeLlamaCpp").mockResolvedValue({
       getLlama: async (...args: unknown[]) => {
         getLlamaSpy(...args);
@@ -600,7 +618,6 @@ describe("local embedding ensureContext concurrency", () => {
       LlamaLogLevel: { error: 0 },
     } as never);
 
-    const { createEmbeddingProvider } = await import("./embeddings.js");
     const result = await createEmbeddingProvider({
       config: {} as never,
       provider: "local",
@@ -682,11 +699,6 @@ describe("local embedding ensureContext concurrency", () => {
 });
 
 describe("FTS-only fallback when no provider available", () => {
-  beforeEach(async () => {
-    authModule = await import("../../../../src/agents/model-auth.js");
-    ({ createEmbeddingProvider, DEFAULT_LOCAL_MODEL } = await import("./embeddings.js"));
-  });
-
   it("returns null provider when all requested auth paths fail", async () => {
     vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
       new Error("No API key found for provider"),

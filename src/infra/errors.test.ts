@@ -68,6 +68,25 @@ describe("error helpers", () => {
     expect(formatErrorMessage(value)).toBe(expected);
   });
 
+  it("traverses .cause chain to include nested error messages", () => {
+    const rootCause = new Error("ECONNRESET");
+    const httpError = Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+      cause: rootCause,
+    });
+    const formatted = formatErrorMessage(httpError);
+    expect(formatted).toContain("Network request for 'sendMessage' failed!");
+    expect(formatted).toContain("ECONNRESET");
+  });
+
+  it("handles circular .cause references without infinite loop", () => {
+    const a: Error & { cause?: unknown } = new Error("error A");
+    const b: Error & { cause?: unknown } = new Error("error B");
+    a.cause = b;
+    b.cause = a;
+    const formatted = formatErrorMessage(a);
+    expect(formatted).toBe("error A | error B");
+  });
+
   it("redacts sensitive tokens from formatted error messages", () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const formatted = formatErrorMessage(new Error(`Authorization: Bearer ${token}`));

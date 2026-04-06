@@ -2,6 +2,7 @@ import OpenClawKit
 import Foundation
 import Testing
 import UIKit
+import UserNotifications
 @testable import OpenClaw
 
 private func makeAgentDeepLinkURL(
@@ -68,6 +69,36 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
     }
 }
 
+private final class MockBootstrapNotificationCenter: NotificationCentering, @unchecked Sendable {
+    var status: NotificationAuthorizationStatus = .notDetermined
+    var requestAuthorizationResult = false
+    var requestAuthorizationCalls = 0
+
+    func authorizationStatus() async -> NotificationAuthorizationStatus {
+        self.status
+    }
+
+    func requestAuthorization(options _: UNAuthorizationOptions) async throws -> Bool {
+        self.requestAuthorizationCalls += 1
+        if self.requestAuthorizationResult {
+            self.status = .authorized
+        } else {
+            self.status = .denied
+        }
+        return self.requestAuthorizationResult
+    }
+
+    func add(_: UNNotificationRequest) async throws {}
+
+    func removePendingNotificationRequests(withIdentifiers _: [String]) async {}
+
+    func removeDeliveredNotifications(withIdentifiers _: [String]) async {}
+
+    func deliveredNotifications() async -> [NotificationSnapshot] {
+        []
+    }
+}
+
 @Suite(.serialized) struct NodeAppModelInvokeTests {
     @Test @MainActor func decodeParamsFailsWithoutJSON() {
         #expect(throws: Error.self) {
@@ -94,6 +125,146 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         appModel.setSelectedAgentId("agent-123")
         #expect(appModel.chatSessionKey == SessionKey.makeAgentSessionKey(agentId: "agent-123", baseKey: "main"))
         #expect(appModel.mainSessionKey == "agent:agent-123:main")
+    }
+
+    @Test @MainActor func execApprovalPromptPresentationTracksLatestNotificationTap() throws {
+        let appModel = NodeAppModel()
+        appModel._test_presentExecApprovalPrompt(
+            try #require(
+                NodeAppModel._test_makeExecApprovalPrompt(
+                    id: "approval-1",
+                    commandText: "echo first",
+                    allowedDecisions: ["allow-once", "deny"],
+                    host: "gateway",
+                    nodeId: nil,
+                    agentId: "main",
+                    expiresAtMs: 1)))
+
+        let firstPrompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        #expect(firstPrompt.id == "approval-1")
+        #expect(firstPrompt.commandText == "echo first")
+        #expect(firstPrompt.allowsAllowAlways == false)
+
+        appModel._test_presentExecApprovalPrompt(
+            try #require(
+                NodeAppModel._test_makeExecApprovalPrompt(
+                    id: "approval-2",
+                    commandText: "echo second",
+                    allowedDecisions: ["allow-once", "allow-always", "deny"],
+                    host: "gateway",
+                    nodeId: "node-2",
+                    agentId: nil,
+                    expiresAtMs: 2)))
+
+        let secondPrompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        #expect(secondPrompt.id == "approval-2")
+        #expect(secondPrompt.commandText == "echo second")
+        #expect(secondPrompt.allowsAllowAlways)
+
+        appModel._test_dismissPendingExecApprovalPrompt()
+        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+    }
+
+    @Test @MainActor func dismissPendingExecApprovalPromptByIdLeavesDifferentPromptVisible() throws {
+        let appModel = NodeAppModel()
+        appModel._test_presentExecApprovalPrompt(
+            try #require(
+                NodeAppModel._test_makeExecApprovalPrompt(
+                    id: "approval-active",
+                    commandText: "echo keep",
+                    allowedDecisions: ["allow-once", "deny"],
+                    host: "gateway",
+                    nodeId: nil,
+                    agentId: nil,
+                    expiresAtMs: 1)))
+
+        appModel.dismissPendingExecApprovalPrompt(approvalId: "approval-stale")
+
+        let prompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        #expect(prompt.id == "approval-active")
+    }
+
+    @Test func approvalNotificationErrorClassificationPrefersStructuredDetails() {
+        let staleError = GatewayResponseError(
+            method: "exec.approval.get",
+            code: "INVALID_REQUEST",
+            message: "gateway error",
+            details: ["reason": AnyCodable("APPROVAL_NOT_FOUND")])
+        let unavailableError = GatewayResponseError(
+            method: "exec.approval.resolve",
+            code: "INVALID_REQUEST",
+            message: "gateway error",
+            details: ["reason": AnyCodable("APPROVAL_ALLOW_ALWAYS_UNAVAILABLE")])
+
+        #expect(NodeAppModel._test_isApprovalNotificationStaleError(staleError))
+        #expect(NodeAppModel._test_isApprovalNotificationUnavailableError(unavailableError))
+    }
+
+    @Test func operatorLoopWaitsForBootstrapHandoffBeforeUsingStoredToken() {
+        #expect(
+            !NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: true)
+        )
+        #expect(
+            !NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                hasStoredOperatorToken: false)
+        )
+        #expect(
+            NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                hasStoredOperatorToken: true)
+        )
+        #expect(
+            NodeAppModel._test_shouldStartOperatorGatewayLoop(
+                token: "shared-token",
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: false)
+        )
+    }
+
+    @Test @MainActor func successfulBootstrapOnboardingRequestsNotificationAuthorization() async {
+        let center = MockBootstrapNotificationCenter()
+        let appModel = NodeAppModel(notificationCenter: center)
+
+        await appModel._test_handleSuccessfulBootstrapGatewayOnboarding()
+
+        #expect(center.requestAuthorizationCalls == 1)
+    }
+
+    @Test func clearingBootstrapTokenStripsReconnectConfigEvenWithoutPersistence() {
+        let config = GatewayConnectConfig(
+            url: URL(string: "wss://gateway.example")!,
+            stableID: "test-gateway",
+            tls: nil,
+            token: nil,
+            bootstrapToken: "spent-bootstrap-token",
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: nil))
+
+        let cleared = NodeAppModel._test_clearingBootstrapToken(in: config)
+        #expect(cleared?.bootstrapToken == nil)
+        #expect(cleared?.url == config.url)
+        #expect(cleared?.stableID == config.stableID)
+        #expect(cleared?.token == config.token)
+        #expect(cleared?.password == config.password)
+        #expect(cleared?.nodeOptions.role == config.nodeOptions.role)
     }
 
     @Test @MainActor func handleInvokeRejectsBackgroundCommands() async {

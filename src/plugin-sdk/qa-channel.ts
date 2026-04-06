@@ -1,0 +1,40 @@
+// Narrow plugin-sdk surface for the bundled qa-channel plugin.
+// Keep this list additive and scoped to QA transport contracts.
+
+export {
+  buildQaTarget,
+  buildQaTarget as formatQaTarget,
+  createQaBusThread,
+  deleteQaBusMessage,
+  editQaBusMessage,
+  getQaBusState,
+  injectQaBusInboundMessage,
+  normalizeQaTarget,
+  parseQaTarget,
+  pollQaBus,
+  qaChannelPlugin,
+  reactToQaBusMessage,
+  readQaBusMessage,
+  searchQaBusMessages,
+  sendQaBusMessage,
+  setQaChannelRuntime,
+} from "../../extensions/qa-channel/api.js";
+export type {
+  QaBusConversation,
+  QaBusConversationKind,
+  QaBusCreateThreadInput,
+  QaBusDeleteMessageInput,
+  QaBusEditMessageInput,
+  QaBusEvent,
+  QaBusInboundMessageInput,
+  QaBusMessage,
+  QaBusOutboundMessageInput,
+  QaBusPollInput,
+  QaBusPollResult,
+  QaBusReactToMessageInput,
+  QaBusReadMessageInput,
+  QaBusSearchMessagesInput,
+  QaBusStateSnapshot,
+  QaBusThread,
+  QaBusWaitForInput,
+} from "../../extensions/qa-channel/api.js";

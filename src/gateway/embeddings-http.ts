@@ -7,8 +7,10 @@ import { logWarn } from "../logger.js";
 import {
   getMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
-  type MemoryEmbeddingProvider,
-  type MemoryEmbeddingProviderAdapter,
+} from "../plugins/memory-embedding-provider-runtime.js";
+import type {
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderAdapter,
 } from "../plugins/memory-embedding-providers.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -19,6 +21,7 @@ import {
   getHeader,
   resolveAgentIdForRequest,
   resolveAgentIdFromModel,
+  resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 
 type OpenAiEmbeddingsHttpOptions = {
@@ -86,9 +89,9 @@ function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function resolveAutoExplicitProviders(): Set<string> {
+function resolveAutoExplicitProviders(cfg: ReturnType<typeof loadConfig>): Set<string> {
   return new Set(
-    listMemoryEmbeddingProviders()
+    listMemoryEmbeddingProviders(cfg)
       .filter((adapter) => adapter.allowExplicitWhenConfiguredAuto)
       .map((adapter) => adapter.id),
   );
@@ -130,7 +133,7 @@ async function createConfiguredEmbeddingProvider(params: {
   };
 
   if (params.provider === "auto") {
-    const adapters = listMemoryEmbeddingProviders()
+    const adapters = listMemoryEmbeddingProviders(params.cfg)
       .filter((adapter) => typeof adapter.autoSelectPriority === "number")
       .toSorted(
         (a, b) =>
@@ -153,7 +156,7 @@ async function createConfiguredEmbeddingProvider(params: {
     throw new Error("No embeddings provider available.");
   }
 
-  const adapter = getMemoryEmbeddingProvider(params.provider);
+  const adapter = getMemoryEmbeddingProvider(params.provider, params.cfg);
   if (!adapter) {
     throw new Error(`Unknown memory embedding provider: ${params.provider}`);
   }
@@ -167,6 +170,7 @@ async function createConfiguredEmbeddingProvider(params: {
 function resolveEmbeddingsTarget(params: {
   requestModel: string;
   configuredProvider: EmbeddingProviderRequest;
+  cfg: ReturnType<typeof loadConfig>;
 }): { provider: EmbeddingProviderRequest; model: string } | { errorMessage: string } {
   const raw = params.requestModel.trim();
   const slash = raw.indexOf("/");
@@ -181,7 +185,7 @@ function resolveEmbeddingsTarget(params: {
   }
 
   if (params.configuredProvider === "auto") {
-    const safeAutoExplicitProviders = resolveAutoExplicitProviders();
+    const safeAutoExplicitProviders = resolveAutoExplicitProviders(params.cfg);
     if (provider === "auto") {
       return { provider: "auto", model };
     }
@@ -210,6 +214,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/embeddings",
     requiredOperatorMethod: "chat.send",
+    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
@@ -266,7 +271,11 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   const memorySearch = resolveMemorySearchConfig(cfg, agentId);
   const configuredProvider = memorySearch?.provider ?? "openai";
   const overrideModel = getHeader(req, "x-openclaw-model")?.trim() || memorySearch?.model || "";
-  const target = resolveEmbeddingsTarget({ requestModel: overrideModel, configuredProvider });
+  const target = resolveEmbeddingsTarget({
+    requestModel: overrideModel,
+    configuredProvider,
+    cfg,
+  });
   if ("errorMessage" in target) {
     sendJson(res, 400, {
       error: {

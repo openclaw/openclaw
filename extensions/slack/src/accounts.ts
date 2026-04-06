@@ -46,7 +46,9 @@ export function resolveSlackAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedSlackAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+  );
   const baseEnabled = params.cfg.channels?.slack?.enabled !== false;
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
@@ -108,7 +110,7 @@ export function listEnabledSlackAccounts(cfg: OpenClawConfig): ResolvedSlackAcco
 export function resolveSlackReplyToMode(
   account: ResolvedSlackAccount,
   chatType?: string | null,
-): "off" | "first" | "all" {
+): "off" | "first" | "all" | "batched" {
   const normalized = normalizeChatType(chatType ?? undefined);
   if (normalized && account.replyToModeByChatType?.[normalized] !== undefined) {
     return account.replyToModeByChatType[normalized] ?? "off";

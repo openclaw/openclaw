@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { messageCommand } from "./message.js";
 
 let testConfig: Record<string, unknown> = {};
 
@@ -22,8 +23,8 @@ const runMessageAction = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => testConfig,
@@ -57,9 +58,6 @@ describe("messageCommand agent routing", () => {
       error: vi.fn(),
       exit: vi.fn(),
     };
-
-    const { messageCommand } = await import("./message.js");
-
     await messageCommand(
       {
         action: "send",

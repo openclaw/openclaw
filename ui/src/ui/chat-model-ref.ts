@@ -25,6 +25,11 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
   if (!trimmedModel) {
     return "";
   }
+  // Preserve already-qualified model refs (provider/model) as-is.
+  // This avoids prepending an unrelated/default provider.
+  if (trimmedModel.includes("/")) {
+    return trimmedModel;
+  }
   const trimmedProvider = provider?.trim();
   return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
 }

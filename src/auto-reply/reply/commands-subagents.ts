@@ -12,7 +12,6 @@ import { handleSubagentsSpawnAction } from "./commands-subagents/action-spawn.js
 import { handleSubagentsUnfocusAction } from "./commands-subagents/action-unfocus.js";
 import {
   type SubagentsCommandContext,
-  extractMessageText,
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
@@ -20,7 +19,7 @@ import {
 } from "./commands-subagents/shared.js";
 import type { CommandHandler } from "./commands-types.js";
 
-export { extractMessageText };
+export { extractMessageText } from "./commands-subagents-text.js";
 
 export const handleSubagentsCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {

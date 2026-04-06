@@ -1,7 +1,5 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import { loadConfig } from "../config/config.js";
-import { callGateway } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -11,16 +9,15 @@ import {
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
-import { isEmbeddedPiRunActive, waitForEmbeddedPiRunEnd } from "./pi-embedded.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
-  resolveAnnounceOrigin,
   runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceTimeoutMs,
   resolveSubagentCompletionOrigin,
 } from "./subagent-announce-delivery.js";
+import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
   buildChildCompletionFindings,
@@ -32,9 +29,15 @@ import {
   type SubagentRunOutcome,
   waitForSubagentRunOutcome,
 } from "./subagent-announce-output.js";
+import {
+  callGateway,
+  isEmbeddedPiRunActive,
+  loadConfig,
+  waitForEmbeddedPiRunEnd,
+} from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
-import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
+import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 type SubagentAnnounceDeps = {
   callGateway: typeof callGateway;
@@ -49,11 +52,11 @@ const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
 let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
 
 let subagentRegistryRuntimePromise: Promise<
-  typeof import("./subagent-registry-runtime.js")
+  typeof import("./subagent-announce.registry.runtime.js")
 > | null = null;
 
 function loadSubagentRegistryRuntime() {
-  subagentRegistryRuntimePromise ??= import("./subagent-registry-runtime.js");
+  subagentRegistryRuntimePromise ??= import("./subagent-announce.registry.runtime.js");
   return subagentRegistryRuntimePromise;
 }
 

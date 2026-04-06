@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import { CommandLane } from "./lanes.js";
 
@@ -56,8 +56,7 @@ function enqueueBlockedMainTask<T = void>(
 }
 
 describe("command queue", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({
       clearCommandLane,
       CommandLaneClearedError,
@@ -72,6 +71,10 @@ describe("command queue", () => {
       setCommandLaneConcurrency,
       waitForActiveTasks,
     } = await import("./command-queue.js"));
+  });
+
+  beforeEach(() => {
+    vi.useRealTimers();
     resetCommandQueueStateForTest();
     // Queue state is global across module instances, so reset main lane
     // concurrency explicitly to avoid cross-file leakage.
@@ -81,6 +84,10 @@ describe("command queue", () => {
     diagnosticMocks.diag.debug.mockClear();
     diagnosticMocks.diag.warn.mockClear();
     diagnosticMocks.diag.error.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("resetAllLanes is safe when no lanes have been created", () => {
@@ -250,9 +257,7 @@ describe("command queue", () => {
       await blocker;
     });
 
-    await vi.waitFor(() => {
-      expect(getActiveTaskCount()).toBeGreaterThanOrEqual(1);
-    });
+    expect(getActiveTaskCount()).toBeGreaterThanOrEqual(1);
 
     // Enqueue another task — it should be stuck behind the blocker
     let task2Ran = false;
@@ -260,9 +265,7 @@ describe("command queue", () => {
       task2Ran = true;
     });
 
-    await vi.waitFor(() => {
-      expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
-    });
+    expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
     expect(task2Ran).toBe(false);
 
     // Simulate SIGUSR1: reset all lanes. Queued work (task2) should be
@@ -291,10 +294,13 @@ describe("command queue", () => {
     const blocker2 = new Promise<void>((r) => {
       resolve2 = r;
     });
+    const firstStarted = createDeferred();
 
     const first = enqueueCommandInLane(lane, async () => {
+      firstStarted.resolve();
       await blocker1;
     });
+    await firstStarted.promise;
     const drainPromise = waitForActiveTasks(2000);
 
     // Starts after waitForActiveTasks snapshot and should not block drain completion.
@@ -396,10 +402,8 @@ describe("command queue", () => {
         return "done";
       });
 
-      await vi.waitFor(() => {
-        expect(commandQueueB.getQueueSize(lane)).toBe(1);
-        expect(commandQueueB.getActiveTaskCount()).toBe(1);
-      });
+      expect(commandQueueB.getQueueSize(lane)).toBe(1);
+      expect(commandQueueB.getActiveTaskCount()).toBe(1);
 
       release();
       await expect(task).resolves.toBe("done");

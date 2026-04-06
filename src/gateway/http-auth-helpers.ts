@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import { sendGatewayAuthFailure } from "./http-common.js";
-import { getBearerToken, getHeader } from "./http-utils.js";
+import { getBearerToken, getHeader, resolveHttpBrowserOriginPolicy } from "./http-utils.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 
 const OPERATOR_SCOPES_HEADER = "x-openclaw-scopes";
@@ -16,6 +16,7 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
   rateLimiter?: AuthRateLimiter;
 }): Promise<boolean> {
   const token = getBearerToken(params.req);
+  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req);
   const authResult = await authorizeHttpGatewayConnect({
     auth: params.auth,
     connectAuth: token ? { token, password: token } : null,
@@ -23,6 +24,7 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
     rateLimiter: params.rateLimiter,
+    browserOriginPolicy,
   });
   if (!authResult.ok) {
     sendGatewayAuthFailure(params.res, authResult);

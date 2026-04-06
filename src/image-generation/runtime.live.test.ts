@@ -175,6 +175,18 @@ describeLive("image generation live (provider sweep)", () => {
         size: "1024x1024",
       });
     }
+    if (availableProviders.includes("vydra")) {
+      liveCases.push({
+        id: "vydra:default-generate",
+        providerId: "vydra",
+        modelRef:
+          envModelMap.get("vydra") ??
+          configuredModels.get("vydra") ??
+          DEFAULT_LIVE_IMAGE_MODELS.vydra,
+        prompt:
+          "Create a minimal flat illustration of an orange cat face sticker on a white background.",
+      });
+    }
 
     const selectedCases = liveCases.filter((entry) =>
       caseFilter ? caseFilter.has(entry.id.toLowerCase()) : true,

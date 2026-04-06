@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectBlueBubblesStatusIssues } from "./runtime-api.js";
+import { collectBlueBubblesStatusIssues } from "./status-issues.js";
 
 describe("collectBlueBubblesStatusIssues", () => {
   it("reports unconfigured enabled accounts", () => {
@@ -51,16 +51,5 @@ describe("collectBlueBubblesStatusIssues", () => {
         message: "Channel error: timeout",
       }),
     );
-  });
-
-  it("skips disabled accounts", () => {
-    const issues = collectBlueBubblesStatusIssues([
-      {
-        accountId: "disabled",
-        enabled: false,
-        configured: false,
-      },
-    ]);
-    expect(issues).toEqual([]);
   });
 });

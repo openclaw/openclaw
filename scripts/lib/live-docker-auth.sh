@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 
-OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.claude .codex .minimax)
+OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.minimax)
+OPENCLAW_DOCKER_LIVE_AUTH_FILES_ALL=(
+  .codex/auth.json
+  .codex/config.toml
+  .claude.json
+  .claude/.credentials.json
+  .claude/settings.json
+  .claude/settings.local.json
+)
 
 openclaw_live_trim() {
   local value="${1:-}"
@@ -21,14 +29,25 @@ openclaw_live_should_include_auth_dir_for_provider() {
   local provider
   provider="$(openclaw_live_trim "${1:-}")"
   case "$provider" in
-    anthropic | claude-cli)
-      printf '%s\n' ".claude"
-      ;;
-    codex-cli | openai-codex)
-      printf '%s\n' ".codex"
-      ;;
     minimax | minimax-portal)
       printf '%s\n' ".minimax"
+      ;;
+  esac
+}
+
+openclaw_live_should_include_auth_file_for_provider() {
+  local provider
+  provider="$(openclaw_live_trim "${1:-}")"
+  case "$provider" in
+    openai-codex)
+      printf '%s\n' ".codex/auth.json"
+      printf '%s\n' ".codex/config.toml"
+      ;;
+    anthropic)
+      printf '%s\n' ".claude.json"
+      printf '%s\n' ".claude/.credentials.json"
+      printf '%s\n' ".claude/settings.json"
+      printf '%s\n' ".claude/settings.local.json"
       ;;
   esac
 }
@@ -36,18 +55,13 @@ openclaw_live_should_include_auth_dir_for_provider() {
 openclaw_live_collect_auth_dirs_from_csv() {
   local raw="${1:-}"
   local token normalized
-  local -A seen=()
   [[ -n "$(openclaw_live_trim "$raw")" ]] || return 0
   IFS=',' read -r -a tokens <<<"$raw"
   for token in "${tokens[@]}"; do
     while IFS= read -r normalized; do
-      [[ -n "$normalized" ]] || continue
-      if [[ -z "${seen[$normalized]:-}" ]]; then
-        printf '%s\n' "$normalized"
-        seen[$normalized]=1
-      fi
+      printf '%s\n' "$normalized"
     done < <(openclaw_live_should_include_auth_dir_for_provider "$token")
-  done
+  done | awk 'NF && !seen[$0]++'
 }
 
 openclaw_live_collect_auth_dirs_from_override() {
@@ -76,6 +90,41 @@ openclaw_live_collect_auth_dirs() {
     return 0
   fi
   printf '%s\n' "${OPENCLAW_DOCKER_LIVE_AUTH_ALL[@]}"
+}
+
+openclaw_live_collect_auth_files_from_csv() {
+  local raw="${1:-}"
+  local token normalized
+  [[ -n "$(openclaw_live_trim "$raw")" ]] || return 0
+  IFS=',' read -r -a tokens <<<"$raw"
+  for token in "${tokens[@]}"; do
+    while IFS= read -r normalized; do
+      printf '%s\n' "$normalized"
+    done < <(openclaw_live_should_include_auth_file_for_provider "$token")
+  done | awk 'NF && !seen[$0]++'
+}
+
+openclaw_live_collect_auth_files_from_override() {
+  local raw
+  raw="$(openclaw_live_trim "${OPENCLAW_DOCKER_AUTH_DIRS:-}")"
+  [[ -n "$raw" ]] || return 1
+  case "$raw" in
+    all)
+      printf '%s\n' "${OPENCLAW_DOCKER_LIVE_AUTH_FILES_ALL[@]}"
+      return 0
+      ;;
+    none)
+      return 0
+      ;;
+  esac
+  return 0
+}
+
+openclaw_live_collect_auth_files() {
+  if openclaw_live_collect_auth_files_from_override; then
+    return 0
+  fi
+  printf '%s\n' "${OPENCLAW_DOCKER_LIVE_AUTH_FILES_ALL[@]}"
 }
 
 openclaw_live_join_csv() {
