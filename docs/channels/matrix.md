@@ -281,7 +281,7 @@ OpenClaw marks finalized text-only preview edits with:
 
 ```bash
 curl -sS -X PUT \
-  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview" \
+  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview-botname" \
   -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{
@@ -311,7 +311,14 @@ Replace these values before you run the command:
 
 - `https://matrix.example.org`: your homeserver base URL
 - `$USER_ACCESS_TOKEN`: the receiving user's access token
+- `openclaw-finalized-preview-botname`: a rule ID unique to this bot for this receiving user
 - `@bot:example.org`: your OpenClaw Matrix bot MXID, not the receiving user's MXID
+
+Important for multi-bot setups:
+
+- Push rules are keyed by `ruleId`. Re-running `PUT` against the same rule ID updates that one rule.
+- If one receiving user should notify for multiple OpenClaw Matrix bot accounts, create one rule per bot with a unique rule ID for each sender match.
+- A simple pattern is `openclaw-finalized-preview-<botname>`, such as `openclaw-finalized-preview-ops` or `openclaw-finalized-preview-support`.
 
 The rule is evaluated against the event sender:
 
@@ -323,11 +330,19 @@ The rule is evaluated against the event sender:
 ```bash
 curl -sS \
   -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
-  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview"
+  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview-botname"
 ```
 
 7. Test a streamed reply. In quiet mode, the room should show a quiet draft preview and the final
    in-place edit should notify once the block or turn finishes.
+
+If you need to remove the rule later, delete that same rule ID with the receiving user's token:
+
+```bash
+curl -sS -X DELETE \
+  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
+  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview-botname"
+```
 
 Notes:
 
