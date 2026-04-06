@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Slack/monitor: add `ignoreOtherMentions` channel option to skip messages that mention other users or bots without mentioning the configured bot, reducing noise in busy channels. (#55570) Thanks @pingren.
+
 ### Fixes
 
 - Providers/Anthropic: skip `service_tier` injection for OAuth-authenticated stream wrapper requests so Claude OAuth requests stop failing with HTTP 401. (#60356) thanks @openperf.
