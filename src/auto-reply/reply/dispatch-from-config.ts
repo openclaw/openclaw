@@ -917,7 +917,9 @@ export async function dispatchReplyFromConfig(params: {
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              // Await delivery so block text reaches the user before tool
+              // execution continues on the same channel (#32868).
+              await dispatcher.sendBlockReply(ttsPayload);
             }
           };
           return run();

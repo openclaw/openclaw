@@ -105,6 +105,39 @@ describe("createReplyDispatcher", () => {
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
+  it("sendBlockReply returns false for dropped payloads and a Promise for accepted ones", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    // Dropped payload returns false (empty text, no media).
+    expect(dispatcher.sendBlockReply({ text: "" })).toBe(false);
+    expect(dispatcher.sendBlockReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
+
+    // Accepted payload returns a Promise that resolves after delivery.
+    const result = dispatcher.sendBlockReply({ text: "hello" });
+    expect(result).not.toBe(false);
+    expect(result).toBeInstanceOf(Promise);
+    await result;
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("awaiting sendBlockReply guarantees delivery completes before continuation", async () => {
+    const order: string[] = [];
+    const deliver = vi.fn(async () => {
+      await Promise.resolve();
+      order.push("delivered");
+    });
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    const promise = dispatcher.sendBlockReply({ text: "block" });
+    expect(promise).not.toBe(false);
+    await promise;
+    order.push("continued");
+
+    // "delivered" must come before "continued" because we awaited the promise.
+    expect(order).toEqual(["delivered", "continued"]);
+  });
+
   it("delays block replies after the first when humanDelay is natural", async () => {
     vi.useFakeTimers();
     const deliver = vi.fn().mockResolvedValue(undefined);

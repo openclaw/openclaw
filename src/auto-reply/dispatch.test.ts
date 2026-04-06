@@ -45,7 +45,7 @@ const {
 function createDispatcher(record: string[]): ReplyDispatcher {
   return {
     sendToolResult: () => true,
-    sendBlockReply: () => true,
+    sendBlockReply: () => Promise.resolve(),
     sendFinalReply: () => true,
     getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
     getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
@@ -131,6 +131,35 @@ describe("withReplyDispatcher", () => {
 
     expect(onSettled).toHaveBeenCalledTimes(1);
     expect(order).toEqual(["run", "markComplete", "waitForIdle", "onSettled"]);
+  });
+
+  it("dispatchInboundMessage owns dispatcher lifecycle", async () => {
+    const order: string[] = [];
+    const dispatcher = {
+      sendToolResult: () => true,
+      sendBlockReply: () => Promise.resolve(),
+      sendFinalReply: () => {
+        order.push("sendFinalReply");
+        return true;
+      },
+      getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      markComplete: () => {
+        order.push("markComplete");
+      },
+      waitForIdle: async () => {
+        order.push("waitForIdle");
+      },
+    } satisfies ReplyDispatcher;
+
+    await dispatchInboundMessage({
+      ctx: buildTestCtx(),
+      cfg: {} as OpenClawConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
   });
 
   it("dispatchInboundMessageWithBufferedDispatcher cleans up typing after a resolver starts it", async () => {

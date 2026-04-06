@@ -38,7 +38,7 @@ const deliverDiscordReply = deliveryMocks.deliverDiscordReply;
 const createDiscordDraftStream = deliveryMocks.createDiscordDraftStream;
 type DispatchInboundParams = {
   dispatcher: {
-    sendBlockReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
+    sendBlockReply: (payload: ReplyPayload) => false | Promise<void>;
     sendFinalReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
   };
   replyOptions?: {
@@ -125,7 +125,7 @@ vi.spyOn(replyRuntimeModule, "createReplyDispatcherWithTyping").mockImplementati
     sendToolResult: vi.fn(() => true),
     sendBlockReply: vi.fn((payload: unknown) => {
       void opts.deliver(payload as never, { kind: "block" });
-      return true;
+      return Promise.resolve();
     }),
     sendFinalReply: vi.fn((payload: unknown) => {
       void opts.deliver(payload as never, { kind: "final" });

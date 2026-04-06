@@ -77,7 +77,19 @@ type ReplyDispatcherWithTypingResult = {
 
 export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
-  sendBlockReply: (payload: ReplyPayload) => boolean;
+  /**
+   * Enqueue a block reply for delivery.
+   *
+   * Returns `false` when the payload is dropped (empty/silent).
+   * Otherwise returns a `Promise<void>` that resolves when the queued delivery
+   * (and all preceding deliveries) complete.  Callers on the same-channel path
+   * should `await` this to guarantee the block text reaches the user before
+   * tool execution continues.
+   *
+   * Because a fulfilled `Promise` is truthy, existing boolean-style checks
+   * (`if (delivered)`) remain correct without changes.
+   */
+  sendBlockReply: (payload: ReplyPayload) => false | Promise<void>;
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
@@ -217,7 +229,13 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 
   return {
     sendToolResult: (payload) => enqueue("tool", payload),
-    sendBlockReply: (payload) => enqueue("block", payload),
+    sendBlockReply: (payload) => {
+      if (!enqueue("block", payload)) {
+        return false;
+      }
+      // Return the delivery chain so same-channel callers can await delivery.
+      return sendChain;
+    },
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
