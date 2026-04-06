@@ -1605,8 +1605,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       // This allows automatic model switching when the current model doesn't support images
       // but a valid imageModel is configured.
       const imageModelConfig = cfg.agents?.defaults?.imageModel;
-      const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
+      let imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
       const imageModelConfigFallbacks = resolveAgentModelFallbackValues(imageModelConfig);
+
+      // Determine if primary was promoted from fallback (fallback-only config).
+      // This affects how we resolve providerless primaries in allowlist checks.
+      // CRITICAL: This must match the logic in the switch path (line 1788-1791).
+      let usedPrimaryFromFallback = false;
+      if (!imageModelPrimary && imageModelConfigFallbacks.length > 0) {
+        imageModelPrimary = imageModelConfigFallbacks[0];
+        usedPrimaryFromFallback = true;
+      }
 
       // Consider imageModel configured if we have either a primary or fallbacks.
       // This handles fallback-only configs like imageModel: { fallbacks: ["openai/gpt-4o"] }
@@ -1669,8 +1678,12 @@ export const chatHandlers: GatewayRequestHandlers = {
             }
           }
 
-          // If primary resolution didn't determine provider, scan fallbacks for provider
-          if (!imageModelProvider) {
+          // If primary resolution didn't determine provider, scan fallbacks for provider.
+          // CRITICAL: Only do this when primary was promoted from fallback (usedPrimaryFromFallback=true).
+          // For explicitly set providerless primaries, we should use defaultProvider to match
+          // the switch path behavior (lines 1911-1930). This ensures consistent resolution
+          // between the allowlist pre-check and the actual model switch.
+          if (!imageModelProvider && usedPrimaryFromFallback) {
             // First pass: find first fallback with explicit provider prefix
             for (const fb of imageModelConfigFallbacks) {
               if (!fb?.trim()) {
