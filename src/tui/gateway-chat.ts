@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig } from "../config/config.js";
+import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import {
@@ -262,6 +263,13 @@ export class GatewayChatClient {
 
   async getStatus() {
     return await this.client.request("status");
+  }
+
+  async getContextReport(sessionKey: string): Promise<SessionSystemPromptReport | null> {
+    const res = await this.client.request<{
+      sessions?: Array<{ contextWeight?: SessionSystemPromptReport | null }>;
+    }>("sessions.usage", { key: sessionKey, includeContextWeight: true });
+    return res?.sessions?.[0]?.contextWeight ?? null;
   }
 
   async listModels(): Promise<GatewayModelChoice[]> {

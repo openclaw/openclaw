@@ -11,6 +11,7 @@ import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
+import { ContextVizOverlay } from "./components/context-viz-overlay.js";
 import {
   createFilterableSelectList,
   createSearchableSelectList,
@@ -238,6 +239,27 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       },
     );
     openOverlay(settings);
+    tui.requestRender();
+  };
+
+  const openContextViz = () => {
+    if (!state.isConnected) {
+      chatLog.addSystem("not connected to gateway — cannot open context visualizer");
+      tui.requestRender();
+      return;
+    }
+    const overlay = new ContextVizOverlay({
+      fetchReport: async () => {
+        return await client.getContextReport(state.currentSessionKey);
+      },
+      getTokenInfo: () => ({
+        totalTokens: state.sessionInfo.totalTokens ?? null,
+        contextTokens: state.sessionInfo.contextTokens ?? null,
+      }),
+      onClose: closeOverlayAndRender,
+      requestRender: () => tui.requestRender(),
+    });
+    openOverlay(overlay);
     tui.requestRender();
   };
 
@@ -493,6 +515,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "abort":
         await abortActive();
         break;
+      case "context": {
+        const sub = args.split(/\s+/)[0]?.toLowerCase() ?? "";
+        if (sub === "visualize" || sub === "viz") {
+          openContextViz();
+        } else {
+          await sendMessage(raw);
+        }
+        break;
+      }
       case "settings":
         openSettings();
         break;
@@ -563,6 +594,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     openAgentSelector,
     openSessionSelector,
     openSettings,
+    openContextViz,
     setAgent,
   };
 }
