@@ -93,7 +93,7 @@ export function buildSlackInteractiveBlocks(interactive?: InteractiveReply): Sla
             ),
             emoji: true,
           },
-          options: block.options.map((option, choiceIndex) => ({
+          options: block.options.map((option) => ({
             text: {
               type: "plain_text",
               text: truncateSlackText(option.label, SLACK_PLAIN_TEXT_MAX),

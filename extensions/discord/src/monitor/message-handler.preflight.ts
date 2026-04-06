@@ -18,7 +18,6 @@ import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { logDebug } from "openclaw/plugin-sdk/text-runtime";
@@ -272,9 +271,10 @@ function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message
         globalName: mention.global_name ?? undefined,
       }))
     : undefined;
+  const baseReferencedMessage = (base as { referencedMessage?: object }).referencedMessage;
   const referencedMessage = fetched.referenced_message
     ? ({
-        ...((base as { referencedMessage?: object }).referencedMessage ?? {}),
+        ...baseReferencedMessage,
         ...fetched.referenced_message,
         mentionedUsers: Array.isArray(fetched.referenced_message.mentions)
           ? fetched.referenced_message.mentions.map((mention) => ({
@@ -288,18 +288,14 @@ function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message
           fetched.referenced_message.mention_everyone ?? baseReferenced?.mentionedEveryone ?? false,
       } satisfies Record<string, unknown>)
     : (base as { referencedMessage?: Message }).referencedMessage;
+  const baseRawData = (base as { rawData?: Record<string, unknown> }).rawData;
   const rawData = {
-    ...((base as { rawData?: Record<string, unknown> }).rawData ?? {}),
-    message_snapshots:
-      fetched.message_snapshots ??
-      (base as { rawData?: { message_snapshots?: unknown } }).rawData?.message_snapshots,
+    ...baseRawData,
+    message_snapshots: fetched.message_snapshots ?? baseRawData?.message_snapshots,
     sticker_items:
-      (fetched as { sticker_items?: unknown }).sticker_items ??
-      (base as { rawData?: { sticker_items?: unknown } }).rawData?.sticker_items,
+      (fetched as { sticker_items?: unknown }).sticker_items ?? baseRawData?.sticker_items,
   };
-  return {
-    ...base,
-    ...fetched,
+  return Object.assign(Object.create(Object.getPrototypeOf(base)), base, fetched, {
     content: fetched.content ?? base.content,
     attachments: fetched.attachments ?? base.attachments,
     embeds: fetched.embeds ?? base.embeds,
@@ -312,7 +308,7 @@ function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message
     mentionedEveryone: fetched.mention_everyone ?? base.mentionedEveryone,
     referencedMessage,
     rawData,
-  } as unknown as Message;
+  }) as Message;
 }
 
 async function hydrateDiscordMessageIfEmpty(params: {

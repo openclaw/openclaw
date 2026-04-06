@@ -45,7 +45,7 @@ export async function listDiscordDirectoryGroupsLive(
   if (!access) {
     return [];
   }
-  const { token, query, accountId } = access;
+  const { token, query } = access;
   const guilds = await listDiscordGuilds(token);
   const rows: ChannelDirectoryEntry[] = [];
 
@@ -82,7 +82,7 @@ export async function listDiscordDirectoryPeersLive(
   if (!access) {
     return [];
   }
-  const { token, query, accountId } = access;
+  const { token, query } = access;
   if (!query) {
     return [];
   }
