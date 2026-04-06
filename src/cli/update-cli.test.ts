@@ -1043,15 +1043,7 @@ describe("update-cli", () => {
         .mock.calls.map((call) => String(call[0]))
         .join("\n"),
     ).toContain(
-      "Skipped plugin update sync in the pre-update CLI process after switching to a git install.",
-    );
-    expect(
-      vi
-        .mocked(defaultRuntime.log)
-        .mock.calls.map((call) => String(call[0]))
-        .join("\n"),
-    ).toContain(
-      "Skipped completion/restart follow-ups in the pre-update CLI process after switching to a git install.",
+      "Switched from a package install to a git checkout. Skipping remaining post-update work in the old CLI process; rerun follow-up commands from the new git install if needed.",
     );
   });
   it("explains why git updates cannot run with edited files", async () => {
