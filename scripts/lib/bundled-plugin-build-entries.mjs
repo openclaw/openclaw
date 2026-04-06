@@ -105,22 +105,19 @@ export function collectBundledPluginBuildEntries(params = {}) {
 
     const pluginDir = path.join(extensionsRoot, dirent.name);
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-    const hasManifest = fs.existsSync(manifestPath);
-    const isRuntimePublicSurfaceOnlyDir = RUNTIME_PUBLIC_SURFACE_ONLY_DIR_NAMES.has(dirent.name);
-    if (!hasManifest && !isRuntimePublicSurfaceOnlyDir) {
-      continue;
-    }
     const packageJsonPath = path.join(pluginDir, "package.json");
     const packageJson = readBundledPluginPackageJson(packageJsonPath);
     const topLevelPublicSurfaceEntries = collectTopLevelPublicSurfaceEntries(pluginDir);
-    if (
+    const hasManifest = fs.existsSync(manifestPath);
+    const isRuntimePublicSurfaceOnlyDir = RUNTIME_PUBLIC_SURFACE_ONLY_DIR_NAMES.has(dirent.name);
+    const isManifestlessSupportPackage =
       !hasManifest &&
-      !isManifestlessBundledRuntimeSupportPackage({
+      isManifestlessBundledRuntimeSupportPackage({
         dirName: dirent.name,
         packageJson,
         topLevelPublicSurfaceEntries,
-      })
-    ) {
+      });
+    if (!hasManifest && !isRuntimePublicSurfaceOnlyDir && !isManifestlessSupportPackage) {
       continue;
     }
     if (!shouldBuildBundledCluster(dirent.name, env, { packageJson })) {

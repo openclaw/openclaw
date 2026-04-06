@@ -41,6 +41,9 @@ describe("bundled plugin build entries", () => {
         "extensions/media-understanding-core/runtime-api.ts",
       "extensions/speech-core/api": "extensions/speech-core/api.ts",
       "extensions/speech-core/runtime-api": "extensions/speech-core/runtime-api.ts",
+      "extensions/video-generation-core/api": "extensions/video-generation-core/api.ts",
+      "extensions/video-generation-core/runtime-api":
+        "extensions/video-generation-core/runtime-api.ts",
     });
   });
 
@@ -65,6 +68,9 @@ describe("bundled plugin build entries", () => {
     );
     expect(artifacts).toContain("dist/extensions/speech-core/runtime-api.js");
     expect(artifacts).not.toContain("dist/extensions/speech-core/openclaw.plugin.json");
+    expect(artifacts).toContain("dist/extensions/video-generation-core/package.json");
+    expect(artifacts).toContain("dist/extensions/video-generation-core/runtime-api.js");
+    expect(artifacts).not.toContain("dist/extensions/video-generation-core/openclaw.plugin.json");
   });
 
   it("packs the Matrix packaged runtime shim", () => {
