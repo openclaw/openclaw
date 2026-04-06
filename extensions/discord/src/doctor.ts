@@ -30,7 +30,7 @@ function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record
 }
 
 function sanitizeForLog(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  return value.replace(/\p{Cc}+/gu, " ").trim();
 }
 
 function isDiscordMutableAllowEntry(raw: string): boolean {
@@ -457,14 +457,14 @@ export function collectDiscordNumericIdWarnings(params: {
 
   const lines: string[] = [];
   if (repairableHits.length > 0) {
-    const sample = repairableHits[0]!;
+    const sample = repairableHits[0];
     lines.push(
       `- Discord allowlists contain ${repairableHits.length} numeric ${repairableHits.length === 1 ? "entry" : "entries"} (e.g. ${sanitizeForLog(sample.path)}=${sanitizeForLog(String(sample.entry))}).`,
       `- Discord IDs must be strings; run "${params.doctorFixCommand}" to convert numeric IDs to quoted strings.`,
     );
   }
   if (blockedHits.length > 0) {
-    const sample = blockedHits[0]!;
+    const sample = blockedHits[0];
     lines.push(
       `- Discord allowlists contain ${blockedHits.length} numeric ${blockedHits.length === 1 ? "entry" : "entries"} in lists that cannot be auto-repaired (e.g. ${sanitizeForLog(sample.path)}).`,
       `- These lists include invalid or precision-losing numeric IDs; manually quote the original values in your config file, then rerun "${params.doctorFixCommand}".`,

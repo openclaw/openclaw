@@ -340,7 +340,7 @@ export class RealtimeCallHandler {
     const baseFields = {
       providerCallId: callSid,
       timestamp,
-      direction: (callerMeta.direction ?? "inbound") as "inbound" | "outbound",
+      direction: callerMeta.direction ?? "inbound",
       ...(callerMeta.from ? { from: callerMeta.from } : {}),
       ...(callerMeta.to ? { to: callerMeta.to } : {}),
     };

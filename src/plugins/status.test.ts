@@ -677,21 +677,22 @@ describe("plugin status reports", () => {
   it("treats a CLI-command-only plugin as a non-capability", () => {
     setSinglePluginLoadResult(
       createPluginRecord({
-        id: "openai",
-        name: "OpenAI",
-        cliCommands: ["openai"],
+        id: "anthropic",
+        name: "Anthropic",
+        cliBackendIds: ["claude-cli"],
       }),
     );
 
-    const inspect = expectInspectReport("openai");
+    const inspect = expectInspectReport("anthropic");
 
     expectInspectShape(inspect, {
       shape: "non-capability",
       capabilityMode: "none",
       capabilityKinds: [],
     });
-    expect(inspect.capabilities).toEqual([]);
+    expect(inspect.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
   });
+
   it("builds compatibility warnings for legacy compatibility paths", () => {
     setPluginLoadResult({
       plugins: [

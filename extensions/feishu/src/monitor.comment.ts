@@ -206,12 +206,17 @@ async function requestFeishuOpenApi<T>(params: {
 }): Promise<T | null> {
   const formatErrorDetails = (error: unknown): string => {
     if (!isRecord(error)) {
-      return String(error);
+      return typeof error === "string" ? error : JSON.stringify(error);
     }
     const response = isRecord(error.response) ? error.response : undefined;
     const responseData = isRecord(response?.data) ? response?.data : undefined;
     const details = {
-      message: typeof error.message === "string" ? error.message : String(error),
+      message:
+        typeof error.message === "string"
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : JSON.stringify(error),
       code: readString(error.code),
       method: readString(isRecord(error.config) ? error.config.method : undefined),
       url: readString(isRecord(error.config) ? error.config.url : undefined),
@@ -230,7 +235,7 @@ async function requestFeishuOpenApi<T>(params: {
       url: params.url,
       data: params.data ?? {},
       timeout: params.timeoutMs,
-    }) as Promise<T>,
+    }),
     { timeoutMs: params.timeoutMs },
   )
     .then((resolved) => (resolved.status === "resolved" ? resolved.value : null))

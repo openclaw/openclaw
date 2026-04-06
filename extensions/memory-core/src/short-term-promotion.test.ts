@@ -247,7 +247,7 @@ describe("short-term promotion", () => {
       expect(fasterDecay).toHaveLength(1);
       expect(slowerDecay[0]?.components.recency).toBeCloseTo(0.5, 3);
       expect(fasterDecay[0]?.components.recency).toBeCloseTo(0.25, 3);
-      expect(slowerDecay[0]!.score).toBeGreaterThan(fasterDecay[0]!.score);
+      expect(slowerDecay[0].score).toBeGreaterThan(fasterDecay[0].score);
     });
   });
 
@@ -334,7 +334,7 @@ describe("short-term promotion", () => {
         nowMs,
       });
       expect(ranked[0]?.path).toBe("memory/2026-04-02.md");
-      expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
+      expect(ranked[0].score).toBeGreaterThan(ranked[1].score);
 
       const phaseStorePath = resolveShortTermPhaseSignalStorePath(workspaceDir);
       const phaseStore = JSON.parse(await fs.readFile(phaseStorePath, "utf-8")) as {
@@ -393,7 +393,7 @@ describe("short-term promotion", () => {
       await recordDreamingPhaseSignals({
         workspaceDir,
         phase: "rem",
-        keys: [key!],
+        keys: [key],
         nowMs: Date.parse("2026-02-01T10:00:00.000Z"),
       });
       const staleSignalRank = await rankShortTermPromotionCandidates({
@@ -406,7 +406,7 @@ describe("short-term promotion", () => {
       await recordDreamingPhaseSignals({
         workspaceDir,
         phase: "rem",
-        keys: [key!],
+        keys: [key],
         nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
       });
       const freshSignalRank = await rankShortTermPromotionCandidates({
@@ -419,7 +419,7 @@ describe("short-term promotion", () => {
 
       expect(staleSignalRank).toHaveLength(1);
       expect(freshSignalRank).toHaveLength(1);
-      expect(freshSignalRank[0]!.score).toBeGreaterThan(staleSignalRank[0]!.score);
+      expect(freshSignalRank[0].score).toBeGreaterThan(staleSignalRank[0].score);
     });
   });
 

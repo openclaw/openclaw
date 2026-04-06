@@ -5,9 +5,7 @@ import {
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "./test-support/inbound-context-contract.js";
 const {
   answerCallbackQuerySpy,
   commandSpy,

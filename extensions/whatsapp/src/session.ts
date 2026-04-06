@@ -50,7 +50,9 @@ function enqueueSaveCreds(
       logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
     })
     .finally(() => {
-      if (credsSaveQueues.get(authDir) === next) credsSaveQueues.delete(authDir);
+      if (credsSaveQueues.get(authDir) === next) {
+        credsSaveQueues.delete(authDir);
+      }
     });
   credsSaveQueues.set(authDir, next);
 }

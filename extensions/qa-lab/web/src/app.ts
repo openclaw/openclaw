@@ -178,47 +178,53 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
   function bindEvents() {
     root.querySelectorAll<HTMLElement>("[data-conversation-id]").forEach((node) => {
-      node.onclick = () => {
+      node.addEventListener("click", () => {
         state.selectedConversationId = node.dataset.conversationId ?? null;
         state.selectedThreadId = null;
         state.activeTab = "debug";
         render();
-      };
+      });
     });
     root.querySelectorAll<HTMLElement>("[data-thread-id]").forEach((node) => {
-      node.onclick = () => {
+      node.addEventListener("click", () => {
         state.selectedConversationId = node.dataset.conversationId ?? null;
         state.selectedThreadId = node.dataset.threadId ?? null;
         state.activeTab = "debug";
         render();
-      };
+      });
     });
     root.querySelectorAll<HTMLElement>("[data-scenario-id]").forEach((node) => {
-      node.onclick = () => {
+      node.addEventListener("click", () => {
         state.selectedScenarioId = node.dataset.scenarioId ?? null;
         state.activeTab = "scenarios";
         render();
-      };
+      });
     });
     root.querySelectorAll<HTMLElement>("[data-tab]").forEach((node) => {
-      node.onclick = () => {
+      node.addEventListener("click", () => {
         const nextTab = node.dataset.tab as TabId | undefined;
         if (nextTab) {
           state.activeTab = nextTab;
           render();
         }
-      };
+      });
     });
 
-    root.querySelector<HTMLButtonElement>("[data-action='refresh']")!.onclick = () => {
-      void refresh();
-    };
-    root.querySelector<HTMLButtonElement>("[data-action='reset']")!.onclick = () => {
-      void resetState();
-    };
-    root.querySelector<HTMLButtonElement>("[data-action='self-check']")!.onclick = () => {
-      void runSelfCheck();
-    };
+    root
+      .querySelector<HTMLButtonElement>("[data-action='refresh']")!
+      .addEventListener("click", () => {
+        void refresh();
+      });
+    root
+      .querySelector<HTMLButtonElement>("[data-action='reset']")!
+      .addEventListener("click", () => {
+        void resetState();
+      });
+    root
+      .querySelector<HTMLButtonElement>("[data-action='self-check']")!
+      .addEventListener("click", () => {
+        void runSelfCheck();
+      });
     root.querySelector<HTMLButtonElement>("[data-action='send']")?.addEventListener("click", () => {
       void sendInbound();
     });

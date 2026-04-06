@@ -2,9 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { runSecurityAudit } from "./audit.js";
-import { execDockerRawUnavailable } from "./audit.test-helpers.js";
+import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
+import { collectIncludeFilePermFindings } from "./audit-extra.async.js";
 
 const isWindows = process.platform === "win32";
 
@@ -27,7 +26,6 @@ describe("security audit config include permissions", () => {
     await fs.writeFile(configPath, `{ "$include": "./extra.json5" }\n`, "utf-8");
     await fs.chmod(configPath, 0o600);
 
-    const cfg: OpenClawConfig = { logging: { redactSensitive: "off" } };
     const user = "DESKTOP-TEST\\Tester";
     const execIcacls = isWindows
       ? async (_cmd: string, args: string[]) => {
@@ -45,25 +43,35 @@ describe("security audit config include permissions", () => {
         }
       : undefined;
 
-    const res = await runSecurityAudit({
-      config: cfg,
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-      stateDir,
-      configPath,
+    const configSnapshot: ConfigFileSnapshot = {
+      path: configPath,
+      exists: true,
+      raw: `{ "$include": "./extra.json5" }\n`,
+      parsed: { $include: "./extra.json5" },
+      sourceConfig: {} as ConfigFileSnapshot["sourceConfig"],
+      resolved: {} as ConfigFileSnapshot["resolved"],
+      valid: true,
+      runtimeConfig: {} as ConfigFileSnapshot["runtimeConfig"],
+      config: {} as ConfigFileSnapshot["config"],
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+
+    const findings = await collectIncludeFilePermFindings({
+      configSnapshot,
       platform: isWindows ? "win32" : undefined,
       env: isWindows
         ? { ...process.env, USERNAME: "Tester", USERDOMAIN: "DESKTOP-TEST" }
         : undefined,
       execIcacls,
-      execDockerRawFn: execDockerRawUnavailable,
     });
 
     const expectedCheckId = isWindows
       ? "fs.config_include.perms_writable"
       : "fs.config_include.perms_world_readable";
 
-    expect(res.findings).toEqual(
+    expect(findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ checkId: expectedCheckId, severity: "critical" }),
       ]),

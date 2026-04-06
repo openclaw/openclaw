@@ -36,7 +36,7 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
 
 import { refreshOpenAICodexToken } from "./openai-codex-provider.runtime.js";
 
-const registerOpenAIPlugin = async () =>
+const _registerOpenAIPlugin = async () =>
   registerProviderPlugin({
     plugin,
     id: "openai",

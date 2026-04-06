@@ -251,7 +251,7 @@ export class GatewayChatClient {
     });
   }
 
-  async getStatus() {
+  async getGatewayStatus() {
     return await this.client.request("status");
   }
 

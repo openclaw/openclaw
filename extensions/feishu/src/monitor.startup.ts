@@ -33,9 +33,9 @@ export type FeishuMonitorBotIdentity = {
 };
 
 function isTimeoutErrorMessage(message: string | undefined): boolean {
-  return message?.toLowerCase().includes("timeout") || message?.toLowerCase().includes("timed out")
-    ? true
-    : false;
+  return !!(
+    message?.toLowerCase().includes("timeout") || message?.toLowerCase().includes("timed out")
+  );
 }
 
 function isAbortErrorMessage(message: string | undefined): boolean {

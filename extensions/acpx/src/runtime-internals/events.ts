@@ -120,7 +120,7 @@ function resolveStatusTextForTag(params: {
   }
   if (tag === "plan") {
     const entries = Array.isArray(payload.entries) ? payload.entries : [];
-    const first = entries.find((entry) => isRecord(entry)) as Record<string, unknown> | undefined;
+    const first = entries.find((entry) => isRecord(entry));
     const content = asTrimmedString(first?.content);
     return content ? `plan: ${content}` : null;
   }
@@ -227,12 +227,12 @@ export function parsePromptEventLine(line: string): AcpRuntimeEvent | null {
     case "tool_call":
       return createToolCallEvent({
         payload,
-        tag: (tag ?? "tool_call") as AcpSessionUpdateTag,
+        tag: tag ?? "tool_call",
       });
     case "tool_call_update":
       return createToolCallEvent({
         payload,
-        tag: (tag ?? "tool_call_update") as AcpSessionUpdateTag,
+        tag: tag ?? "tool_call_update",
       });
     case "agent_message_chunk":
       return resolveTextChunk({

@@ -9,7 +9,7 @@ import type { CoreConfig } from "../types.js";
 function createLookupFn(addresses: Array<{ address: string; family: number }>): LookupFn {
   return vi.fn(async (_hostname: string, options?: unknown) => {
     if (typeof options === "number" || !options || !(options as { all?: boolean }).all) {
-      return addresses[0]!;
+      return addresses[0];
     }
     return addresses;
   }) as unknown as LookupFn;
@@ -1324,9 +1324,7 @@ describe("resolveMatrixAuth", () => {
   });
 
   it("skips persistence when startup backfill is aborted before whoami resolves", async () => {
-    let resolveWhoami:
-      | ((value: { user_id: string; device_id: string }) => void)
-      | undefined;
+    let resolveWhoami: ((value: { user_id: string; device_id: string }) => void) | undefined;
     matrixDoRequestMock.mockImplementation(
       () =>
         new Promise((resolve) => {

@@ -4,6 +4,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
+  isCliProvider,
   parseModelRef,
   buildModelAliasIndex,
   normalizeModelSelection,
@@ -100,7 +101,7 @@ function createProviderWithModelsConfig(provider: string, models: Array<Record<s
 
 function resolveConfiguredRefForTest(cfg: Partial<OpenClawConfig>) {
   return resolveConfiguredModelRef({
-    cfg: cfg,
+    cfg: cfg as OpenClawConfig,
     defaultProvider: "openai",
     defaultModel: "gpt-5.4",
   });
@@ -127,6 +128,12 @@ describe("model-selection", () => {
       expect(normalizeProviderIdForAuth("volcengine-plan")).toBe("volcengine");
       expect(normalizeProviderIdForAuth("byteplus-plan")).toBe("byteplus");
       expect(normalizeProviderIdForAuth("openai")).toBe("openai");
+    });
+  });
+
+  describe("isCliProvider", () => {
+    it("returns false for provider ids", () => {
+      expect(isCliProvider("example-cli", {} as OpenClawConfig)).toBe(false);
     });
   });
 
@@ -455,7 +462,7 @@ describe("model-selection", () => {
       };
 
       const index = buildModelAliasIndex({
-        cfg: cfg,
+        cfg: cfg as OpenClawConfig,
         defaultProvider: "anthropic",
       });
 
@@ -744,7 +751,7 @@ describe("model-selection", () => {
         };
 
         const result = resolveConfiguredModelRef({
-          cfg: cfg,
+          cfg: cfg as OpenClawConfig,
           defaultProvider: "google",
           defaultModel: "gemini-pro",
         });
@@ -772,7 +779,7 @@ describe("model-selection", () => {
         };
 
         const result = resolveConfiguredModelRef({
-          cfg: cfg,
+          cfg: cfg as OpenClawConfig,
           defaultProvider: "google",
           defaultModel: "gemini-pro",
         });
@@ -825,7 +832,7 @@ describe("model-selection", () => {
     it("should use default provider/model if config is empty", () => {
       const cfg: Partial<OpenClawConfig> = {};
       const result = resolveConfiguredModelRef({
-        cfg: cfg,
+        cfg: cfg as OpenClawConfig,
         defaultProvider: "openai",
         defaultModel: "gpt-4",
       });
@@ -905,7 +912,7 @@ describe("model-selection", () => {
         };
 
         const result = resolveConfiguredModelRef({
-          cfg: cfg,
+          cfg: cfg as OpenClawConfig,
           defaultProvider: "openai",
           defaultModel: "gpt-5.4",
         });

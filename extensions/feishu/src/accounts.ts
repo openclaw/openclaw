@@ -16,7 +16,7 @@ import type {
 } from "./types.js";
 
 const {
-  listConfiguredAccountIds,
+  _listConfiguredAccountIds,
   listAccountIds: listFeishuAccountIds,
   resolveDefaultAccountId,
 } = createAccountListHelpers("feishu", {

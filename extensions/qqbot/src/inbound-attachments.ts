@@ -53,7 +53,9 @@ export async function processAttachments(
   attachments: RawAttachment[] | undefined,
   ctx: ProcessContext,
 ): Promise<ProcessedAttachments> {
-  if (!attachments?.length) return EMPTY_RESULT;
+  if (!attachments?.length) {
+    return EMPTY_RESULT;
+  }
 
   const { accountId, cfg, log } = ctx;
   const downloadDir = getQQBotMediaDir("downloads");
@@ -176,8 +178,12 @@ export async function processAttachments(
 
   // Phase 3: collect results in the original attachment order.
   for (const result of processResults) {
-    if (result.meta.voiceUrl) voiceAttachmentUrls.push(result.meta.voiceUrl);
-    if (result.meta.asrReferText) voiceAsrReferTexts.push(result.meta.asrReferText);
+    if (result.meta.voiceUrl) {
+      voiceAttachmentUrls.push(result.meta.voiceUrl);
+    }
+    if (result.meta.asrReferText) {
+      voiceAsrReferTexts.push(result.meta.asrReferText);
+    }
 
     if (result.type === "image" && result.localPath) {
       imageUrls.push(result.localPath);
@@ -222,7 +228,9 @@ export async function processAttachments(
 
 /** Format voice transcripts into user-visible text. */
 export function formatVoiceText(transcripts: string[]): string {
-  if (transcripts.length === 0) return "";
+  if (transcripts.length === 0) {
+    return "";
+  }
   return transcripts.length === 1
     ? `[Voice message] ${transcripts[0]}`
     : transcripts.map((t, i) => `[Voice ${i + 1}] ${t}`).join("\n");
@@ -302,7 +310,11 @@ async function processVoiceAttachment(
         audioPath = localPath;
       }
     } catch (convertErr) {
-      log?.error(`${prefix} Voice conversion failed: ${convertErr}`);
+      log?.error(
+        `${prefix} Voice conversion failed: ${
+          convertErr instanceof Error ? convertErr.message : JSON.stringify(convertErr)
+        }`,
+      );
       if (asrReferText) {
         return {
           localPath,
@@ -324,7 +336,7 @@ async function processVoiceAttachment(
 
   // Run speech-to-text on the prepared audio file.
   try {
-    const transcript = await transcribeAudio(audioPath!, cfg as Record<string, unknown>);
+    const transcript = await transcribeAudio(audioPath, cfg as Record<string, unknown>);
     if (transcript) {
       log?.info(`${prefix} STT transcript: ${transcript.slice(0, 100)}...`);
       return { localPath, type: "voice", transcript, transcriptSource: "stt", meta };
@@ -342,7 +354,9 @@ async function processVoiceAttachment(
       meta,
     };
   } catch (sttErr) {
-    log?.error(`${prefix} STT failed: ${sttErr}`);
+    log?.error(
+      `${prefix} STT failed: ${sttErr instanceof Error ? sttErr.message : JSON.stringify(sttErr)}`,
+    );
     if (asrReferText) {
       return { localPath, type: "voice", transcript: asrReferText, transcriptSource: "asr", meta };
     }

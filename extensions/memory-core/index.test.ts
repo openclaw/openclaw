@@ -1,14 +1,12 @@
-import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
-import { describe, expect, it, vi } from "vitest";
-import plugin, {
+import { describe, expect, it } from "vitest";
+import {
   buildMemoryFlushPlan,
   buildPromptSection,
   DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
   DEFAULT_MEMORY_FLUSH_PROMPT,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
 } from "./index.js";
-import { memoryRuntime } from "./src/runtime-provider.js";
 
 describe("buildPromptSection", () => {
   it("returns empty when no memory tools are available", () => {

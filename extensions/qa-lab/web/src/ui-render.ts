@@ -352,7 +352,7 @@ function renderTabContent(state: UiState, scenarios: SeedScenario[]) {
     selectedConversationId,
     selectedThreadId,
   });
-  const events = (state.snapshot?.events ?? []).slice(-40).reverse();
+  const events = (state.snapshot?.events ?? []).slice(-40).toReversed();
   const kickoffTask = state.bootstrap?.kickoffTask ?? "";
 
   if (state.activeTab === "scenarios") {

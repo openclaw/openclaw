@@ -176,7 +176,7 @@ function resolveConfiguredMcpServers(params: {
   pluginToolsMcpBridge: boolean;
   moduleUrl?: string;
 }): Record<string, McpServerConfig> {
-  const resolved = { ...(params.mcpServers ?? {}) };
+  const resolved = { ...params.mcpServers };
   if (!params.pluginToolsMcpBridge) {
     return resolved;
   }
@@ -239,6 +239,10 @@ export function resolveAcpxPluginConfig(params: {
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
+    legacyCompatibilityConfig: {
+      strictWindowsCmdWrapper: normalized.strictWindowsCmdWrapper,
+      queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds,
+    },
     mcpServers,
     agents,
   };

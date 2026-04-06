@@ -17,7 +17,6 @@ import {
 import { extractFilename, extractMessageId } from "./media-helpers.js";
 import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js";
 import { buildMSTeamsPollCard } from "./polls.js";
-import { getMSTeamsRuntime } from "./runtime.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
 
 export type SendMSTeamsMessageParams = {

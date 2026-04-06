@@ -244,7 +244,9 @@ function getConfiguredLogFiles(): string[] {
   for (const cli of ["openclaw", "clawdbot", "moltbot"]) {
     try {
       const cfgPath = path.join(homeDir, `.${cli}`, `${cli}.json`);
-      if (!fs.existsSync(cfgPath)) continue;
+      if (!fs.existsSync(cfgPath)) {
+        continue;
+      }
       const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
       const logFile = cfg?.logging?.file;
       if (logFile && typeof logFile === "string") {
@@ -264,13 +266,17 @@ function collectCandidateLogDirs(): string[] {
   const dirs = new Set<string>();
 
   const pushDir = (p?: string) => {
-    if (!p) return;
+    if (!p) {
+      return;
+    }
     const normalized = path.resolve(p);
     dirs.add(normalized);
   };
 
   const pushStateDir = (stateDir?: string) => {
-    if (!stateDir) return;
+    if (!stateDir) {
+      return;
+    }
     pushDir(stateDir);
     pushDir(path.join(stateDir, "logs"));
   };
@@ -280,7 +286,9 @@ function collectCandidateLogDirs(): string[] {
   }
 
   for (const [key, value] of Object.entries(process.env)) {
-    if (!value) continue;
+    if (!value) {
+      continue;
+    }
     if (/STATE_DIR$/i.test(key) && /(OPENCLAW|CLAWDBOT|MOLTBOT)/i.test(key)) {
       pushStateDir(value);
     }
@@ -292,15 +300,23 @@ function collectCandidateLogDirs(): string[] {
   }
 
   const searchRoots = new Set<string>([homeDir, process.cwd(), path.dirname(process.cwd())]);
-  if (process.env.APPDATA) searchRoots.add(process.env.APPDATA);
-  if (process.env.LOCALAPPDATA) searchRoots.add(process.env.LOCALAPPDATA);
+  if (process.env.APPDATA) {
+    searchRoots.add(process.env.APPDATA);
+  }
+  if (process.env.LOCALAPPDATA) {
+    searchRoots.add(process.env.LOCALAPPDATA);
+  }
 
   for (const root of searchRoots) {
     try {
       const entries = fs.readdirSync(root, { withFileTypes: true });
       for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        if (!/(openclaw|clawdbot|moltbot)/i.test(entry.name)) continue;
+        if (!entry.isDirectory()) {
+          continue;
+        }
+        if (!/(openclaw|clawdbot|moltbot)/i.test(entry.name)) {
+          continue;
+        }
         const base = path.join(root, entry.name);
         pushDir(base);
         pushDir(path.join(base, "logs"));
@@ -322,9 +338,15 @@ function collectCandidateLogDirs(): string[] {
   if (isWindows()) {
     // Windows temp locations.
     tmpRoots.add("C:\\tmp");
-    if (process.env.TEMP) tmpRoots.add(process.env.TEMP);
-    if (process.env.TMP) tmpRoots.add(process.env.TMP);
-    if (process.env.LOCALAPPDATA) tmpRoots.add(path.join(process.env.LOCALAPPDATA, "Temp"));
+    if (process.env.TEMP) {
+      tmpRoots.add(process.env.TEMP);
+    }
+    if (process.env.TMP) {
+      tmpRoots.add(process.env.TMP);
+    }
+    if (process.env.LOCALAPPDATA) {
+      tmpRoots.add(path.join(process.env.LOCALAPPDATA, "Temp"));
+    }
   } else {
     tmpRoots.add("/tmp");
   }
@@ -349,10 +371,14 @@ function collectRecentLogFiles(logDirs: string[]): LogCandidate[] {
 
   const pushFile = (filePath: string, sourceDir: string) => {
     const normalized = path.resolve(filePath);
-    if (dedupe.has(normalized)) return;
+    if (dedupe.has(normalized)) {
+      return;
+    }
     try {
       const stat = fs.statSync(normalized);
-      if (!stat.isFile()) return;
+      if (!stat.isFile()) {
+        return;
+      }
       dedupe.add(normalized);
       candidates.push({ filePath: normalized, sourceDir, mtimeMs: stat.mtimeMs });
     } catch {
@@ -375,9 +401,15 @@ function collectRecentLogFiles(logDirs: string[]): LogCandidate[] {
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
-        if (!entry.isFile()) continue;
-        if (!/\.(log|txt)$/i.test(entry.name)) continue;
-        if (!/(gateway|openclaw|clawdbot|moltbot)/i.test(entry.name)) continue;
+        if (!entry.isFile()) {
+          continue;
+        }
+        if (!/\.(log|txt)$/i.test(entry.name)) {
+          continue;
+        }
+        if (!/(gateway|openclaw|clawdbot|moltbot)/i.test(entry.name)) {
+          continue;
+        }
         pushFile(path.join(dir, entry.name), dir);
       }
     } catch {
@@ -425,7 +457,9 @@ function tailFileLines(
       bytesRead += readSize;
 
       for (let i = 0; i < readSize; i++) {
-        if (buf[i] === 0x0a) newlineCount++;
+        if (buf[i] === 0x0a) {
+          newlineCount++;
+        }
       }
     }
 
@@ -505,7 +539,9 @@ function buildBotLogsResult(): SlashCommandResult {
         lines.push(...tail);
         totalIncluded += tail.length;
         totalOriginal += totalFileLines;
-        if (totalFileLines > MAX_LINES_PER_FILE) truncatedCount++;
+        if (totalFileLines > MAX_LINES_PER_FILE) {
+          truncatedCount++;
+        }
       }
     } catch {
       lines.push(`[Failed to read ${path.basename(logFile.filePath)}]`);
@@ -562,7 +598,9 @@ registerCommand({
  */
 export async function matchSlashCommand(ctx: SlashCommandContext): Promise<SlashCommandResult> {
   const content = ctx.rawContent.trim();
-  if (!content.startsWith("/")) return null;
+  if (!content.startsWith("/")) {
+    return null;
+  }
 
   // Parse the command name and trailing arguments.
   const spaceIdx = content.indexOf(" ");
@@ -570,7 +608,9 @@ export async function matchSlashCommand(ctx: SlashCommandContext): Promise<Slash
   const args = spaceIdx === -1 ? "" : content.slice(spaceIdx + 1).trim();
 
   const cmd = commands.get(cmdName);
-  if (!cmd) return null;
+  if (!cmd) {
+    return null;
+  }
 
   // Gate sensitive commands behind the allowFrom authorization check.
   if (cmd.requireAuth && !ctx.commandAuthorized) {

@@ -9,6 +9,15 @@ import {
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const GIB = 1024 ** 3;
+const CONSTRAINED_HOST = {
+  totalMemoryBytes: 16 * GIB,
+  logicalCpuCount: 8,
+};
+const ROOMY_HOST = {
+  totalMemoryBytes: 128 * GIB,
+  logicalCpuCount: 16,
+};
 
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
   return {
@@ -19,15 +28,15 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
 }
 
 describe("local-heavy-check-runtime", () => {
-  it("tightens local tsgo runs to a single checker with a Go memory limit", () => {
-    const { args, env } = applyLocalTsgoPolicy([], makeEnv());
+  it("tightens local tsgo runs on constrained hosts", () => {
+    const { args, env } = applyLocalTsgoPolicy([], makeEnv(), CONSTRAINED_HOST);
 
     expect(args).toEqual(["--singleThreaded", "--checkers", "1"]);
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
   });
 
-  it("keeps explicit tsgo flags and Go env overrides intact", () => {
+  it("keeps explicit tsgo flags and Go env overrides intact when throttled", () => {
     const { args, env } = applyLocalTsgoPolicy(
       ["--checkers", "4", "--singleThreaded", "--pprofDir", "/tmp/existing"],
       makeEnv({
@@ -35,6 +44,7 @@ describe("local-heavy-check-runtime", () => {
         GOMEMLIMIT: "5GiB",
         OPENCLAW_TSGO_PPROF_DIR: "/tmp/profile",
       }),
+      CONSTRAINED_HOST,
     );
 
     expect(args).toEqual(["--checkers", "4", "--singleThreaded", "--pprofDir", "/tmp/existing"]);
@@ -42,10 +52,38 @@ describe("local-heavy-check-runtime", () => {
     expect(env.GOMEMLIMIT).toBe("5GiB");
   });
 
-  it("serializes local oxlint runs onto one thread", () => {
-    const { args } = applyLocalOxlintPolicy([], makeEnv());
+  it("keeps local tsgo at full speed on roomy hosts in auto mode", () => {
+    const { args, env } = applyLocalTsgoPolicy([], makeEnv(), ROOMY_HOST);
+
+    expect(args).toEqual([]);
+    expect(env.GOGC).toBeUndefined();
+    expect(env.GOMEMLIMIT).toBeUndefined();
+  });
+
+  it("allows forcing the throttled tsgo policy on roomy hosts", () => {
+    const { args, env } = applyLocalTsgoPolicy(
+      [],
+      makeEnv({
+        OPENCLAW_LOCAL_CHECK_MODE: "throttled",
+      }),
+      ROOMY_HOST,
+    );
+
+    expect(args).toEqual(["--singleThreaded", "--checkers", "1"]);
+    expect(env.GOGC).toBe("30");
+    expect(env.GOMEMLIMIT).toBe("3GiB");
+  });
+
+  it("serializes local oxlint runs onto one thread on constrained hosts", () => {
+    const { args } = applyLocalOxlintPolicy([], makeEnv(), CONSTRAINED_HOST);
 
     expect(args).toEqual(["--type-aware", "--tsconfig", "tsconfig.oxlint.json", "--threads=1"]);
+  });
+
+  it("keeps local oxlint parallel on roomy hosts in auto mode", () => {
+    const { args } = applyLocalOxlintPolicy([], makeEnv(), ROOMY_HOST);
+
+    expect(args).toEqual(["--type-aware", "--tsconfig", "tsconfig.oxlint.json"]);
   });
 
   it("reclaims stale local heavy-check locks from dead pids", () => {

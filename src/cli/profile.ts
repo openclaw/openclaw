@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { getPrimaryCommand } from "./argv.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
 import { forwardConsumedCliRootOption } from "./root-option-forward.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
@@ -32,7 +32,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     }
 
     if (arg === "--dev") {
-      if (getPrimaryCommand(out) === "gateway") {
+      if (resolveCliArgvInvocation(out).primary === "gateway") {
         out.push(arg);
         continue;
       }

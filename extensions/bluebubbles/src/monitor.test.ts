@@ -1,20 +1,18 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import { resetBlueBubblesSelfChatCache } from "./monitor-self-chat-cache.js";
-import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
+import { resolveBlueBubblesMessageId } from "./monitor.js";
 import {
   createMockAccount,
-  createNewMessagePayloadForTest,
   createMockRequest,
-  createTimestampedNewMessagePayloadForTest,
+  createNewMessagePayloadForTest,
   createTimestampedMessageReactionPayloadForTest,
-  dispatchWebhookRequestForTest,
+  createTimestampedNewMessagePayloadForTest,
   dispatchWebhookPayloadForTest,
-  flushAsync,
+  dispatchWebhookRequestForTest,
   setupWebhookTargetForTest,
   setupWebhookTargetsForTest,
   trackWebhookRegistrationForTest,
@@ -805,7 +803,7 @@ describe("BlueBubbles webhook monitor", () => {
         const core = createMockRuntime();
         installTimingAwareInboundDebouncer(core);
 
-        const registration = trackWebhookRegistrationForTest(
+        const _registration = trackWebhookRegistrationForTest(
           setupWebhookTargetForTest({
             createCore: createMockRuntime,
             core,

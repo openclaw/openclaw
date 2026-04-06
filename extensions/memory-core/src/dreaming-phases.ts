@@ -5,19 +5,18 @@ import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memo
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   resolveMemoryCorePluginConfig,
+  resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
-  resolveMemoryDreamingWorkspaces,
   type MemoryLightDreamingConfig,
   type MemoryRemDreamingConfig,
-  type MemoryDreamingPhaseName,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
 import {
   readShortTermRecallEntries,
-  recordShortTermRecalls,
   recordDreamingPhaseSignals,
+  recordShortTermRecalls,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 
@@ -661,7 +660,7 @@ async function collectDailyIngestionBatches(params: {
       if (!match) {
         return null;
       }
-      const day = match[1]!;
+      const day = match[1];
       if (!isDayWithinLookback(day, cutoffMs)) {
         return null;
       }

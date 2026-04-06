@@ -14,20 +14,19 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import {
+  checkZcaAuthenticated,
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
   resolveZalouserAccountSync,
-  checkZcaAuthenticated,
   type ResolvedZalouserAccount,
 } from "./accounts.js";
 import type {
-  ChannelAccountSnapshot,
   ChannelDirectoryEntry,
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelPlugin,
-  OpenClawConfig,
   GroupToolPolicyConfig,
+  OpenClawConfig,
 } from "./channel-api.js";
 import {
   DEFAULT_ACCOUNT_ID,

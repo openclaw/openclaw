@@ -102,7 +102,9 @@ export async function monitorWebSocket({
     let cleanedUp = false;
 
     const cleanup = () => {
-      if (cleanedUp) return;
+      if (cleanedUp) {
+        return;
+      }
       cleanedUp = true;
       abortSignal?.removeEventListener("abort", handleAbort);
       try {
@@ -131,7 +133,7 @@ export async function monitorWebSocket({
     abortSignal?.addEventListener("abort", handleAbort, { once: true });
 
     try {
-      wsClient.start({ eventDispatcher });
+      void wsClient.start({ eventDispatcher });
       log(`feishu[${accountId}]: WebSocket client started`);
     } catch (err) {
       cleanup();

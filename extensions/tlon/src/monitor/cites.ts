@@ -17,7 +17,7 @@ export function createTlonCitationResolver(params: { api: TlonScryApi; runtime: 
       const scryPath = `/channels/v4/${cite.nest}/posts/post/${cite.postId}.json`;
       runtime.log?.(`[tlon] Fetching cited post: ${scryPath}`);
 
-      const data: any = await api.scry(scryPath);
+      const data: unknown = await api.scry(scryPath);
       if (data?.essay?.content) {
         return extractMessageText(data.essay.content) || null;
       }

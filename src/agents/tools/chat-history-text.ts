@@ -1,12 +1,7 @@
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
-import {
-  extractAssistantVisibleText,
-  stripDowngradedToolCallText,
-  stripMinimaxToolCallXml,
-  stripModelSpecialTokens,
-  stripThinkingTagsFromText,
-} from "../pi-embedded-utils.js";
+import { extractAssistantVisibleText } from "../pi-embedded-utils.js";
 
 export function stripToolMessages(messages: unknown[]): unknown[] {
   return messages.filter((msg) => {
@@ -23,12 +18,7 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
  * This ensures user-facing text doesn't leak internal tool representations.
  */
 export function sanitizeTextContent(text: string): string {
-  if (!text) {
-    return text;
-  }
-  return stripThinkingTagsFromText(
-    stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
-  );
+  return sanitizeAssistantVisibleTextWithProfile(text, "history");
 }
 
 export function hasAssistantPhaseMetadata(message: unknown): boolean {

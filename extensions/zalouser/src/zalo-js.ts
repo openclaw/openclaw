@@ -203,14 +203,17 @@ function normalizeAccountInfoUser(info: AccountInfoResponse): User | null {
     }
     return null;
   }
-  return info as User;
+  return info;
 }
 
 function toInteger(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.trunc(value);
   }
-  const parsed = Number.parseInt(String(value ?? ""), 10);
+  const parsed = Number.parseInt(
+    typeof value === "string" ? value : typeof value === "number" ? String(value) : "",
+    10,
+  );
   if (!Number.isFinite(parsed)) {
     return fallback;
   }
@@ -243,7 +246,10 @@ function resolveInboundTimestamp(rawTs: unknown): number {
   if (typeof rawTs === "number" && Number.isFinite(rawTs)) {
     return rawTs > 1_000_000_000_000 ? rawTs : rawTs * 1000;
   }
-  const parsed = Number.parseInt(String(rawTs ?? ""), 10);
+  const parsed = Number.parseInt(
+    typeof rawTs === "string" ? rawTs : typeof rawTs === "number" ? String(rawTs) : "",
+    10,
+  );
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return Date.now();
   }
@@ -617,7 +623,7 @@ async function ensureApi(
   const initPromise = (async () => {
     const stored = readCredentials(profile);
     if (!stored) {
-      throw new Error(`No saved Zalo session for profile \"${profile}\"`);
+      throw new Error(`No saved Zalo session for profile "${profile}"`);
     }
     const zalo = await createZalo({
       logging: false,
@@ -631,7 +637,7 @@ async function ensureApi(
         language: stored.language,
       }),
       timeoutMs,
-      `Timed out restoring Zalo session for profile \"${profile}\"`,
+      `Timed out restoring Zalo session for profile "${profile}"`,
     );
     apiByProfile.set(profile, api);
     touchCredentials(profile);
@@ -776,7 +782,7 @@ function extractGroupMembersFromInfo(
 }
 
 function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMessage | null {
-  const data = message.data as Record<string, unknown>;
+  const data = message.data;
   const isGroup = message.type === ThreadType.Group;
   const senderId = toNumberId(data.uidFrom);
   const threadId = isGroup
@@ -886,7 +892,7 @@ export async function listZaloFriendsMatching(
       return { friend, exact, includes };
     })
     .filter((entry) => entry.includes)
-    .sort((a, b) => Number(b.exact) - Number(a.exact));
+    .toSorted((a, b) => Number(b.exact) - Number(a.exact));
   return scored.map((entry) => entry.friend);
 }
 
@@ -1503,7 +1509,7 @@ export async function startZaloListener(params: {
   const existing = activeListeners.get(profile);
   if (existing) {
     throw new Error(
-      `Zalo listener already running for profile \"${profile}\" (account \"${existing.accountId}\")`,
+      `Zalo listener already running for profile "${profile}" (account "${existing.accountId}")`,
     );
   }
 

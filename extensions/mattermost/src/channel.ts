@@ -27,8 +27,6 @@ import {
   chunkTextForOutbound,
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   type ChannelPlugin,
 } from "./channel-api.js";
 import { MattermostChannelConfigSchema } from "./config-surface.js";
@@ -117,7 +115,7 @@ function describeMattermostMessageTool({
   const baseReactions = actionsConfig?.reactions;
   const hasReactionCapableAccount = enabledAccounts.some((account) => {
     const accountActions = account.config.actions as { reactions?: boolean } | undefined;
-    return (accountActions?.reactions ?? baseReactions ?? true) !== false;
+    return accountActions?.reactions ?? baseReactions ?? true;
   });
   if (hasReactionCapableAccount) {
     actions.push("react");

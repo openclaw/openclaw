@@ -13,12 +13,12 @@ ACP_AGENT="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
 
 case "$ACP_AGENT" in
   claude)
-    AUTH_PROVIDER="anthropic"
+    AUTH_PROVIDER="claude-cli"
     CLI_PACKAGE="@anthropic-ai/claude-code"
     CLI_BIN="claude"
     ;;
   codex)
-    AUTH_PROVIDER="openai-codex"
+    AUTH_PROVIDER="codex-cli"
     CLI_PACKAGE="@openai/codex"
     CLI_BIN="codex"
     ;;
@@ -103,7 +103,6 @@ if ((${#auth_files[@]} > 0)); then
   for auth_file in "${auth_files[@]}"; do
     [ -n "$auth_file" ] || continue
     if [ -f "/host-auth-files/$auth_file" ]; then
-      mkdir -p "$(dirname "$HOME/$auth_file")"
       cp "/host-auth-files/$auth_file" "$HOME/$auth_file"
       chmod u+rw "$HOME/$auth_file" || true
     fi

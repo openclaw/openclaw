@@ -15,7 +15,7 @@ function resolveMemoryCorePluginConfig(cfg: OpenClawConfig): Record<string, unkn
 }
 
 function updateDreamingEnabledInConfig(cfg: OpenClawConfig, enabled: boolean): OpenClawConfig {
-  const entries = { ...(cfg.plugins?.entries ?? {}) };
+  const entries = { ...cfg.plugins?.entries };
   const existingEntry = asRecord(entries["memory-core"]) ?? {};
   const existingConfig = asRecord(existingEntry.config) ?? {};
   const existingSleep = asRecord(existingConfig.dreaming) ?? {};

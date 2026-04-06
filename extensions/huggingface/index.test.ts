@@ -20,7 +20,7 @@ vi.mock("./onboard.js", () => ({
 
 import plugin from "./index.js";
 
-function registerProvider() {
+function _registerProvider() {
   return registerProviderWithPluginConfig({});
 }
 

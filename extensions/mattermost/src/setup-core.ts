@@ -52,7 +52,7 @@ export const mattermostSetupAdapter: ChannelSetupAdapter = {
         message: "Mattermost requires --bot-token and --http-url (or --use-env).",
       },
     ],
-    validate: ({ accountId, input }) => {
+    validate: ({ _accountId, input }) => {
       const token = input.botToken ?? input.token;
       const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);
       if (!input.useEnv && (!token || !baseUrl)) {

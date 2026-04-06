@@ -10,17 +10,14 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled, loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { enqueueSystemEvent, recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
+import { getChildLogger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { logDebug } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import {
@@ -272,34 +269,42 @@ function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message
         globalName: mention.global_name ?? undefined,
       }))
     : undefined;
+  const assignWithPrototype = <T extends object>(baseObject: T, ...sources: object[]): T =>
+    Object.assign(
+      Object.create(Object.getPrototypeOf(baseObject) ?? Object.prototype),
+      baseObject,
+      ...sources,
+    ) as T;
   const referencedMessage = fetched.referenced_message
-    ? ({
-        ...((base as { referencedMessage?: object }).referencedMessage ?? {}),
-        ...fetched.referenced_message,
-        mentionedUsers: Array.isArray(fetched.referenced_message.mentions)
-          ? fetched.referenced_message.mentions.map((mention) => ({
-              ...mention,
-              globalName: mention.global_name ?? undefined,
-            }))
-          : (baseReferenced?.mentionedUsers ?? []),
-        mentionedRoles:
-          fetched.referenced_message.mention_roles ?? baseReferenced?.mentionedRoles ?? [],
-        mentionedEveryone:
-          fetched.referenced_message.mention_everyone ?? baseReferenced?.mentionedEveryone ?? false,
-      } satisfies Record<string, unknown>)
+    ? assignWithPrototype(
+        ((base as { referencedMessage?: Message }).referencedMessage ?? {}) as Message,
+        fetched.referenced_message,
+        {
+          mentionedUsers: Array.isArray(fetched.referenced_message.mentions)
+            ? fetched.referenced_message.mentions.map((mention) => ({
+                ...mention,
+                globalName: mention.global_name ?? undefined,
+              }))
+            : (baseReferenced?.mentionedUsers ?? []),
+          mentionedRoles:
+            fetched.referenced_message.mention_roles ?? baseReferenced?.mentionedRoles ?? [],
+          mentionedEveryone:
+            fetched.referenced_message.mention_everyone ??
+            baseReferenced?.mentionedEveryone ??
+            false,
+        } satisfies Record<string, unknown>,
+      )
     : (base as { referencedMessage?: Message }).referencedMessage;
+  const baseRawData = (base as { rawData?: Record<string, unknown> }).rawData;
   const rawData = {
-    ...((base as { rawData?: Record<string, unknown> }).rawData ?? {}),
+    ...(base as { rawData?: Record<string, unknown> }).rawData,
     message_snapshots:
       fetched.message_snapshots ??
       (base as { rawData?: { message_snapshots?: unknown } }).rawData?.message_snapshots,
     sticker_items:
-      (fetched as { sticker_items?: unknown }).sticker_items ??
-      (base as { rawData?: { sticker_items?: unknown } }).rawData?.sticker_items,
+      (fetched as { sticker_items?: unknown }).sticker_items ?? baseRawData?.sticker_items,
   };
-  return {
-    ...base,
-    ...fetched,
+  return assignWithPrototype(base, fetched, {
     content: fetched.content ?? base.content,
     attachments: fetched.attachments ?? base.attachments,
     embeds: fetched.embeds ?? base.embeds,
@@ -312,7 +317,7 @@ function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message
     mentionedEveryone: fetched.mention_everyone ?? base.mentionedEveryone,
     referencedMessage,
     rawData,
-  } as unknown as Message;
+  }) as unknown as Message;
 }
 
 async function hydrateDiscordMessageIfEmpty(params: {

@@ -15,9 +15,7 @@ export { listQaChannelAccountIds, resolveDefaultQaChannelAccountId };
 function resolveMergedQaAccountConfig(cfg: CoreConfig, accountId: string): QaChannelAccountConfig {
   return resolveMergedAccountConfig<QaChannelAccountConfig>({
     channelConfig: cfg.channels?.["qa-channel"] as QaChannelAccountConfig | undefined,
-    accounts: cfg.channels?.["qa-channel"]?.accounts as
-      | Record<string, Partial<QaChannelAccountConfig>>
-      | undefined,
+    accounts: cfg.channels?.["qa-channel"]?.accounts,
     accountId,
     omitKeys: ["defaultAccount"],
     normalizeAccountId,

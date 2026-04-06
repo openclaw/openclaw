@@ -1753,7 +1753,7 @@ describe("runReplyAgent memory flush", () => {
       const baseRun = createBaseRun({
         storePath,
         sessionEntry,
-        runOverrides: { provider: "openai" },
+        runOverrides: { provider: "codex-cli" },
       });
 
       await runReplyAgentWithBase({

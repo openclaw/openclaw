@@ -432,7 +432,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     config,
     runtime,
     core,
-    text,
+    _text,
     mediaPath,
     mediaType,
     statusSink,
@@ -613,7 +613,9 @@ async function deliverZaloReply(params: {
       statusSink?.({ lastOutboundAt: Date.now() });
     },
     onMediaError: (error) => {
-      runtime.error?.(`Zalo photo send failed: ${String(error)}`);
+      runtime.error?.(
+        `Zalo photo send failed: ${error instanceof Error ? error.message : JSON.stringify(error)}`,
+      );
     },
   });
 }

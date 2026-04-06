@@ -163,7 +163,7 @@ describe("mattermost setup", () => {
     expect(applyAccountConfig).toBeTypeOf("function");
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: { channels: { mattermost: {} } },
         accountId: DEFAULT_ACCOUNT_ID,
         input: {
@@ -184,7 +184,7 @@ describe("mattermost setup", () => {
     });
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: {
           channels: {
             mattermost: {

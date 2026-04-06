@@ -35,7 +35,7 @@ function createCfg(): OpenClawConfig {
 }
 
 function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegramAccount {
-  return telegramPlugin.config.resolveAccount(cfg, accountId) as ResolvedTelegramAccount;
+  return telegramPlugin.config.resolveAccount(cfg, accountId);
 }
 
 function installTelegramRuntime(telegram?: Record<string, unknown>) {

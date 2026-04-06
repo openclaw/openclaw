@@ -971,6 +971,7 @@ export async function startGatewayServer(
             clearAgentRunContext,
             toolEventRecipients,
             sessionEventSubscribers,
+            isChatSendRunActive: (runId) => chatAbortControllers.has(runId),
           }),
         );
 

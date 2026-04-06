@@ -106,7 +106,7 @@ describe.skipIf(!LIVE)("video generation provider live", () => {
           "video provider",
         );
         const durationSeconds = Math.min(provider.capabilities.maxDurationSeconds ?? 3, 3);
-        const providerModel = resolveProviderModelForLiveTest(testCase.providerId, modelRef!);
+        const providerModel = resolveProviderModelForLiveTest(testCase.providerId, modelRef);
 
         const result = await provider.generateVideo({
           provider: testCase.providerId,

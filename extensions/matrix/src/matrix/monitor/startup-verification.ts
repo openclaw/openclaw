@@ -134,8 +134,7 @@ function hasPendingSelfVerification(
   }>,
 ): boolean {
   return verifications.some(
-    (entry) =>
-      entry.isSelfVerification === true && entry.completed !== true && entry.pending !== false,
+    (entry) => entry.isSelfVerification && !entry.completed && entry.pending,
   );
 }
 

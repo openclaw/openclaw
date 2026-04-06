@@ -75,7 +75,7 @@ function createCronHarness(
       if (index < 0) {
         return {};
       }
-      const current = jobs[index]!;
+      const current = jobs[index];
       jobs[index] = {
         ...current,
         ...(patch.name ? { name: patch.name } : {}),
