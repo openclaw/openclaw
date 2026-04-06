@@ -228,7 +228,8 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
  * (Docker, Podman, or Kubernetes).
  *
  * Uses two reliable heuristics:
- * 1. Presence of `/.dockerenv` (set by Docker and Podman).
+ * 1. Presence of well-known container sentinel files such as `/.dockerenv`
+ *    (Docker) or `/run/.containerenv` (Podman).
  * 2. Presence of container-related cgroup entries in `/proc/1/cgroup`
  *    (covers Docker, containerd, and Kubernetes pods).
  *
@@ -245,12 +246,14 @@ export function isContainerEnvironment(): boolean {
 }
 
 function detectContainerEnvironment(): boolean {
-  // 1. /.dockerenv exists in Docker and Podman containers.
-  try {
-    fs.accessSync("/.dockerenv", fs.constants.F_OK);
-    return true;
-  } catch {
-    // not present — continue
+  // 1. Check common Docker/Podman container sentinel files.
+  for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
+    try {
+      fs.accessSync(sentinelPath, fs.constants.F_OK);
+      return true;
+    } catch {
+      // not present — continue
+    }
   }
   // 2. /proc/1/cgroup contains docker, containerd, kubepods, or lxc markers.
   //    Covers both cgroup v1 (/docker/<id>, /kubepods/...) and cgroup v2
@@ -354,9 +357,9 @@ export async function resolveGatewayBindHost(
  * returns `"loopback"` because Tailscale serve/funnel architecturally requires
  * a loopback bind — container auto-detection must never override this.
  *
- * This function is the **single source of truth** for the unset-bind default
- * and MUST be used by all codepaths that need the effective bind mode (runtime
- * config, CLI startup, doctor diagnostics, status gathering, etc.).
+ * Use this only in gateway startup codepaths that execute in the same
+ * environment as the eventual bind decision. Host-side diagnostics should keep
+ * their own explicit defaults instead of inferring from the caller process.
  */
 export function defaultGatewayBindMode(
   tailscaleMode?: string,
