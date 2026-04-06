@@ -667,7 +667,7 @@ export function createHooksRequestHandler(
           message: normalized.value.message,
           name: normalized.value.name,
           wakeMode: normalized.value.wakeMode,
-          sessionTarget: normalized.value.sessionTarget ?? null,
+          sessionTarget: null, // mapping-level only; direct /agent endpoint always uses isolated
           deliver: normalized.value.deliver,
           channel: normalized.value.channel,
           to: normalized.value.to ?? null,
