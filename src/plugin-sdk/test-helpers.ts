@@ -1,3 +1,4 @@
+import { mkdtempSync } from "node:fs";
 import { mkdtemp, rm, type RmOptions } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -26,7 +27,14 @@ export function createPluginSdkTestHarness(options?: { cleanup?: RmOptions }) {
     return dir;
   }
 
+  function createTempDirSync(prefix: string): string {
+    const dir = mkdtempSync(path.join(tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  }
+
   return {
     createTempDir,
+    createTempDirSync,
   };
 }
