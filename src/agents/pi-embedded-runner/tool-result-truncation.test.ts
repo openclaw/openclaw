@@ -1,51 +1,25 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildSessionWriteLockModuleMock,
-  resetModulesWithSessionWriteLockDoMock,
-} from "../../test-utils/session-write-lock-module-mock.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
-
-const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
-const acquireSessionWriteLockMock = vi.hoisted(() =>
-  vi.fn(async (_params?: unknown) => ({ release: acquireSessionWriteLockReleaseMock })),
-);
-
-vi.mock("../session-write-lock.js", () =>
-  buildSessionWriteLockModuleMock(
-    () => vi.importActual<typeof import("../session-write-lock.js")>("../session-write-lock.js"),
-    (params) => acquireSessionWriteLockMock(params),
-  ),
-);
 
 let truncateToolResultText: typeof import("./tool-result-truncation.js").truncateToolResultText;
 let truncateToolResultMessage: typeof import("./tool-result-truncation.js").truncateToolResultMessage;
 let calculateMaxToolResultChars: typeof import("./tool-result-truncation.js").calculateMaxToolResultChars;
 let getToolResultTextLength: typeof import("./tool-result-truncation.js").getToolResultTextLength;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
-let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
 let isOversizedToolResult: typeof import("./tool-result-truncation.js").isOversizedToolResult;
-let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let HARD_MAX_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").HARD_MAX_TOOL_RESULT_CHARS;
-let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 
 async function loadFreshToolResultTruncationModuleForTest() {
-  resetModulesWithSessionWriteLockDoMock("../session-write-lock.js", (params) =>
-    acquireSessionWriteLockMock(params),
-  );
-  ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({
     truncateToolResultText,
     truncateToolResultMessage,
     calculateMaxToolResultChars,
     getToolResultTextLength,
     truncateOversizedToolResultsInMessages,
-    truncateOversizedToolResultsInSession,
     isOversizedToolResult,
-    sessionLikelyHasOversizedToolResults,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     HARD_MAX_TOOL_RESULT_CHARS,
   } = await import("./tool-result-truncation.js"));
@@ -56,8 +30,6 @@ const nextTimestamp = () => testTimestamp++;
 
 beforeEach(async () => {
   testTimestamp = 1;
-  acquireSessionWriteLockMock.mockClear();
-  acquireSessionWriteLockReleaseMock.mockClear();
   await loadFreshToolResultTruncationModuleForTest();
 });
 
@@ -293,206 +265,6 @@ describe("truncateOversizedToolResultsInMessages", () => {
       const text = getFirstToolResultText(msg);
       expect(text.length).toBeLessThan(500_000);
     }
-  });
-});
-
-describe("truncateOversizedToolResultsInSession", () => {
-  it("acquires the session write lock before rewriting oversized tool results", async () => {
-    const sessionFile = "/tmp/tool-result-truncation-session.jsonl";
-    const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(makeUserMessage("hello"));
-    sessionManager.appendMessage(makeAssistantMessage("reading file"));
-    sessionManager.appendMessage(makeToolResult("x".repeat(500_000)));
-
-    const openSpy = vi
-      .spyOn(SessionManager, "open")
-      .mockReturnValue(sessionManager as unknown as ReturnType<typeof SessionManager.open>);
-    const listener = vi.fn();
-    const cleanup = onSessionTranscriptUpdate(listener);
-
-    try {
-      const result = await truncateOversizedToolResultsInSession({
-        sessionFile,
-        contextWindowTokens: 128_000,
-        sessionKey: "agent:main:test",
-      });
-
-      expect(result.truncated).toBe(true);
-      expect(result.truncatedCount).toBe(1);
-      expect(acquireSessionWriteLockMock).toHaveBeenCalledWith({ sessionFile });
-      expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
-      expect(listener).toHaveBeenCalledWith({ sessionFile });
-
-      const branch = sessionManager.getBranch();
-      const rewrittenToolResult = branch.find(
-        (entry) => entry.type === "message" && entry.message.role === "toolResult",
-      );
-      expect(rewrittenToolResult?.type).toBe("message");
-      if (
-        rewrittenToolResult?.type !== "message" ||
-        rewrittenToolResult.message.role !== "toolResult"
-      ) {
-        throw new Error("expected rewritten tool result");
-      }
-      const rewrittenText = getFirstToolResultText(rewrittenToolResult.message);
-      expect(rewrittenText.length).toBeLessThan(500_000);
-      expect(rewrittenText).toContain("truncated");
-    } finally {
-      cleanup();
-      openSpy.mockRestore();
-    }
-  });
-
-  it("rewrites aggregate medium tool results when their combined size still overflows the session", async () => {
-    const sessionFile = "/tmp/tool-result-truncation-aggregate-session.jsonl";
-    const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage(makeUserMessage("u".repeat(20_000)));
-    sessionManager.appendMessage(makeAssistantMessage("reading files"));
-    sessionManager.appendMessage(makeToolResult("a".repeat(10_000)));
-    sessionManager.appendMessage(makeToolResult("b".repeat(10_000)));
-    sessionManager.appendMessage(makeToolResult("c".repeat(10_000)));
-
-    const openSpy = vi
-      .spyOn(SessionManager, "open")
-      .mockReturnValue(sessionManager as unknown as ReturnType<typeof SessionManager.open>);
-
-    try {
-      const result = await truncateOversizedToolResultsInSession({
-        sessionFile,
-        contextWindowTokens: 10_000,
-        sessionKey: "agent:main:aggregate-test",
-      });
-
-      expect(result.truncated).toBe(true);
-      expect(result.truncatedCount).toBeGreaterThan(0);
-
-      const branch = sessionManager.getBranch();
-      const toolTexts = branch
-        .filter((entry) => entry.type === "message" && entry.message.role === "toolResult")
-        .map((entry) =>
-          entry.type === "message" && entry.message.role === "toolResult"
-            ? getFirstToolResultText(entry.message)
-            : "",
-        );
-      expect(toolTexts.some((text) => text.includes("truncated"))).toBe(true);
-      expect(toolTexts.some((text) => text.length < 10_000)).toBe(true);
-    } finally {
-      openSpy.mockRestore();
-    }
-  });
-
-  it("lets a retry pass the real guard after aggregate session rewrite", async () => {
-    const { PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE, installToolResultContextGuard } =
-      await import("./tool-result-context-guard.js");
-    const sessionFile = "/tmp/tool-result-truncation-seam-session.jsonl";
-    const contextWindowTokens = 10_000;
-    const originalMessages = [
-      makeUserMessage("u".repeat(20_000)),
-      makeAssistantMessage("reading files"),
-      makeToolResult("a".repeat(10_000), "call_a"),
-      makeToolResult("b".repeat(10_000), "call_b"),
-      makeToolResult("c".repeat(10_000), "call_c"),
-    ];
-    const guardAgent = {};
-    installToolResultContextGuard({ agent: guardAgent, contextWindowTokens });
-
-    await expect(
-      (
-        guardAgent as {
-          transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown;
-        }
-      ).transformContext?.(originalMessages, new AbortController().signal),
-    ).rejects.toThrow(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
-
-    expect(
-      sessionLikelyHasOversizedToolResults({
-        messages: originalMessages,
-        contextWindowTokens,
-      }),
-    ).toBe(true);
-
-    const sessionManager = SessionManager.inMemory();
-    for (const message of originalMessages) {
-      sessionManager.appendMessage(message);
-    }
-    const openSpy = vi
-      .spyOn(SessionManager, "open")
-      .mockReturnValue(sessionManager as unknown as ReturnType<typeof SessionManager.open>);
-
-    try {
-      const rewriteResult = await truncateOversizedToolResultsInSession({
-        sessionFile,
-        contextWindowTokens,
-        sessionKey: "agent:main:seam-test",
-      });
-
-      expect(rewriteResult.truncated).toBe(true);
-      expect(rewriteResult.truncatedCount).toBeGreaterThan(0);
-
-      const rewrittenMessages = sessionManager
-        .getBranch()
-        .filter((entry) => entry.type === "message")
-        .map((entry) => (entry.type === "message" ? entry.message : null))
-        .filter((message): message is AgentMessage => message !== null);
-
-      const retryAgent = {};
-      installToolResultContextGuard({ agent: retryAgent, contextWindowTokens });
-      await expect(
-        (
-          retryAgent as {
-            transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown;
-          }
-        ).transformContext?.(rewrittenMessages, new AbortController().signal),
-      ).resolves.toBeDefined();
-    } finally {
-      openSpy.mockRestore();
-    }
-  });
-});
-
-describe("sessionLikelyHasOversizedToolResults", () => {
-  it("returns false when no tool results are oversized", () => {
-    const messages = [makeUserMessage("hello"), makeToolResult("small result")];
-    expect(
-      sessionLikelyHasOversizedToolResults({
-        messages,
-        contextWindowTokens: 200_000,
-      }),
-    ).toBe(false);
-  });
-
-  it("returns true when a tool result is oversized", () => {
-    const messages = [makeUserMessage("hello"), makeToolResult("x".repeat(500_000))];
-    expect(
-      sessionLikelyHasOversizedToolResults({
-        messages,
-        contextWindowTokens: 128_000,
-      }),
-    ).toBe(true);
-  });
-
-  it("returns true when several medium tool results exceed the aggregate overflow budget", () => {
-    const messages = [
-      makeUserMessage("u".repeat(20_000)),
-      makeToolResult("a".repeat(10_000)),
-      makeToolResult("b".repeat(10_000)),
-      makeToolResult("c".repeat(10_000)),
-    ];
-    expect(
-      sessionLikelyHasOversizedToolResults({
-        messages,
-        contextWindowTokens: 10_000,
-      }),
-    ).toBe(true);
-  });
-
-  it("returns false for empty messages", () => {
-    expect(
-      sessionLikelyHasOversizedToolResults({
-        messages: [],
-        contextWindowTokens: 200_000,
-      }),
-    ).toBe(false);
   });
 });
 
