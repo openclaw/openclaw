@@ -355,12 +355,12 @@ describe("installPluginFromClawHub", () => {
     );
   });
 
-  it("validates _meta.json against the canonical package name instead of the requested alias", async () => {
+  it("validates _meta.json against canonical package and resolved version metadata", async () => {
     const archive = await createClawHubArchive({
       "openclaw.plugin.json": '{"id":"demo"}',
       "_meta.json": '{"slug":"demo","version":"2026.3.22"}',
     });
-    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "DemoAlias" });
+    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "DemoAlias", version: "latest" });
     fetchClawHubPackageDetailMock.mockResolvedValueOnce({
       package: {
         name: "demo",
@@ -399,12 +399,14 @@ describe("installPluginFromClawHub", () => {
       ...archive,
       cleanup: archiveCleanupMock,
     });
+    const logger = createLoggerSpies();
 
     const result = await installPluginFromClawHub({
-      spec: "clawhub:DemoAlias",
+      spec: "clawhub:DemoAlias@latest",
+      logger,
     });
 
-    expect(result).toMatchObject({ ok: true, pluginId: "demo" });
+    expect(result).toMatchObject({ ok: true, pluginId: "demo", version: "2026.3.22" });
     expect(fetchClawHubPackageDetailMock).toHaveBeenCalledWith(
       expect.objectContaining({
         name: "DemoAlias",
@@ -413,7 +415,11 @@ describe("installPluginFromClawHub", () => {
     expect(fetchClawHubPackageVersionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         name: "demo",
+        version: "latest",
       }),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      'ClawHub package "demo@2026.3.22" is missing sha256hash; falling back to files[] verification. Validated files: openclaw.plugin.json. Validated generated metadata files present in archive: _meta.json (JSON parse plus slug/version match only).',
     );
   });
 

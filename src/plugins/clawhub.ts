@@ -497,7 +497,7 @@ function validateClawHubArchiveMetaJson(params: {
 async function verifyClawHubArchiveFiles(params: {
   archivePath: string;
   packageName: string;
-  version: string;
+  packageVersion: string;
   files: ClawHubFileVerificationEntry[];
 }): Promise<ClawHubArchiveFileVerificationResult> {
   try {
@@ -532,7 +532,7 @@ async function verifyClawHubArchiveFiles(params: {
       const relativePath = normalizeClawHubRelativePath(entry.name);
       if (!relativePath) {
         return buildClawHubInstallFailure(
-          `ClawHub archive contents do not match files[] metadata for "${params.packageName}@${params.version}": invalid package file path "${entry.name}" (${describeInvalidClawHubRelativePath(entry.name)}).`,
+          `ClawHub archive contents do not match files[] metadata for "${params.packageName}@${params.packageVersion}": invalid package file path "${entry.name}" (${describeInvalidClawHubRelativePath(entry.name)}).`,
           CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
         );
       }
@@ -546,7 +546,7 @@ async function verifyClawHubArchiveFiles(params: {
         }
         const metaFailure = validateClawHubArchiveMetaJson({
           packageName: params.packageName,
-          version: params.version,
+          version: params.packageVersion,
           bytes: metaResult,
         });
         if (metaFailure) {
@@ -568,13 +568,13 @@ async function verifyClawHubArchiveFiles(params: {
       const actualSha256 = actualFiles.get(file.path);
       if (!actualSha256) {
         return buildClawHubInstallFailure(
-          `ClawHub archive contents do not match files[] metadata for "${params.packageName}@${params.version}": missing "${file.path}".`,
+          `ClawHub archive contents do not match files[] metadata for "${params.packageName}@${params.packageVersion}": missing "${file.path}".`,
           CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
         );
       }
       if (actualSha256 !== file.sha256) {
         return buildClawHubInstallFailure(
-          `ClawHub archive contents do not match files[] metadata for "${params.packageName}@${params.version}": expected ${file.path} to hash to ${file.sha256}, got ${actualSha256}.`,
+          `ClawHub archive contents do not match files[] metadata for "${params.packageName}@${params.packageVersion}": expected ${file.path} to hash to ${file.sha256}, got ${actualSha256}.`,
           CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
         );
       }
@@ -583,7 +583,7 @@ async function verifyClawHubArchiveFiles(params: {
     const unexpectedFile = [...actualFiles.keys()].toSorted()[0];
     if (unexpectedFile) {
       return buildClawHubInstallFailure(
-        `ClawHub archive contents do not match files[] metadata for "${params.packageName}@${params.version}": unexpected file "${unexpectedFile}".`,
+        `ClawHub archive contents do not match files[] metadata for "${params.packageName}@${params.packageVersion}": unexpected file "${unexpectedFile}".`,
         CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
       );
     }
@@ -613,8 +613,8 @@ async function resolveCompatiblePackageVersion(params: {
     }
   | ClawHubInstallFailure
 > {
-  const version = resolveRequestedVersion(params);
-  if (!version) {
+  const requestedVersion = resolveRequestedVersion(params);
+  if (!requestedVersion) {
     return buildClawHubInstallFailure(
       `ClawHub package "${params.detail.package?.name ?? "unknown"}" has no installable version.`,
       CLAWHUB_INSTALL_ERROR_CODE.NO_INSTALLABLE_VERSION,
@@ -624,7 +624,7 @@ async function resolveCompatiblePackageVersion(params: {
   try {
     versionDetail = await fetchClawHubPackageVersion({
       name: params.detail.package?.name ?? "",
-      version,
+      version: requestedVersion,
       baseUrl: params.baseUrl,
       token: params.token,
     });
@@ -632,13 +632,14 @@ async function resolveCompatiblePackageVersion(params: {
     return mapClawHubRequestError(error, {
       stage: "version",
       name: params.detail.package?.name ?? "unknown",
-      version,
+      version: requestedVersion,
     });
   }
+  const resolvedVersion = versionDetail.version?.version ?? requestedVersion;
   if (params.detail.package?.family === "skill") {
     return {
       ok: true,
-      version,
+      version: resolvedVersion,
       compatibility:
         versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
       verification: null,
@@ -647,14 +648,14 @@ async function resolveCompatiblePackageVersion(params: {
   const verificationState = resolveClawHubArchiveVerification(
     versionDetail,
     params.detail.package?.name ?? "unknown",
-    version,
+    resolvedVersion,
   );
   if (!verificationState.ok) {
     return verificationState;
   }
   return {
     ok: true,
-    version,
+    version: resolvedVersion,
     compatibility:
       versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
     verification: verificationState.verification,
@@ -849,7 +850,7 @@ export async function installPluginFromClawHub(
       const fallbackVerification = await verifyClawHubArchiveFiles({
         archivePath: archive.archivePath,
         packageName: canonicalPackageName,
-        version: versionState.version,
+        packageVersion: versionState.version,
         files: versionState.verification.files,
       });
       if (!fallbackVerification.ok) {
@@ -860,7 +861,7 @@ export async function installPluginFromClawHub(
           ? ` Validated generated metadata files present in archive: ${fallbackVerification.validatedGeneratedPaths.join(", ")} (JSON parse plus slug/version match only).`
           : "";
       params.logger?.warn?.(
-        `ClawHub package "${parsed.name}@${versionState.version}" is missing sha256hash; falling back to files[] verification. Validated files: ${validatedPaths}.${validatedGeneratedPaths}`,
+        `ClawHub package "${canonicalPackageName}@${versionState.version}" is missing sha256hash; falling back to files[] verification. Validated files: ${validatedPaths}.${validatedGeneratedPaths}`,
       );
     }
     params.logger?.info?.(
