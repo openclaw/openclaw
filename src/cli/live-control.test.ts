@@ -4,23 +4,34 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectLiveStatus,
+  collectLiveSyncStatus,
   createDraftWorktree,
   listLiveJournal,
   promoteLiveSource,
+  syncLiveCheckout,
   type LiveControlDeps,
 } from "./live-control.js";
 
 type GitFixture = {
+  ahead?: number;
   branch: string;
   commonDir: string;
   head: string;
+  behind?: number;
+  lockfileChanged?: boolean;
+  remotes?: Record<string, string>;
   status: string;
+  remoteRefs?: Record<string, string>;
 };
 
 type GitFixtures = Record<string, GitFixture>;
 
 function createGitRunCommand(fixtures: GitFixtures) {
   return vi.fn(async (argv: string[]) => {
+    if (argv[0] === "pnpm" && argv[1] === "install" && argv[2] === "--frozen-lockfile") {
+      return { code: 0, stdout: "", stderr: "" };
+    }
+
     const [binary, dashC, cwd, ...args] = argv;
     if (binary !== "git" || dashC !== "-C" || typeof cwd !== "string") {
       throw new Error(`Unexpected command: ${argv.join(" ")}`);
@@ -40,8 +51,22 @@ function createGitRunCommand(fixtures: GitFixtures) {
     if (args[0] === "rev-parse" && args[1] === "HEAD") {
       return { code: 0, stdout: `${fixture.head}\n`, stderr: "" };
     }
+    if (args[0] === "rev-parse" && args[1] === "origin/main") {
+      const remoteHead = fixture.remoteRefs?.["origin/main"];
+      if (!remoteHead) {
+        return { code: 1, stdout: "", stderr: "origin/main missing" };
+      }
+      return { code: 0, stdout: `${remoteHead}\n`, stderr: "" };
+    }
     if (args[0] === "rev-parse" && args[1] === "--git-common-dir") {
       return { code: 0, stdout: `${fixture.commonDir}\n`, stderr: "" };
+    }
+    if (args[0] === "rev-list" && args[1] === "--left-right" && args[2] === "--count") {
+      return {
+        code: 0,
+        stdout: `${fixture.ahead ?? 0}\t${fixture.behind ?? 0}\n`,
+        stderr: "",
+      };
     }
     if (
       args[0] === "status" &&
@@ -50,13 +75,35 @@ function createGitRunCommand(fixtures: GitFixtures) {
     ) {
       return { code: 0, stdout: fixture.status, stderr: "" };
     }
+    if (args[0] === "diff" && args[1] === "--name-only") {
+      return {
+        code: 0,
+        stdout: fixture.lockfileChanged ? "pnpm-lock.yaml\n" : "",
+        stderr: "",
+      };
+    }
+    if (args[0] === "fetch" && args[1] === "--quiet") {
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "remote" && args[1] === "get-url") {
+      const url = fixture.remotes?.[args[2] ?? ""];
+      if (!url) {
+        return { code: 1, stdout: "", stderr: `missing remote ${args[2]}` };
+      }
+      return { code: 0, stdout: `${url}\n`, stderr: "" };
+    }
     if (args[0] === "worktree" && args[1] === "add") {
       const branch = args[3];
       const draftPath = args[4];
       fixtures[draftPath] = {
+        ahead: 0,
+        behind: 0,
         branch,
         commonDir: fixture.commonDir,
         head: fixture.head,
+        lockfileChanged: false,
+        remotes: fixture.remotes,
+        remoteRefs: fixture.remoteRefs,
         status: "",
       };
       await fs.mkdir(draftPath, { recursive: true });
@@ -64,11 +111,21 @@ function createGitRunCommand(fixtures: GitFixtures) {
     }
     if (args[0] === "merge" && args[1] === "--ff-only") {
       fixture.head = args[2] ?? fixture.head;
+      if (fixture.remoteRefs?.["origin/main"] === fixture.head) {
+        fixture.ahead = 0;
+        fixture.behind = 0;
+        fixture.lockfileChanged = false;
+      }
       fixture.status = "";
       return { code: 0, stdout: "", stderr: "" };
     }
     if (args[0] === "reset" && args[1] === "--hard") {
       fixture.head = args[2] ?? fixture.head;
+      if (fixture.remoteRefs?.["origin/main"] === fixture.head) {
+        fixture.ahead = 0;
+        fixture.behind = 0;
+        fixture.lockfileChanged = false;
+      }
       fixture.status = "";
       return { code: 0, stdout: "", stderr: "" };
     }
@@ -106,15 +163,35 @@ describe("live-control", () => {
   }): LiveControlDeps {
     const fixtures = params?.git ?? {
       [repoDir]: {
+        ahead: 0,
+        behind: 0,
         branch: "main",
         commonDir: path.join(tempRoot, ".git"),
         head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        lockfileChanged: false,
+        remotes: {
+          origin: "git@github.com:nathan-widjaja/openclaw.git",
+          upstream: "git@github.com:openclaw/openclaw.git",
+        },
+        remoteRefs: {
+          "origin/main": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
         status: "",
       },
       [draftDir]: {
+        ahead: 0,
+        behind: 0,
         branch: "draft/codex-local",
         commonDir: path.join(tempRoot, ".git"),
         head: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        lockfileChanged: false,
+        remotes: {
+          origin: "git@github.com:nathan-widjaja/openclaw.git",
+          upstream: "git@github.com:openclaw/openclaw.git",
+        },
+        remoteRefs: {
+          "origin/main": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
         status: "",
       },
     };
@@ -313,6 +390,264 @@ describe("live-control", () => {
     );
   });
 
+  it("reports live sync as safe when live main already matches origin/main", async () => {
+    const deps = createDeps();
+
+    const status = await collectLiveSyncStatus({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
+    });
+
+    expect(status).toMatchObject({
+      behindBy: 0,
+      draftCount: 0,
+      lockfileChanged: false,
+      originMainSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      runtimeMatchesLive: true,
+      safeToApply: true,
+    });
+    expect(status.blockers).toHaveLength(0);
+  });
+
+  it("reports a clean behind live lane and detects lockfile changes", async () => {
+    const deps = createDeps({
+      git: {
+        [repoDir]: {
+          ahead: 0,
+          behind: 2,
+          branch: "main",
+          commonDir: path.join(tempRoot, ".git"),
+          head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          lockfileChanged: true,
+          remotes: {
+            origin: "git@github.com:nathan-widjaja/openclaw.git",
+            upstream: "git@github.com:openclaw/openclaw.git",
+          },
+          remoteRefs: {
+            "origin/main": "cccccccccccccccccccccccccccccccccccccccc",
+          },
+          status: "",
+        },
+      },
+    });
+
+    const status = await collectLiveSyncStatus({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
+    });
+
+    expect(status).toMatchObject({
+      behindBy: 2,
+      lockfileChanged: true,
+      originMainSha: "cccccccccccccccccccccccccccccccccccccccc",
+      safeToApply: true,
+    });
+    expect(status.blockers).toHaveLength(0);
+  });
+
+  it("blocks live sync when the live checkout is dirty", async () => {
+    const deps = createDeps({
+      git: {
+        [repoDir]: {
+          ahead: 0,
+          behind: 1,
+          branch: "main",
+          commonDir: path.join(tempRoot, ".git"),
+          head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          lockfileChanged: false,
+          remotes: {
+            origin: "git@github.com:nathan-widjaja/openclaw.git",
+            upstream: "git@github.com:openclaw/openclaw.git",
+          },
+          remoteRefs: {
+            "origin/main": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          },
+          status: " M src/cli/live-control.ts\n",
+        },
+      },
+    });
+
+    const status = await collectLiveSyncStatus({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
+    });
+
+    expect(status.safeToApply).toBe(false);
+    expect(status.blockers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "dirty-live-checkout" })]),
+    );
+  });
+
+  it("blocks live sync when draft worktrees are present", async () => {
+    const deps = createDeps({
+      git: {
+        [repoDir]: {
+          ahead: 0,
+          behind: 1,
+          branch: "main",
+          commonDir: path.join(tempRoot, ".git"),
+          head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          lockfileChanged: false,
+          remotes: {
+            origin: "git@github.com:nathan-widjaja/openclaw.git",
+            upstream: "git@github.com:openclaw/openclaw.git",
+          },
+          remoteRefs: {
+            "origin/main": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          },
+          status: "",
+        },
+      },
+    });
+
+    await createDraftWorktree({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
+      name: "codex-local",
+    });
+
+    const status = await collectLiveSyncStatus({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
+    });
+
+    expect(status.safeToApply).toBe(false);
+    expect(status.blockers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "drafts-present" })]),
+    );
+  });
+
+  it("blocks live sync when the runtime source does not match live checkout", async () => {
+    const otherRuntimeDir = path.join(tempRoot, "other-runtime");
+    await fs.mkdir(otherRuntimeDir, { recursive: true });
+    const deps = createDeps({
+      gatherDaemonStatus: vi.fn(async () => ({
+        service: {
+          label: "ai.openclaw.gateway",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          command: {
+            programArguments: [],
+            sourcePath: otherRuntimeDir,
+          },
+          runtime: {
+            status: "running",
+            pid: 999,
+            detail: "healthy",
+          },
+        },
+        rpc: { ok: true },
+        extraServices: [],
+      })),
+      git: {
+        [repoDir]: {
+          ahead: 0,
+          behind: 1,
+          branch: "main",
+          commonDir: path.join(tempRoot, ".git"),
+          head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          lockfileChanged: false,
+          remotes: {
+            origin: "git@github.com:nathan-widjaja/openclaw.git",
+            upstream: "git@github.com:openclaw/openclaw.git",
+          },
+          remoteRefs: {
+            "origin/main": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          },
+          status: "",
+        },
+        [otherRuntimeDir]: {
+          ahead: 0,
+          behind: 0,
+          branch: "main",
+          commonDir: path.join(tempRoot, ".other-runtime.git"),
+          head: "ffffffffffffffffffffffffffffffffffffffff",
+          lockfileChanged: false,
+          remotes: {
+            origin: "git@github.com:someone-else/openclaw.git",
+            upstream: "git@github.com:openclaw/openclaw.git",
+          },
+          remoteRefs: {
+            "origin/main": "ffffffffffffffffffffffffffffffffffffffff",
+          },
+          status: "",
+        },
+      },
+    });
+
+    const status = await collectLiveSyncStatus({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
+    });
+
+    expect(status.safeToApply).toBe(false);
+    expect(status.blockers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "runtime-source-mismatch" })]),
+    );
+  });
+
+  it("syncs live main to origin/main and journals the apply", async () => {
+    const buildCheckout = vi.fn<LiveControlDeps["buildCheckout"]>().mockResolvedValue(undefined);
+    const restartRuntime = vi.fn<LiveControlDeps["restartRuntime"]>().mockResolvedValue(undefined);
+    const deps = createDeps({
+      buildCheckout,
+      git: {
+        [repoDir]: {
+          ahead: 0,
+          behind: 2,
+          branch: "main",
+          commonDir: path.join(tempRoot, ".git"),
+          head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          lockfileChanged: true,
+          remotes: {
+            origin: "git@github.com:nathan-widjaja/openclaw.git",
+            upstream: "git@github.com:openclaw/openclaw.git",
+          },
+          remoteRefs: {
+            "origin/main": "dddddddddddddddddddddddddddddddddddddddd",
+          },
+          status: "",
+        },
+      },
+      restartRuntime,
+    });
+
+    const result = await syncLiveCheckout({
+      actor: "codex",
+      checkout: repoDir,
+      deps,
+    });
+
+    expect(result.applied).toBe(true);
+    expect(result.status.liveSha).toBe("dddddddddddddddddddddddddddddddddddddddd");
+    expect(result.status.behindBy).toBe(0);
+    expect(buildCheckout).toHaveBeenCalledTimes(1);
+    expect(restartRuntime).toHaveBeenCalledTimes(1);
+    expect(deps.runCommand).toHaveBeenCalledWith(
+      ["pnpm", "install", "--frozen-lockfile"],
+      expect.objectContaining({ cwd: repoDir }),
+    );
+
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(stateDir, "live-control", "manifest.json"), "utf8"),
+    ) as { promotedCommit: string; previousPromotedCommit: string };
+    expect(manifest.promotedCommit).toBe("dddddddddddddddddddddddddddddddddddddddd");
+    expect(manifest.previousPromotedCommit).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    const journal = await listLiveJournal({ checkout: repoDir, deps, limit: 10 });
+    expect(journal.entries[0]).toMatchObject({
+      actor: "codex",
+      type: "synced",
+    });
+  });
+
   it("rolls back to the previous promoted commit and records the change", async () => {
     const deps = createDeps();
     await collectLiveStatus({ checkout: repoDir, deps, actor: "codex" });
@@ -387,6 +722,62 @@ describe("live-control", () => {
     expect(journal.entries[0]).toMatchObject({
       actor: "codex",
       type: "promotion_failed",
+    });
+  });
+
+  it("restores the previous live state when a sync apply fails after merge", async () => {
+    const buildCheckout = vi
+      .fn<LiveControlDeps["buildCheckout"]>()
+      .mockRejectedValueOnce(new Error("build exploded"))
+      .mockResolvedValueOnce(undefined);
+    const restartRuntime = vi.fn<LiveControlDeps["restartRuntime"]>().mockResolvedValue(undefined);
+    const deps = createDeps({
+      buildCheckout,
+      git: {
+        [repoDir]: {
+          ahead: 0,
+          behind: 2,
+          branch: "main",
+          commonDir: path.join(tempRoot, ".git"),
+          head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          lockfileChanged: true,
+          remotes: {
+            origin: "git@github.com:nathan-widjaja/openclaw.git",
+            upstream: "git@github.com:openclaw/openclaw.git",
+          },
+          remoteRefs: {
+            "origin/main": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          },
+          status: "",
+        },
+      },
+      restartRuntime,
+    });
+
+    await expect(
+      syncLiveCheckout({
+        actor: "codex",
+        checkout: repoDir,
+        deps,
+      }),
+    ).rejects.toThrow("build exploded");
+
+    expect(buildCheckout).toHaveBeenCalledTimes(2);
+    expect(restartRuntime).toHaveBeenCalledTimes(1);
+    expect(deps.runCommand).toHaveBeenCalledWith(
+      ["pnpm", "install", "--frozen-lockfile"],
+      expect.objectContaining({ cwd: repoDir }),
+    );
+
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(stateDir, "live-control", "manifest.json"), "utf8"),
+    ) as { promotedCommit: string };
+    expect(manifest.promotedCommit).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    const journal = await listLiveJournal({ checkout: repoDir, deps, limit: 10 });
+    expect(journal.entries[0]).toMatchObject({
+      actor: "codex",
+      type: "sync_failed",
     });
   });
 });

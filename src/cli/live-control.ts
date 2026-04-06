@@ -18,12 +18,14 @@ const DEFAULT_JOURNAL_LIMIT = 10;
 const DEFAULT_GIT_TIMEOUT_MS = 10_000;
 const DEFAULT_BUILD_TIMEOUT_MS = 20 * 60_000;
 const DEFAULT_SMOKE_TIMEOUT_MS = 10_000;
+const DEFAULT_INSTALL_TIMEOUT_MS = 20 * 60_000;
 const WATCH_ARGS = ["gateway", "--force"];
 const LIVE_CONTROL_DIRNAME = "live-control";
 const JOURNAL_FILENAME = "journal.jsonl";
 const LOCK_FILENAME = "lock.json";
 const MANIFEST_FILENAME = "manifest.json";
 const DRAFTS_DIRNAME = "drafts";
+const KNOWN_LOCKFILE_PATHS = ["pnpm-lock.yaml", "package-lock.json", "bun.lock", "bun.lockb"];
 
 const liveManifestSchema = z.object({
   version: z.literal(LIVE_CONTROL_VERSION),
@@ -52,6 +54,8 @@ const liveJournalEntrySchema = z.object({
     "promoted",
     "rolled_back",
     "promotion_failed",
+    "synced",
+    "sync_failed",
   ]),
   message: z.string().min(1),
   details: z.record(z.string(), z.unknown()).default({}),
@@ -59,7 +63,7 @@ const liveJournalEntrySchema = z.object({
 
 const actorLockSchema = z.object({
   actor: z.string().min(1),
-  operation: z.enum(["start", "promote", "draft"]),
+  operation: z.enum(["start", "promote", "draft", "sync"]),
   pid: z.number().int().positive(),
   startedAt: z.string().min(1),
 });
@@ -101,6 +105,23 @@ export type DraftSummary = {
   dirty: boolean;
 };
 
+export type LiveSyncBlocker = {
+  code:
+    | "busy"
+    | "branch-drift"
+    | "dirty-live-checkout"
+    | "drafts-present"
+    | "fork-remote-misconfigured"
+    | "live-branch-not-main"
+    | "origin-fetch-failed"
+    | "origin-main-missing"
+    | "promoted-commit-drift"
+    | "runtime-source-mismatch"
+    | "runtime-source-unverified"
+    | "sync-diverged";
+  message: string;
+};
+
 export type LiveStatusSnapshot = {
   manifest: LiveManifest;
   liveGit: GitState;
@@ -115,6 +136,18 @@ export type LiveStatusSnapshot = {
   recentJournal: LiveJournalEntry[];
   drafts: DraftSummary[];
   issues: LiveStatusIssue[];
+};
+
+export type LiveSyncStatus = {
+  liveCheckoutPath: string;
+  liveSha: string;
+  originMainSha: string | null;
+  behindBy: number | null;
+  safeToApply: boolean;
+  blockers: LiveSyncBlocker[];
+  runtimeMatchesLive: boolean | null;
+  draftCount: number;
+  lockfileChanged: boolean;
 };
 
 type CommandResult = {
@@ -182,6 +215,12 @@ type PromoteParams = ResolveManifestParams & {
   buildTimeoutMs?: number;
   smokeTimeoutMs?: number;
   source?: string | null;
+};
+
+type SyncParams = ResolveManifestParams & {
+  buildTimeoutMs?: number;
+  smokeTimeoutMs?: number;
+  fetchOrigin?: boolean;
 };
 
 type CreateDraftParams = ResolveManifestParams & {
@@ -260,6 +299,16 @@ function slugifyDraftName(value: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return slug || "draft";
+}
+
+class LiveAdvanceError extends Error {
+  readonly restoredPreviousLiveState: boolean;
+
+  constructor(message: string, params: { restoredPreviousLiveState: boolean; cause?: unknown }) {
+    super(message, params.cause ? { cause: params.cause } : undefined);
+    this.name = "LiveAdvanceError";
+    this.restoredPreviousLiveState = params.restoredPreviousLiveState;
+  }
 }
 
 async function ensureDir(dir: string): Promise<void> {
@@ -367,6 +416,25 @@ async function runGitCommand(
     );
   }
   return result.stdout.trim();
+}
+
+async function tryRunGitCommand(
+  root: string,
+  args: string[],
+  deps: LiveControlDeps,
+  timeoutMs = DEFAULT_GIT_TIMEOUT_MS,
+): Promise<string | null> {
+  const result = await deps
+    .runCommand(["git", "-C", root, ...args], {
+      cwd: root,
+      timeoutMs,
+    })
+    .catch(() => null);
+  if (!result || result.code !== 0) {
+    return null;
+  }
+  const value = result.stdout.trim();
+  return value || null;
 }
 
 async function resolveGitRoot(cwd: string, deps: LiveControlDeps): Promise<string | null> {
@@ -579,6 +647,125 @@ async function listDrafts(stateDir: string, deps: LiveControlDeps): Promise<Draf
   }
 }
 
+function normalizeRemoteUrl(value: string): string {
+  const trimmed = value.trim().replace(/\.git$/i, "");
+  const sshMatch = trimmed.match(/^[^@]+@([^:]+):(.+)$/);
+  if (sshMatch) {
+    return `${sshMatch[1]}/${sshMatch[2]}`.replace(/\/+$/g, "").toLowerCase();
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return `${parsed.hostname}${parsed.pathname}`.replace(/\/+$/g, "").toLowerCase();
+  } catch {
+    return trimmed.replace(/\/+$/g, "").toLowerCase();
+  }
+}
+
+async function fetchRemoteRef(
+  root: string,
+  remote: string,
+  deps: LiveControlDeps,
+  timeoutMs = DEFAULT_GIT_TIMEOUT_MS,
+): Promise<boolean> {
+  const result = await deps
+    .runCommand(["git", "-C", root, "fetch", "--quiet", remote, "main"], {
+      cwd: root,
+      timeoutMs,
+    })
+    .catch(() => null);
+  return Boolean(result && result.code === 0);
+}
+
+async function resolveGitRemoteUrl(
+  root: string,
+  remote: string,
+  deps: LiveControlDeps,
+): Promise<string | null> {
+  return await tryRunGitCommand(root, ["remote", "get-url", remote], deps);
+}
+
+async function resolveGitRef(
+  root: string,
+  ref: string,
+  deps: LiveControlDeps,
+): Promise<string | null> {
+  return await tryRunGitCommand(root, ["rev-parse", ref], deps);
+}
+
+async function resolveAheadBehindCounts(
+  root: string,
+  left: string,
+  right: string,
+  deps: LiveControlDeps,
+): Promise<{ ahead: number | null; behind: number | null }> {
+  const raw = await tryRunGitCommand(
+    root,
+    ["rev-list", "--left-right", "--count", `${left}...${right}`],
+    deps,
+  );
+  if (!raw) {
+    return { ahead: null, behind: null };
+  }
+  const [aheadRaw, behindRaw] = raw.split(/\s+/);
+  const ahead = Number.parseInt(aheadRaw ?? "", 10);
+  const behind = Number.parseInt(behindRaw ?? "", 10);
+  if (!Number.isFinite(ahead) || !Number.isFinite(behind)) {
+    return { ahead: null, behind: null };
+  }
+  return { ahead, behind };
+}
+
+async function detectLockfileChange(
+  root: string,
+  baseRef: string,
+  targetRef: string,
+  deps: LiveControlDeps,
+): Promise<boolean> {
+  const result = await deps.runCommand(
+    [
+      "git",
+      "-C",
+      root,
+      "diff",
+      "--name-only",
+      `${baseRef}..${targetRef}`,
+      "--",
+      ...KNOWN_LOCKFILE_PATHS,
+    ],
+    {
+      cwd: root,
+      timeoutMs: DEFAULT_GIT_TIMEOUT_MS,
+    },
+  );
+  if (result.code !== 0) {
+    throw new Error(
+      `Could not inspect lockfile changes between ${baseRef} and ${targetRef}: ${trimCommandFailure(result.stderr || result.stdout)}`,
+    );
+  }
+  return (
+    result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean).length > 0
+  );
+}
+
+async function installCheckoutDependencies(
+  checkoutPath: string,
+  deps: LiveControlDeps,
+  timeoutMs = DEFAULT_INSTALL_TIMEOUT_MS,
+): Promise<void> {
+  const result = await deps.runCommand(["pnpm", "install", "--frozen-lockfile"], {
+    cwd: checkoutPath,
+    timeoutMs,
+  });
+  if (result.code !== 0) {
+    throw new Error(
+      `Dependency install failed in ${checkoutPath}: ${trimCommandFailure(result.stderr || result.stdout)}`,
+    );
+  }
+}
+
 function runtimeSummaryFromStatus(status: DaemonStatus): {
   status: string;
   summary: string;
@@ -690,6 +877,24 @@ function assertSafeLiveLane(status: LiveStatusSnapshot): void {
   }
 }
 
+function createBlockerCollector() {
+  const blockers: LiveSyncBlocker[] = [];
+  const seen = new Set<string>();
+  return {
+    add(blocker: LiveSyncBlocker) {
+      const key = `${blocker.code}:${blocker.message}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      blockers.push(blocker);
+    },
+    list() {
+      return blockers;
+    },
+  };
+}
+
 async function smokeCheckRuntime(
   deps: LiveControlDeps,
   timeoutMs: number,
@@ -712,6 +917,58 @@ async function smokeCheckRuntime(
   }
   if (!status.rpc?.ok) {
     throw new Error(`Gateway RPC probe failed: ${status.rpc?.error ?? "unknown error"}`);
+  }
+}
+
+async function advanceLiveCheckout(params: {
+  buildTimeoutMs: number;
+  deps: LiveControlDeps;
+  installDeps: boolean;
+  liveCheckoutPath: string;
+  smokeTimeoutMs: number;
+  targetCommit: string;
+}): Promise<{ currentHead: string; liveChanged: boolean }> {
+  const liveGit = await readGitState(params.liveCheckoutPath, params.deps);
+  const currentHead = liveGit.head;
+  let liveChanged = false;
+  if (params.targetCommit !== currentHead) {
+    const mergeResult = await params.deps.runCommand(
+      ["git", "-C", params.liveCheckoutPath, "merge", "--ff-only", params.targetCommit],
+      {
+        cwd: params.liveCheckoutPath,
+        timeoutMs: DEFAULT_BUILD_TIMEOUT_MS,
+      },
+    );
+    if (mergeResult.code !== 0) {
+      throw new Error(
+        `Could not fast-forward live checkout to ${params.targetCommit.slice(0, 7)}: ${trimCommandFailure(mergeResult.stderr || mergeResult.stdout)}`,
+      );
+    }
+    liveChanged = true;
+  }
+
+  try {
+    if (params.installDeps) {
+      await installCheckoutDependencies(params.liveCheckoutPath, params.deps);
+    }
+    await params.deps.buildCheckout(params.liveCheckoutPath, params.buildTimeoutMs);
+    await params.deps.restartRuntime();
+    await smokeCheckRuntime(params.deps, params.smokeTimeoutMs, params.liveCheckoutPath);
+    return { currentHead, liveChanged };
+  } catch (error) {
+    let restoredPreviousLiveState = false;
+    if (liveChanged) {
+      await restoreLiveCheckoutCommit({
+        buildTimeoutMs: params.buildTimeoutMs,
+        commit: currentHead,
+        deps: params.deps,
+        installDeps: params.installDeps,
+        liveCheckoutPath: params.liveCheckoutPath,
+        smokeTimeoutMs: params.smokeTimeoutMs,
+      });
+      restoredPreviousLiveState = true;
+    }
+    throw new LiveAdvanceError(String(error), { cause: error, restoredPreviousLiveState });
   }
 }
 
@@ -811,6 +1068,7 @@ async function restoreLiveCheckoutCommit(params: {
   deps: LiveControlDeps;
   liveCheckoutPath: string;
   buildTimeoutMs: number;
+  installDeps?: boolean;
   smokeTimeoutMs: number;
 }): Promise<void> {
   const resetResult = await params.deps.runCommand(
@@ -824,6 +1082,9 @@ async function restoreLiveCheckoutCommit(params: {
     throw new Error(
       `Failed to reset live checkout: ${trimCommandFailure(resetResult.stderr || resetResult.stdout)}`,
     );
+  }
+  if (params.installDeps) {
+    await installCheckoutDependencies(params.liveCheckoutPath, params.deps);
   }
   await params.deps.buildCheckout(params.liveCheckoutPath, params.buildTimeoutMs);
   await params.deps.restartRuntime();
@@ -919,39 +1180,18 @@ export async function promoteLiveSource(params: PromoteParams = {}): Promise<{
     }
 
     const oldLiveHead = liveGit.head;
-    let mergeApplied = false;
-    if (sourceGit.head !== liveGit.head) {
-      const mergeResult = await deps.runCommand(
-        ["git", "-C", manifest.liveCheckoutPath, "merge", "--ff-only", sourceGit.head],
-        {
-          cwd: manifest.liveCheckoutPath,
-          timeoutMs: DEFAULT_BUILD_TIMEOUT_MS,
-        },
-      );
-      if (mergeResult.code !== 0) {
-        throw new Error(
-          `Could not fast-forward live checkout to ${sourceGit.head.slice(0, 7)}: ${trimCommandFailure(mergeResult.stderr || mergeResult.stdout)}`,
-        );
-      }
-      mergeApplied = true;
-    }
-
     try {
-      await deps.buildCheckout(manifest.liveCheckoutPath, buildTimeoutMs);
-      await deps.restartRuntime();
-      await smokeCheckRuntime(deps, smokeTimeoutMs, manifest.liveCheckoutPath);
+      await advanceLiveCheckout({
+        buildTimeoutMs,
+        deps,
+        installDeps: false,
+        liveCheckoutPath: manifest.liveCheckoutPath,
+        smokeTimeoutMs,
+        targetCommit: sourceGit.head,
+      });
     } catch (error) {
-      let restoredPreviousLiveState = false;
-      if (mergeApplied) {
-        await restoreLiveCheckoutCommit({
-          buildTimeoutMs,
-          commit: oldLiveHead,
-          deps,
-          liveCheckoutPath: manifest.liveCheckoutPath,
-          smokeTimeoutMs,
-        });
-        restoredPreviousLiveState = true;
-      }
+      const restoredPreviousLiveState =
+        error instanceof LiveAdvanceError ? error.restoredPreviousLiveState : false;
       await appendJournalEntry(stateDir, {
         id: `promote-failed-${Date.now()}`,
         ts: formatIso(deps.now()),
@@ -1006,4 +1246,206 @@ export async function listLiveJournal(
     entries: await readJournalEntries(stateDir, params.limit ?? DEFAULT_JOURNAL_LIMIT),
     manifest,
   };
+}
+
+export async function collectLiveSyncStatus(params: SyncParams = {}): Promise<LiveSyncStatus> {
+  const deps = withDeps(params.deps);
+  const status = await collectLiveStatus({ ...params, deps });
+  const collector = createBlockerCollector();
+
+  for (const issue of status.issues) {
+    if (
+      issue.code === "branch-drift" ||
+      issue.code === "dirty-live-checkout" ||
+      issue.code === "promoted-commit-drift" ||
+      issue.code === "runtime-source-mismatch"
+    ) {
+      collector.add({ code: issue.code, message: issue.message });
+    }
+  }
+
+  if (status.actorLock && status.actorLock.pid !== process.pid) {
+    collector.add({
+      code: "busy",
+      message: `Live control is busy: ${status.actorLock.operation} by ${status.actorLock.actor} (pid ${status.actorLock.pid}).`,
+    });
+  }
+  if (status.manifest.liveBranch !== "main" || status.liveGit.branch !== "main") {
+    collector.add({
+      code: "live-branch-not-main",
+      message: "Fork-backed live sync requires the live checkout to stay on main.",
+    });
+  }
+  if (status.drafts.length > 0) {
+    collector.add({
+      code: "drafts-present",
+      message: "Close or promote draft worktrees before applying fork sync updates to live main.",
+    });
+  }
+  if (status.runtime.matchesLiveCheckout !== true) {
+    collector.add({
+      code:
+        status.runtime.matchesLiveCheckout === false
+          ? "runtime-source-mismatch"
+          : "runtime-source-unverified",
+      message:
+        status.runtime.matchesLiveCheckout === false
+          ? `Gateway runtime source ${status.runtime.sourcePath ?? "unknown"} does not match live checkout ${status.manifest.liveCheckoutPath}.`
+          : "Cannot verify that the running gateway matches the live checkout. Start the live runtime first.",
+    });
+  }
+
+  const fetchOk =
+    params.fetchOrigin === false
+      ? true
+      : await fetchRemoteRef(status.manifest.liveCheckoutPath, "origin", deps);
+  if (!fetchOk) {
+    collector.add({
+      code: "origin-fetch-failed",
+      message: "Could not fetch origin/main. Check git remote access before syncing live main.",
+    });
+  }
+
+  const [originUrl, upstreamUrl, originMainSha] = await Promise.all([
+    resolveGitRemoteUrl(status.manifest.liveCheckoutPath, "origin", deps),
+    resolveGitRemoteUrl(status.manifest.liveCheckoutPath, "upstream", deps),
+    resolveGitRef(status.manifest.liveCheckoutPath, "origin/main", deps),
+  ]);
+
+  if (!originMainSha) {
+    collector.add({
+      code: "origin-main-missing",
+      message:
+        "origin/main is not available in this checkout. Fetch the fork remote before syncing.",
+    });
+  }
+
+  if (!originUrl || !upstreamUrl) {
+    collector.add({
+      code: "fork-remote-misconfigured",
+      message: "Fork-backed live sync requires both origin and upstream remotes.",
+    });
+  } else if (normalizeRemoteUrl(originUrl) === normalizeRemoteUrl(upstreamUrl)) {
+    collector.add({
+      code: "fork-remote-misconfigured",
+      message:
+        "origin and upstream point at the same repository. Configure your fork as origin and openclaw/openclaw as upstream.",
+    });
+  }
+
+  const counts =
+    originMainSha && fetchOk
+      ? await resolveAheadBehindCounts(
+          status.manifest.liveCheckoutPath,
+          "HEAD",
+          "origin/main",
+          deps,
+        )
+      : { ahead: null, behind: null };
+  if ((counts.ahead ?? 0) > 0 && (counts.behind ?? 0) > 0) {
+    collector.add({
+      code: "sync-diverged",
+      message: `Live main diverged from origin/main (ahead ${counts.ahead}, behind ${counts.behind}). Reconcile the fork before syncing.`,
+    });
+  } else if ((counts.ahead ?? 0) > 0) {
+    collector.add({
+      code: "sync-diverged",
+      message: `Live main is ahead of origin/main by ${counts.ahead}. Push or reconcile those commits before syncing.`,
+    });
+  }
+
+  const lockfileChanged =
+    originMainSha && fetchOk && (counts.behind ?? 0) > 0
+      ? await detectLockfileChange(status.manifest.liveCheckoutPath, "HEAD", "origin/main", deps)
+      : false;
+  const blockers = collector.list();
+
+  return {
+    liveCheckoutPath: status.manifest.liveCheckoutPath,
+    liveSha: status.liveGit.head,
+    originMainSha,
+    behindBy: counts.behind,
+    safeToApply: blockers.length === 0,
+    blockers,
+    runtimeMatchesLive: status.runtime.matchesLiveCheckout,
+    draftCount: status.drafts.length,
+    lockfileChanged,
+  };
+}
+
+export async function syncLiveCheckout(params: SyncParams = {}): Promise<{
+  applied: boolean;
+  status: LiveSyncStatus;
+}> {
+  const deps = withDeps(params.deps);
+  const actor = resolveActor(params.actor);
+  const buildTimeoutMs = params.buildTimeoutMs ?? DEFAULT_BUILD_TIMEOUT_MS;
+  const smokeTimeoutMs = params.smokeTimeoutMs ?? DEFAULT_SMOKE_TIMEOUT_MS;
+  const { manifest, stateDir } = await ensureManifest(params);
+  return await withActorLock(stateDir, { actor, operation: "sync" }, async () => {
+    const statusBefore = await collectLiveSyncStatus({ ...params, deps, fetchOrigin: true });
+    if (statusBefore.blockers.length > 0) {
+      throw new Error(statusBefore.blockers.map((blocker) => blocker.message).join(" "));
+    }
+    if (!statusBefore.originMainSha) {
+      throw new Error("origin/main is unavailable for live sync.");
+    }
+    if ((statusBefore.behindBy ?? 0) === 0) {
+      return {
+        applied: false,
+        status: statusBefore,
+      };
+    }
+
+    try {
+      const advance = await advanceLiveCheckout({
+        buildTimeoutMs,
+        deps,
+        installDeps: statusBefore.lockfileChanged,
+        liveCheckoutPath: manifest.liveCheckoutPath,
+        smokeTimeoutMs,
+        targetCommit: statusBefore.originMainSha,
+      });
+      const now = formatIso(deps.now());
+      await updateManifestPromotion(stateDir, manifest, {
+        currentCommit: statusBefore.originMainSha,
+        previousCommit: advance.currentHead,
+        now,
+      });
+      await appendJournalEntry(stateDir, {
+        id: `sync-${Date.now()}`,
+        ts: now,
+        actor,
+        type: "synced",
+        message: `Synced live checkout to origin/main at ${statusBefore.originMainSha.slice(0, 7)}`,
+        details: {
+          fromCommit: advance.currentHead,
+          lockfileChanged: statusBefore.lockfileChanged,
+          toCommit: statusBefore.originMainSha,
+        },
+      });
+    } catch (error) {
+      const restoredPreviousLiveState =
+        error instanceof LiveAdvanceError ? error.restoredPreviousLiveState : false;
+      await appendJournalEntry(stateDir, {
+        id: `sync-failed-${Date.now()}`,
+        ts: formatIso(deps.now()),
+        actor,
+        type: "sync_failed",
+        message: restoredPreviousLiveState
+          ? "Live sync failed. Previous live state restored."
+          : "Live sync failed before live state changed.",
+        details: {
+          error: String(error),
+          targetCommit: statusBefore.originMainSha,
+        },
+      });
+      throw error;
+    }
+
+    return {
+      applied: true,
+      status: await collectLiveSyncStatus({ ...params, deps, fetchOrigin: false }),
+    };
+  });
 }

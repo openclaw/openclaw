@@ -80,6 +80,18 @@ install method aligned:
 
 The Gateway core auto-updater (when enabled via config) reuses this same update path.
 
+## What `openclaw update` Does Not Do
+
+`openclaw update` keeps one install current with its own channel or remote. It does not manage a fork-backed upstream sync workflow.
+
+If you run OpenClaw from your own fork and want to keep upstream changes flowing in safely:
+
+1. Prepare the sync PR with `node scripts/upstream-sync.mjs --open-pr`.
+2. Merge that PR into your fork's `main`.
+3. Apply it on the live machine with `openclaw live sync --apply`.
+
+That split is deliberate. It keeps upstream integration, fork review, and live runtime mutation in separate lanes.
+
 ## Git checkout flow
 
 Channels:

@@ -6,9 +6,12 @@ import { runCommandWithRuntime } from "./cli-utils.js";
 import { formatHelpExamples } from "./help-format.js";
 import {
   collectLiveStatus,
+  collectLiveSyncStatus,
   createDraftWorktree,
   listLiveJournal,
   promoteLiveSource,
+  syncLiveCheckout,
+  type LiveSyncStatus,
   startLiveRuntime,
   type LiveStatusSnapshot,
 } from "./live-control.js";
@@ -52,6 +55,13 @@ function renderDraftLabel(draft: LiveStatusSnapshot["drafts"][number]): string {
   return `${draft.path} (${parts.join(", ")})`;
 }
 
+function renderBooleanLabel(value: boolean | null): string {
+  if (value == null) {
+    return "unknown";
+  }
+  return value ? "yes" : "no";
+}
+
 function renderLiveStatus(status: LiveStatusSnapshot): string[] {
   const rich = isRich();
   const lines = [
@@ -90,6 +100,30 @@ function renderLiveStatus(status: LiveStatusSnapshot): string[] {
   return lines;
 }
 
+function renderLiveSyncStatus(status: LiveSyncStatus): string[] {
+  const rich = isRich();
+  const lines = [
+    colorize(rich, theme.heading, "Live Sync"),
+    `${colorize(rich, theme.muted, "Live checkout:")} ${status.liveCheckoutPath}`,
+    `${colorize(rich, theme.muted, "Live HEAD:")} ${status.liveSha.slice(0, 7)}`,
+    `${colorize(rich, theme.muted, "Origin/main:")} ${status.originMainSha?.slice(0, 7) ?? "unknown"}`,
+    `${colorize(rich, theme.muted, "Behind:")} ${status.behindBy ?? "unknown"}`,
+    `${colorize(rich, theme.muted, "Runtime matches live:")} ${renderBooleanLabel(status.runtimeMatchesLive)}`,
+    `${colorize(rich, theme.muted, "Draft worktrees:")} ${status.draftCount}`,
+    `${colorize(rich, theme.muted, "Lockfile changed:")} ${renderBooleanLabel(status.lockfileChanged)}`,
+    `${colorize(rich, theme.muted, "Safe to apply:")} ${renderBooleanLabel(status.safeToApply)}`,
+  ];
+  if (status.blockers.length > 0) {
+    lines.push(colorize(rich, theme.warn, "Blockers:"));
+    for (const blocker of status.blockers) {
+      lines.push(`- ${blocker.message}`);
+    }
+  } else {
+    lines.push(colorize(rich, theme.success, "Blockers: none"));
+  }
+  return lines;
+}
+
 export function registerLiveCli(program: Command) {
   const live = program
     .command("live")
@@ -99,6 +133,14 @@ export function registerLiveCli(program: Command) {
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw live status", "Show live vs draft state, runtime source, and journal."],
+          [
+            "openclaw live sync",
+            "Inspect whether live main can safely fast-forward to origin/main.",
+          ],
+          [
+            "openclaw live sync --apply",
+            "Fast-forward live main to origin/main with rollback on failure.",
+          ],
           ["openclaw live start", "Restart the Telegram-facing runtime from the live checkout."],
           ["openclaw live propose codex-local", "Create a dedicated draft worktree."],
           [
@@ -127,6 +169,54 @@ export function registerLiveCli(program: Command) {
           return;
         }
         for (const line of renderLiveStatus(status)) {
+          defaultRuntime.log(line);
+        }
+      });
+    });
+
+  live
+    .command("sync")
+    .description("Inspect or apply fork-backed origin/main updates to the live checkout")
+    .option("--checkout <path>", "Explicit live checkout path")
+    .option("--actor <name>", "Actor label for journal entries")
+    .option("--apply", "Fast-forward live main to origin/main", false)
+    .option("--build-timeout <ms>", "Build timeout in milliseconds", "1200000")
+    .option("--smoke-timeout <ms>", "RPC smoke-check timeout", "10000")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        if (opts.apply) {
+          const result = await syncLiveCheckout({
+            actor: opts.actor as string | undefined,
+            buildTimeoutMs: parsePositiveInt(opts.buildTimeout, 1_200_000),
+            checkout: opts.checkout as string | undefined,
+            smokeTimeoutMs: parsePositiveInt(opts.smokeTimeout, 10_000),
+          });
+          if (opts.json) {
+            defaultRuntime.writeJson(result);
+            return;
+          }
+          if (!result.applied) {
+            defaultRuntime.log(
+              `Live checkout already matches origin/main (${result.status.originMainSha?.slice(0, 7) ?? result.status.liveSha.slice(0, 7)}).`,
+            );
+            return;
+          }
+          defaultRuntime.log(
+            `Live checkout synced to origin/main at ${result.status.liveSha.slice(0, 7)}.`,
+          );
+          return;
+        }
+
+        const status = await collectLiveSyncStatus({
+          actor: opts.actor as string | undefined,
+          checkout: opts.checkout as string | undefined,
+        });
+        if (opts.json) {
+          defaultRuntime.writeJson(status);
+          return;
+        }
+        for (const line of renderLiveSyncStatus(status)) {
           defaultRuntime.log(line);
         }
       });

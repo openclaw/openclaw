@@ -4,20 +4,24 @@ import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
   collectLiveStatus: vi.fn(),
+  collectLiveSyncStatus: vi.fn(),
   createDraftWorktree: vi.fn(),
   listLiveJournal: vi.fn(),
   promoteLiveSource: vi.fn(),
   startLiveRuntime: vi.fn(),
+  syncLiveCheckout: vi.fn(),
 }));
 
 const { runtimeLogs, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("./live-control.js", () => ({
   collectLiveStatus: (...args: unknown[]) => mocks.collectLiveStatus(...args),
+  collectLiveSyncStatus: (...args: unknown[]) => mocks.collectLiveSyncStatus(...args),
   createDraftWorktree: (...args: unknown[]) => mocks.createDraftWorktree(...args),
   listLiveJournal: (...args: unknown[]) => mocks.listLiveJournal(...args),
   promoteLiveSource: (...args: unknown[]) => mocks.promoteLiveSource(...args),
   startLiveRuntime: (...args: unknown[]) => mocks.startLiveRuntime(...args),
+  syncLiveCheckout: (...args: unknown[]) => mocks.syncLiveCheckout(...args),
 }));
 
 vi.mock("./cli-utils.js", () => ({
@@ -146,6 +150,76 @@ describe("live-cli", () => {
     await runCli(["live", "status", "--json"]);
 
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
+  });
+
+  it("renders live sync status in text mode", async () => {
+    mocks.collectLiveSyncStatus.mockResolvedValueOnce({
+      liveCheckoutPath: "/tmp/live",
+      liveSha: "abcdef1234567890",
+      originMainSha: "fedcba9876543210",
+      behindBy: 2,
+      safeToApply: false,
+      blockers: [
+        {
+          code: "drafts-present",
+          message:
+            "Close or promote draft worktrees before applying fork sync updates to live main.",
+        },
+      ],
+      runtimeMatchesLive: true,
+      draftCount: 1,
+      lockfileChanged: true,
+    });
+
+    await runCli(["live", "sync"]);
+
+    expect(runtimeLogs).toContain("Live Sync");
+    expect(runtimeLogs).toContain("Live checkout: /tmp/live");
+    expect(runtimeLogs).toContain("Origin/main: fedcba9");
+    expect(runtimeLogs).toContain("Behind: 2");
+    expect(runtimeLogs).toContain("Lockfile changed: yes");
+    expect(runtimeLogs).toContain(
+      "- Close or promote draft worktrees before applying fork sync updates to live main.",
+    );
+  });
+
+  it("writes live sync JSON when requested", async () => {
+    const payload = {
+      liveCheckoutPath: "/tmp/live",
+      liveSha: "abcdef1234567890",
+      originMainSha: "fedcba9876543210",
+      behindBy: 0,
+      safeToApply: true,
+      blockers: [],
+      runtimeMatchesLive: true,
+      draftCount: 0,
+      lockfileChanged: false,
+    };
+    mocks.collectLiveSyncStatus.mockResolvedValueOnce(payload);
+
+    await runCli(["live", "sync", "--json"]);
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
+  });
+
+  it("applies live sync with parsed options", async () => {
+    mocks.syncLiveCheckout.mockResolvedValueOnce({
+      applied: true,
+      status: {
+        liveSha: "fedcba9876543210",
+        originMainSha: "fedcba9876543210",
+      },
+    });
+
+    await runCli(["live", "sync", "--apply", "--actor", "codex", "--smoke-timeout", "2500"]);
+
+    expect(mocks.syncLiveCheckout).toHaveBeenCalledWith({
+      actor: "codex",
+      buildTimeoutMs: 1_200_000,
+      checkout: undefined,
+      smokeTimeoutMs: 2500,
+    });
+    expect(runtimeLogs).toContain("Live checkout synced to origin/main at fedcba9.");
   });
 
   it("starts the live runtime with parsed options", async () => {

@@ -32,6 +32,15 @@ if you want the raw npm beta dist-tag for a one-off package update.
 
 See [Development channels](/install/development-channels) for channel semantics.
 
+## Fork-Backed Source Installs
+
+If you run OpenClaw from your own fork, treat updates as two separate jobs:
+
+- Sync upstream into the fork with `node scripts/upstream-sync.mjs --open-pr`.
+- After that PR merges, apply the fork's new `main` to the live machine with `openclaw live sync --apply`.
+
+This is different from `openclaw update`. `openclaw update` keeps a single checkout current. The fork-backed flow keeps `upstream/main`, your fork's `origin/main`, and the live runtime boundary separate so local work and upstream upgrades do not step on each other.
+
 ## Alternative: re-run the installer
 
 ```bash
