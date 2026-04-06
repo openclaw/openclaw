@@ -34,6 +34,7 @@ export const HARD_MAX_TOOL_RESULT_CHARS = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
  * what was in the content.
  */
 const MIN_KEEP_CHARS = 2_000;
+const RECOVERY_MIN_KEEP_CHARS = 0;
 
 type ToolResultTruncationOptions = {
   suffix?: string | ((truncatedChars: number) => string);
@@ -43,6 +44,7 @@ type ToolResultTruncationOptions = {
 const DEFAULT_SUFFIX = (truncatedChars: number) =>
   formatContextLimitTruncationNotice(truncatedChars);
 export const MIN_TRUNCATED_TEXT_CHARS = MIN_KEEP_CHARS + DEFAULT_SUFFIX(1).length;
+const RECOVERY_MIN_TRUNCATED_TEXT_CHARS = RECOVERY_MIN_KEEP_CHARS + DEFAULT_SUFFIX(1).length;
 
 /**
  * Marker inserted between head and tail when using head+tail truncation.
@@ -247,8 +249,11 @@ export function truncateOversizedToolResultsInMessages(
   return { messages: result, truncatedCount };
 }
 
-function calculateAggregateToolResultChars(contextWindowTokens: number): number {
-  return Math.max(calculateMaxToolResultChars(contextWindowTokens), MIN_TRUNCATED_TEXT_CHARS);
+function calculateRecoveryAggregateToolResultChars(contextWindowTokens: number): number {
+  return Math.max(
+    calculateMaxToolResultChars(contextWindowTokens),
+    RECOVERY_MIN_TRUNCATED_TEXT_CHARS,
+  );
 }
 
 export type ToolResultReductionPotential = {
@@ -265,7 +270,10 @@ export type ToolResultReductionPotential = {
 function buildAggregateToolResultReplacements(params: {
   branch: Array<{ id: string; type: string; message?: AgentMessage }>;
   aggregateBudgetChars: number;
+  minKeepChars?: number;
 }): Array<{ entryId: string; message: AgentMessage }> {
+  const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
+  const minTruncatedTextChars = minKeepChars + DEFAULT_SUFFIX(1).length;
   const candidates = params.branch
     .map((entry, index) => ({ entry, index }))
     .filter(
@@ -302,17 +310,16 @@ function buildAggregateToolResultReplacements(params: {
     if (remainingReduction <= 0) {
       break;
     }
-    const reducibleChars = Math.max(0, candidate.textLength - MIN_TRUNCATED_TEXT_CHARS);
+    const reducibleChars = Math.max(0, candidate.textLength - minTruncatedTextChars);
     if (reducibleChars <= 0) {
       continue;
     }
 
     const requestedReduction = Math.min(reducibleChars, remainingReduction);
-    const targetChars = Math.max(
-      MIN_TRUNCATED_TEXT_CHARS,
-      candidate.textLength - requestedReduction,
-    );
-    const truncatedMessage = truncateToolResultMessage(candidate.message, targetChars);
+    const targetChars = Math.max(minTruncatedTextChars, candidate.textLength - requestedReduction);
+    const truncatedMessage = truncateToolResultMessage(candidate.message, targetChars, {
+      minKeepChars,
+    });
     const newLength = getToolResultTextLength(truncatedMessage);
     const actualReduction = Math.max(0, candidate.textLength - newLength);
     if (actualReduction <= 0) {
@@ -332,7 +339,7 @@ export function estimateToolResultReductionPotential(params: {
 }): ToolResultReductionPotential {
   const { messages, contextWindowTokens } = params;
   const maxChars = calculateMaxToolResultChars(contextWindowTokens);
-  const aggregateBudgetChars = calculateAggregateToolResultChars(contextWindowTokens);
+  const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(contextWindowTokens);
 
   let toolResultCount = 0;
   let totalToolResultChars = 0;
@@ -355,7 +362,9 @@ export function estimateToolResultReductionPotential(params: {
       continue;
     }
     oversizedCount += 1;
-    const truncatedMessage = truncateToolResultMessage(msg, maxChars);
+    const truncatedMessage = truncateToolResultMessage(msg, maxChars, {
+      minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+    });
     individuallyTrimmedMessages[index] = truncatedMessage;
     oversizedReducibleChars += Math.max(0, textLength - getToolResultTextLength(truncatedMessage));
   }
@@ -367,6 +376,7 @@ export function estimateToolResultReductionPotential(params: {
       message,
     })),
     aggregateBudgetChars,
+    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
   });
   const individuallyTrimmedBranch = individuallyTrimmedMessages.map((message, index) => ({
     id: `message-${index}`,
@@ -405,7 +415,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   const { sessionManager, contextWindowTokens } = params;
   const maxChars = calculateMaxToolResultChars(contextWindowTokens);
-  const aggregateBudgetChars = calculateAggregateToolResultChars(contextWindowTokens);
+  const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(contextWindowTokens);
   const branch = sessionManager.getBranch();
 
   if (branch.length === 0) {
@@ -431,6 +441,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     const replacements = buildAggregateToolResultReplacements({
       branch: branch as Array<{ id: string; type: string; message?: AgentMessage }>,
       aggregateBudgetChars,
+      minKeepChars: RECOVERY_MIN_KEEP_CHARS,
     });
     if (replacements.length === 0) {
       return {
@@ -466,7 +477,14 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     if (!entry || entry.type !== "message") {
       return [];
     }
-    return [{ entryId: entry.id, message: truncateToolResultMessage(entry.message, maxChars) }];
+    return [
+      {
+        entryId: entry.id,
+        message: truncateToolResultMessage(entry.message, maxChars, {
+          minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+        }),
+      },
+    ];
   });
 
   const rewriteResult = rewriteTranscriptEntriesInSessionManager({
