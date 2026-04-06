@@ -862,6 +862,8 @@ Additional top-level observability fields are also included:
   - short operational hint such as `check_token`, `check_runtime_submit_path`, `check_runtime_poll_path`, `check_executor_gate`, `check_bridge_mapping`, `check_dispatch_input`, `check_triage_input`, or `no_action_needed`
 - `recovery_priority`
   - short priority label such as `immediate`, `high`, `medium`, `low`, or `none`
+- `recovery_rank`
+  - numeric sort value for priority where larger numbers mean higher urgency, such as `100`, `75`, `50`, `25`, or `0`
 - `recovery_bucket`
   - coarse aggregation bucket such as `auth`, `runtime_submit`, `runtime_poll`, `control_plane`, `executor_gate`, `config_mapping`, or `none`
 - `recovery_owner`
@@ -881,7 +883,7 @@ Additional top-level observability fields are also included:
 
 These fields are for observability and aggregation only. They do not change runtime behavior.
 
-The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id` plus parent span linkage for a lightweight trace tree. `manager_handoff` and `feedback_memory` also carry compact `path_codes`, `error_code`, `error_detail_code`, `error_source_layer`, `error_stage`, `recovery_hint`, `recovery_priority`, `recovery_bucket`, `recovery_owner`, and `recovery_actionable` for lightweight aggregation and faster operational triage.
+The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id` plus parent span linkage for a lightweight trace tree. `manager_handoff` and `feedback_memory` also carry compact `path_codes`, `error_code`, `error_detail_code`, `error_source_layer`, `error_stage`, `recovery_hint`, `recovery_priority`, `recovery_rank`, `recovery_bucket`, `recovery_owner`, and `recovery_actionable` for lightweight aggregation and faster operational triage.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 

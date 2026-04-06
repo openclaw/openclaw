@@ -366,6 +366,18 @@ def derive_recovery_priority(
     return 'medium'
 
 
+def derive_recovery_rank(recovery_priority: str | None) -> int:
+    priority = str(recovery_priority or '')
+    mapping = {
+        'immediate': 100,
+        'high': 75,
+        'medium': 50,
+        'low': 25,
+        'none': 0,
+    }
+    return mapping.get(priority, 0)
+
+
 def derive_recovery_bucket(
     error_code: str | None,
     error_detail_code: str | None,
@@ -563,6 +575,7 @@ def build_feedback_memory(entry_result: dict, dispatch_result: dict, feedback_su
         'last_error_stage': manager_handoff.get('error_stage'),
         'last_recovery_hint': manager_handoff.get('recovery_hint'),
         'last_recovery_priority': manager_handoff.get('recovery_priority'),
+        'last_recovery_rank': manager_handoff.get('recovery_rank'),
         'last_recovery_bucket': manager_handoff.get('recovery_bucket'),
         'last_recovery_owner': manager_handoff.get('recovery_owner'),
         'last_recovery_actionable': manager_handoff.get('recovery_actionable'),
@@ -636,6 +649,7 @@ def main() -> int:
         error_stage = normalize_error_stage(runtime_entry_state, None, dispatch_result)
         recovery_hint = derive_recovery_hint(error_code, error_detail_code, error_stage)
         recovery_priority = derive_recovery_priority(error_code, error_detail_code, error_stage)
+        recovery_rank = derive_recovery_rank(recovery_priority)
         recovery_bucket = derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage)
         recovery_owner = derive_recovery_owner(recovery_bucket, error_source_layer, error_stage)
         output = {
@@ -657,6 +671,7 @@ def main() -> int:
             'error_stage': error_stage,
             'recovery_hint': recovery_hint,
             'recovery_priority': recovery_priority,
+            'recovery_rank': recovery_rank,
             'recovery_bucket': recovery_bucket,
             'recovery_owner': recovery_owner,
             'recovery_actionable': derive_recovery_actionable(
@@ -709,6 +724,7 @@ def main() -> int:
         error_stage = normalize_error_stage(runtime_entry_state, error_text, dispatch_result)
         recovery_hint = derive_recovery_hint(error_code, error_detail_code, error_stage)
         recovery_priority = derive_recovery_priority(error_code, error_detail_code, error_stage)
+        recovery_rank = derive_recovery_rank(recovery_priority)
         recovery_bucket = derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage)
         recovery_owner = derive_recovery_owner(recovery_bucket, error_source_layer, error_stage)
         output = {
@@ -730,6 +746,7 @@ def main() -> int:
             'error_stage': error_stage,
             'recovery_hint': recovery_hint,
             'recovery_priority': recovery_priority,
+            'recovery_rank': recovery_rank,
             'recovery_bucket': recovery_bucket,
             'recovery_owner': recovery_owner,
             'recovery_actionable': derive_recovery_actionable(

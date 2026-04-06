@@ -228,6 +228,18 @@ def derive_recovery_priority(
     return 'medium'
 
 
+def derive_recovery_rank(recovery_priority: str | None) -> int:
+    priority = str(recovery_priority or '')
+    mapping = {
+        'immediate': 100,
+        'high': 75,
+        'medium': 50,
+        'low': 25,
+        'none': 0,
+    }
+    return mapping.get(priority, 0)
+
+
 def derive_recovery_bucket(
     error_code: str | None,
     error_detail_code: str | None,
@@ -316,6 +328,7 @@ def finalize_output(output: dict) -> dict:
         output.get('error_detail_code'),
         output.get('error_stage'),
     )
+    output['recovery_rank'] = derive_recovery_rank(output.get('recovery_priority'))
     output['recovery_bucket'] = derive_recovery_bucket(
         output.get('error_code'),
         output.get('error_detail_code'),
@@ -791,6 +804,7 @@ def build_manager_handoff(report: dict) -> dict:
         'error_stage': report.get('error_stage'),
         'recovery_hint': report.get('recovery_hint'),
         'recovery_priority': report.get('recovery_priority'),
+        'recovery_rank': report.get('recovery_rank'),
         'recovery_bucket': report.get('recovery_bucket'),
         'recovery_owner': report.get('recovery_owner'),
         'recovery_actionable': report.get('recovery_actionable'),
