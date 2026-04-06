@@ -64,11 +64,14 @@ function resolveDirectAnnounceTransientRetryDelaysMs() {
 }
 
 export function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
-  const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
-  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+  const configured = cfg.agents?.defaults?.subagents?.completionAnnounceTimeoutMs;
+  const legacyConfigured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
+  const effectiveConfigured =
+    typeof configured === "number" && Number.isFinite(configured) ? configured : legacyConfigured;
+  if (typeof effectiveConfigured !== "number" || !Number.isFinite(effectiveConfigured)) {
     return DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS;
   }
-  return Math.min(Math.max(1, Math.floor(configured)), MAX_TIMER_SAFE_TIMEOUT_MS);
+  return Math.min(Math.max(1, Math.floor(effectiveConfigured)), MAX_TIMER_SAFE_TIMEOUT_MS);
 }
 
 export function isInternalAnnounceRequesterSession(sessionKey: string | undefined): boolean {

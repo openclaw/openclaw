@@ -18,6 +18,6 @@ describe("gateway.connectChallengeTimeoutMs", () => {
       },
     });
     expect(result.ok).toBe(false);
-    expect(result.issues.join("\n")).toContain("connectChallengeTimeoutMs");
+    expect(JSON.stringify(result.issues)).toContain("connectChallengeTimeoutMs");
   });
 });

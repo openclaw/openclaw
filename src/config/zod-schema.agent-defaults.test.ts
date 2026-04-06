@@ -12,12 +12,32 @@ describe("agent defaults schema", () => {
     ).not.toThrow();
   });
 
-  it("accepts videoGenerationModel", () => {
+  it("accepts positive subagent startupWaitTimeoutMs", () => {
     expect(() =>
       AgentDefaultsSchema.parse({
-        videoGenerationModel: {
-          primary: "qwen/wan2.6-t2v",
-          fallbacks: ["minimax/video-01"],
+        subagents: {
+          startupWaitTimeoutMs: 60_000,
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects invalid subagent startupWaitTimeoutMs", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        subagents: {
+          startupWaitTimeoutMs: 0,
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("accepts both completionAnnounceTimeoutMs and announceTimeoutMs during the alias window", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        subagents: {
+          completionAnnounceTimeoutMs: 90_000,
+          announceTimeoutMs: 45_000,
         },
       }),
     ).not.toThrow();

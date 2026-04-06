@@ -160,11 +160,14 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   resolveSubagentCompletionOrigin: async (params: { requesterOrigin?: unknown }) =>
     params.requesterOrigin,
   resolveSubagentAnnounceTimeoutMs: (cfg: typeof configOverride) => {
-    const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
-    if (typeof configured !== "number" || !Number.isFinite(configured)) {
+    const configured = cfg.agents?.defaults?.subagents?.completionAnnounceTimeoutMs;
+    const legacyConfigured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
+    const effectiveConfigured =
+      typeof configured === "number" && Number.isFinite(configured) ? configured : legacyConfigured;
+    if (typeof effectiveConfigured !== "number" || !Number.isFinite(effectiveConfigured)) {
       return 120_000;
     }
-    return Math.min(Math.max(1, Math.floor(configured)), 2_147_000_000);
+    return Math.min(Math.max(1, Math.floor(effectiveConfigured)), 2_147_000_000);
   },
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
@@ -311,6 +314,20 @@ describe("subagent announce timeout config", () => {
       (call) => call.method === "agent" && call.expectFinal === true,
     );
     expect(completionDirectAgentCall?.timeoutMs).toBe(120_000);
+  });
+
+  it("prefers completionAnnounceTimeoutMs over legacy announceTimeoutMs", async () => {
+    configOverride.agents.defaults.subagents.announceTimeoutMs = 45_000;
+    configOverride.agents.defaults.subagents.completionAnnounceTimeoutMs = 55_000;
+    await runAnnounceFlowForTest("run-completion-timeout-preferred", {
+      requesterOrigin: { channel: "discord", to: "12345" },
+      expectsCompletionMessage: true,
+    });
+
+    const completionDirectAgentCall = findGatewayCall(
+      (call) => call.method === "agent" && call.expectFinal === true,
+    );
+    expect(completionDirectAgentCall?.timeoutMs).toBe(55_000);
   });
 
   it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
