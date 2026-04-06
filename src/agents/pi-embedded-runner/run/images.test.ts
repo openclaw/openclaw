@@ -291,6 +291,23 @@ describe("detectAndLoadPromptImages", () => {
     expectNoPromptImages(result);
   });
 
+  it("sanitizes existingImages even when prompt has no image references", async () => {
+    // 1x1 red PNG, tiny enough to survive sanitization unchanged
+    const tinyPng =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
+    const result = await detectAndLoadPromptImages({
+      prompt: "no images here",
+      workspaceDir: "/tmp",
+      model: { input: ["text", "image"] },
+      existingImages: [{ type: "image", data: tinyPng, mimeType: "image/png" }],
+    });
+
+    expect(result.detectedRefs).toHaveLength(0);
+    // Image should survive sanitization (tiny, under limits)
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0].type).toBe("image");
+  });
+
   it("preserves attachment order when offloaded refs and inline images are mixed", async () => {
     const merged = mergePromptAttachmentImages({
       imageOrder: ["offloaded", "inline"],

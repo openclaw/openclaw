@@ -573,6 +573,18 @@ export async function handleOpenAiHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
+        if (phase === "error" && !sawAssistantDelta) {
+          if (!wroteRole) {
+            wroteRole = true;
+            writeAssistantRoleChunk(res, { runId, model });
+          }
+          writeAssistantContentChunk(res, {
+            runId,
+            model,
+            content: "Error: internal error",
+            finishReason: "stop",
+          });
+        }
         closed = true;
         unsubscribe();
         writeDone(res);
