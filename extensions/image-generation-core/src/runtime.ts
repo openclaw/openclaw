@@ -3,7 +3,6 @@ import {
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "openclaw/plugin-sdk/media-generation-runtime-shared";
-} from "openclaw/plugin-sdk/media-generation-runtime-shared";
 import {
   createSubsystemLogger,
   describeFailoverError,
