@@ -56,16 +56,34 @@ type ResolvedPluginSkillDir = {
   watchDir: string;
 };
 
-function maybeResolveBundledRuntimeSkillDir(candidate: string): BundledRuntimeRemap {
+function maybeResolveBundledRuntimeSkillDir(
+  candidate: string,
+  rootDir: string,
+): BundledRuntimeRemap {
   const normalized = path.normalize(candidate);
-  const runtimeMarker = path.join("dist-runtime", "extensions") + path.sep;
-  const markerIndex = normalized.indexOf(runtimeMarker);
+  // Segment-aware marker: leading sep ensures we don't match partial dir names
+  // like "mydist-runtime".
+  const segmentMarker = path.sep + path.join("dist-runtime", "extensions") + path.sep;
+  const markerIndex = normalized.indexOf(segmentMarker);
   if (markerIndex === -1) {
     return { remapped: candidate, builtPluginRoot: null, packageRoot: null };
   }
 
+  // packageRoot is everything before the sep that starts segmentMarker.
   const packageRoot = normalized.slice(0, markerIndex);
-  const bundledLeaf = normalized.slice(markerIndex + runtimeMarker.length);
+  const bundledLeaf = normalized.slice(markerIndex + segmentMarker.length);
+
+  // Verify the plugin rootDir itself is under the same dist-runtime/extensions subtree.
+  // Without this, a non-bundled plugin whose path accidentally contains the marker
+  // segment would be incorrectly remapped outside its configured root.
+  const runtimeSubtree = path.join(packageRoot, "dist-runtime", "extensions");
+  const normalizedRootDir = path.normalize(rootDir);
+  if (
+    !normalizedRootDir.startsWith(runtimeSubtree + path.sep) &&
+    normalizedRootDir !== runtimeSubtree
+  ) {
+    return { remapped: candidate, builtPluginRoot: null, packageRoot: null };
+  }
   if (!packageRoot || !bundledLeaf) {
     return { remapped: candidate, builtPluginRoot: null, packageRoot: null };
   }
@@ -152,8 +170,10 @@ function resolvePluginSkillDirEntries(params: {
       if (seenLoadDirs.has(candidate)) {
         continue;
       }
-      const { remapped, builtPluginRoot, packageRoot } =
-        maybeResolveBundledRuntimeSkillDir(candidate);
+      const { remapped, builtPluginRoot, packageRoot } = maybeResolveBundledRuntimeSkillDir(
+        candidate,
+        record.rootDir,
+      );
       const preferredCandidate = path.resolve(remapped);
       if (builtPluginRoot != null && packageRoot != null && preferredCandidate !== candidate) {
         // Verify the built plugin root itself is anchored inside the package root.

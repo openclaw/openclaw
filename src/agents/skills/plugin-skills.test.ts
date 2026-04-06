@@ -267,6 +267,115 @@ describe("resolvePluginSkillDirs", () => {
     expect(dirs).toEqual([path.resolve(builtPluginRoot, "skills")]);
   });
 
+  it("does not remap when dist-runtime appears as a partial segment", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    // Dir name contains "dist-runtime" as a substring, not a full segment.
+    const fakeRoot = await tempDirs.make("openclaw-mydist-runtime-");
+    const pluginRoot = path.join(fakeRoot, "extensions", "helper");
+    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+
+    hoisted.loadPluginManifestRegistry.mockReturnValue(
+      createSinglePluginRegistry({
+        pluginRoot,
+        skills: ["./skills"],
+      }),
+    );
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {
+        plugins: {
+          entries: {
+            helper: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);
+  });
+
+  it("does not remap when plugin rootDir is outside the dist-runtime/extensions subtree", async () => {
+    // A non-bundled plugin whose resolved skill path accidentally contains
+    // /dist-runtime/extensions/ should not be remapped, even if the dist/
+    // counterpart exists on disk.
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const packageRoot = await tempDirs.make("openclaw-package-");
+    // Plugin root is directly inside package root, NOT under dist-runtime/extensions.
+    const pluginRoot = path.join(packageRoot, "dist-runtime", "extensions", "helper");
+    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+    // Create a dist/ counterpart that would be used if remap incorrectly fires.
+    const distSkills = path.join(packageRoot, "dist", "extensions", "helper", "skills");
+    await fs.mkdir(distSkills, { recursive: true });
+
+    // Register the plugin with rootDir pointing to a DIFFERENT location
+    // (outside the dist-runtime subtree) but whose skill path resolves
+    // through the dist-runtime/extensions segment.
+    const externalRoot = await tempDirs.make("openclaw-external-");
+    const externalSkillsDir = path.join(pluginRoot, "skills");
+    // Use the external root as the plugin rootDir but point skills at the
+    // dist-runtime-containing path via a symlink.
+    const linkedSkills = path.join(externalRoot, "skills");
+    await fs.symlink(externalSkillsDir, linkedSkills);
+
+    hoisted.loadPluginManifestRegistry.mockReturnValue(
+      createSinglePluginRegistry({
+        pluginRoot: externalRoot,
+        skills: ["./skills"],
+      }),
+    );
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {
+        plugins: {
+          entries: {
+            helper: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    // The symlink resolves outside externalRoot, so containment rejects it.
+    expect(dirs).toEqual([]);
+  });
+
+  it("does not remap when rootDir is not under the matched dist-runtime subtree", async () => {
+    // Plugin rootDir is a standalone directory that happens to contain
+    // dist-runtime/extensions as path segments in its skill path but the
+    // rootDir itself is not under that subtree.
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const fakePackage = await tempDirs.make("openclaw-fake-pkg-");
+    const pluginRoot = path.join(fakePackage, "dist-runtime", "extensions", "helper");
+    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+    // Create dist counterpart that would match if remap fires.
+    await fs.mkdir(path.join(fakePackage, "dist", "extensions", "helper", "skills"), {
+      recursive: true,
+    });
+
+    hoisted.loadPluginManifestRegistry.mockReturnValue(
+      createSinglePluginRegistry({
+        // rootDir IS the dist-runtime subtree, so this should still remap.
+        pluginRoot,
+        skills: ["./skills"],
+      }),
+    );
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {
+        plugins: {
+          entries: {
+            helper: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    // rootDir is under dist-runtime/extensions, so remap is valid.
+    expect(dirs).toEqual([path.resolve(fakePackage, "dist", "extensions", "helper", "skills")]);
+  });
+
   it("falls back to dist-runtime path when dist counterpart does not exist", async () => {
     const workspaceDir = await tempDirs.make("openclaw-");
     const packageRoot = await tempDirs.make("openclaw-package-");
