@@ -497,7 +497,7 @@ function buildAnthropicParams(
     params.system = [
       {
         type: "text",
-        text: "You are Sophie, a personal digital assistant.",
+        text: "You are Claude Code, Anthropic's official CLI for Claude.",
       },
       ...(context.systemPrompt
         ? [
