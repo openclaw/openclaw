@@ -1,9 +1,17 @@
+import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import type { resolveOsSummary } from "../infra/os-summary.js";
+import type { Tone } from "../memory-host-sdk/status.js";
+import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import type { SecurityAuditReport } from "../security/audit.js";
+import type { RenderTableOptions, TableColumn } from "../terminal/table.js";
+import type { HealthSummary } from "./health.js";
+import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
   buildStatusChannelsTableRows,
   statusChannelsTableColumns,
 } from "./status-all/channels-table.js";
 import { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
-import { type StatusOverviewSurface } from "./status-overview-surface.ts";
+import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
@@ -15,6 +23,8 @@ import {
   buildStatusSystemEventsTrailer,
   statusHealthColumns,
 } from "./status.command-sections.js";
+import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
+import type { SessionStatus, StatusSummary } from "./status.types.js";
 
 export async function buildStatusCommandReportData(params: {
   opts: {
@@ -22,63 +32,17 @@ export async function buildStatusCommandReportData(params: {
     verbose?: boolean;
   };
   surface: StatusOverviewSurface;
-  osSummary: { label: string };
-  summary: {
-    tasks: {
-      total: number;
-      active: number;
-      failures: number;
-      byStatus: { queued: number; running: number };
-    };
-    taskAudit: {
-      errors: number;
-      warnings: number;
-    };
-    heartbeat: {
-      agents: Array<{
-        agentId: string;
-        enabled?: boolean | null;
-        everyMs?: number | null;
-        every: string;
-      }>;
-    };
-    queuedSystemEvents: string[];
-    sessions: {
-      count: number;
-      paths: string[];
-      defaults: {
-        model?: string | null;
-        contextTokens?: number | null;
-      };
-      recent: Array<{
-        key: string;
-        kind: string;
-        updatedAt?: number | null;
-        age: number;
-        model?: string | null;
-      }>;
-    };
-  };
-  securityAudit: {
-    summary: { critical: number; warn: number; info: number };
-    findings: Array<{
-      severity: "critical" | "warn" | "info";
-      title: string;
-      detail: string;
-      remediation?: string | null;
-    }>;
-  };
-  health?: unknown;
+  osSummary: ReturnType<typeof resolveOsSummary>;
+  summary: StatusSummary;
+  securityAudit?: SecurityAuditReport;
+  health?: HealthSummary;
   usageLines?: string[];
-  lastHeartbeat: unknown;
+  lastHeartbeat: HeartbeatEventPayload | null;
   agentStatus: {
     defaultId?: string | null;
     bootstrapPendingCount: number;
     totalSessions: number;
-    agents: Array<{
-      id: string;
-      lastActiveAgeMs?: number | null;
-    }>;
+    agents: AgentLocalStatus[];
   };
   channels: {
     rows: Array<{
@@ -93,21 +57,9 @@ export async function buildStatusCommandReportData(params: {
     channel: string;
     message: string;
   }>;
-  memory: {
-    files: number;
-    chunks: number;
-    dirty?: boolean;
-    sources?: string[];
-    vector?: unknown;
-    fts?: unknown;
-    cache?: unknown;
-  } | null;
-  memoryPlugin: {
-    enabled: boolean;
-    reason?: string | null;
-    slot?: string | null;
-  };
-  pluginCompatibility: Array<{ severity?: "warn" | "info" | null } & Record<string, unknown>>;
+  memory: MemoryStatusSnapshot | null;
+  memoryPlugin: MemoryPluginStatus;
+  pluginCompatibility: PluginCompatibilityNotice[];
   pairingRecovery: { requestId: string | null } | null;
   tableWidth: number;
   ok: (value: string) => string;
@@ -117,26 +69,23 @@ export async function buildStatusCommandReportData(params: {
   formatCliCommand: (value: string) => string;
   formatTimeAgo: (ageMs: number) => string;
   formatKTokens: (value: number) => string;
-  formatTokensCompact: (value: {
-    key: string;
-    kind: string;
-    updatedAt?: number | null;
-    age: number;
-    model?: string | null;
-  }) => string;
-  formatPromptCacheCompact: (value: {
-    key: string;
-    kind: string;
-    updatedAt?: number | null;
-    age: number;
-    model?: string | null;
-  }) => string | null;
-  formatHealthChannelLines: (summary: unknown, opts: { accountMode: "all" }) => string[];
-  formatPluginCompatibilityNotice: (notice: Record<string, unknown>) => string;
-  formatUpdateAvailableHint: (update: Record<string, unknown>) => string | null;
-  resolveMemoryVectorState: (value: unknown) => { state: string; tone: "ok" | "warn" | "muted" };
-  resolveMemoryFtsState: (value: unknown) => { state: string; tone: "ok" | "warn" | "muted" };
-  resolveMemoryCacheSummary: (value: unknown) => { text: string; tone: "ok" | "warn" | "muted" };
+  formatTokensCompact: (value: SessionStatus) => string;
+  formatPromptCacheCompact: (value: SessionStatus) => string | null;
+  formatHealthChannelLines: (summary: HealthSummary, opts: { accountMode: "all" }) => string[];
+  formatPluginCompatibilityNotice: (notice: PluginCompatibilityNotice) => string;
+  formatUpdateAvailableHint: (update: StatusOverviewSurface["update"]) => string | null;
+  resolveMemoryVectorState: (value: NonNullable<MemoryStatusSnapshot["vector"]>) => {
+    state: string;
+    tone: Tone;
+  };
+  resolveMemoryFtsState: (value: NonNullable<MemoryStatusSnapshot["fts"]>) => {
+    state: string;
+    tone: Tone;
+  };
+  resolveMemoryCacheSummary: (value: NonNullable<MemoryStatusSnapshot["cache"]>) => {
+    text: string;
+    tone: Tone;
+  };
   accentDim: (value: string) => string;
   updateValue?: string;
   theme: {
@@ -145,11 +94,7 @@ export async function buildStatusCommandReportData(params: {
     warn: (value: string) => string;
     error: (value: string) => string;
   };
-  renderTable: (input: {
-    width: number;
-    columns: Array<Record<string, unknown>>;
-    rows: Array<Record<string, string>>;
-  }) => string;
+  renderTable: (input: RenderTableOptions) => string;
 }) {
   const overviewRows = buildStatusCommandOverviewRows({
     opts: params.opts,
@@ -180,7 +125,12 @@ export async function buildStatusCommandReportData(params: {
     { key: "Model", header: "Model", minWidth: 14 },
     { key: "Tokens", header: "Tokens", minWidth: 16 },
     ...(params.opts.verbose ? [{ key: "Cache", header: "Cache", minWidth: 16, flex: true }] : []),
-  ];
+  ] satisfies TableColumn[];
+  const securityAudit = params.securityAudit ?? {
+    summary: { critical: 0, warn: 0, info: 0 },
+    findings: [],
+  };
+
   return {
     heading: params.theme.heading,
     muted: params.theme.muted,
@@ -202,7 +152,7 @@ export async function buildStatusCommandReportData(params: {
       formatCliCommand: params.formatCliCommand,
     }),
     securityAuditLines: buildStatusSecurityAuditLines({
-      securityAudit: params.securityAudit,
+      securityAudit,
       theme: params.theme,
       shortenText: params.shortenText,
       formatCliCommand: params.formatCliCommand,
@@ -237,8 +187,8 @@ export async function buildStatusCommandReportData(params: {
     healthColumns: params.health ? statusHealthColumns : undefined,
     healthRows: params.health
       ? buildStatusHealthRows({
-          health: params.health as never,
-          formatHealthChannelLines: params.formatHealthChannelLines as never,
+          health: params.health,
+          formatHealthChannelLines: params.formatHealthChannelLines,
           ok: params.ok,
           warn: params.warn,
           muted: params.muted,

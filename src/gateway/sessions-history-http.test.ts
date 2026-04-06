@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, test } from "vitest";
 import {
   appendAssistantMessageToSessionTranscript,
@@ -59,8 +60,8 @@ async function seedSession(params?: { text?: string }) {
 
 function makeTranscriptAssistantMessage(params: {
   text: string;
-  content?: Array<Record<string, unknown>>;
-}) {
+  content?: AssistantMessage["content"];
+}): AssistantMessage {
   return {
     role: "assistant" as const,
     content: params.content ?? [{ type: "text", text: params.text }],
@@ -88,7 +89,7 @@ function makeTranscriptAssistantMessage(params: {
 
 async function appendTranscriptMessage(params: {
   sessionKey: string;
-  message: ReturnType<typeof makeTranscriptAssistantMessage>;
+  message: AssistantMessage;
   emitInlineMessage?: boolean;
   storePath?: string;
 }): Promise<string> {

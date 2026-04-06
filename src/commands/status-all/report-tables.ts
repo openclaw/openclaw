@@ -1,3 +1,4 @@
+import type { RenderTableOptions } from "../../terminal/table.js";
 import { formatTimeAgo } from "./format.js";
 import type { StatusReportSection } from "./text-report.js";
 
@@ -53,11 +54,7 @@ export function buildStatusAgentTableRows(params: {
 export function buildStatusChannelDetailSections(params: {
   details: ChannelDetailLike[];
   width: number;
-  renderTable: (input: {
-    width: number;
-    columns: Array<Record<string, unknown>>;
-    rows: Array<Record<string, string>>;
-  }) => string;
+  renderTable: (input: RenderTableOptions) => string;
   ok: (text: string) => string;
   warn: (text: string) => string;
 }): StatusReportSection[] {

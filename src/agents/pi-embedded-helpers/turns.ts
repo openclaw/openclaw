@@ -50,7 +50,7 @@ function collectMatchingToolResultIds(message: AgentMessage): Set<string> {
       ids.add(toolResultId);
     }
   } else if (role === "tool") {
-    for (const id of extractToolResultIdsFromRecord(message as Record<string, unknown>)) {
+    for (const id of extractToolResultIdsFromRecord(message as unknown as Record<string, unknown>)) {
       ids.add(id);
     }
   }

@@ -192,6 +192,7 @@ export async function statusCommand(
   const {
     buildStatusUpdateSurface,
     formatCliCommand,
+    formatHealthChannelLines,
     formatKTokens,
     formatPromptCacheCompact,
     formatPluginCompatibilityNotice,

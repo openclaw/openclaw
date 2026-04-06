@@ -46,7 +46,12 @@ describe("security audit install metadata findings", () => {
   });
 
   it("evaluates install metadata findings", async () => {
-    const cases = [
+    const cases: Array<{
+      name: string;
+      run: () => Promise<Awaited<ReturnType<typeof runInstallMetadataAudit>>>;
+      expectedPresent?: readonly string[];
+      expectedAbsent?: readonly string[];
+    }> = [
       {
         name: "warns on unpinned npm install specs and missing integrity metadata",
         run: async () =>
@@ -165,7 +170,7 @@ describe("security audit install metadata findings", () => {
         },
         expectedPresent: ["plugins.installs_version_drift", "hooks.installs_version_drift"],
       },
-    ] as const;
+    ];
 
     for (const testCase of cases) {
       const res = await testCase.run();

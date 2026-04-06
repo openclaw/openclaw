@@ -75,7 +75,7 @@ export async function resolveStatusJsonOutput(params: {
   return buildStatusJsonPayload({
     summary: scan.summary,
     surface: buildStatusOverviewSurfaceFromScan({
-      scan,
+      scan: scan as never,
       gatewayService,
       nodeService,
     }),

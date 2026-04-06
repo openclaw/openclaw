@@ -665,7 +665,7 @@ function sanitizeChatHistoryMessage(
     const sanitizedBlocks = updated.map((item) => item.block);
     const hasPhaseMetadata = hasAssistantPhaseMetadata(entry);
     if (hasPhaseMetadata) {
-      const stripped = stripInlineDirectiveTagsForDisplay(extractAssistantHistoryText(entry));
+      const stripped = stripInlineDirectiveTagsForDisplay(extractAssistantHistoryText(entry) ?? "");
       const res = truncateChatHistoryText(stripped.text, maxChars);
       const nonTextBlocks = sanitizedBlocks.filter(
         (block) =>
