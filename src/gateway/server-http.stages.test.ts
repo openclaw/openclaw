@@ -91,4 +91,26 @@ describe("runGatewayHttpRequestStages", () => {
 
     consoleSpy.mockRestore();
   });
+
+  it("throws when a critical stage fails", async () => {
+    const stageC = vi.fn(() => true);
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const stages = [
+      {
+        name: "critical-auth",
+        critical: true,
+        run: () => {
+          throw new Error("auth failed");
+        },
+      },
+      { name: "c", run: stageC },
+    ];
+
+    await expect(runGatewayHttpRequestStages(stages)).rejects.toThrow("auth failed");
+    expect(stageC).not.toHaveBeenCalled();
+    expect(consoleSpy).not.toHaveBeenCalled();
+
+    consoleSpy.mockRestore();
+  });
 });
