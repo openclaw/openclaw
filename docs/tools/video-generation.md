@@ -1,5 +1,5 @@
 ---
-summary: "Generate videos from text, images, or existing videos using 11 provider backends"
+summary: "Generate videos from text, images, or existing videos using 12 provider backends"
 read_when:
   - Generating videos via the agent
   - Configuring video generation providers and models
@@ -9,7 +9,7 @@ title: "Video Generation"
 
 # Video Generation
 
-OpenClaw agents can generate videos from text prompts, reference images, or existing videos. Eleven provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
+OpenClaw agents can generate videos from text prompts, reference images, or existing videos. Twelve provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
 
 <Note>
 The `video_generate` tool only appears when at least one video-generation provider is available. If you do not see it in your agent tools, set a provider API key or configure `agents.defaults.videoGenerationModel`.
@@ -62,6 +62,7 @@ Outside of session-backed agent runs (for example, direct tool invocations), the
 | Qwen     | `wan2.6-t2v`                    | Yes  | Yes (remote URL) | Yes (remote URL) | `QWEN_API_KEY`                           |
 | Runway   | `gen4.5`                        | Yes  | 1 image          | 1 video          | `RUNWAYML_API_SECRET`                    |
 | Together | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image          | No               | `TOGETHER_API_KEY`                       |
+| Vydra    | `veo3`                          | Yes  | 1 image (`kling`) | No              | `VYDRA_API_KEY`                          |
 | xAI      | `grok-imagine-video`            | Yes  | 1 image          | 1 video          | `XAI_API_KEY`                            |
 
 Some providers accept additional or alternate API key env vars. See individual [provider pages](#related) for details.
@@ -109,7 +110,7 @@ Not all providers support all parameters. Unsupported overrides are ignored on a
 ## Actions
 
 - **generate** (default) -- create a video from the given prompt and optional reference inputs.
-- **status** -- check the state of the in-flight video task for the current session without starting a new one.
+- **status** -- check the state of the in-flight video task for the current session without starting another generation.
 - **list** -- show available providers, models, and their capabilities.
 
 ## Model selection
@@ -150,6 +151,7 @@ If a provider fails, the next candidate is tried automatically. If all candidate
 | Qwen     | Same DashScope backend as Alibaba. Reference inputs must be remote `http(s)` URLs; local files are rejected upfront.                     |
 | Runway   | Supports local files via data URIs. Video-to-video requires `runway/gen4_aleph`. Text-only runs expose `16:9` and `9:16` aspect ratios.  |
 | Together | Single image reference only.                                                                                                             |
+| Vydra    | Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping redirects. `veo3` is bundled as text-to-video only; `kling` requires a remote image URL. |
 | xAI      | Supports text-to-video, image-to-video, and remote video edit/extend flows.                                                              |
 
 ## Configuration
@@ -189,6 +191,7 @@ openclaw config set agents.defaults.videoGenerationModel.primary "qwen/wan2.6-t2
 - [Qwen](/providers/qwen)
 - [Runway](/providers/runway)
 - [Together AI](/providers/together)
+- [Vydra](/providers/vydra)
 - [xAI](/providers/xai)
 - [Configuration Reference](/gateway/configuration-reference#agent-defaults)
 - [Models](/concepts/models)
