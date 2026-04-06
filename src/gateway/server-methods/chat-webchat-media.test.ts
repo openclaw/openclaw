@@ -30,7 +30,10 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     expect(block.type).toBe("audio");
     expect(block.source?.type).toBe("base64");
     expect(block.source?.media_type).toBe("audio/mpeg");
-    expect(block.source?.data?.startsWith("data:audio/mpeg;base64,")).toBe(true);
+    expect(block.source?.data?.includes("data:")).toBe(false);
+    expect(Buffer.from(block.source?.data ?? "", "base64")).toEqual(
+      Buffer.from([0xff, 0xfb, 0x90, 0x00]),
+    );
   });
 
   it("skips remote URLs", () => {

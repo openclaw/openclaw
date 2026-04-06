@@ -106,10 +106,10 @@ function tryReadLocalAudioContentBlock(filePath: string): Record<string, unknown
       return null;
     }
     const mediaType = mimeTypeForPath(filePath);
-    const dataUrl = `data:${mediaType};base64,${buf.toString("base64")}`;
+    const base64Data = buf.toString("base64");
     return {
       type: "audio",
-      source: { type: "base64", media_type: mediaType, data: dataUrl },
+      source: { type: "base64", media_type: mediaType, data: base64Data },
     };
   } catch {
     return null;
