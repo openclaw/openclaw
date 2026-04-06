@@ -72,9 +72,9 @@ func TestPostprocessLocalizedDocsRewritesPublishedPageLinksForEachLocale(t *test
 			writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
 			writeFile(t, filepath.Join(docsRoot, "gateway", "index.md"), "# Gateway\n")
 			writeFile(t, filepath.Join(docsRoot, "gateway", "troubleshooting.md"), "# Troubleshooting\n")
-			writeFile(t, filepath.Join(docsRoot, "providers", "alibaba.md"), "# Alibaba\n")
+			writeFile(t, filepath.Join(docsRoot, "providers", "example-provider.md"), "# Example provider\n")
 			writeFile(t, filepath.Join(docsRoot, tt.lang, "gateway", "troubleshooting.md"), "# Localized troubleshooting\n")
-			writeFile(t, filepath.Join(docsRoot, tt.lang, "providers", "alibaba.md"), "# Localized Alibaba\n")
+			writeFile(t, filepath.Join(docsRoot, tt.lang, "providers", "example-provider.md"), "# Localized example provider\n")
 
 			pagePath := filepath.Join(docsRoot, tt.lang, "gateway", "index.md")
 			writeFile(t, pagePath, stringsJoin(
@@ -86,10 +86,10 @@ func TestPostprocessLocalizedDocsRewritesPublishedPageLinksForEachLocale(t *test
 				"",
 				"See [Troubleshooting](/gateway/troubleshooting).",
 				"",
-				"See [Alibaba](/providers/alibaba).",
+				"See [Example provider](/providers/example-provider).",
 				"",
 				`<Card href="/gateway/troubleshooting" title="Troubleshooting" />`,
-				`<Card href="`+tt.wantPrefix+`/providers/alibaba" title="Alibaba" />`,
+				`<Card href="`+tt.wantPrefix+`/providers/example-provider" title="Example provider" />`,
 			))
 
 			if err := postprocessLocalizedDocs(docsRoot, tt.lang, []string{pagePath}); err != nil {
@@ -99,9 +99,9 @@ func TestPostprocessLocalizedDocsRewritesPublishedPageLinksForEachLocale(t *test
 			got := mustReadFile(t, pagePath)
 			expectedLinks := []string{
 				"See [Troubleshooting](" + tt.wantPrefix + "/gateway/troubleshooting).",
-				"See [Alibaba](" + tt.wantPrefix + "/providers/alibaba).",
+				"See [Example provider](" + tt.wantPrefix + "/providers/example-provider).",
 				`<Card href="` + tt.wantPrefix + `/gateway/troubleshooting" title="Troubleshooting" />`,
-				`<Card href="` + tt.wantPrefix + `/providers/alibaba" title="Alibaba" />`,
+				`<Card href="` + tt.wantPrefix + `/providers/example-provider" title="Example provider" />`,
 			}
 			for _, want := range expectedLinks {
 				if !containsLine(got, want) {

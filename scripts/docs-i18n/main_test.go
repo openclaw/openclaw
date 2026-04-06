@@ -38,12 +38,12 @@ func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 		"",
 		"See [Troubleshooting](/gateway/troubleshooting).",
 		"",
-		"See [Alibaba](/providers/alibaba).",
+		"See [Example provider](/providers/example-provider).",
 	))
 	writeFile(t, filepath.Join(docsRoot, "gateway", "troubleshooting.md"), "# Troubleshooting\n")
-	writeFile(t, filepath.Join(docsRoot, "providers", "alibaba.md"), "# Alibaba\n")
+	writeFile(t, filepath.Join(docsRoot, "providers", "example-provider.md"), "# Example provider\n")
 	writeFile(t, filepath.Join(docsRoot, "zh-CN", "gateway", "troubleshooting.md"), "# 故障排除\n")
-	writeFile(t, filepath.Join(docsRoot, "zh-CN", "providers", "alibaba.md"), "# 阿里巴巴\n")
+	writeFile(t, filepath.Join(docsRoot, "zh-CN", "providers", "example-provider.md"), "# 示例 provider\n")
 
 	// This is the higher-level regression for the bug fixed in this PR:
 	// if the pipeline stops wiring postprocess through the main flow, the final
@@ -66,7 +66,7 @@ func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 	got := mustReadFile(t, filepath.Join(docsRoot, "zh-CN", "gateway", "index.md"))
 	expected := []string{
 		"参见 [Troubleshooting](/zh-CN/gateway/troubleshooting).",
-		"参见 [Alibaba](/zh-CN/providers/alibaba).",
+		"参见 [Example provider](/zh-CN/providers/example-provider).",
 	}
 	for _, want := range expected {
 		if !containsLine(got, want) {
