@@ -1438,6 +1438,7 @@ export const ko: TranslationMap = {
     uk: "우크라이나어 (Ukrainian)",
     id: "Bahasa Indonesia (인도네시아어)",
     pl: "Polski (폴란드어)",
+    sv: "스웨덴어 (Svenska)",
     th: "ไทย (태국어)",
     vi: "Tiếng Việt (베트남어)",
     nl: "Nederlands (네덜란드어)",

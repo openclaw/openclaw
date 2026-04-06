@@ -1453,6 +1453,7 @@ export const ja_JP: TranslationMap = {
     uk: "Українська（ウクライナ語）",
     id: "Bahasa Indonesia（Indonesian）",
     pl: "Polski（Polish）",
+    sv: "スウェーデン語 (Svenska)",
     th: "ไทย (Thai)",
     vi: "Tiếng Việt（ベトナム語）",
     nl: "Nederlands（オランダ語）",
