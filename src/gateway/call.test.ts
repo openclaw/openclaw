@@ -784,6 +784,32 @@ describe("callGateway error details", () => {
     expect(lastClientOptions?.connectChallengeTimeoutMs).toBe(25_000);
   });
 
+  it("uses configured connect handshake budget as the default outer timeout floor", async () => {
+    vi.useFakeTimers();
+    startMode = "silent";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", connectChallengeTimeoutMs: 25_000 },
+    });
+    setGatewayNetworkDefaults();
+
+    const promise = callGateway({ method: "health" }).catch((caught) => caught);
+
+    await vi.advanceTimersByTimeAsync(10_001);
+    await Promise.resolve();
+
+    let settled = false;
+    void promise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    const err = await promise;
+    expect(err).toBeInstanceOf(Error);
+    expect(String(err)).toContain("gateway timeout after 25000ms");
+  });
+
   it("does not inject wrapper timeout defaults into expectFinal requests", async () => {
     setLocalLoopbackGatewayConfig();
 

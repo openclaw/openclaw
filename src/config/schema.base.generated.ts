@@ -4833,27 +4833,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   thinking: {
                     type: "string",
                   },
-                  startupWaitTimeoutMs: {
-                    description:
-                      "Requester-side wait budget in milliseconds for the primary sub-agent startup RPC (default: 60000).",
-                    type: "integer",
-                    exclusiveMinimum: 0,
-                    maximum: 9007199254740991,
-                  },
                   runTimeoutSeconds: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
                   },
-                  completionAnnounceTimeoutMs: {
-                    description:
-                      "Preferred gateway timeout in milliseconds for sub-agent completion announce delivery calls (default: 90000).",
-                    type: "integer",
-                    exclusiveMinimum: 0,
-                    maximum: 9007199254740991,
-                  },
                   announceTimeoutMs: {
-                    description: "Backward-compatible alias for completionAnnounceTimeoutMs.",
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
@@ -20803,7 +20788,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           connectChallengeTimeoutMs: {
             type: "integer",
             minimum: 1,
-            maximum: 9007199254740991,
+            maximum: 300000,
             description:
               "WebSocket pre-auth/connect handshake timeout in milliseconds for gateway clients and server-side handshake enforcement (default: 10000). Raise this when local control-plane stalls can delay connect challenge completion.",
           },
