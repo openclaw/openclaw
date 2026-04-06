@@ -116,9 +116,13 @@ describe("CDP screenshot params", () => {
 
     const setCalls = sentMessages.filter((m) => m.method === "Emulation.setDeviceMetricsOverride");
     expect(setCalls.length).toBe(2);
+    const [firstSetCall, secondSetCall] = setCalls;
+    if (!firstSetCall || !secondSetCall) {
+      throw new Error("expected two viewport updates");
+    }
 
     // Expand: uses saved DPR, mobile defaults to false
-    expect(setCalls[0]!.params).toMatchObject({
+    expect(firstSetCall.params).toMatchObject({
       width: 1200,
       height: 3000,
       deviceScaleFactor: 2,
@@ -130,7 +134,7 @@ describe("CDP screenshot params", () => {
     expect(clearCall).toBeDefined();
 
     // Viewport drifted after clear → re-apply saved dimensions
-    expect(setCalls[1]!.params).toMatchObject({
+    expect(secondSetCall.params).toMatchObject({
       width: 800,
       height: 600,
       deviceScaleFactor: 2,

@@ -89,6 +89,7 @@ Those belong in your plugin code and `package.json`.
   "modelSupport": {
     "modelPrefixes": ["router-"]
   },
+  "cliBackends": ["openrouter-cli"],
   "providerAuthEnvVars": {
     "openrouter": ["OPENROUTER_API_KEY"]
   },
@@ -139,6 +140,7 @@ Those belong in your plugin code and `package.json`.
 | `channels`                          | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                                                                                                  |
 | `providers`                         | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                                                                                                           |
 | `modelSupport`                      | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                  |
+| `cliBackends`                       | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                  |
 | `providerAuthEnvVars`               | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                                                                                                      |
 | `providerAuthChoices`               | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                |
 | `contracts`                         | No       | `object`                         | Static bundled capability snapshot for speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
@@ -443,7 +445,7 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
   - `kind: "memory"` is selected by `plugins.slots.memory`.
   - `kind: "context-engine"` is selected by `plugins.slots.contextEngine`
     (default: built-in `legacy`).
-- `channels`, `providers`, and `skills` can be omitted when a
+- `channels`, `providers`, `cliBackends`, and `skills` can be omitted when a
   plugin does not need them.
 - If your plugin depends on native modules, document the build steps and any
   package-manager allowlist requirements (for example, pnpm `allow-build-scripts`

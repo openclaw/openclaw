@@ -19,7 +19,7 @@ async function runSetup(params: {
 }) {
   return await runSetupWizardConfigure({
     configure: zalouserConfigure,
-    cfg: params.cfg as OpenClawConfig | undefined,
+    cfg: params.cfg,
     prompter: params.prompter,
     options: params.options,
     forceAllowFrom: params.forceAllowFrom,

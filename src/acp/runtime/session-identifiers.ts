@@ -18,6 +18,11 @@ const ACP_AGENT_RESUME_HINT_BY_KEY = new Map<string, SessionResumeHintResolver>(
       `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
   ],
   [
+    "codex-cli",
+    ({ agentSessionId }) =>
+      `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
+  ],
+  [
     "kimi",
     ({ agentSessionId }) =>
       `resume in Kimi CLI: \`kimi resume ${agentSessionId}\` (continues this conversation).`,

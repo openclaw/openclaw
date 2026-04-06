@@ -1,6 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { getRuntimeConfigSnapshot, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   jsonResult,
   readCache,
@@ -11,10 +10,7 @@ import {
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
-import {
-  resolveEffectiveXSearchConfig,
-  resolveLegacyXSearchConfig,
-} from "./src/x-search-config.js";
+import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import {
   buildXaiXSearchPayload,
   requestXaiXSearch,
@@ -198,7 +194,7 @@ export function createXSearchTool(options?: {
         enableImageUnderstanding: args.enable_image_understanding === true,
         enableVideoUnderstanding: args.enable_video_understanding === true,
       };
-      const xSearchConfigRecord = xSearchConfig as Record<string, unknown> | undefined;
+      const xSearchConfigRecord = xSearchConfig;
       const model = resolveXaiXSearchModel(xSearchConfigRecord);
       const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfigRecord);
       const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfigRecord);

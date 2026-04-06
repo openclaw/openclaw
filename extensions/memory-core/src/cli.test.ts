@@ -373,7 +373,7 @@ describe("memory cli", () => {
       await runMemoryCli(["status"]);
 
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Recall store: 1 entries"));
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: 0 3 * * *"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: off"));
       expect(close).toHaveBeenCalled();
     });
   });
@@ -527,6 +527,33 @@ describe("memory cli", () => {
     expectCliSync(sync);
     expect(close).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Memory index updated (main).");
+  });
+
+  it("warns on stderr when index completes without sqlite-vec embeddings", async () => {
+    const close = vi.fn(async () => {});
+    const sync = vi.fn(async () => {});
+    mockManager({
+      sync,
+      status: () =>
+        makeMemoryStatus({
+          vector: {
+            enabled: true,
+            available: false,
+            loadError: "load failed",
+          },
+        }),
+      close,
+    });
+
+    const error = spyRuntimeErrors(defaultRuntime);
+    await runMemoryCli(["index"]);
+
+    expectCliSync(sync);
+    expect(error).toHaveBeenCalledWith(
+      "Memory index WARNING (main): chunks_vec not updated — sqlite-vec unavailable: load failed. Vector recall degraded.",
+    );
+    expect(close).toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("logs qmd index file path and size after index", async () => {

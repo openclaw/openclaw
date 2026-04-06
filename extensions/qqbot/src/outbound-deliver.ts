@@ -89,7 +89,7 @@ export async function parseAndSendMediaTags(
 
   const tagCounts = mediaTagMatches.reduce(
     (acc, m) => {
-      const t = m[1]!.toLowerCase();
+      const t = m[1].toLowerCase();
       acc[t] = (acc[t] ?? 0) + 1;
       return acc;
     },
@@ -122,7 +122,7 @@ export async function parseAndSendMediaTags(
       sendQueue.push({ type: "text", content: filterInternalMarkers(textBefore) });
     }
 
-    const tagName = match[1]!.toLowerCase();
+    const tagName = match[1].toLowerCase();
     let mediaPath = decodeMediaPath(match[2]?.trim() ?? "", log, prefix);
 
     if (mediaPath) {
@@ -178,15 +178,21 @@ export async function parseAndSendMediaTags(
       await sendTextChunks(item.content, event, actx, sendWithRetry, consumeQuoteRef);
     } else if (item.type === "image") {
       const result = await sendPhoto(mediaTarget, item.content);
-      if (result.error) log?.error(`${prefix} sendPhoto error: ${result.error}`);
+      if (result.error) {
+        log?.error(`${prefix} sendPhoto error: ${result.error}`);
+      }
     } else if (item.type === "voice") {
       await sendVoiceWithTimeout(mediaTarget, item.content, account, log, prefix);
     } else if (item.type === "video") {
       const result = await sendVideoMsg(mediaTarget, item.content);
-      if (result.error) log?.error(`${prefix} sendVideoMsg error: ${result.error}`);
+      if (result.error) {
+        log?.error(`${prefix} sendVideoMsg error: ${result.error}`);
+      }
     } else if (item.type === "file") {
       const result = await sendDocument(mediaTarget, item.content);
-      if (result.error) log?.error(`${prefix} sendDocument error: ${result.error}`);
+      if (result.error) {
+        log?.error(`${prefix} sendDocument error: ${result.error}`);
+      }
     } else if (item.type === "media") {
       const result = await sendMediaAuto({
         to: actx.qualifiedTarget,
@@ -196,7 +202,9 @@ export async function parseAndSendMediaTags(
         replyToId: event.messageId,
         account,
       });
-      if (result.error) log?.error(`${prefix} sendMedia(auto) error: ${result.error}`);
+      if (result.error) {
+        log?.error(`${prefix} sendMedia(auto) error: ${result.error}`);
+      }
     }
   }
 
@@ -231,7 +239,9 @@ export async function sendPlainReply(
   const localMediaToSend: string[] = [];
 
   const collectImageUrl = (url: string | undefined | null): boolean => {
-    if (!url) return false;
+    if (!url) {
+      return false;
+    }
     const isHttpUrl = url.startsWith("http://") || url.startsWith("https://");
     const isDataUrl = url.startsWith("data:image/");
     if (isHttpUrl || isDataUrl) {
@@ -254,9 +264,13 @@ export async function sendPlainReply(
   };
 
   if (payload.mediaUrls?.length) {
-    for (const url of payload.mediaUrls) collectImageUrl(url);
+    for (const url of payload.mediaUrls) {
+      collectImageUrl(url);
+    }
   }
-  if (payload.mediaUrl) collectImageUrl(payload.mediaUrl);
+  if (payload.mediaUrl) {
+    collectImageUrl(payload.mediaUrl);
+  }
 
   // Extract markdown images.
   const mdImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/gi;
@@ -278,7 +292,7 @@ export async function sendPlainReply(
 
   // Extract bare image URLs.
   const bareUrlRegex =
-    /(?<![(\["'])(https?:\/\/[^\s)"'<>]+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s"'<>]*)?)/gi;
+    /(?<![(["'])(https?:\/\/[^\s)"'<>]+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s"'<>]*)?)/gi;
   const bareUrlMatches = [...replyText.matchAll(bareUrlRegex)];
   for (const m of bareUrlMatches) {
     const url = m[1];
@@ -288,7 +302,7 @@ export async function sendPlainReply(
     }
   }
 
-  const useMarkdown = account.markdownSupport === true;
+  const useMarkdown = account.markdownSupport;
   log?.info(`${prefix} Markdown mode: ${useMarkdown}, images: ${collectedImageUrls.length}`);
 
   let textWithoutImages = filterInternalMarkers(replyText);
@@ -341,11 +355,13 @@ export async function sendPlainReply(
           replyToId: event.messageId,
           account,
         });
-        if (result.error)
+        if (result.error) {
           log?.error(`${prefix} sendMedia(auto) error for ${mediaPath}: ${result.error}`);
-        else log?.info(`${prefix} Sent local media: ${mediaPath}`);
+        } else {
+          log?.info(`${prefix} Sent local media: ${mediaPath}`);
+        }
       } catch (err) {
-        log?.error(`${prefix} sendMedia(auto) failed for ${mediaPath}: ${err}`);
+        log?.error(`${prefix} sendMedia(auto) failed for ${mediaPath}: ${String(err)}`);
       }
     }
   }
@@ -365,10 +381,13 @@ export async function sendPlainReply(
           replyToId: event.messageId,
           account,
         });
-        if (result.error) log?.error(`${prefix} Tool media forward error: ${result.error}`);
-        else log?.info(`${prefix} Forwarded tool media: ${mediaUrl.slice(0, 80)}...`);
+        if (result.error) {
+          log?.error(`${prefix} Tool media forward error: ${result.error}`);
+        } else {
+          log?.info(`${prefix} Forwarded tool media: ${mediaUrl.slice(0, 80)}...`);
+        }
       } catch (err) {
-        log?.error(`${prefix} Tool media forward failed: ${err}`);
+        log?.error(`${prefix} Tool media forward failed: ${String(err)}`);
       }
     }
     toolMediaUrls.length = 0;
@@ -417,7 +436,7 @@ function decodeMediaPath(raw: string, log: DeliverAccountContext["log"], prefix:
       }
     }
   } catch (decodeErr) {
-    log?.error(`${prefix} Path decode error: ${decodeErr}`);
+    log?.error(`${prefix} Path decode error: ${String(decodeErr)}`);
   }
 
   return mediaPath;
@@ -465,7 +484,7 @@ async function sendTextChunks(
         `${prefix} Sent text chunk (${chunk.length}/${text.length} chars): ${chunk.slice(0, 50)}...`,
       );
     } catch (err) {
-      log?.error(`${prefix} Failed to send text chunk: ${err}`);
+      log?.error(`${prefix} Failed to send text chunk: ${String(err)}`);
     }
   }
 }
@@ -503,9 +522,11 @@ async function sendVoiceWithTimeout(
         }, voiceTimeout),
       ),
     ]);
-    if (result.error) log?.error(`${prefix} sendVoice error: ${result.error}`);
+    if (result.error) {
+      log?.error(`${prefix} sendVoice error: ${result.error}`);
+    }
   } catch (err) {
-    log?.error(`${prefix} sendVoice unexpected error: ${err}`);
+    log?.error(`${prefix} sendVoice unexpected error: ${String(err)}`);
   }
 }
 
@@ -527,8 +548,11 @@ async function sendMarkdownReply(
   const httpImageUrls: string[] = [];
   const base64ImageUrls: string[] = [];
   for (const url of imageUrls) {
-    if (url.startsWith("data:image/")) base64ImageUrls.push(url);
-    else if (url.startsWith("http://") || url.startsWith("https://")) httpImageUrls.push(url);
+    if (url.startsWith("data:image/")) {
+      base64ImageUrls.push(url);
+    } else if (url.startsWith("http://") || url.startsWith("https://")) {
+      httpImageUrls.push(url);
+    }
   }
   log?.info(
     `${prefix} Image classification: httpUrls=${httpImageUrls.length}, base64=${base64ImageUrls.length}`,
@@ -566,7 +590,7 @@ async function sendMarkdownReply(
           `${prefix} Sent Base64 image via Rich Media API (size: ${imageUrl.length} chars)`,
         );
       } catch (imgErr) {
-        log?.error(`${prefix} Failed to send Base64 image via Rich Media API: ${imgErr}`);
+        log?.error(`${prefix} Failed to send Base64 image via Rich Media API: ${String(imgErr)}`);
       }
     }
   }
@@ -584,7 +608,7 @@ async function sendMarkdownReply(
           `${prefix} Formatted HTTP image: ${size ? `${size.width}x${size.height}` : "default size"} - ${url.slice(0, 60)}...`,
         );
       } catch (err) {
-        log?.info(`${prefix} Failed to get image size, using default: ${err}`);
+        log?.info(`${prefix} Failed to get image size, using default: ${String(err)}`);
         imagesToAppend.push(formatQQBotMarkdownImage(url, null));
       }
     }
@@ -604,7 +628,9 @@ async function sendMarkdownReply(
           `${prefix} Updated image with size: ${size ? `${size.width}x${size.height}` : "default"} - ${imgUrl.slice(0, 60)}...`,
         );
       } catch (err) {
-        log?.info(`${prefix} Failed to get image size for existing md, using default: ${err}`);
+        log?.info(
+          `${prefix} Failed to get image size for existing md, using default: ${String(err)}`,
+        );
         result = result.replace(fullMatch, formatQQBotMarkdownImage(imgUrl, null));
       }
     }
@@ -655,7 +681,7 @@ async function sendMarkdownReply(
           `${prefix} Sent markdown chunk (${chunk.length}/${result.length} chars) with ${httpImageUrls.length} HTTP images (${event.type})`,
         );
       } catch (err) {
-        log?.error(`${prefix} Failed to send markdown message chunk: ${err}`);
+        log?.error(`${prefix} Failed to send markdown message chunk: ${String(err)}`);
       }
     }
   }
@@ -698,8 +724,12 @@ async function sendPlainTextReply(
   };
 
   let result = textWithoutImages;
-  for (const m of mdMatches) result = result.replace(m[0], "").trim();
-  for (const m of bareUrlMatches) result = result.replace(m[0], "").trim();
+  for (const m of mdMatches) {
+    result = result.replace(m[0], "").trim();
+  }
+  for (const m of bareUrlMatches) {
+    result = result.replace(m[0], "").trim();
+  }
 
   // QQ group messages reject some dotted bare URLs, so filter them first.
   if (result && event.type !== "c2c") {
@@ -710,10 +740,13 @@ async function sendPlainTextReply(
     for (const imageUrl of imageUrls) {
       try {
         const imgResult = await sendPhoto(imgMediaTarget, imageUrl);
-        if (imgResult.error) log?.error(`${prefix} Failed to send image: ${imgResult.error}`);
-        else log?.info(`${prefix} Sent image via sendPhoto: ${imageUrl.slice(0, 80)}...`);
+        if (imgResult.error) {
+          log?.error(`${prefix} Failed to send image: ${imgResult.error}`);
+        } else {
+          log?.info(`${prefix} Sent image via sendPhoto: ${imageUrl.slice(0, 80)}...`);
+        }
       } catch (imgErr) {
-        log?.error(`${prefix} Failed to send image: ${imgErr}`);
+        log?.error(`${prefix} Failed to send image: ${String(imgErr)}`);
       }
     }
 
@@ -749,6 +782,6 @@ async function sendPlainTextReply(
       }
     }
   } catch (err) {
-    log?.error(`${prefix} Send failed: ${err}`);
+    log?.error(`${prefix} Send failed: ${String(err)}`);
   }
 }

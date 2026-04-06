@@ -12,9 +12,9 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   parseModelRef,
-  resolvePersistedModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolvePersistedSelectedModelRef,
 } from "../agents/model-selection.js";
 import {
   getSessionDisplaySubagentRunByChildSessionKey,
@@ -1033,7 +1033,7 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
       });
 
-  const persisted = resolvePersistedModelRef({
+  const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
     runtimeProvider: entry?.modelProvider,
     runtimeModel: entry?.model,
@@ -1187,6 +1187,9 @@ export function buildGatewaySessionRow(params: {
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
   const subagentRuntimeMs = subagentRun ? resolveSessionRuntimeMs(subagentRun, now) : undefined;
+  const selectedModel = entry?.modelOverride?.trim()
+    ? resolveSessionModelRef(cfg, entry, sessionAgentId)
+    : null;
   const resolvedModel = resolveSessionModelIdentityRef(
     cfg,
     entry,
@@ -1319,8 +1322,8 @@ export function buildGatewaySessionRow(params: {
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
-    modelProvider,
-    model,
+    modelProvider: selectedModel?.provider ?? modelProvider,
+    model: selectedModel?.model ?? model,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,

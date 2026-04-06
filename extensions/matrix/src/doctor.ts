@@ -11,7 +11,6 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor";
 import {
   hasLegacyFlatAllowPrivateNetworkAlias,
-  isPrivateNetworkOptInEnabled,
   migrateLegacyFlatAllowPrivateNetworkAlias,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -183,7 +182,7 @@ function normalizeMatrixCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorC
     config: {
       ...cfg,
       channels: {
-        ...(cfg.channels ?? {}),
+        ...cfg.channels,
         matrix: updatedMatrix as NonNullable<OpenClawConfig["channels"]>["matrix"],
       },
     },

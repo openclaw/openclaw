@@ -52,3 +52,8 @@ export function collectRuntimeConfigAssignments(params: {
     accountInactiveReason: "Mattermost account is disabled.",
   });
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

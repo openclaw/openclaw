@@ -22,6 +22,58 @@ import {
 
 const log = createSubsystemLogger("video-generation");
 
+function resolveVideoGenerationMode(params: {
+  inputImageCount?: number;
+  inputVideoCount?: number;
+}): "generate" | "imageToVideo" | "videoToVideo" | null {
+  const inputImageCount = params.inputImageCount ?? 0;
+  const inputVideoCount = params.inputVideoCount ?? 0;
+  if (inputImageCount > 0 && inputVideoCount > 0) {
+    return null;
+  }
+  if (inputVideoCount > 0) {
+    return "videoToVideo";
+  }
+  if (inputImageCount > 0) {
+    return "imageToVideo";
+  }
+  return "generate";
+}
+
+function resolveVideoGenerationModeCapabilities(params: {
+  provider?: NonNullable<ReturnType<typeof getVideoGenerationProvider>>;
+  inputImageCount?: number;
+  inputVideoCount?: number;
+}) {
+  const mode = resolveVideoGenerationMode(params);
+  const capabilities = params.provider?.capabilities;
+  if (!capabilities) {
+    return { mode, capabilities: undefined };
+  }
+  if (mode === "generate") {
+    return {
+      mode,
+      capabilities: capabilities.generate,
+    };
+  }
+  if (mode === "imageToVideo") {
+    return {
+      mode,
+      capabilities: capabilities.imageToVideo,
+    };
+  }
+  if (mode === "videoToVideo") {
+    return {
+      mode,
+      capabilities: capabilities.videoToVideo,
+    };
+  }
+  return {
+    mode,
+    capabilities: undefined,
+  };
+}
+
 export type GenerateVideoParams = {
   cfg: OpenClawConfig;
   prompt: string;
@@ -67,14 +119,31 @@ function resolveProviderVideoGenerationOverrides(params: {
   resolution?: VideoGenerationResolution;
   audio?: boolean;
   watermark?: boolean;
+  inputImageCount?: number;
+  inputVideoCount?: number;
 }) {
-  const caps = params.provider.capabilities;
+  const { capabilities: caps } = resolveVideoGenerationModeCapabilities({
+    provider: params.provider,
+    inputImageCount: params.inputImageCount,
+    inputVideoCount: params.inputVideoCount,
+  });
   const ignoredOverrides: VideoGenerationIgnoredOverride[] = [];
   let size = params.size;
   let aspectRatio = params.aspectRatio;
   let resolution = params.resolution;
   let audio = params.audio;
   let watermark = params.watermark;
+
+  if (!caps) {
+    return {
+      size,
+      aspectRatio,
+      resolution,
+      audio,
+      watermark,
+      ignoredOverrides,
+    };
+  }
 
   if (size && !caps.supportsSize) {
     ignoredOverrides.push({ key: "size", value: size });
@@ -148,6 +217,8 @@ export async function generateVideo(
         resolution: params.resolution,
         audio: params.audio,
         watermark: params.watermark,
+        inputImageCount: params.inputImages?.length ?? 0,
+        inputVideoCount: params.inputVideos?.length ?? 0,
       });
       const result: VideoGenerationResult = await provider.generateVideo({
         provider: candidate.provider,

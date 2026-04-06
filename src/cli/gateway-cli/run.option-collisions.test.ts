@@ -197,6 +197,18 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it.each([
+    ["--cli-backend-logs", "generic flag"],
+    ["--claude-cli-logs", "deprecated alias"],
+  ])("enables CLI backend log filtering via %s (%s)", async (flag) => {
+    delete process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT;
+
+    await runGatewayCli(["gateway", "run", flag, "--allow-unconfigured"]);
+
+    expect(setConsoleSubsystemFilter).toHaveBeenCalledWith(["agent/cli-backend"]);
+    expect(process.env.OPENCLAW_CLI_BACKEND_LOG_OUTPUT).toBe("1");
+  });
+
   it("starts gateway when token mode has no configured token (startup bootstrap path)", async () => {
     await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
 

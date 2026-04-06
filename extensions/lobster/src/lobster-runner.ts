@@ -399,7 +399,7 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
       if (hasFile) {
         try {
           const output = await deps.runWorkflowFile({
-            filePath: filePath!,
+            filePath: filePath,
             args,
             ctx: runtime,
           });
@@ -431,9 +431,9 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
           pipeline: parsed,
           registry: runtime.registry,
           input: [],
-          stdin: runtime.stdin!,
-          stdout: runtime.stdout!,
-          stderr: runtime.stderr!,
+          stdin: runtime.stdin,
+          stdout: runtime.stdout,
+          stderr: runtime.stderr,
           env: runtime.env,
           mode: "tool",
           cwd: runtime.cwd,
@@ -531,9 +531,9 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
           pipeline: remaining,
           registry: runtime.registry,
           input: streamFromItems(resumeState.items),
-          stdin: runtime.stdin!,
-          stdout: runtime.stdout!,
-          stderr: runtime.stderr!,
+          stdin: runtime.stdin,
+          stdout: runtime.stdout,
+          stderr: runtime.stderr,
           env: runtime.env,
           mode: "tool",
           cwd: runtime.cwd,

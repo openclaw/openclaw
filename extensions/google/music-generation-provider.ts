@@ -102,14 +102,27 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxTracks: 1,
-      maxInputImages: GOOGLE_MAX_INPUT_IMAGES,
-      supportsLyrics: true,
-      supportsInstrumental: true,
-      supportsFormat: true,
-      supportedFormatsByModel: {
-        [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
-        [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
+      generate: {
+        maxTracks: 1,
+        supportsLyrics: true,
+        supportsInstrumental: true,
+        supportsFormat: true,
+        supportedFormatsByModel: {
+          [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
+          [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
+        },
+      },
+      edit: {
+        enabled: true,
+        maxTracks: 1,
+        maxInputImages: GOOGLE_MAX_INPUT_IMAGES,
+        supportsLyrics: true,
+        supportsInstrumental: true,
+        supportsFormat: true,
+        supportedFormatsByModel: {
+          [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
+          [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
+        },
       },
     },
     async generateMusic(req) {

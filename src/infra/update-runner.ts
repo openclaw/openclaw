@@ -31,6 +31,7 @@ import {
   resolveGlobalInstallSpec,
 } from "./update-global.js";
 import {
+  managerInstallIgnoreScriptsArgs,
   managerInstallArgs,
   managerScriptArgs,
   resolveUpdateBuildManager,
@@ -307,6 +308,34 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
 
 function normalizeTag(tag?: string) {
   return normalizePackageTagInput(tag, ["openclaw", DEFAULT_PACKAGE_NAME]) ?? "latest";
+}
+
+function shouldRetryWindowsInstallIgnoringScripts(manager: "pnpm" | "bun" | "npm"): boolean {
+  return process.platform === "win32" && manager === "pnpm";
+}
+
+function isSupersededInstallFailure(
+  step: UpdateStepResult,
+  steps: readonly UpdateStepResult[],
+): boolean {
+  if (step.exitCode === 0) {
+    return false;
+  }
+  if (step.name === "deps install") {
+    return steps.some(
+      (candidate) => candidate.name === "deps install (ignore scripts)" && candidate.exitCode === 0,
+    );
+  }
+  const preflightMatch = /^preflight deps install \((.+)\)$/.exec(step.name);
+  if (!preflightMatch) {
+    return false;
+  }
+  const retryName = `preflight deps install (ignore scripts) (${preflightMatch[1]})`;
+  return steps.some((candidate) => candidate.name === retryName && candidate.exitCode === 0);
+}
+
+function findBlockingGitFailure(steps: readonly UpdateStepResult[]): UpdateStepResult | undefined {
+  return steps.find((step) => step.exitCode !== 0 && !isSupersededInstallFailure(step, steps));
 }
 
 function mergeCommandEnvironments(
@@ -608,7 +637,26 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             ),
           );
           steps.push(depsStep);
-          if (depsStep.exitCode !== 0) {
+          let finalDepsStep = depsStep;
+          if (
+            depsStep.exitCode !== 0 &&
+            shouldRetryWindowsInstallIgnoringScripts(manager.manager)
+          ) {
+            const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
+            if (retryArgv) {
+              const retryStep = await runStep(
+                step(
+                  `preflight deps install (ignore scripts) (${shortSha})`,
+                  retryArgv,
+                  worktreeDir,
+                  manager.env,
+                ),
+              );
+              steps.push(retryStep);
+              finalDepsStep = retryStep;
+            }
+          }
+          if (finalDepsStep.exitCode !== 0) {
             continue;
           }
 
@@ -771,7 +819,18 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         ),
       );
       steps.push(depsStep);
-      if (depsStep.exitCode !== 0) {
+      let finalDepsStep = depsStep;
+      if (depsStep.exitCode !== 0 && shouldRetryWindowsInstallIgnoringScripts(manager.manager)) {
+        const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
+        if (retryArgv) {
+          const retryStep = await runStep(
+            step("deps install (ignore scripts)", retryArgv, gitRoot, manager.env),
+          );
+          steps.push(retryStep);
+          finalDepsStep = retryStep;
+        }
+      }
+      if (finalDepsStep.exitCode !== 0) {
         return {
           status: "error",
           mode: "git",
@@ -905,7 +964,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
       }
 
-      const failedStep = steps.find((s) => s.exitCode !== 0);
+      const failedStep = findBlockingGitFailure(steps);
       const afterShaStep = await runStep(
         step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
       );

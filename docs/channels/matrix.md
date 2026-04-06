@@ -44,6 +44,7 @@ See [Plugins](/tools/plugin) for plugin behavior and install rules.
    - `homeserver` + `userId` + `password`.
 4. Restart the gateway.
 5. Start a DM with the bot or invite it to a room.
+   - Fresh Matrix invites only work when `channels.matrix.autoJoin` allows them.
 
 Interactive setup paths:
 
@@ -69,6 +70,44 @@ Wizard behavior that matters:
 - Room allowlist prompts accept room IDs and aliases directly. They can also resolve joined-room names live, but unresolved names are only kept as typed during setup and are ignored later by runtime allowlist resolution. Prefer `!room:server` or `#alias:server`.
 - Runtime room/session identity uses the stable Matrix room ID. Room-declared aliases are only used as lookup inputs, not as the long-term session key or stable group identity.
 - To resolve room names before saving them, use `openclaw channels resolve --channel matrix "Project Room"`.
+
+<Warning>
+`channels.matrix.autoJoin` defaults to `off`.
+
+If you leave it unset, the bot will not join invited rooms or fresh DM-style invites, so it will not appear in new groups or invited DMs unless you join manually first.
+
+Set `autoJoin: "allowlist"` together with `autoJoinAllowlist` to restrict which invites it accepts, or set `autoJoin: "always"` if you want it to join every invite.
+</Warning>
+
+Allowlist example:
+
+```json5
+{
+  channels: {
+    matrix: {
+      autoJoin: "allowlist",
+      autoJoinAllowlist: ["!ops:example.org", "#support:example.org"],
+      groups: {
+        "!ops:example.org": {
+          requireMention: true,
+        },
+      },
+    },
+  },
+}
+```
+
+Join every invite:
+
+```json5
+{
+  channels: {
+    matrix: {
+      autoJoin: "always",
+    },
+  },
+}
+```
 
 Minimal token-based setup:
 
@@ -174,6 +213,13 @@ This is a practical baseline config with DM pairing, room allowlist, and E2EE en
   },
 }
 ```
+
+`autoJoin` applies to Matrix invites in general, not only room/group invites.
+That includes fresh DM-style invites. At invite time, OpenClaw does not reliably know whether the
+invited room will end up being treated as a DM or a group, so all invites go through the same
+`autoJoin` decision first. `dm.policy` still applies after the bot has joined and the room is
+classified as a DM, so `autoJoin` controls join behavior while `dm.policy` controls reply/access
+behavior.
 
 ## Streaming previews
 
@@ -773,7 +819,7 @@ Current behavior:
 ## History context
 
 - `channels.matrix.historyLimit` controls how many recent room messages are included as `InboundHistory` when a Matrix room message triggers the agent.
-- It falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
+- It falls back to `messages.groupChat.historyLimit`. If both are unset, the effective default is `0`, so mention-gated room messages are not buffered. Set `0` to disable.
 - Matrix room history is room-only. DMs keep using normal session history.
 - Matrix room history is pending-only: OpenClaw buffers room messages that did not trigger a reply yet, then snapshots that window when a mention or other trigger arrives.
 - The current trigger message is not included in `InboundHistory`; it stays in the main inbound body for that turn.
@@ -913,14 +959,16 @@ By default, OpenClaw blocks private/internal Matrix homeservers for SSRF protect
 explicitly opt in per account.
 
 If your homeserver runs on localhost, a LAN/Tailscale IP, or an internal hostname, enable
-`allowPrivateNetwork` for that Matrix account:
+`network.dangerouslyAllowPrivateNetwork` for that Matrix account:
 
 ```json5
 {
   channels: {
     matrix: {
       homeserver: "http://matrix-synapse:8008",
-      allowPrivateNetwork: true,
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
       accessToken: "syt_internal_xxx",
     },
   },
@@ -979,7 +1027,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `name`: optional label for the account.
 - `defaultAccount`: preferred account ID when multiple Matrix accounts are configured.
 - `homeserver`: homeserver URL, for example `https://matrix.example.org`.
-- `allowPrivateNetwork`: allow this Matrix account to connect to private/internal homeservers. Enable this when the homeserver resolves to `localhost`, a LAN/Tailscale IP, or an internal host such as `matrix-synapse`.
+- `network.dangerouslyAllowPrivateNetwork`: allow this Matrix account to connect to private/internal homeservers. Enable this when the homeserver resolves to `localhost`, a LAN/Tailscale IP, or an internal host such as `matrix-synapse`.
 - `proxy`: optional HTTP(S) proxy URL for Matrix traffic. Named accounts can override the top-level default with their own `proxy`.
 - `userId`: full Matrix user ID, for example `@bot:example.org`.
 - `accessToken`: access token for token-based auth. Plaintext values and SecretRef values are supported for `channels.matrix.accessToken` and `channels.matrix.accounts.<id>.accessToken` across env/file/exec providers. See [Secrets Management](/gateway/secrets).
@@ -995,8 +1043,8 @@ Live directory lookup uses the logged-in Matrix account:
 - `contextVisibility`: supplemental room-context visibility mode (`all`, `allowlist`, `allowlist_quote`).
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `groupAllowFrom` entries should be full Matrix user IDs. Unresolved names are ignored at runtime.
-- `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
-- `replyToMode`: `off`, `first`, or `all`.
+- `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`; if both are unset, the effective default is `0`. Set `0` to disable.
+- `replyToMode`: `off`, `first`, `all`, or `batched`.
 - `markdown`: optional Markdown rendering configuration for outbound Matrix text.
 - `streaming`: `off` (default), `partial`, `quiet`, `true`, or `false`. `partial` and `true` enable preview-first draft updates with normal Matrix text messages. `quiet` uses non-notifying preview notices for self-hosted push-rule setups.
 - `blockStreaming`: `true` enables separate progress messages for completed assistant blocks while draft preview streaming is active.
@@ -1011,9 +1059,10 @@ Live directory lookup uses the logged-in Matrix account:
 - `ackReactionScope`: optional ack reaction scope override (`group-mentions`, `group-all`, `direct`, `all`, `none`, `off`).
 - `reactionNotifications`: inbound reaction notification mode (`own`, `off`).
 - `mediaMaxMb`: media size cap in MB for Matrix media handling. It applies to outbound sends and inbound media processing.
-- `autoJoin`: invite auto-join policy (`always`, `allowlist`, `off`). Default: `off`.
+- `autoJoin`: invite auto-join policy (`always`, `allowlist`, `off`). Default: `off`. This applies to Matrix invites in general, including DM-style invites, not only room/group invites. OpenClaw makes this decision at invite time, before it can reliably classify the joined room as a DM or a group.
 - `autoJoinAllowlist`: rooms/aliases allowed when `autoJoin` is `allowlist`. Alias entries are resolved to room IDs during invite handling; OpenClaw does not trust alias state claimed by the invited room.
 - `dm`: DM policy block (`enabled`, `policy`, `allowFrom`, `sessionScope`, `threadReplies`).
+- `dm.policy`: controls DM access after OpenClaw has joined the room and classified it as a DM. It does not change whether an invite is auto-joined.
 - `dm.allowFrom` entries should be full Matrix user IDs unless you already resolved them through live directory lookup.
 - `dm.sessionScope`: `per-user` (default) or `per-room`. Use `per-room` when you want each Matrix DM room to keep separate context even if the peer is the same.
 - `dm.threadReplies`: DM-only thread policy override (`off`, `inbound`, `always`). It overrides the top-level `threadReplies` setting for both reply placement and session isolation in DMs.

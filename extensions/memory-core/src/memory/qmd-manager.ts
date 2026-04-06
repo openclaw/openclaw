@@ -96,7 +96,7 @@ function getQmdEmbedQueueState(): QmdEmbedQueueState {
   }));
 }
 
-function hasHanScript(value: string): boolean {
+function _hasHanScript(value: string): boolean {
   return HAN_SCRIPT_RE.test(value);
 }
 

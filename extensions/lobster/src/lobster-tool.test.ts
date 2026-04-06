@@ -10,7 +10,6 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
     id: "lobster",
     name: "lobster",
     source: "test",
-    // oxlint-disable-next-line typescript/no-explicit-any
     runtime: { version: "test" } as any,
     resolvePath: (p) => p,
     ...overrides,

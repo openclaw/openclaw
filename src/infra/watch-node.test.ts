@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeWatchedPaths } from "../../scripts/run-node.mjs";
 import { runWatchMain } from "../../scripts/watch-node.mjs";
 import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const VOICE_CALL_README = bundledPluginFile("voice-call", "README.md");
 const VOICE_CALL_MANIFEST = bundledPluginFile("voice-call", "openclaw.plugin.json");
@@ -50,71 +50,74 @@ const createWatchHarness = () => {
 describe("watch-node script", () => {
   it("wires chokidar watch to run-node with watched source/config paths", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-watch-node-"));
-    fs.mkdirSync(path.join(cwd, "src", "infra"), { recursive: true });
-    fs.mkdirSync(path.join(cwd, "extensions", "voice-call"), { recursive: true });
+    await withTempDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
+      fs.mkdirSync(path.join(cwd, "src", "infra"), { recursive: true });
+      fs.mkdirSync(path.join(cwd, "extensions", "voice-call"), { recursive: true });
 
-    const runPromise = runWatch({
-      args: ["gateway", "--force"],
-      cwd,
-      createWatcher,
-      env: { PATH: "/usr/bin" },
-      lockDisabled: true,
-      now: () => 1700000000000,
-      process: fakeProcess,
-      spawn,
-    });
-
-    expect(createWatcher).toHaveBeenCalledTimes(1);
-    const firstWatcherCall = createWatcher.mock.calls[0];
-    expect(firstWatcherCall).toBeDefined();
-    const [watchPaths, watchOptions] = firstWatcherCall as unknown as [
-      string[],
-      { ignoreInitial: boolean; ignored: (watchPath: string) => boolean },
-    ];
-    expect(watchPaths).toEqual(runNodeWatchedPaths);
-    expect(watchPaths).toContain("extensions");
-    expect(watchPaths).toContain("tsdown.config.ts");
-    expect(watchOptions.ignoreInitial).toBe(true);
-    expect(watchOptions.ignored("src")).toBe(false);
-    expect(watchOptions.ignored("src/infra")).toBe(false);
-    expect(watchOptions.ignored("extensions")).toBe(false);
-    expect(watchOptions.ignored("extensions/voice-call")).toBe(false);
-    expect(watchOptions.ignored("extensions/voice-call/dist")).toBe(true);
-    expect(watchOptions.ignored("extensions/voice-call/node_modules")).toBe(true);
-    expect(watchOptions.ignored("extensions/voice-call/node_modules/chokidar/index.js")).toBe(true);
-    expect(watchOptions.ignored("src/infra/watch-node.test.ts")).toBe(true);
-    expect(watchOptions.ignored("src/infra/watch-node.test.tsx")).toBe(true);
-    expect(watchOptions.ignored("src/infra/watch-node-test-helpers.ts")).toBe(true);
-    expect(watchOptions.ignored(VOICE_CALL_README)).toBe(true);
-    expect(watchOptions.ignored(VOICE_CALL_MANIFEST)).toBe(false);
-    expect(watchOptions.ignored(VOICE_CALL_PACKAGE)).toBe(false);
-    expect(watchOptions.ignored(VOICE_CALL_INDEX)).toBe(false);
-    expect(watchOptions.ignored(VOICE_CALL_RUNTIME)).toBe(false);
-    expect(watchOptions.ignored("src/infra/watch-node.ts")).toBe(false);
-    expect(watchOptions.ignored("tsconfig.json")).toBe(false);
-
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(spawn).toHaveBeenCalledWith(
-      "/usr/local/bin/node",
-      ["scripts/run-node.mjs", "gateway", "--force"],
-      expect.objectContaining({
+      const runPromise = runWatch({
+        args: ["gateway", "--force"],
         cwd,
-        stdio: "inherit",
-        env: expect.objectContaining({
-          PATH: "/usr/bin",
-          OPENCLAW_WATCH_MODE: "1",
-          OPENCLAW_WATCH_SESSION: "1700000000000-4242",
-          OPENCLAW_NO_RESPAWN: "1",
-          OPENCLAW_WATCH_COMMAND: "gateway --force",
+        createWatcher,
+        env: { PATH: "/usr/bin" },
+        lockDisabled: true,
+        now: () => 1700000000000,
+        process: fakeProcess,
+        spawn,
+      });
+
+      expect(createWatcher).toHaveBeenCalledTimes(1);
+      const firstWatcherCall = createWatcher.mock.calls[0];
+      expect(firstWatcherCall).toBeDefined();
+      const [watchPaths, watchOptions] = firstWatcherCall as unknown as [
+        string[],
+        { ignoreInitial: boolean; ignored: (watchPath: string) => boolean },
+      ];
+      expect(watchPaths).toEqual(runNodeWatchedPaths);
+      expect(watchPaths).toContain("extensions");
+      expect(watchPaths).toContain("tsdown.config.ts");
+      expect(watchOptions.ignoreInitial).toBe(true);
+      expect(watchOptions.ignored("src")).toBe(false);
+      expect(watchOptions.ignored("src/infra")).toBe(false);
+      expect(watchOptions.ignored("extensions")).toBe(false);
+      expect(watchOptions.ignored("extensions/voice-call")).toBe(false);
+      expect(watchOptions.ignored("extensions/voice-call/dist")).toBe(true);
+      expect(watchOptions.ignored("extensions/voice-call/node_modules")).toBe(true);
+      expect(watchOptions.ignored("extensions/voice-call/node_modules/chokidar/index.js")).toBe(
+        true,
+      );
+      expect(watchOptions.ignored("src/infra/watch-node.test.ts")).toBe(true);
+      expect(watchOptions.ignored("src/infra/watch-node.test.tsx")).toBe(true);
+      expect(watchOptions.ignored("src/infra/watch-node-test-helpers.ts")).toBe(true);
+      expect(watchOptions.ignored(VOICE_CALL_README)).toBe(true);
+      expect(watchOptions.ignored(VOICE_CALL_MANIFEST)).toBe(false);
+      expect(watchOptions.ignored(VOICE_CALL_PACKAGE)).toBe(false);
+      expect(watchOptions.ignored(VOICE_CALL_INDEX)).toBe(false);
+      expect(watchOptions.ignored(VOICE_CALL_RUNTIME)).toBe(false);
+      expect(watchOptions.ignored("src/infra/watch-node.ts")).toBe(false);
+      expect(watchOptions.ignored("tsconfig.json")).toBe(false);
+
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(spawn).toHaveBeenCalledWith(
+        "/usr/local/bin/node",
+        ["scripts/run-node.mjs", "gateway", "--force"],
+        expect.objectContaining({
+          cwd,
+          stdio: "inherit",
+          env: expect.objectContaining({
+            PATH: "/usr/bin",
+            OPENCLAW_WATCH_MODE: "1",
+            OPENCLAW_WATCH_SESSION: "1700000000000-4242",
+            OPENCLAW_NO_RESPAWN: "1",
+            OPENCLAW_WATCH_COMMAND: "gateway --force",
+          }),
         }),
-      }),
-    );
-    fakeProcess.emit("SIGINT");
-    const exitCode = await runPromise;
-    expect(exitCode).toBe(130);
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(watcher.close).toHaveBeenCalledTimes(1);
+      );
+      fakeProcess.emit("SIGINT");
+      const exitCode = await runPromise;
+      expect(exitCode).toBe(130);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(watcher.close).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("terminates child on SIGINT and returns shell interrupt code", async () => {
@@ -345,63 +348,64 @@ describe("watch-node script", () => {
 
   it("replaces an existing watcher lock holder before starting", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-watch-node-lock-"));
-    const lockPath = resolveTestWatchLockPath(cwd, ["gateway", "--force"]);
-    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-    fs.writeFileSync(
-      lockPath,
-      `${JSON.stringify({
-        pid: 2121,
-        command: "gateway --force",
-        createdAt: new Date(1_700_000_000_000).toISOString(),
-        cwd,
-        watchSession: "existing-session",
-      })}\n`,
-      "utf8",
-    );
+    await withTempDir({ prefix: "openclaw-watch-node-lock-" }, async (cwd) => {
+      const lockPath = resolveTestWatchLockPath(cwd, ["gateway", "--force"]);
+      fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+      fs.writeFileSync(
+        lockPath,
+        `${JSON.stringify({
+          pid: 2121,
+          command: "gateway --force",
+          createdAt: new Date(1_700_000_000_000).toISOString(),
+          cwd,
+          watchSession: "existing-session",
+        })}\n`,
+        "utf8",
+      );
 
-    let existingWatcherAlive = true;
-    const signalProcess = vi.fn((pid: number, signal: NodeJS.Signals | 0) => {
-      if (signal === 0) {
-        if (pid === 2121 && existingWatcherAlive) {
+      let existingWatcherAlive = true;
+      const signalProcess = vi.fn((pid: number, signal: NodeJS.Signals | 0) => {
+        if (signal === 0) {
+          if (pid === 2121 && existingWatcherAlive) {
+            return;
+          }
+          throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+        }
+        if (pid === 2121 && signal === "SIGTERM") {
+          existingWatcherAlive = false;
           return;
         }
-        throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
-      }
-      if (pid === 2121 && signal === "SIGTERM") {
-        existingWatcherAlive = false;
-        return;
-      }
-      throw new Error(`unexpected signal ${signal} for pid ${pid}`);
+        throw new Error(`unexpected signal ${signal} for pid ${pid}`);
+      });
+
+      const runPromise = runWatch({
+        args: ["gateway", "--force"],
+        createWatcher,
+        cwd,
+        now: () => 1_700_000_000_000,
+        process: fakeProcess,
+        signalProcess,
+        sleep: async () => {},
+        spawn,
+      });
+
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(signalProcess).toHaveBeenCalledWith(2121, "SIGTERM");
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(fs.readFileSync(lockPath, "utf8"))).toMatchObject({
+        pid: 4242,
+        command: "gateway --force",
+        watchSession: "1700000000000-4242",
+      });
+
+      fakeProcess.emit("SIGINT");
+      const exitCode = await runPromise;
+
+      expect(exitCode).toBe(130);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(fs.existsSync(lockPath)).toBe(false);
+      expect(watcher.close).toHaveBeenCalledTimes(1);
     });
-
-    const runPromise = runWatch({
-      args: ["gateway", "--force"],
-      createWatcher,
-      cwd,
-      now: () => 1_700_000_000_000,
-      process: fakeProcess,
-      signalProcess,
-      sleep: async () => {},
-      spawn,
-    });
-
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(signalProcess).toHaveBeenCalledWith(2121, "SIGTERM");
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(fs.readFileSync(lockPath, "utf8"))).toMatchObject({
-      pid: 4242,
-      command: "gateway --force",
-      watchSession: "1700000000000-4242",
-    });
-
-    fakeProcess.emit("SIGINT");
-    const exitCode = await runPromise;
-
-    expect(exitCode).toBe(130);
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(fs.existsSync(lockPath)).toBe(false);
-    expect(watcher.close).toHaveBeenCalledTimes(1);
   });
 });

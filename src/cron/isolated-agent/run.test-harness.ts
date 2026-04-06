@@ -44,13 +44,16 @@ export const resolveEffectiveModelFallbacksMock = createMock();
 export const resolveAgentModelFallbacksOverrideMock = createMock();
 export const resolveAgentSkillsFilterMock = createMock();
 export const getModelRefStatusMock = createMock();
+export const isCliProviderMock = createMock();
 export const resolveAllowedModelRefMock = createMock();
 export const resolveConfiguredModelRefMock = createMock();
 export const resolveHooksGmailModelMock = createMock();
 export const resolveThinkingDefaultMock = createMock();
 export const runWithModelFallbackMock = createMock();
 export const runEmbeddedPiAgentMock = createMock();
+export const runCliAgentMock = createMock();
 export const lookupContextTokensMock = createMock();
+export const getCliSessionIdMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
 export const logWarnMock = createMock();
@@ -100,6 +103,7 @@ vi.mock("./run.runtime.js", () => ({
   DEFAULT_PROVIDER: "openai",
   loadModelCatalog: loadModelCatalogMock,
   getModelRefStatus: getModelRefStatusMock,
+  isCliProvider: isCliProviderMock,
   normalizeModelSelection: normalizeModelSelectionForTest,
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
@@ -129,10 +133,13 @@ vi.mock("./run.runtime.js", () => ({
 vi.mock("./run-execution.runtime.js", () => ({
   resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
   resolveBootstrapWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeenMock,
+  getCliSessionId: getCliSessionIdMock,
+  runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
   resolveNestedAgentLane: resolveNestedAgentLaneMock,
   LiveSessionModelSwitchError,
   runWithModelFallback: runWithModelFallbackMock,
+  isCliProvider: isCliProviderMock,
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
   countActiveDescendantRuns: countActiveDescendantRunsMock,
   listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
@@ -140,6 +147,10 @@ vi.mock("./run-execution.runtime.js", () => ({
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   registerAgentRunContext: registerAgentRunContextMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
+}));
+
+vi.mock("../../agents/cli-runner.runtime.js", () => ({
+  setCliSessionId: vi.fn(),
 }));
 
 vi.mock("../../config/sessions/store.runtime.js", () => ({
@@ -264,6 +275,7 @@ function resetRunConfigMocks(): void {
 }
 
 function resetRunExecutionMocks(): void {
+  isCliProviderMock.mockReturnValue(false);
   resolveBootstrapWarningSignaturesSeenMock.mockReturnValue(new Set());
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
   resolveNestedAgentLaneMock.mockReturnValue(undefined);
@@ -274,6 +286,8 @@ function resetRunExecutionMocks(): void {
   runWithModelFallbackMock.mockResolvedValue(makeDefaultModelFallbackResult());
   runEmbeddedPiAgentMock.mockReset();
   runEmbeddedPiAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
+  runCliAgentMock.mockReset();
+  getCliSessionIdMock.mockReturnValue(undefined);
   countActiveDescendantRunsMock.mockReset();
   countActiveDescendantRunsMock.mockReturnValue(0);
   listDescendantRunsForRequesterMock.mockReset();

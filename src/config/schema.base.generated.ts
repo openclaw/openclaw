@@ -3172,6 +3172,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               skipBootstrap: {
                 type: "boolean",
               },
+              contextInjection: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "always",
+                  },
+                  {
+                    type: "string",
+                    const: "continuation-skip",
+                  },
+                ],
+                title: "Context Injection",
+                description:
+                  'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+              },
               bootstrapMaxChars: {
                 type: "integer",
                 exclusiveMinimum: 0,
@@ -3264,6 +3279,256 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+              },
+              cliBackends: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    command: {
+                      type: "string",
+                    },
+                    args: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    output: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "json",
+                        },
+                        {
+                          type: "string",
+                          const: "text",
+                        },
+                        {
+                          type: "string",
+                          const: "jsonl",
+                        },
+                      ],
+                    },
+                    resumeOutput: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "json",
+                        },
+                        {
+                          type: "string",
+                          const: "text",
+                        },
+                        {
+                          type: "string",
+                          const: "jsonl",
+                        },
+                      ],
+                    },
+                    input: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "arg",
+                        },
+                        {
+                          type: "string",
+                          const: "stdin",
+                        },
+                      ],
+                    },
+                    maxPromptArgChars: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    env: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "string",
+                      },
+                    },
+                    clearEnv: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    modelArg: {
+                      type: "string",
+                    },
+                    modelAliases: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "string",
+                      },
+                    },
+                    sessionArg: {
+                      type: "string",
+                    },
+                    sessionArgs: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    resumeArgs: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    sessionMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "always",
+                        },
+                        {
+                          type: "string",
+                          const: "existing",
+                        },
+                        {
+                          type: "string",
+                          const: "none",
+                        },
+                      ],
+                    },
+                    sessionIdFields: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    systemPromptArg: {
+                      type: "string",
+                    },
+                    systemPromptMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "append",
+                        },
+                        {
+                          type: "string",
+                          const: "replace",
+                        },
+                      ],
+                    },
+                    systemPromptWhen: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "first",
+                        },
+                        {
+                          type: "string",
+                          const: "always",
+                        },
+                        {
+                          type: "string",
+                          const: "never",
+                        },
+                      ],
+                    },
+                    imageArg: {
+                      type: "string",
+                    },
+                    imageMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "repeat",
+                        },
+                        {
+                          type: "string",
+                          const: "list",
+                        },
+                      ],
+                    },
+                    serialize: {
+                      type: "boolean",
+                    },
+                    reliability: {
+                      type: "object",
+                      properties: {
+                        watchdog: {
+                          type: "object",
+                          properties: {
+                            fresh: {
+                              type: "object",
+                              properties: {
+                                noOutputTimeoutMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                                noOutputTimeoutRatio: {
+                                  type: "number",
+                                  minimum: 0.05,
+                                  maximum: 0.95,
+                                },
+                                minMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                                maxMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                            resume: {
+                              type: "object",
+                              properties: {
+                                noOutputTimeoutMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                                noOutputTimeoutRatio: {
+                                  type: "number",
+                                  minimum: 0.05,
+                                  maximum: 0.95,
+                                },
+                                minMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                                maxMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                  required: ["command"],
+                  additionalProperties: false,
+                },
+                title: "CLI Backends",
+                description: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
               },
               memorySearch: {
                 type: "object",
@@ -23888,6 +24153,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
       tags: ["advanced"],
     },
+    "agents.defaults.contextInjection": {
+      label: "Context Injection",
+      help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+      tags: ["advanced"],
+    },
     "agents.defaults.bootstrapMaxChars": {
       label: "Bootstrap Max Chars",
       help: "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
@@ -24764,6 +25034,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Human Delay Max (ms)",
       help: "Maximum delay in ms for custom humanDelay (default: 2500).",
       tags: ["performance"],
+    },
+    "agents.defaults.cliBackends": {
+      label: "CLI Backends",
+      help: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
+      tags: ["advanced"],
     },
     "agents.defaults.compaction": {
       label: "Compaction",

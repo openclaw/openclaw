@@ -3419,6 +3419,20 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
     }
 }
 
+public struct ExecApprovalGetParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
 public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
     public let command: String?

@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
+import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 import {
   createVitestRunSpecs,
   parseTestProjectsArgs,
+  resolveChangedTargetArgs,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
 
@@ -66,7 +68,9 @@ function createRootVitestRunSpec(args) {
     includePatterns: null,
     pnpmArgs: [
       "exec",
-      "vitest",
+      "node",
+      ...resolveVitestNodeArgs(process.env),
+      resolveVitestCliEntry(),
       ...(watchMode ? [] : ["run"]),
       "--config",
       "vitest.config.ts",
@@ -79,8 +83,10 @@ function createRootVitestRunSpec(args) {
 async function main() {
   const args = process.argv.slice(2);
   const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
+  const changedTargetArgs =
+    targetArgs.length === 0 ? resolveChangedTargetArgs(args, process.cwd()) : null;
   const runSpecs =
-    targetArgs.length === 0
+    targetArgs.length === 0 && changedTargetArgs === null
       ? [createRootVitestRunSpec(args)]
       : createVitestRunSpecs(args, {
           baseEnv: process.env,

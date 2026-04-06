@@ -6,7 +6,11 @@ import {
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
   getMemoryRuntime,
+  listMemoryCorpusSupplements,
+  listMemoryPromptSupplements,
+  registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
+  registerMemoryPromptSupplement,
   registerMemoryPromptSection,
   registerMemoryRuntime,
   resolveMemoryFlushPlan,
@@ -38,12 +42,15 @@ function createMemoryFlushPlan(relativePath: string) {
 function expectClearedMemoryState() {
   expect(resolveMemoryFlushPlan({})).toBeNull();
   expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toEqual([]);
+  expect(listMemoryCorpusSupplements()).toEqual([]);
   expect(getMemoryRuntime()).toBeUndefined();
 }
 
 function createMemoryStateSnapshot() {
   return {
+    corpusSupplements: listMemoryCorpusSupplements(),
     promptBuilder: getMemoryPromptSectionBuilder(),
+    promptSupplements: listMemoryPromptSupplements(),
     flushPlanResolver: getMemoryFlushPlanResolver(),
     runtime: getMemoryRuntime(),
   };
@@ -103,6 +110,32 @@ describe("memory plugin state", () => {
     ).toEqual(["citations: off"]);
   });
 
+  it("appends prompt supplements in plugin-id order", () => {
+    registerMemoryPromptSection(() => ["primary"]);
+    registerMemoryPromptSupplement("memory-wiki", () => ["wiki"]);
+    registerMemoryPromptSupplement("alpha-helper", () => ["alpha"]);
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
+      "primary",
+      "alpha",
+      "wiki",
+    ]);
+  });
+
+  it("stores memory corpus supplements", async () => {
+    const supplement = {
+      search: async () => [{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }],
+      get: async () => null,
+    };
+
+    registerMemoryCorpusSupplement("memory-wiki", supplement);
+
+    expect(listMemoryCorpusSupplements()).toHaveLength(1);
+    await expect(
+      listMemoryCorpusSupplements()[0]?.supplement.search({ query: "alpha" }),
+    ).resolves.toEqual([{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }]);
+  });
+
   it("uses the registered flush plan resolver", () => {
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1,
@@ -137,14 +170,23 @@ describe("memory plugin state", () => {
       relativePath: "memory/first.md",
       runtime,
     });
+    registerMemoryPromptSupplement("memory-wiki", () => ["wiki supplement"]);
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }],
+      get: async () => null,
+    });
     const snapshot = createMemoryStateSnapshot();
 
     _resetMemoryPluginState();
     expectClearedMemoryState();
 
     restoreMemoryPluginState(snapshot);
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["first"]);
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
+      "first",
+      "wiki supplement",
+    ]);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/first.md");
+    expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(getMemoryRuntime()).toBe(runtime);
   });
 

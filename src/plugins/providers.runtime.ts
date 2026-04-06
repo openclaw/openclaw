@@ -1,4 +1,3 @@
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withActivatedPluginIds } from "./activation-context.js";
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
 import {
@@ -6,7 +5,6 @@ import {
   resolveRuntimePluginRegistry,
   type PluginLoadOptions,
 } from "./loader.js";
-import { createPluginLoaderLogger } from "./logger.js";
 import {
   resolveDiscoveredProviderPluginIds,
   resolveEnabledProviderPluginIds,
@@ -16,9 +14,12 @@ import {
   withBundledProviderVitestCompat,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
+import {
+  buildPluginRuntimeLoadOptionsFromValues,
+  createPluginRuntimeLoaderLogger,
+} from "./runtime/load-context.js";
 import type { ProviderPlugin } from "./types.js";
 
-const log = createSubsystemLogger("plugins");
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -87,21 +88,27 @@ export function resolvePluginProviders(params: {
     if (providerPluginIds.length === 0) {
       return [];
     }
-    const registry = loadOpenClawPlugins({
-      config: withActivatedPluginIds({
-        config: runtimeConfig,
-        pluginIds: providerPluginIds,
-      }),
-      activationSourceConfig: runtimeConfig,
-      autoEnabledReasons: {},
-      workspaceDir,
-      env,
-      onlyPluginIds: providerPluginIds,
-      pluginSdkResolution: params.pluginSdkResolution,
-      cache: params.cache ?? false,
-      activate: params.activate ?? false,
-      logger: createPluginLoaderLogger(log),
-    });
+    const registry = loadOpenClawPlugins(
+      buildPluginRuntimeLoadOptionsFromValues(
+        {
+          config: withActivatedPluginIds({
+            config: runtimeConfig,
+            pluginIds: providerPluginIds,
+          }),
+          activationSourceConfig: runtimeConfig,
+          autoEnabledReasons: {},
+          workspaceDir,
+          env,
+          logger: createPluginRuntimeLoaderLogger(),
+        },
+        {
+          onlyPluginIds: providerPluginIds,
+          pluginSdkResolution: params.pluginSdkResolution,
+          cache: params.cache ?? false,
+          activate: params.activate ?? false,
+        },
+      ),
+    );
     return registry.providers.map((entry) => ({
       ...entry.provider,
       pluginId: entry.pluginId,
@@ -133,18 +140,24 @@ export function resolvePluginProviders(params: {
     env,
     onlyPluginIds: requestedPluginIds,
   });
-  const registry = resolveRuntimePluginRegistry({
-    config,
-    activationSourceConfig: activation.activationSourceConfig,
-    autoEnabledReasons: activation.autoEnabledReasons,
-    workspaceDir,
-    env,
-    onlyPluginIds: providerPluginIds,
-    pluginSdkResolution: params.pluginSdkResolution,
-    cache: params.cache ?? false,
-    activate: params.activate ?? false,
-    logger: createPluginLoaderLogger(log),
-  });
+  const registry = resolveRuntimePluginRegistry(
+    buildPluginRuntimeLoadOptionsFromValues(
+      {
+        config,
+        activationSourceConfig: activation.activationSourceConfig,
+        autoEnabledReasons: activation.autoEnabledReasons,
+        workspaceDir,
+        env,
+        logger: createPluginRuntimeLoaderLogger(),
+      },
+      {
+        onlyPluginIds: providerPluginIds,
+        pluginSdkResolution: params.pluginSdkResolution,
+        cache: params.cache ?? false,
+        activate: params.activate ?? false,
+      },
+    ),
+  );
   if (!registry) {
     return [];
   }

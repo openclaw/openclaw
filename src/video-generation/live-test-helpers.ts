@@ -14,6 +14,8 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   xai: "xai/grok-imagine-video",
 };
 
+const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "qwen", "xai"]);
+
 export function redactLiveApiKey(value: string | undefined): string {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -76,6 +78,25 @@ export function resolveConfiguredLiveVideoModels(cfg: OpenClawConfig): Map<strin
     add(fallback);
   }
   return resolved;
+}
+
+export function canRunBufferBackedVideoToVideoLiveLane(params: {
+  providerId: string;
+  modelRef: string;
+}): boolean {
+  const providerId = params.providerId.trim().toLowerCase();
+  if (REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS.has(providerId)) {
+    return false;
+  }
+  if (providerId !== "runway") {
+    return true;
+  }
+  const slash = params.modelRef.indexOf("/");
+  const model =
+    slash <= 0 || slash === params.modelRef.length - 1
+      ? params.modelRef.trim()
+      : params.modelRef.slice(slash + 1).trim();
+  return model === "gen4_aleph";
 }
 
 export function resolveLiveVideoAuthStore(params: {

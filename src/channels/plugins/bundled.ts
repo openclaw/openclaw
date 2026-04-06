@@ -191,6 +191,8 @@ type BundledChannelState = {
   sortedIds: readonly ChannelId[];
   pluginsById: Map<ChannelId, ChannelPlugin>;
   setupPluginsById: Map<ChannelId, ChannelPlugin>;
+  secretsById: Map<ChannelId, ChannelPlugin["secrets"] | null>;
+  setupSecretsById: Map<ChannelId, ChannelPlugin["secrets"] | null>;
   runtimeSettersById: Map<ChannelId, NonNullable<BundledChannelEntryContract["setChannelRuntime"]>>;
 };
 
@@ -201,6 +203,8 @@ const EMPTY_BUNDLED_CHANNEL_STATE: BundledChannelState = {
   sortedIds: [],
   pluginsById: new Map(),
   setupPluginsById: new Map(),
+  secretsById: new Map(),
+  setupSecretsById: new Map(),
   runtimeSettersById: new Map(),
 };
 
@@ -247,6 +251,8 @@ function getBundledChannelState(): BundledChannelState {
       sortedIds: [...entriesById.keys()].toSorted((left, right) => left.localeCompare(right)),
       pluginsById: new Map(),
       setupPluginsById: new Map(),
+      secretsById: new Map(),
+      setupSecretsById: new Map(),
       runtimeSettersById,
     };
     return cachedBundledChannelState;
@@ -294,6 +300,20 @@ export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefine
   }
 }
 
+export function getBundledChannelSecrets(id: ChannelId): ChannelPlugin["secrets"] | undefined {
+  const state = getBundledChannelState();
+  if (state.secretsById.has(id)) {
+    return state.secretsById.get(id) ?? undefined;
+  }
+  const entry = state.entriesById.get(id);
+  if (!entry) {
+    return undefined;
+  }
+  const secrets = entry.loadChannelSecrets?.() ?? getBundledChannelPlugin(id)?.secrets;
+  state.secretsById.set(id, secrets ?? null);
+  return secrets;
+}
+
 export function getBundledChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
   const state = getBundledChannelState();
   const cached = state.setupPluginsById.get(id);
@@ -315,6 +335,20 @@ export function getBundledChannelSetupPlugin(id: ChannelId): ChannelPlugin | und
   } finally {
     setupPluginLoadInProgressIds.delete(id);
   }
+}
+
+export function getBundledChannelSetupSecrets(id: ChannelId): ChannelPlugin["secrets"] | undefined {
+  const state = getBundledChannelState();
+  if (state.setupSecretsById.has(id)) {
+    return state.setupSecretsById.get(id) ?? undefined;
+  }
+  const entry = state.setupEntriesById.get(id);
+  if (!entry) {
+    return undefined;
+  }
+  const secrets = entry.loadSetupSecrets?.() ?? getBundledChannelSetupPlugin(id)?.secrets;
+  state.setupSecretsById.set(id, secrets ?? null);
+  return secrets;
 }
 
 export function requireBundledChannelPlugin(id: ChannelId): ChannelPlugin {

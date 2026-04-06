@@ -1,3 +1,5 @@
+import { getChannelStreamingConfigObject } from "openclaw/plugin-sdk/channel-streaming";
+
 export type DiscordPreviewStreamMode = "off" | "partial" | "block";
 
 function normalizeStreamingMode(value: unknown): string | null {
@@ -35,7 +37,9 @@ export function resolveDiscordPreviewStreamMode(
     streaming?: unknown;
   } = {},
 ): DiscordPreviewStreamMode {
-  const parsedStreaming = parseDiscordPreviewStreamMode(params.streaming);
+  const parsedStreaming = parseDiscordPreviewStreamMode(
+    getChannelStreamingConfigObject(params)?.mode ?? params.streaming,
+  );
   if (parsedStreaming) {
     return parsedStreaming;
   }

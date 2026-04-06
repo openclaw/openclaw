@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ConversationRef,
   SessionBindingAdapter,
@@ -9,8 +8,10 @@ import type {
 } from "../infra/outbound/session-binding-service.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
-const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-binding-"));
+const tempDirs: string[] = [];
+const tempRoot = makeTrackedTempDir("openclaw-plugin-binding", tempDirs);
 const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
 
 const sessionBindingState = vi.hoisted(() => {
@@ -156,6 +157,10 @@ function createAdapter(channel: string, accountId: string): SessionBindingAdapte
     unbind: sessionBindingState.unbind,
   };
 }
+
+afterAll(() => {
+  cleanupTrackedTempDirs(tempDirs);
+});
 
 function createDiscordCodexBindRequest(
   conversationId: string,

@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "declarationMap": false,
+    "emitDeclarationOnly": true,
+    "ignoreDeprecations": "6.0",
+    "noEmit": false,
+    "noEmitOnError": false,
+    "outDir": "dist",
+    "rootDir": "../.."
+  },
+  "include": [
+    "src/**/*.ts",
+    "../../src/types/**/*.d.ts",
+    "../../packages/memory-host-sdk/src/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist", "../../src/**/*.test.ts"]
+}

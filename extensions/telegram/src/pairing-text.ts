@@ -18,7 +18,7 @@ export const telegramPairingText = {
     message: string;
     accountId?: string | null;
   }) => {
-    const resolveToken = await resolveTelegramTokenHelper();
+    const resolveToken = resolveTelegramTokenHelper();
     const { token } = await resolveToken(cfg, { accountId });
     if (!token) {
       throw new Error("telegram token not configured");

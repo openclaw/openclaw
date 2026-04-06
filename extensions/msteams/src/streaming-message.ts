@@ -27,7 +27,7 @@ const TEAMS_MAX_CHARS = 4000;
  */
 const MAX_STREAM_AGE_MS = 45_000;
 
-type StreamSendFn = (activity: Record<string, unknown>) => Promise<{ id?: string } | unknown>;
+type StreamSendFn = (activity: Record<string, unknown>) => Promise<unknown>;
 
 export type TeamsStreamOptions = {
   /** Function to send an activity (POST to Bot Framework). */

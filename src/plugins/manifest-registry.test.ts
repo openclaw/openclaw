@@ -500,6 +500,35 @@ describe("loadPluginManifestRegistry", () => {
       }),
     );
   });
+
+  it("preserves manifest-owned config contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "acpx",
+      configSchema: { type: "object" },
+      configContracts: {
+        dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
+        secretInputs: {
+          bundledDefaultEnabled: false,
+          paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+        },
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "acpx",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.configContracts).toEqual({
+      dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
+      secretInputs: {
+        bundledDefaultEnabled: false,
+        paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+      },
+    });
+  });
   it("does not promote legacy top-level capability fields into contracts", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

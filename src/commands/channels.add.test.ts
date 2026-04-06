@@ -202,7 +202,7 @@ function createSignalPlugin(
             enabled: true,
             accounts: {
               [accountId]: {
-                signalNumber: input.signalNumber,
+                account: input.signalNumber,
               },
             },
           },
@@ -463,7 +463,7 @@ describe("channelsAddCommand", () => {
             enabled: true,
             accounts: {
               ops: {
-                signalNumber: "+15550001",
+                account: "+15550001",
               },
             },
           },

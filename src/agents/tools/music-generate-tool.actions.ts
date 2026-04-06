@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
 import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import {
@@ -16,6 +17,35 @@ function getMusicGenerationProviderAuthEnvVars(providerId: string): string[] {
   return getProviderEnvVars(providerId);
 }
 
+function summarizeMusicGenerationCapabilities(
+  provider: ReturnType<typeof listRuntimeMusicGenerationProviders>[number],
+): string {
+  const supportedModes = listSupportedMusicGenerationModes(provider);
+  const generate = provider.capabilities.generate;
+  const edit = provider.capabilities.edit;
+  const capabilities = [
+    supportedModes.length > 0 ? `modes=${supportedModes.join("/")}` : null,
+    generate?.maxTracks ? `maxTracks=${generate.maxTracks}` : null,
+    edit?.maxInputImages ? `maxInputImages=${edit.maxInputImages}` : null,
+    generate?.maxDurationSeconds ? `maxDurationSeconds=${generate.maxDurationSeconds}` : null,
+    generate?.supportsLyrics ? "lyrics" : null,
+    generate?.supportsInstrumental ? "instrumental" : null,
+    generate?.supportsDuration ? "duration" : null,
+    generate?.supportsFormat ? "format" : null,
+    generate?.supportedFormats?.length
+      ? `supportedFormats=${generate.supportedFormats.join("/")}`
+      : null,
+    generate?.supportedFormatsByModel && Object.keys(generate.supportedFormatsByModel).length > 0
+      ? `supportedFormatsByModel=${Object.entries(generate.supportedFormatsByModel)
+          .map(([modelId, formats]) => `${modelId}:${formats.join("/")}`)
+          .join("; ")}`
+      : null,
+  ]
+    .filter((entry): entry is string => Boolean(entry))
+    .join(", ");
+  return capabilities;
+}
+
 export function createMusicGenerateListActionResult(
   config?: OpenClawConfig,
 ): MusicGenerateActionResult {
@@ -28,30 +58,7 @@ export function createMusicGenerateListActionResult(
   }
   const lines = providers.map((provider) => {
     const authHints = getMusicGenerationProviderAuthEnvVars(provider.id);
-    const capabilities = [
-      provider.capabilities.maxTracks ? `maxTracks=${provider.capabilities.maxTracks}` : null,
-      provider.capabilities.maxInputImages
-        ? `maxInputImages=${provider.capabilities.maxInputImages}`
-        : null,
-      provider.capabilities.maxDurationSeconds
-        ? `maxDurationSeconds=${provider.capabilities.maxDurationSeconds}`
-        : null,
-      provider.capabilities.supportsLyrics ? "lyrics" : null,
-      provider.capabilities.supportsInstrumental ? "instrumental" : null,
-      provider.capabilities.supportsDuration ? "duration" : null,
-      provider.capabilities.supportsFormat ? "format" : null,
-      provider.capabilities.supportedFormats?.length
-        ? `supportedFormats=${provider.capabilities.supportedFormats.join("/")}`
-        : null,
-      provider.capabilities.supportedFormatsByModel &&
-      Object.keys(provider.capabilities.supportedFormatsByModel).length > 0
-        ? `supportedFormatsByModel=${Object.entries(provider.capabilities.supportedFormatsByModel)
-            .map(([modelId, formats]) => `${modelId}:${formats.join("/")}`)
-            .join("; ")}`
-        : null,
-    ]
-      .filter((entry): entry is string => Boolean(entry))
-      .join(", ");
+    const capabilities = summarizeMusicGenerationCapabilities(provider);
     return [
       `${provider.id}: default=${provider.defaultModel ?? "none"}`,
       provider.models?.length ? `models=${provider.models.join(", ")}` : null,
@@ -68,6 +75,7 @@ export function createMusicGenerateListActionResult(
         id: provider.id,
         defaultModel: provider.defaultModel,
         models: provider.models ?? [],
+        modes: listSupportedMusicGenerationModes(provider),
         authEnvVars: getMusicGenerationProviderAuthEnvVars(provider.id),
         capabilities: provider.capabilities,
       })),

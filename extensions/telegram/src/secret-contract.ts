@@ -115,3 +115,8 @@ export function collectRuntimeConfigAssignments(params: {
       "Telegram account is disabled or webhook mode is not active for this account.",
   });
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

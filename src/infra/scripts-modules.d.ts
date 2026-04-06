@@ -25,5 +25,6 @@ declare module "../../scripts/ci-changed-scope.mjs" {
     runWindows: boolean;
     runSkillsPython: boolean;
     runChangedSmoke: boolean;
+    runControlUiI18n: boolean;
   };
 }

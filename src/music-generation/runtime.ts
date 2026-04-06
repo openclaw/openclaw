@@ -8,6 +8,7 @@ import {
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
+import { resolveMusicGenerationModeCapabilities } from "./capabilities.js";
 import { parseMusicGenerationModelRef } from "./model-ref.js";
 import { getMusicGenerationProvider, listMusicGenerationProviders } from "./provider-registry.js";
 import type {
@@ -54,13 +55,27 @@ function resolveProviderMusicGenerationOverrides(params: {
   instrumental?: boolean;
   durationSeconds?: number;
   format?: MusicGenerationOutputFormat;
+  inputImages?: MusicGenerationSourceImage[];
 }) {
-  const caps = params.provider.capabilities;
+  const { capabilities: caps } = resolveMusicGenerationModeCapabilities({
+    provider: params.provider,
+    inputImageCount: params.inputImages?.length ?? 0,
+  });
   const ignoredOverrides: MusicGenerationIgnoredOverride[] = [];
   let lyrics = params.lyrics;
   let instrumental = params.instrumental;
   let durationSeconds = params.durationSeconds;
   let format = params.format;
+
+  if (!caps) {
+    return {
+      lyrics,
+      instrumental,
+      durationSeconds,
+      format,
+      ignoredOverrides,
+    };
+  }
 
   if (lyrics?.trim() && !caps.supportsLyrics) {
     ignoredOverrides.push({ key: "lyrics", value: lyrics });
@@ -142,6 +157,7 @@ export async function generateMusic(
         instrumental: params.instrumental,
         durationSeconds: params.durationSeconds,
         format: params.format,
+        inputImages: params.inputImages,
       });
       const result: MusicGenerationResult = await provider.generateMusic({
         provider: candidate.provider,

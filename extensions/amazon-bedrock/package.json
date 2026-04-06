@@ -5,7 +5,7 @@
   "description": "OpenClaw Amazon Bedrock provider plugin",
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-bedrock": "3.1023.0"
+    "@aws-sdk/client-bedrock": "3.1024.0"
   },
   "openclaw": {
     "bundle": {

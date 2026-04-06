@@ -4,7 +4,6 @@ import {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
 } from "openclaw/plugin-sdk/channel-status";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -59,8 +58,7 @@ async function resolveTelegramAuditMembership() {
 
 export const telegramStatus = createComputedAccountStatusAdapter<
   ResolvedTelegramAccount,
-  TelegramProbe,
-  unknown
+  TelegramProbe
 >({
   defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
   collectStatusIssues: collectTelegramStatusIssues,

@@ -9,6 +9,9 @@ type MockImplementationTarget = {
 type SessionStore = Record<string, Record<string, unknown>>;
 type SessionStoreMutator = (store: SessionStore) => unknown;
 type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks" | "runSubagentSpawning">;
+type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
+  resetSubagentRegistryForTests: MockFn;
+};
 
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
@@ -120,7 +123,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   workspaceDir?: string;
   sessionStorePath?: string;
   resetModules?: boolean;
-}) {
+}): Promise<SubagentSpawnModuleForTest> {
   if (params.resetModules ?? true) {
     vi.resetModules();
   }

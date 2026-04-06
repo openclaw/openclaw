@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   ChannelDirectoryEntryKind,
+  ChannelMessageActionName,
   ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
@@ -32,7 +33,7 @@ const whatsappConfig = {
 
 const runDryAction = (params: {
   cfg: OpenClawConfig;
-  action: "send" | "thread-reply" | "broadcast" | "upload-file";
+  action: ChannelMessageActionName;
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;

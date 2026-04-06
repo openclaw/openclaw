@@ -2,10 +2,14 @@
 
 export type {
   GeneratedVideoAsset,
+  VideoGenerationMode,
+  VideoGenerationModeCapabilities,
   VideoGenerationProvider,
+  VideoGenerationProviderCapabilities,
   VideoGenerationProviderConfiguredContext,
   VideoGenerationRequest,
   VideoGenerationResolution,
   VideoGenerationResult,
   VideoGenerationSourceAsset,
+  VideoGenerationTransformCapabilities,
 } from "../video-generation/types.js";
