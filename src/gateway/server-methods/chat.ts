@@ -5,6 +5,10 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import {
+  extractAssistantText as extractAssistantHistoryText,
+  hasAssistantPhaseMetadata,
+} from "../../agents/tools/chat-history-text.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -19,7 +23,6 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -660,18 +663,9 @@ function sanitizeChatHistoryMessage(
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block, maxChars));
     const sanitizedBlocks = updated.map((item) => item.block);
-    const hasPhaseMetadata =
-      entry.role === "assistant" &&
-      entry.content.some(
-        (block) =>
-          block &&
-          typeof block === "object" &&
-          typeof (block as { textSignature?: unknown }).textSignature === "string",
-      );
+    const hasPhaseMetadata = hasAssistantPhaseMetadata(entry);
     if (hasPhaseMetadata) {
-      const stripped = stripInlineDirectiveTagsForDisplay(
-        extractAssistantVisibleText(entry as Parameters<typeof extractAssistantVisibleText>[0]),
-      );
+      const stripped = stripInlineDirectiveTagsForDisplay(extractAssistantHistoryText(entry));
       const res = truncateChatHistoryText(stripped.text, maxChars);
       const nonTextBlocks = sanitizedBlocks.filter(
         (block) =>
@@ -704,7 +698,7 @@ function sanitizeChatHistoryMessage(
  * dropping messages that carry real text alongside a stale `content: "NO_REPLY"`.
  */
 function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
-  return extractAssistantVisibleText(message);
+  return extractAssistantHistoryText(message);
 }
 
 export function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unknown[] {
