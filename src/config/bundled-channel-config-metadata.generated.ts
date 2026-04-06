@@ -8978,6 +8978,144 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
     },
   },
   {
+    pluginId: "qa-channel",
+    channelId: "qa-channel",
+    label: "QA Channel",
+    description: "Synthetic Slack-class transport for automated OpenClaw QA scenarios.",
+    schema: {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+        },
+        enabled: {
+          type: "boolean",
+        },
+        baseUrl: {
+          type: "string",
+          format: "uri",
+        },
+        botUserId: {
+          type: "string",
+        },
+        botDisplayName: {
+          type: "string",
+        },
+        pollTimeoutMs: {
+          type: "integer",
+          minimum: 100,
+          maximum: 30000,
+        },
+        allowFrom: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "number",
+              },
+            ],
+          },
+        },
+        defaultTo: {
+          type: "string",
+        },
+        actions: {
+          type: "object",
+          properties: {
+            messages: {
+              type: "boolean",
+            },
+            reactions: {
+              type: "boolean",
+            },
+            search: {
+              type: "boolean",
+            },
+            threads: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
+        },
+        accounts: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              enabled: {
+                type: "boolean",
+              },
+              baseUrl: {
+                type: "string",
+                format: "uri",
+              },
+              botUserId: {
+                type: "string",
+              },
+              botDisplayName: {
+                type: "string",
+              },
+              pollTimeoutMs: {
+                type: "integer",
+                minimum: 100,
+                maximum: 30000,
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              defaultTo: {
+                type: "string",
+              },
+              actions: {
+                type: "object",
+                properties: {
+                  messages: {
+                    type: "boolean",
+                  },
+                  reactions: {
+                    type: "boolean",
+                  },
+                  search: {
+                    type: "boolean",
+                  },
+                  threads: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        defaultAccount: {
+          type: "string",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     pluginId: "qqbot",
     channelId: "qqbot",
     label: "QQ Bot",
