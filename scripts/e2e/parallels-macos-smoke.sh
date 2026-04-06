@@ -561,6 +561,12 @@ guest_current_user_exec() {
   guest_current_user_exec_path "$GUEST_EXEC_PATH" "$@"
 }
 
+resolve_guest_current_user_home() {
+  local user_name
+  user_name="$(guest_current_user_exec /usr/bin/id -un | tr -d '\r')"
+  printf '/Users/%s\n' "$user_name"
+}
+
 guest_current_user_cli() {
   local parts=() arg joined=""
   for arg in "$@"; do
@@ -685,10 +691,13 @@ ensure_guest_pnpm_for_dev_update() {
 }
 
 run_dev_channel_update() {
-  local bootstrap_bin
+  local bootstrap_bin guest_home update_root
   bootstrap_bin="/tmp/openclaw-smoke-pnpm-bootstrap/node_modules/.bin"
+  guest_home="$(resolve_guest_current_user_home)"
+  update_root="$guest_home/openclaw"
   ensure_guest_pnpm_for_dev_update
   printf 'update-dev: run\n'
+  guest_current_user_exec /bin/rm -rf "$update_root"
   guest_current_user_exec_path "$bootstrap_bin:$GUEST_EXEC_PATH" \
     "$GUEST_OPENCLAW_BIN" update --channel dev --yes --json
   guest_current_user_exec "$GUEST_OPENCLAW_BIN" --version
