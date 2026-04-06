@@ -38,6 +38,9 @@ func TestPostprocessLocalizedDocsFixesStaleLinksAfterLaterPagesExist(t *testing.
 	}
 
 	got := mustReadFile(t, filepath.Join(docsRoot, "zh-CN", "gateway", "index.md"))
+	if !strings.Contains(got, "---\ntitle: 网关\nx-i18n:\n  source_hash: test\n---\n\n") {
+		t.Fatalf("front matter corrupted after rewrite:\n%s", got)
+	}
 	want := "See [Troubleshooting](/zh-CN/gateway/troubleshooting)."
 	if !containsLine(got, want) {
 		t.Fatalf("expected rewritten localized link %q in output:\n%s", want, got)

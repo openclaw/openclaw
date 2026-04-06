@@ -44,7 +44,7 @@ func postprocessLocalizedDocs(docsRoot, targetLang string) error {
 
 		output := rewrittenBody
 		if frontMatter != "" {
-			output = "---\n" + frontMatter + "---\n\n" + rewrittenBody
+			output = "---\n" + frontMatter + "\n---\n\n" + rewrittenBody
 		}
 
 		return os.WriteFile(path, []byte(output), 0o644)
