@@ -12,6 +12,7 @@ import type {
   TelegramAccountConfig,
   TelegramDirectConfig,
 } from "openclaw/plugin-sdk/config-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -487,18 +488,66 @@ export const dispatchTelegramMessage = async ({
     }
     return { ...payload, text };
   };
-  const sendPayload = async (payload: ReplyPayload) => {
+  const sendPayload = async (
+    payload: ReplyPayload,
+    options?: { skipMessageSendingHooks?: boolean },
+  ) => {
     const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
       ...deliveryBaseOptions,
       replies: [payload],
       onVoiceRecording: sendRecordVoice,
       silent: silentErrorReplies && payload.isError === true,
+      skipMessageSendingHooks: options?.skipMessageSendingHooks,
       mediaLoader: telegramDeps.loadWebMedia,
     });
     if (result.delivered) {
       deliveryState.markDelivered();
     }
     return result.delivered;
+  };
+  // Preview finalization can edit the visible Telegram message in place, so apply
+  // message_sending here and mark fallback sends to skip a second hook pass.
+  const preparePreviewFinalization = async (params: {
+    payload: ReplyPayload;
+    text: string;
+  }): Promise<{ cancelled: boolean; text: string; skipMessageSendingHooks: boolean }> => {
+    const hookRunner = getGlobalHookRunner();
+    if (!hookRunner?.hasHooks("message_sending")) {
+      return {
+        cancelled: false,
+        text: params.text,
+        skipMessageSendingHooks: false,
+      };
+    }
+    const reply = resolveSendableOutboundReplyParts(params.payload, { text: params.text });
+    const hookResult = await hookRunner.runMessageSending(
+      {
+        to: deliveryBaseOptions.chatId,
+        content: reply.text,
+        metadata: {
+          channel: "telegram",
+          mediaUrls: reply.mediaUrls,
+          threadId: deliveryBaseOptions.thread?.id,
+        },
+      },
+      {
+        channelId: "telegram",
+        accountId: deliveryBaseOptions.accountId,
+        conversationId: deliveryBaseOptions.chatId,
+      },
+    );
+    if (hookResult?.cancel) {
+      return {
+        cancelled: true,
+        text: reply.text,
+        skipMessageSendingHooks: true,
+      };
+    }
+    return {
+      cancelled: false,
+      text: typeof hookResult?.content === "string" ? hookResult.content : reply.text,
+      skipMessageSendingHooks: true,
+    };
   };
   const emitPreviewFinalizedHook = (result: LaneDeliveryResult) => {
     if (result.kind !== "preview-finalized") {
@@ -523,6 +572,8 @@ export const dispatchTelegramMessage = async ({
     draftMaxChars,
     applyTextToPayload,
     sendPayload,
+    preparePreviewFinalization: async ({ payload, text }) =>
+      await preparePreviewFinalization({ payload, text }),
     flushDraftLane,
     stopDraftLane: async (lane) => {
       await lane.stream?.stop();

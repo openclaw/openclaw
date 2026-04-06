@@ -601,6 +601,8 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** When true, messages are sent with disable_notification. */
   silent?: boolean;
+  /** When true, assume message_sending already ran upstream for this payload. */
+  skipMessageSendingHooks?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
   /** Override media loader (tests). */
@@ -613,7 +615,8 @@ export async function deliverReplies(params: {
   };
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
   const hookRunner = getGlobalHookRunner();
-  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  const hasMessageSendingHooks =
+    !params.skipMessageSendingHooks && (hookRunner?.hasHooks("message_sending") ?? false);
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
   const chunkText = buildChunkTextResolver({
     textLimit: params.textLimit,

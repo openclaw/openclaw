@@ -58,6 +58,11 @@ const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 const generateTopicLabel = vi.hoisted(() => vi.fn());
+const getGlobalHookRunner = vi.hoisted(() => vi.fn());
+const messageHookRunner = vi.hoisted(() => ({
+  hasHooks: vi.fn<(name: string) => boolean>(() => false),
+  runMessageSending: vi.fn(),
+}));
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -102,6 +107,10 @@ vi.mock("./sticker-cache.js", () => ({
   searchStickers: () => [],
   getAllCachedStickers: () => [],
   describeStickerImage: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getGlobalHookRunner,
 }));
 
 let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
@@ -162,6 +171,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
     generateTopicLabel.mockReset();
+    getGlobalHookRunner.mockReset();
+    messageHookRunner.hasHooks.mockReset();
+    messageHookRunner.runMessageSending.mockReset();
     loadConfig.mockReturnValue({});
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
@@ -199,6 +211,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
     loadSessionStore.mockReturnValue({});
     generateTopicLabel.mockResolvedValue("Topic label");
+    getGlobalHookRunner.mockReturnValue(messageHookRunner);
+    messageHookRunner.hasHooks.mockReturnValue(false);
   });
 
   const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
@@ -1739,6 +1753,113 @@ describe("dispatchTelegramMessage draft streaming", () => {
       "Checking the directory...",
       expect.any(Object),
     );
+  });
+
+  it("applies message_sending rewrite before preview-finalized final edit", async () => {
+    const answerDraftStream = createDraftStream(321);
+    const reasoningDraftStream = createDraftStream(111);
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "Hooked final answer" });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Checking the directory..." });
+        await dispatcherOptions.deliver({ text: "Checking the directory..." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      {
+        to: "123",
+        content: "Checking the directory...",
+        metadata: {
+          channel: "telegram",
+          mediaUrls: [],
+          threadId: 777,
+        },
+      },
+      {
+        channelId: "telegram",
+        accountId: "default",
+        conversationId: "123",
+      },
+    );
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      321,
+      "Hooked final answer",
+      expect.any(Object),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("falls back to send once when message_sending rewrite makes the final too long to edit", async () => {
+    const answerDraftStream = createDraftStream(321);
+    const reasoningDraftStream = createDraftStream(111);
+    const rewrittenText = "Hooked final answer ".repeat(300);
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: rewrittenText });
+    deliverReplies.mockResolvedValue({ delivered: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Checking the directory..." });
+        await dispatcherOptions.deliver({ text: "Checking the directory..." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledTimes(1);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skipMessageSendingHooks: true,
+        replies: [expect.objectContaining({ text: rewrittenText })],
+      }),
+    );
+  });
+
+  it("blocks preview-finalized final delivery when message_sending cancels it", async () => {
+    const answerDraftStream = createDraftStream(321);
+    const reasoningDraftStream = createDraftStream(111);
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ cancel: true });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Checking the directory..." });
+        await dispatcherOptions.deliver({ text: "Checking the directory..." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "123",
+        content: "Checking the directory...",
+      }),
+      expect.objectContaining({
+        channelId: "telegram",
+        accountId: "default",
+        conversationId: "123",
+      }),
+    );
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
   });
 
   it("keeps reasoning and answer streaming in separate preview lanes", async () => {
