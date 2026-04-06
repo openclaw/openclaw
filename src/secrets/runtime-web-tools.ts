@@ -386,8 +386,12 @@ export async function resolveRuntimeWebTools(params: {
     ? params.resolvedConfig.tools
     : undefined;
   const resolvedWeb = isRecord(resolvedTools?.web) ? resolvedTools.web : undefined;
-  const legacyXSearchSource = isRecord(sourceWeb?.x_search) ? sourceWeb.x_search : undefined;
-  const legacyXSearchResolved = isRecord(resolvedWeb?.x_search) ? resolvedWeb.x_search : undefined;
+  const legacyXSearchSource = isRecord(sourceWeb?.x_search)
+    ? (sourceWeb.x_search as Record<string, unknown>)
+    : undefined;
+  const legacyXSearchResolved = isRecord(resolvedWeb?.x_search)
+    ? (resolvedWeb.x_search as Record<string, unknown>)
+    : undefined;
   if (!sourceWeb && !hasPluginWebToolConfig(params.sourceConfig)) {
     return {
       search: {
