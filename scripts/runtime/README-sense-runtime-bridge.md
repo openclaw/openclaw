@@ -834,8 +834,12 @@ Additional top-level observability fields are also included:
   - span id for the manager entry layer
 - `dispatch_trace_span_id`
   - span id for the dispatch layer
+- `dispatch_trace_parent_span_id`
+  - parent span id pointing back to `entry_trace_span_id`
 - `executor_trace_span_id`
   - span id for the executor layer
+- `executor_trace_parent_span_id`
+  - parent span id pointing back to `dispatch_trace_span_id`
 - `entry_duration_sec`
   - time spent in manager entry
 - `dispatch_duration_sec`
@@ -848,6 +852,10 @@ Additional top-level observability fields are also included:
   - short uppercase machine-readable codes such as `HANDOFF`, `TRIAGE_USE`, `SHORTCUT`, `BRIDGE`, `FULL_EVAL`, `EXECUTOR`, `FAILED`, or `STOPPED`
 - `error_code`
   - normalized top-level code such as `NONE`, `UNAUTHORIZED`, `TIMEOUT`, `RUNTIME_SUBMIT_FAILED`, `EXECUTOR_STOPPED`, or `EXECUTOR_FAILED`
+- `error_detail_code`
+  - finer-grained code such as `AUTH_401`, `AUTH_TOKEN_MISSING`, `TIMEOUT_ENTRY`, `TIMEOUT_EXECUTOR`, `SUBMIT_HTTP_4XX`, `SUBMIT_HTTP_5XX`, `EXECUTOR_STOP_CONFIDENCE_GATE`, or `EXECUTOR_STOP_MANUAL_REVIEW`
+- `summary_counters`
+  - compact counters such as `warning_count`, `remaining_issue_count`, `secondary_action_count`, `followup_executed_count`, and `path_depth`
 - `entry_status`
   - status of the manager entry layer
 - `bridge_status`
@@ -859,7 +867,7 @@ Additional top-level observability fields are also included:
 
 These fields are for observability and aggregation only. They do not change runtime behavior.
 
-The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id`. `manager_handoff` and `feedback_memory` also carry compact `path_codes` for lightweight aggregation.
+The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id` plus parent span linkage for a lightweight trace tree. `manager_handoff` and `feedback_memory` also carry compact `path_codes`, `error_code`, and `error_detail_code` for lightweight aggregation.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
@@ -874,6 +882,8 @@ The runtime entrypoint now also emits a lightweight feedback layer for the next 
   - `last_primary_issue`
   - `last_success_action`
   - `last_path_codes`
+  - `last_error_code`
+  - `last_error_detail_code`
 
 This feedback is observational only. It does not add retries or a new loop. The manager entry can read `feedback_memory` and apply lightweight gating rules at the next turn:
 

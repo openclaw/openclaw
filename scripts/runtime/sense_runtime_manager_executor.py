@@ -63,6 +63,70 @@ def compact_path_codes(executor_state: str | None, policy: dict) -> list[str]:
     return deduped
 
 
+def normalize_executor_error_code(output: dict) -> str:
+    executor_state = str(output.get('executor_state') or '')
+    if executor_state == 'stopped':
+        return 'EXECUTOR_STOPPED'
+
+    main_result = extract_result_payload(output.get('main_action'))
+    secondary_result = extract_result_payload(output.get('secondary_action'))
+    error_text = str(
+        main_result.get('error')
+        or secondary_result.get('error')
+        or output.get('stop_reason')
+        or ''
+    ).lower()
+
+    if 'unauthorized' in error_text or 'status=401' in error_text:
+        return 'UNAUTHORIZED'
+    if 'timeout' in error_text:
+        return 'TIMEOUT'
+    if 'submit failed' in error_text:
+        return 'RUNTIME_SUBMIT_FAILED'
+    if executor_state in {'failed', 'partial_failure'}:
+        return 'EXECUTOR_FAILED'
+    return 'NONE'
+
+
+def normalize_executor_error_detail_code(output: dict) -> str:
+    executor_state = str(output.get('executor_state') or '')
+    if executor_state == 'stopped':
+        stop_reason = str(output.get('stop_reason') or '').lower()
+        if 'confidence gate' in stop_reason:
+            return 'EXECUTOR_STOP_CONFIDENCE_GATE'
+        return 'EXECUTOR_STOP_MANUAL_REVIEW'
+
+    main_result = extract_result_payload(output.get('main_action'))
+    secondary_result = extract_result_payload(output.get('secondary_action'))
+    error_text = str(
+        main_result.get('error')
+        or secondary_result.get('error')
+        or output.get('secondary_gate_reason')
+        or ''
+    ).lower()
+
+    if 'status=401' in error_text or 'unauthorized' in error_text:
+        return 'AUTH_401'
+    if 'token' in error_text and 'missing' in error_text:
+        return 'AUTH_TOKEN_MISSING'
+    if 'timeout' in error_text and 'executor' in error_text:
+        return 'TIMEOUT_EXECUTOR'
+    if 'timeout' in error_text:
+        return 'TIMEOUT_EXECUTOR'
+    if 'submit failed status=4' in error_text:
+        return 'SUBMIT_HTTP_4XX'
+    if 'submit failed status=5' in error_text:
+        return 'SUBMIT_HTTP_5XX'
+    return 'NONE'
+
+
+def finalize_output(output: dict) -> dict:
+    output['error_code'] = normalize_executor_error_code(output)
+    output['error_detail_code'] = normalize_executor_error_detail_code(output)
+    output['manager_handoff'] = build_manager_handoff(output)
+    return output
+
+
 def load_policy(args: argparse.Namespace) -> dict:
     if args.policy_json:
         return json.loads(args.policy_json)
@@ -500,6 +564,7 @@ def build_manager_handoff(report: dict) -> dict:
     return {
         'handoff_version': 'v1',
         'decision_trace_id': report.get('decision_trace_id'),
+        'trace_parent_span_id': report.get('executor_trace_span_id'),
         'path_codes': compact_path_codes(
             report.get('executor_state'),
             {
@@ -510,6 +575,8 @@ def build_manager_handoff(report: dict) -> dict:
         ),
         'source': 'sense_runtime_manager_executor',
         'executor_state': report.get('executor_state'),
+        'error_code': report.get('error_code'),
+        'error_detail_code': report.get('error_detail_code'),
         'loop_convergence_state': convergence.get('state'),
         'primary_remaining_issue': summary.get('primary_remaining_issue'),
         'secondary_remaining_issues': summary.get('secondary_remaining_issues', []),
@@ -738,7 +805,7 @@ def main() -> int:
             'exit_summary': build_exit_summary(main_placeholder, secondary_placeholder),
             'policy_trace': policy.get('policy_trace', {}),
         }
-        output['manager_handoff'] = build_manager_handoff(output)
+        output = finalize_output(output)
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
@@ -779,7 +846,7 @@ def main() -> int:
             'exit_summary': build_exit_summary(main_result, secondary_placeholder),
             'policy_trace': policy.get('policy_trace', {}),
         }
-        output['manager_handoff'] = build_manager_handoff(output)
+        output = finalize_output(output)
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 1
 
@@ -806,7 +873,7 @@ def main() -> int:
             'exit_summary': build_exit_summary(main_result, secondary_placeholder),
             'policy_trace': policy.get('policy_trace', {}),
         }
-        output['manager_handoff'] = build_manager_handoff(output)
+        output = finalize_output(output)
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 1
 
@@ -851,7 +918,7 @@ def main() -> int:
                 'exit_summary': build_exit_summary(main_result, secondary_result),
                 'policy_trace': policy.get('policy_trace', {}),
             }
-            output['manager_handoff'] = build_manager_handoff(output)
+            output = finalize_output(output)
             print(json.dumps(output, ensure_ascii=False, indent=2))
             return 1
 
@@ -879,7 +946,7 @@ def main() -> int:
                 'exit_summary': build_exit_summary(main_result, secondary_result),
                 'policy_trace': policy.get('policy_trace', {}),
             }
-            output['manager_handoff'] = build_manager_handoff(output)
+            output = finalize_output(output)
             print(json.dumps(output, ensure_ascii=False, indent=2))
             return 1
 
@@ -961,7 +1028,7 @@ def main() -> int:
             output['executor_state'] = 'completed_with_followup_candidate'
         else:
             output['executor_state'] = 'completed_resolved'
-    output['manager_handoff'] = build_manager_handoff(output)
+    output = finalize_output(output)
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
 
