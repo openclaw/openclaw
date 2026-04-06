@@ -4,7 +4,6 @@
 
 import type { Client } from "@larksuiteoapi/node-sdk";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { stripInlineDirectiveTagsForDisplay } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -130,17 +129,6 @@ function stripHtmlTagsToText(text: string): string {
     .replace(/&#39;/gi, "'");
 }
 
-function sanitizeVisibleCardText(text: string | undefined): string {
-  if (!text) {
-    return "";
-  }
-  const result = stripInlineDirectiveTagsForDisplay(text);
-  // When directive tags are stripped, clean up residual leading/trailing
-  // whitespace left behind by the removed tags — but preserve internal
-  // indentation so markdown code blocks and nested lists render correctly.
-  return result.changed ? result.text.trim() : result.text;
-}
-
 export function mergeStreamingText(
   previousText: string | undefined,
   nextText: string | undefined,
@@ -153,27 +141,26 @@ export function mergeStreamingText(
   if (!previous || next === previous) {
     return next;
   }
+  // Cumulative snapshot: next contains the full text so far (pi-embedded-subscribe,
+  // or provider snapshot updates like "这" → "这是"). Replace.
   if (next.startsWith(previous)) {
     return next;
   }
-  if (previous.startsWith(next)) {
-    return previous;
-  }
-  if (next.includes(previous)) {
-    return next;
-  }
-  if (previous.includes(next)) {
-    return previous;
-  }
-
-  // Merge partial overlaps, e.g. "这" + "这是" => "这是".
-  const maxOverlap = Math.min(previous.length, next.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (previous.slice(-overlap) === next.slice(0, overlap)) {
-      return `${previous}${next.slice(overlap)}`;
-    }
-  }
-  // Fallback for fragmented partial chunks: append as-is to avoid losing tokens.
+  // NOTE: Do NOT check `previous.startsWith(next)` or `previous.includes(next)`.
+  // Delta producers (model-aware-runner) emit single-character tokens like "|",
+  // "\n", " ", "-" that trivially match as substrings/prefixes of accumulated
+  // text. Those checks silently swallow every repeated character — catastrophic
+  // for markdown tables.
+  // Delta fragments (model-aware-runner emits token-level deltas like
+  // "NO" + "_REPLY"). Append as-is to preserve every character.
+  //
+  // NOTE: Do NOT try to detect "tail-of-previous matches head-of-next" overlap
+  // and collapse it — that breaks markdown tables where adjacent rows share
+  // repeating characters like `| `. For example:
+  //   previous="...abc| |", next="| |xyz..."
+  // An overlap collapse would produce "...abc| |xyz..." eating the `\n`
+  // between two table rows. The simple append below is correct for all
+  // genuine delta streams.
   return `${previous}${next}`;
 }
 
@@ -236,7 +223,7 @@ export class FeishuStreamingSession {
       config: {
         streaming_mode: true,
         summary: { content: "[Generating...]" },
-        streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 1 } },
+        streaming_config: { print_frequency_ms: { default: 30 }, print_step: { default: 50 } },
       },
       body: { elements },
     };
@@ -482,7 +469,6 @@ export class FeishuStreamingSession {
   /** Build the full elements array for full card updates, including thinking panel. */
   private buildFullElements(text: string, options?: { note?: string }): Record<string, unknown>[] {
     const elements: Record<string, unknown>[] = [];
-    const visibleText = sanitizeVisibleCardText(text);
     // Include thinking panel if there's thinking content
     if (this.state?.thinkingText) {
       elements.push({
@@ -500,7 +486,7 @@ export class FeishuStreamingSession {
         ],
       });
     }
-    elements.push({ tag: "markdown", content: visibleText, element_id: "content" });
+    elements.push({ tag: "markdown", content: text || "", element_id: "content" });
     if (this.state?.hasNote) {
       elements.push({ tag: "hr" });
       const noteSource = options?.note ?? this.state.noteText;
@@ -567,10 +553,9 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) {
       return;
     }
-    const visibleText = sanitizeVisibleCardText(text);
     const resolvedInput = options?.replace
-      ? visibleText
-      : mergeStreamingText(this.pendingText ?? this.state.currentText, visibleText);
+      ? text
+      : mergeStreamingText(this.pendingText ?? this.state.currentText, text);
     if (!resolvedInput || resolvedInput === this.state.currentText) {
       return;
     }
@@ -632,7 +617,7 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) {
       return;
     }
-    const normalized = sanitizeVisibleCardText(text).trim();
+    const normalized = (text ?? "").trim();
     const previousText = this.state.thinkingText;
     const previousTitle = this.state.thinkingTitle;
     const nextTitle = options?.title?.trim() || this.state.thinkingTitle || "💭 Thinking";
@@ -732,10 +717,7 @@ export class FeishuStreamingSession {
     // present, treat it as authoritative instead of merging it with the last
     // streamed preview, otherwise stale status/preview text can be duplicated
     // into the terminal card content.
-    const text =
-      finalText !== undefined
-        ? sanitizeVisibleCardText(finalText)
-        : sanitizeVisibleCardText(pendingMerged);
+    const text = finalText !== undefined ? (finalText ?? "") : (pendingMerged ?? "");
 
     const hadThinkingPanel = this.state.thinkingPanelRendered || Boolean(this.state.thinkingText);
     if (options?.dropThinkingPanel) {

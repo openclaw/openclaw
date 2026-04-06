@@ -73,6 +73,8 @@ export type GetReplyOptions = {
     phase?: string;
     toolCallId?: string;
   }) => Promise<void> | void;
+  /** Called with low-level structured agent events (for channels that need lifecycle fidelity). */
+  onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void> | void;
   /** Called when a concrete work item starts, updates, or completes. */
   onItemEvent?: (payload: {
     itemId?: string;

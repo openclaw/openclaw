@@ -5,6 +5,10 @@ import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
 } from "openclaw/plugin-sdk/reply-payload";
+import {
+  stripInlineDirectiveTagsForDelivery,
+  stripInlineDirectiveTagsForDisplay,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveMediaContentType } from "./media-types.js";
@@ -373,7 +377,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let replaceNextPartialAfterTool = false;
   let streamPhase: "idle" | "thinking" | "tool" | "streaming" = "idle";
   const activeTools: Array<{ toolCallId?: string; name: string; startedAt: number }> = [];
+  const seenToolCallIds = new Set<string>();
   let toolElapsedTimer: ReturnType<typeof setInterval> | null = null;
+  let streamingActivityTimer: ReturnType<typeof setInterval> | null = null;
   let toolCallCount = 0;
   let lastRenderedStreamContent = "";
   let hasThinkingPrelude = false;
@@ -505,6 +511,28 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
+  const clearStreamingActivityTimer = (): void => {
+    if (streamingActivityTimer !== null) {
+      clearInterval(streamingActivityTimer);
+      streamingActivityTimer = null;
+    }
+  };
+
+  const ensureStreamingActivityTimer = (): void => {
+    if (streamingActivityTimer !== null) {
+      return;
+    }
+    streamingActivityTimer = setInterval(() => {
+      if (streamPhase !== "streaming" || !shouldRenderStreamingStatus()) {
+        clearStreamingActivityTimer();
+        return;
+      }
+      bumpThinkingActivity();
+      queueThinkingPanelUpdate();
+    }, 1_500);
+    streamingActivityTimer.unref?.();
+  };
+
   const removeActiveTool = (toolCallId: string | undefined): void => {
     if (activeTools.length === 0) {
       return;
@@ -527,6 +555,92 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (activeTools.length === 0) {
       clearToolElapsedTimer();
     }
+  };
+
+  const noteToolCallSeen = (
+    payload: { toolCallId?: string; name?: string },
+    options?: { allowUnnamed?: boolean },
+  ): boolean => {
+    const normalizedId = payload.toolCallId?.trim();
+    if (!normalizedId) {
+      return options?.allowUnnamed === true;
+    }
+    if (seenToolCallIds.has(normalizedId)) {
+      return false;
+    }
+    seenToolCallIds.add(normalizedId);
+    return true;
+  };
+
+  const handleToolStartLikeEvent = (
+    payload: {
+      name?: string;
+      phase?: string;
+      toolCallId?: string;
+    },
+    options?: { allowUnnamed?: boolean },
+  ) => {
+    const isStartPhase = !payload?.phase || payload.phase === "start" || payload.phase === "update";
+    if (isStartPhase) {
+      const isNewToolCall = noteToolCallSeen(payload, options);
+      if (isNewToolCall) {
+        const trackedName = resolveTrackedToolName(payload?.name);
+        activeTools.push({
+          name: trackedName,
+          toolCallId: payload.toolCallId?.trim() || undefined,
+          startedAt: Date.now(),
+        });
+        toolCallCount += 1;
+        replaceNextPartialAfterTool = Boolean(streamText);
+        if (toolElapsedTimer === null) {
+          toolElapsedTimer = setInterval(() => {
+            if (activeTools.length > 0) {
+              queueThinkingPanelUpdate();
+            }
+          }, 10_000);
+          toolElapsedTimer.unref?.();
+        }
+      }
+    }
+    queueThinkingPrelude();
+    streamPhase = "tool";
+    clearStreamingActivityTimer();
+    bumpThinkingActivity();
+    // Tool-only runs need to bootstrap the streaming card even in auto mode.
+    startStreaming();
+    queueThinkingPanelUpdate();
+  };
+
+  const handleToolResultLikeEvent = (payload: {
+    toolCallId?: string;
+    text?: string;
+    isError?: boolean;
+  }) => {
+    const synthesizedToolCall = payload.toolCallId
+      ? noteToolCallSeen({
+          toolCallId: payload.toolCallId,
+        })
+      : false;
+    if (synthesizedToolCall) {
+      activeTools.push({
+        name: "Tool",
+        toolCallId: payload.toolCallId?.trim() || undefined,
+        startedAt: Date.now(),
+      });
+      toolCallCount += 1;
+      queueThinkingPrelude();
+      streamPhase = "tool";
+      startStreaming();
+    }
+    removeActiveTool(payload.toolCallId);
+    if (activeTools.length === 0 && streamPhase === "tool") {
+      streamPhase = streamText ? "streaming" : "idle";
+    }
+    bumpThinkingActivity();
+    if (!shouldRenderStreamingStatus()) {
+      return;
+    }
+    queueThinkingPanelUpdate();
   };
 
   const hasReasoningText = (): boolean => reasoningText.trim().length > 0;
@@ -666,6 +780,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return text.substring(0, lastAtIdx);
   };
 
+  /** Strip a leading [[reply_to_current]] / [[reply_to:<id>]] directive tag
+   *  for render-only display. Only touches the prefix and its surrounding
+   *  whitespace — markdown structure in the middle of the body is preserved.
+   *  streamText itself is left untouched; this runs on the render-time copy. */
+  const stripLeadingReplyDirectiveForRender = (text: string): string =>
+    text.replace(/^\s*\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\]\s*/i, "");
+
   /** Queue an update to the main content element only. */
   const queueStreamingRender = () => {
     partialUpdateQueue = partialUpdateQueue.then(async () => {
@@ -676,7 +797,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         return;
       }
       const safeRendered = stripIncompleteAtTag(streamText);
-      const renderedForCard = normalizeMentionTagsForCard(safeRendered);
+      const displayRendered = stripLeadingReplyDirectiveForRender(safeRendered);
+      const renderedForCard = normalizeMentionTagsForCard(displayRendered);
       if (!renderedForCard || renderedForCard === lastRenderedStreamContent) {
         return;
       }
@@ -748,6 +870,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       lastPartial = nextText;
     }
     streamPhase = "streaming";
+    ensureStreamingActivityTimer();
     bumpThinkingActivity();
     queueThinkingPanelUpdate();
     // Collapse thinking panel when first assistant text arrives
@@ -816,6 +939,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return;
     }
     closingInProgress = true;
+    // Switch to idle before draining the queue so any late-arriving
+    // queueThinkingPanelUpdate steps compose without the "Streaming reply..."
+    // activity line and can't overwrite the final panel.
+    streamPhase = "idle";
+    clearStreamingActivityTimer();
     try {
       if (streamingStartPromise) {
         await streamingStartPromise;
@@ -826,7 +954,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         `closeStreaming called reason=${options?.reason ?? "none"} emitFinalText=${options?.emitFinalText ? "true" : "false"} active=${streaming?.isActive() ? "true" : "false"} streamMsgId=${streamMessageId ?? "none"} streamTextChars=${streamText.trim().length}`,
       );
       if (streaming?.isActive()) {
-        const finalText = streamText;
+        // Strip directive tags that were preserved in raw partials — they must
+        // not leak into the closed card when onIdle fires without a final deliver.
+        const finalText = stripInlineDirectiveTagsForDelivery(streamText).text;
         const finalThinking = composeThinkingContent({ final: true });
         const hasFinalText = finalText.trim().length > 0;
         const hasFinalThinking = finalThinking.text.trim().length > 0;
@@ -867,7 +997,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         } else {
           logStreamingDecision("close", {
-            action: "close-final-card",
+            action: hasFinalThinking
+              ? "close-final-card"
+              : "close-final-card-drop-status-only-panel",
             finalText,
             thinkingText: finalThinking.text,
             emitFinalText: options?.emitFinalText,
@@ -893,6 +1025,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             : undefined;
           await streaming.close(text, {
             ...(finalNote !== undefined ? { note: finalNote } : {}),
+            ...(hasFinalThinking ? {} : { dropThinkingPanel: true }),
           });
           hasVisibleTextInReply = true;
           deliveredFinalTexts.add(finalText);
@@ -916,6 +1049,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       thinkingActivityTick = 0;
       activeTools.length = 0;
       clearToolElapsedTimer();
+      clearStreamingActivityTimer();
+      seenToolCallIds.clear();
     } finally {
       closingInProgress = false;
     }
@@ -969,6 +1104,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           streamPhase = "idle";
           activeTools.length = 0;
           clearToolElapsedTimer();
+          clearStreamingActivityTimer();
+          seenToolCallIds.clear();
           toolCallCount = 0;
           lastRenderedStreamContent = "";
           replaceNextPartialAfterTool = false;
@@ -1029,6 +1166,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               ? hookResult.metadata
               : undefined;
         }
+        text = stripInlineDirectiveTagsForDelivery(text).text;
         const hasText = text.trim().length > 0;
         const hasMedia = originalReply.hasMedia;
         const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
@@ -1248,22 +1386,53 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyOptions: {
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
+      onAgentEvent: async (evt: { stream: string; data: Record<string, unknown> }) => {
+        if (evt.stream !== "tool") {
+          return;
+        }
+        const phase = typeof evt.data.phase === "string" ? evt.data.phase : undefined;
+        const toolCallId =
+          typeof evt.data.toolUseId === "string"
+            ? evt.data.toolUseId
+            : typeof evt.data.toolCallId === "string"
+              ? evt.data.toolCallId
+              : undefined;
+        const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
+        if (phase === "start" || phase === "update") {
+          handleToolStartLikeEvent({ name, phase, toolCallId });
+          return;
+        }
+        if (phase === "result") {
+          const text =
+            typeof evt.data.result === "string"
+              ? evt.data.result
+              : typeof evt.data.partialResult === "string"
+                ? evt.data.partialResult
+                : undefined;
+          const isError = evt.data.isError === true;
+          handleToolResultLikeEvent({ toolCallId, text, isError });
+        }
+      },
       onAssistantMessageStart: streamingEnabled
         ? () => {
             queueThinkingPrelude();
             startStreaming();
+            queueThinkingPanelUpdate();
           }
         : undefined,
       onReasoningStream: reasoningEnabled
         ? (payload?: { text?: string; mediaUrls?: string[]; isReasoning?: boolean }) => {
             queueThinkingPrelude();
             streamPhase = "thinking";
-            if (payload?.text) {
+            const cleanedReasoningText = stripInlineDirectiveTagsForDisplay(
+              payload?.text ?? "",
+            ).text;
+            if (cleanedReasoningText) {
               if (streamingEnabled) {
                 startStreaming();
-                queueReasoningUpdate(payload.text);
+                queueReasoningUpdate(cleanedReasoningText);
               } else {
-                reasoningText = mergeReasoningDisplayText(reasoningText, payload.text);
+                reasoningText = mergeReasoningDisplayText(reasoningText, cleanedReasoningText);
               }
             }
           }
@@ -1277,63 +1446,38 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         : undefined,
       onToolStart: streamingEnabled
-        ? (payload: { name?: string; phase?: string; toolCallId?: string }) => {
-            const isStartPhase = !payload?.phase || payload.phase === "start";
-            if (isStartPhase) {
-              const trackedName = resolveTrackedToolName(payload?.name);
-              activeTools.push({
-                name: trackedName,
-                toolCallId: payload.toolCallId?.trim() || undefined,
-                startedAt: Date.now(),
-              });
-              toolCallCount += 1;
-              replaceNextPartialAfterTool = Boolean(streamText);
-              if (toolElapsedTimer === null) {
-                toolElapsedTimer = setInterval(() => {
-                  if (activeTools.length > 0) {
-                    queueThinkingPanelUpdate();
-                  }
-                }, 10_000);
-                toolElapsedTimer.unref?.();
-              }
-            }
-            queueThinkingPrelude();
-            streamPhase = "tool";
-            bumpThinkingActivity();
-            // Tool-only runs need to bootstrap the streaming card even in
-            // auto mode; otherwise the first visible event is dropped and the
-            // thinking panel stays blank until assistant text arrives.
-            startStreaming();
-            queueThinkingPanelUpdate();
-          }
+        ? (payload: { name?: string; phase?: string; toolCallId?: string }) =>
+            handleToolStartLikeEvent(payload, { allowUnnamed: true })
         : undefined,
       onToolResult: streamingEnabled
-        ? (payload: ReplyPayload) => {
-            removeActiveTool(payload.toolCallId);
-            if (activeTools.length === 0 && streamPhase === "tool") {
-              streamPhase = streamText ? "streaming" : "idle";
-            }
-            bumpThinkingActivity();
-            if (!shouldRenderStreamingStatus()) {
-              return;
-            }
-            queueThinkingPanelUpdate();
-          }
+        ? (payload: ReplyPayload) =>
+            handleToolResultLikeEvent({
+              toolCallId: payload.toolCallId,
+              text: payload.text,
+              isError: payload.isError,
+            })
         : undefined,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
-            if (!payload.text) {
+            // Pass raw cumulative text through — directive tag stripping is
+            // deferred to final delivery (L1154) so streaming partials preserve
+            // all whitespace/newlines in markdown tables, lists, and fences.
+            // The `INLINE_DIRECTIVE_TAG_WITH_PADDING_RE` regex used by
+            // stripInlineDirectiveTagsForDelivery has `\s*` padding that eats
+            // newlines around directive tags, which collapses markdown rows.
+            const cleanedText = payload.text ?? "";
+            if (!cleanedText) {
               return;
             }
             if (suppressAssistantTextStreaming) {
               params.runtime.log?.(
-                `feishu[${account.accountId}] streaming partial suppressed by message_sending hooks: textChars=${payload.text.trim().length}`,
+                `feishu[${account.accountId}] streaming partial suppressed by message_sending hooks: textChars=${cleanedText.trim().length}`,
               );
               return;
             }
             queueThinkingPrelude();
             startStreaming();
-            queueStreamingUpdate(payload.text, { dedupeWithLastPartial: true });
+            queueStreamingUpdate(cleanedText, { dedupeWithLastPartial: true });
           }
         : undefined,
     },
