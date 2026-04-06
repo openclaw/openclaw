@@ -9,6 +9,8 @@ import {
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
   getMemoryRuntime,
+  listMemoryCorpusSupplements,
+  listMemoryPromptSupplements,
   registerMemoryFlushPlanResolver,
   restoreMemoryPluginState,
 } from "../../plugins/memory-state.js";
@@ -57,7 +59,9 @@ const state = vi.hoisted(() => ({
 }));
 
 const initialMemoryPluginState = {
+  corpusSupplements: listMemoryCorpusSupplements(),
   promptBuilder: getMemoryPromptSectionBuilder(),
+  promptSupplements: listMemoryPromptSupplements(),
   flushPlanResolver: getMemoryFlushPlanResolver(),
   runtime: getMemoryRuntime(),
 };
