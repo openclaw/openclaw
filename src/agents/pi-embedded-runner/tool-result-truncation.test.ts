@@ -279,7 +279,7 @@ describe("estimateToolResultReductionPotential", () => {
     expect(estimate.maxReducibleChars).toBe(estimate.aggregateReducibleChars);
   });
 
-  it("does not count aggregate savings on top of oversized savings in a single pass", () => {
+  it("counts aggregate savings on top of oversized savings in a single pass", () => {
     const oversized = "x".repeat(500_000);
     const medium = "alpha beta gamma delta epsilon ".repeat(800);
     const messages: AgentMessage[] = [
@@ -295,7 +295,10 @@ describe("estimateToolResultReductionPotential", () => {
 
     expect(estimate.oversizedCount).toBeGreaterThan(0);
     expect(estimate.oversizedReducibleChars).toBeGreaterThan(0);
-    expect(estimate.maxReducibleChars).toBe(estimate.oversizedReducibleChars);
+    expect(estimate.aggregateReducibleChars).toBeGreaterThan(0);
+    expect(estimate.maxReducibleChars).toBe(
+      estimate.oversizedReducibleChars + estimate.aggregateReducibleChars,
+    );
   });
 });
 
@@ -446,6 +449,52 @@ describe("truncateOversizedToolResultsInSession", () => {
     const text = getFirstToolResultText(toolResult.message);
     expect(text.length).toBeLessThan(2_000);
     expect(text).toContain("truncated");
+  });
+
+  it("applies aggregate recovery after oversized truncation for mixed tool-result tails", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+    sm.appendMessage(makeUserMessage("hello"));
+    sm.appendMessage(makeAssistantMessage("calling tools"));
+    const oversized = "x".repeat(500_000);
+    const medium = "alpha beta gamma delta epsilon ".repeat(800);
+    sm.appendMessage(makeToolResult(oversized, "call_1"));
+    sm.appendMessage(makeToolResult(medium, "call_2"));
+    sm.appendMessage(makeToolResult(medium, "call_3"));
+    const sessionFile = sm.getSessionFile()!;
+
+    const beforeBranch = SessionManager.open(sessionFile).getBranch();
+    const beforeToolResults = beforeBranch.filter(
+      (entry) => entry.type === "message" && entry.message.role === "toolResult",
+    );
+    const beforeLengths = beforeToolResults.map((entry) =>
+      entry.type === "message" ? getToolResultTextLength(entry.message) : 0,
+    );
+
+    const result = await truncateOversizedToolResultsInSession({
+      sessionFile,
+      contextWindowTokens: 128_000,
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.truncatedCount).toBeGreaterThan(1);
+
+    const afterBranch = SessionManager.open(sessionFile).getBranch();
+    const afterToolResults = afterBranch.filter(
+      (entry) => entry.type === "message" && entry.message.role === "toolResult",
+    );
+    const afterLengths = afterToolResults.map((entry) =>
+      entry.type === "message" ? getToolResultTextLength(entry.message) : 0,
+    );
+
+    expect(afterLengths[0]).toBeLessThan(beforeLengths[0] ?? Infinity);
+    expect(
+      (afterLengths[1] ?? Infinity) < (beforeLengths[1] ?? Infinity) ||
+        (afterLengths[2] ?? Infinity) < (beforeLengths[2] ?? Infinity),
+    ).toBe(true);
+    expect(afterLengths.reduce((sum, value) => sum + value, 0)).toBeLessThan(
+      beforeLengths.reduce((sum, value) => sum + value, 0),
+    );
   });
 });
 
