@@ -2,13 +2,18 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { buildPluginSdkEntrySources, pluginSdkEntrypoints } from "../../plugin-sdk/entrypoints.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { createSuiteTempRootTracker } from "../test-helpers/fs-fixtures.js";
 
 const require = createRequire(import.meta.url);
 const tsdownModuleUrl = pathToFileURL(require.resolve("tsdown")).href;
 const bundledRepresentativeEntrypoints = ["matrix-runtime-heavy"] as const;
+const bundleTempRootTracker = createSuiteTempRootTracker(
+  "openclaw-plugin-sdk-build",
+  path.join(process.cwd(), "node_modules", ".cache"),
+);
 const bundledPluginRoots = new Map(
   loadPluginManifestRegistry({ cache: true, config: {} })
     .plugins.filter((plugin) => plugin.origin === "bundled")
@@ -47,12 +52,12 @@ async function listBuiltJsFiles(rootDir: string): Promise<string[]> {
 }
 
 describe("plugin-sdk bundled exports", () => {
+  afterAll(() => {
+    bundleTempRootTracker.cleanup();
+  });
+
   it("emits importable bundled subpath entries", { timeout: 120_000 }, async () => {
-    const bundleCacheRoot = path.join(process.cwd(), "node_modules", ".cache");
-    await fs.mkdir(bundleCacheRoot, { recursive: true });
-    const bundleTempRoot = await fs.mkdtemp(
-      path.join(bundleCacheRoot, "openclaw-plugin-sdk-build-"),
-    );
+    const bundleTempRoot = bundleTempRootTracker.ensureSuiteTempRoot();
     const outDir = path.join(bundleTempRoot, "bundle");
     await fs.rm(outDir, { recursive: true, force: true });
     await fs.mkdir(outDir, { recursive: true });

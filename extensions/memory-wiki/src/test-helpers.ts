@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach } from "vitest";
+import { afterEach, vi } from "vitest";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
+import type { OpenClawPluginApi } from "../api.js";
 import {
   resolveMemoryWikiConfig,
   type MemoryWikiPluginConfig,
@@ -14,6 +16,15 @@ const MEMORY_WIKI_TEST_HOME = "/Users/tester";
 export type MemoryWikiTestVault = {
   rootDir: string;
   config: ResolvedMemoryWikiConfig;
+};
+
+export type MemoryWikiPluginApiHarness = {
+  api: OpenClawPluginApi;
+  registerCli: ReturnType<typeof vi.fn>;
+  registerGatewayMethod: ReturnType<typeof vi.fn>;
+  registerMemoryCorpusSupplement: ReturnType<typeof vi.fn>;
+  registerMemoryPromptSupplement: ReturnType<typeof vi.fn>;
+  registerTool: ReturnType<typeof vi.fn>;
 };
 
 export function createMemoryWikiTestHarness() {
@@ -57,7 +68,37 @@ export function createMemoryWikiTestHarness() {
     return { rootDir, config };
   }
 
+  function createPluginApi(): MemoryWikiPluginApiHarness {
+    const registerCli = vi.fn();
+    const registerGatewayMethod = vi.fn();
+    const registerMemoryCorpusSupplement = vi.fn();
+    const registerMemoryPromptSupplement = vi.fn();
+    const registerTool = vi.fn();
+    const api = createTestPluginApi({
+      id: "memory-wiki",
+      name: "Memory Wiki",
+      source: "test",
+      config: {},
+      runtime: {} as OpenClawPluginApi["runtime"],
+      registerCli,
+      registerGatewayMethod,
+      registerMemoryCorpusSupplement,
+      registerMemoryPromptSupplement,
+      registerTool,
+    }) as OpenClawPluginApi;
+
+    return {
+      api,
+      registerCli,
+      registerGatewayMethod,
+      registerMemoryCorpusSupplement,
+      registerMemoryPromptSupplement,
+      registerTool,
+    };
+  }
+
   return {
+    createPluginApi,
     createTempDir,
     createVault,
   };

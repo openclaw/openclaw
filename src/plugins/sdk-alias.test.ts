@@ -19,7 +19,11 @@ import {
   resolvePluginSdkAliasFile,
   shouldPreferNativeJiti,
 } from "./sdk-alias.js";
-import { makeTrackedTempDir, mkdirSafeDir } from "./test-helpers/fs-fixtures.js";
+import {
+  cleanupTrackedTempDirs,
+  makeTrackedTempDir,
+  mkdirSafeDir,
+} from "./test-helpers/fs-fixtures.js";
 
 type CreateJiti = typeof import("jiti").createJiti;
 
@@ -305,7 +309,7 @@ function expectCwdFallbackPluginSdkAliasResolution(params: {
 }
 
 afterAll(() => {
-  fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  cleanupTrackedTempDirs(fixtureTempDirs);
 });
 
 describe("plugin sdk alias helpers", () => {

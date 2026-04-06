@@ -84,7 +84,7 @@ describe("buildMemoryFlushPlan", () => {
 
     expect(plan?.prompt).toContain("memory/2026-02-16.md");
     expect(plan?.prompt).toContain(
-      "Current time: Monday, February 16th, 2026 — 10:00 AM (America/New_York) / 2026-02-16 15:00 UTC",
+      "Current time: Monday, February 16th, 2026 - 10:00 AM (America/New_York) / 2026-02-16 15:00 UTC",
     );
     expect(plan?.relativePath).toBe("memory/2026-02-16.md");
   });

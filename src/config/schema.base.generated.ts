@@ -3172,6 +3172,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               skipBootstrap: {
                 type: "boolean",
               },
+              contextInjection: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "always",
+                  },
+                  {
+                    type: "string",
+                    const: "continuation-skip",
+                  },
+                ],
+                title: "Context Injection",
+                description:
+                  'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+              },
               bootstrapMaxChars: {
                 type: "integer",
                 exclusiveMinimum: 0,
@@ -23886,6 +23901,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.repoRoot": {
       label: "Repo Root",
       help: "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
+      tags: ["advanced"],
+    },
+    "agents.defaults.contextInjection": {
+      label: "Context Injection",
+      help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
       tags: ["advanced"],
     },
     "agents.defaults.bootstrapMaxChars": {

@@ -13,7 +13,15 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundSessionRoute: vi.fn(),
   ensureOutboundSessionEntry: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
-  sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
+  sendPoll: vi.fn<
+    () => Promise<{
+      messageId: string;
+      toJid?: string;
+      channelId?: string;
+      conversationId?: string;
+      pollId?: string;
+    }>
+  >(async () => ({ messageId: "poll-1" })),
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
@@ -411,6 +419,39 @@ describe("gateway send mirroring", () => {
         to: "resolved",
         gatewayClientScopes: [],
       }),
+    );
+  });
+
+  it("includes optional poll delivery identifiers in the gateway payload", async () => {
+    mocks.sendPoll.mockResolvedValue({
+      messageId: "poll-rich",
+      channelId: "C123",
+      conversationId: "conv-1",
+      toJid: "jid-1",
+      pollId: "poll-meta-1",
+    });
+
+    const { respond } = await runPoll({
+      to: "channel:C1",
+      question: "Q?",
+      options: ["A", "B"],
+      channel: "slack",
+      idempotencyKey: "idem-poll-rich",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "idem-poll-rich",
+        messageId: "poll-rich",
+        channel: "slack",
+        channelId: "C123",
+        conversationId: "conv-1",
+        toJid: "jid-1",
+        pollId: "poll-meta-1",
+      }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
     );
   });
 

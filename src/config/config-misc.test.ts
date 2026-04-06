@@ -5,8 +5,8 @@ import {
   setConfigValueAtPath,
   unsetConfigValueAtPath,
 } from "./config-paths.js";
-import { validateConfigObject } from "./config.js";
-import { buildWebSearchProviderConfig } from "./test-helpers.js";
+import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
+import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("$schema key in config (#14998)", () => {
@@ -644,6 +644,41 @@ describe("config strict validation", () => {
       );
       expect(snap.sourceConfig.plugins?.entries?.xai?.config?.webSearch).toMatchObject({
         apiKey: "test-key",
+      });
+      expect(
+        (snap.sourceConfig.tools?.web?.x_search as Record<string, unknown> | undefined)?.apiKey,
+      ).toBeUndefined();
+    });
+  });
+
+  it("accepts legacy x_search SecretRefs via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        tools: {
+          web: {
+            x_search: {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "X_SEARCH_KEY_REF",
+              },
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "tools.web.x_search.apiKey")).toBe(
+        true,
+      );
+      expect(snap.sourceConfig.plugins?.entries?.xai?.config?.webSearch).toMatchObject({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "X_SEARCH_KEY_REF",
+        },
       });
       expect(
         (snap.sourceConfig.tools?.web?.x_search as Record<string, unknown> | undefined)?.apiKey,

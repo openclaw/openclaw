@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
+import type { OpenClawConfig } from "./config.js";
 import { validateConfigObject } from "./validation.js";
 
 function getChannelConfig(config: unknown, provider: string) {
@@ -234,7 +236,9 @@ describe("legacy config detection", () => {
     {
       name: "streamMode with streaming boolean",
       input: { channels: { discord: { streaming: false, streamMode: "block" } } },
-      expectedChanges: ["Moved channels.discord.streamMode → channels.discord.streaming.mode (block)."],
+      expectedChanges: [
+        "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
+      ],
       expectedStreaming: "block",
     },
   ] as const)(

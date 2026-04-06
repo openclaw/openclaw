@@ -125,14 +125,6 @@
       "destination": "/concepts/context"
     },
     {
-      "source": "/zh-CN",
-      "destination": "/zh-CN/index"
-    },
-    {
-      "source": "/zh-CN/",
-      "destination": "/zh-CN/index"
-    },
-    {
       "source": "/compaction",
       "destination": "/concepts/compaction"
     },

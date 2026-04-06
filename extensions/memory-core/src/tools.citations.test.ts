@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -16,6 +15,7 @@ import {
   setMemoryWorkspaceDir,
   type MemoryReadParams,
 } from "../../../test/helpers/memory-tool-manager-mock.js";
+import { createMemoryCoreTestHarness } from "./test-helpers.js";
 import {
   asOpenClawConfig,
   createAutoCitationsMemorySearchTool,
@@ -24,6 +24,8 @@ import {
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,
 } from "./tools.test-helpers.js";
+
+const { createTempWorkspace } = createMemoryCoreTestHarness();
 
 async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
   const startedAt = Date.now();
@@ -180,7 +182,7 @@ describe("memory tools", () => {
   });
 
   it("persists short-term recall events from memory_search tool hits", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-tools-recall-"));
+    const workspaceDir = await createTempWorkspace("memory-tools-recall-");
     try {
       setMemoryBackend("builtin");
       setMemoryWorkspaceDir(workspaceDir);
