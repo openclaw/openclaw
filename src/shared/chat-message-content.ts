@@ -88,30 +88,39 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
   return explicitPhases.size === 1 ? [...explicitPhases][0] : undefined;
 }
 
-function extractAssistantTextForPhase(
+export function extractAssistantTextForPhase(
   message: unknown,
-  phase?: AssistantPhase,
+  options?: {
+    phase?: AssistantPhase;
+    sanitizeText?: (text: string) => string;
+    joinWith?: string;
+  },
 ): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
   const entry = message as { text?: unknown; content?: unknown; phase?: unknown };
   const messagePhase = normalizeAssistantPhase(entry.phase);
+  const phase = options?.phase;
   const shouldIncludeContent = (resolvedPhase?: AssistantPhase) => {
     if (phase) {
       return resolvedPhase === phase;
     }
     return resolvedPhase === undefined;
   };
+  const sanitizeText = options?.sanitizeText;
+  const joinWith = options?.joinWith ?? "\n";
+  const normalizeText = (text: string) => {
+    const normalized = (sanitizeText ? sanitizeText(text) : text).trim();
+    return normalized || undefined;
+  };
 
   if (typeof entry.text === "string") {
-    const normalized = entry.text.trim();
-    return shouldIncludeContent(messagePhase) && normalized ? normalized : undefined;
+    return shouldIncludeContent(messagePhase) ? normalizeText(entry.text) : undefined;
   }
 
   if (typeof entry.content === "string") {
-    const normalized = entry.content.trim();
-    return shouldIncludeContent(messagePhase) && normalized ? normalized : undefined;
+    return shouldIncludeContent(messagePhase) ? normalizeText(entry.content) : undefined;
   }
 
   if (!Array.isArray(entry.content)) {
@@ -144,19 +153,18 @@ function extractAssistantTextForPhase(
       if (!shouldIncludeContent(resolvedPhase)) {
         return null;
       }
-      const normalized = record.text.trim();
-      return normalized || null;
+      return normalizeText(record.text) ?? null;
     })
     .filter((value): value is string => typeof value === "string");
 
   if (parts.length === 0) {
     return undefined;
   }
-  return parts.join("\n");
+  return parts.join(joinWith);
 }
 
 export function extractAssistantVisibleText(message: unknown): string | undefined {
-  const finalAnswerText = extractAssistantTextForPhase(message, "final_answer");
+  const finalAnswerText = extractAssistantTextForPhase(message, { phase: "final_answer" });
   if (finalAnswerText) {
     return finalAnswerText;
   }
