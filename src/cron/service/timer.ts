@@ -372,7 +372,7 @@ function emitFailureAlert(
 
   state.deps.enqueueSystemEvent(text, {
     agentId: params.job.agentId,
-    wakeRequested: params.job.wakeMode === "now",
+    wakeRequested: true,
   });
   if (params.job.wakeMode === "now") {
     state.deps.requestHeartbeatNow({ reason: `cron:${params.job.id}:failure-alert` });
@@ -1366,7 +1366,7 @@ export function wake(
   if (!text) {
     return { ok: false } as const;
   }
-  state.deps.enqueueSystemEvent(text, { wakeRequested: opts.mode === "now" });
+  state.deps.enqueueSystemEvent(text, { wakeRequested: true });
   if (opts.mode === "now") {
     state.deps.requestHeartbeatNow({ reason: "wake" });
   }
