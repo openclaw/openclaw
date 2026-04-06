@@ -9,7 +9,9 @@ import { danger } from "../../../globals.js";
  * `file_shared` fallback handler skips them.
  */
 const handledMessageTimestamps = new Set<string>();
+const handledFileIds = new Set<string>();
 const DEDUP_TTL_MS = 30_000;
+const HISTORY_FETCH_LIMIT = 20;
 
 export function markMessageHandled(ts: string) {
   handledMessageTimestamps.add(ts);
@@ -64,14 +66,22 @@ export function registerSlackFileSharedEvents(params: {
         return;
       }
 
+      // Early dedup by fileId — mark before any awaits to prevent concurrent
+      // file_shared events for the same file from both passing the guard.
+      if (handledFileIds.has(fileId)) {
+        return;
+      }
+      handledFileIds.add(fileId);
+      setTimeout(() => handledFileIds.delete(fileId), DEDUP_TTL_MS);
+
       // Small delay — give Slack time to settle the message so
       // conversations.history returns it with the full files array.
       await new Promise((r) => setTimeout(r, 2000));
 
-      // Fetch the most recent messages in the channel
+      // Fetch recent messages in the channel (larger window for busy channels)
       const result = await ctx.app.client.conversations.history({
         channel: channelId,
-        limit: 5,
+        limit: HISTORY_FETCH_LIMIT,
       });
 
       if (!result.ok || !result.messages?.length) {
@@ -103,7 +113,7 @@ export function registerSlackFileSharedEvents(params: {
         return;
       }
 
-      // Mark as handled (prevent future duplicates within this handler)
+      // Mark ts as handled to prevent future duplicates
       if (msgTs) {
         markMessageHandled(msgTs);
       }
