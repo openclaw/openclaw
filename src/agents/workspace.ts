@@ -327,6 +327,12 @@ async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
+  /**
+   * List of optional bootstrap filenames to skip writing.
+   * Applies only to SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
+   * Required files (AGENTS.md, MEMORY.md, TOOLS.md) cannot be skipped.
+   */
+  skipOptionalBootstrapFiles?: string[];
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -381,12 +387,32 @@ export async function ensureAgentWorkspace(params?: {
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
-  await writeFileIfMissing(agentsPath, agentsTemplate);
-  await writeFileIfMissing(soulPath, soulTemplate);
-  await writeFileIfMissing(toolsPath, toolsTemplate);
-  await writeFileIfMissing(identityPath, identityTemplate);
-  await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  // Determine which optional files should be skipped.
+  // Required files (AGENTS.md, MEMORY.md, TOOLS.md) are always written.
+  const OPTIONAL_BOOTSTRAP_FILES = new Set([
+    DEFAULT_SOUL_FILENAME,
+    DEFAULT_IDENTITY_FILENAME,
+    DEFAULT_USER_FILENAME,
+    DEFAULT_HEARTBEAT_FILENAME,
+  ]);
+  const skipSet = new Set(params?.skipOptionalBootstrapFiles ?? []);
+  const shouldWrite = (filename: string): boolean =>
+    !OPTIONAL_BOOTSTRAP_FILES.has(filename) || !skipSet.has(filename);
+
+  await writeFileIfMissing(agentsPath, agentsTemplate); // required — always written
+  if (shouldWrite(DEFAULT_SOUL_FILENAME)) {
+    await writeFileIfMissing(soulPath, soulTemplate);
+  }
+  await writeFileIfMissing(toolsPath, toolsTemplate); // required — always written
+  if (shouldWrite(DEFAULT_IDENTITY_FILENAME)) {
+    await writeFileIfMissing(identityPath, identityTemplate);
+  }
+  if (shouldWrite(DEFAULT_USER_FILENAME)) {
+    await writeFileIfMissing(userPath, userTemplate);
+  }
+  if (shouldWrite(DEFAULT_HEARTBEAT_FILENAME)) {
+    await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  }
 
   let state = await readWorkspaceSetupState(statePath);
   let stateDirty = false;
@@ -409,9 +435,15 @@ export async function ensureAgentWorkspace(params?: {
     // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
     // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
     // already-configured workspaces.
+    // If IDENTITY or USER were intentionally skipped via skipOptionalBootstrapFiles,
+    // fall back to template content so the migration probe does not throw ENOENT.
     const [identityContent, userContent] = await Promise.all([
-      fs.readFile(identityPath, "utf-8"),
-      fs.readFile(userPath, "utf-8"),
+      shouldWrite(DEFAULT_IDENTITY_FILENAME)
+        ? fs.readFile(identityPath, "utf-8")
+        : Promise.resolve(identityTemplate),
+      shouldWrite(DEFAULT_USER_FILENAME)
+        ? fs.readFile(userPath, "utf-8")
+        : Promise.resolve(userTemplate),
     ]);
     const hasUserContent = await (async () => {
       const indicators = [
