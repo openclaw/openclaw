@@ -13,6 +13,7 @@
   "setup-adapter-runtime",
   "setup-runtime",
   "channel-setup",
+  "channel-streaming",
   "setup-tools",
   "approval-auth-runtime",
   "approval-client-runtime",

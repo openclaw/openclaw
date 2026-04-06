@@ -13,6 +13,7 @@ import {
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import {
   resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
@@ -1134,6 +1135,7 @@ async function dispatchDiscordCommandInteraction(params: {
     accountId: effectiveRoute.accountId,
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
 
   let didReply = false;
   const dispatchResult = await dispatchReplyWithDispatcherImpl({
@@ -1175,9 +1177,7 @@ async function dispatchDiscordCommandInteraction(params: {
     replyOptions: {
       skillFilter: channelConfig?.skills,
       disableBlockStreaming:
-        typeof discordConfig?.blockStreaming === "boolean"
-          ? !discordConfig.blockStreaming
-          : undefined,
+        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
       onModelSelected,
     },
   });
