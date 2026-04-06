@@ -54,10 +54,21 @@ function normalizeBlueBubblesPrivateNetworkAliases(
     return config;
   }
 
+  const {
+    allowPrivateNetwork: _legacyFlatAllow,
+    dangerouslyAllowPrivateNetwork: _legacyFlatDanger,
+    ...rest
+  } = record;
+  const {
+    allowPrivateNetwork: _legacyNetworkAllow,
+    dangerouslyAllowPrivateNetwork: _legacyNetworkDanger,
+    ...restNetwork
+  } = network ?? {};
+
   return {
-    ...record,
+    ...rest,
     network: {
-      ...network,
+      ...restNetwork,
       dangerouslyAllowPrivateNetwork: canonicalValue,
     },
   };
