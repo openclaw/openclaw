@@ -31,6 +31,13 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  /**
+   * Pre-resolved agent-scoped env vars. When set, these replace the global
+   * process.env as the base environment for command execution (non-sandbox).
+   * This enables per-agent env isolation so external collaborator agents
+   * don't inherit the owner's API keys.
+   */
+  agentEnvVars?: Record<string, string>;
 };
 
 export type ExecElevatedDefaults = {
