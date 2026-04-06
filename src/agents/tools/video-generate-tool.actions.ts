@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import { listSupportedVideoGenerationModes } from "../../video-generation/capabilities.js";
 import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";
 import {
   buildVideoGenerationTaskStatusDetails,
@@ -28,7 +29,9 @@ export function createVideoGenerateListActionResult(
   }
   const lines = providers.map((provider) => {
     const authHints = getVideoGenerationProviderAuthEnvVars(provider.id);
+    const supportedModes = listSupportedVideoGenerationModes(provider);
     const capabilities = [
+      supportedModes.length > 0 ? `modes=${supportedModes.join("/")}` : null,
       provider.capabilities.maxVideos ? `maxVideos=${provider.capabilities.maxVideos}` : null,
       provider.capabilities.maxInputImages
         ? `maxInputImages=${provider.capabilities.maxInputImages}`
@@ -74,6 +77,7 @@ export function createVideoGenerateListActionResult(
         id: provider.id,
         defaultModel: provider.defaultModel,
         models: provider.models ?? [],
+        modes: listSupportedVideoGenerationModes(provider),
         authEnvVars: getVideoGenerationProviderAuthEnvVars(provider.id),
         capabilities: provider.capabilities,
       })),

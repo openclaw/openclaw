@@ -8,6 +8,7 @@ import {
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
+import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
   normalizeVideoGenerationDuration,
   resolveVideoGenerationSupportedDurations,
@@ -68,14 +69,31 @@ function resolveProviderVideoGenerationOverrides(params: {
   resolution?: VideoGenerationResolution;
   audio?: boolean;
   watermark?: boolean;
+  inputImageCount?: number;
+  inputVideoCount?: number;
 }) {
-  const caps = params.provider.capabilities;
+  const { capabilities: caps } = resolveVideoGenerationModeCapabilities({
+    provider: params.provider,
+    inputImageCount: params.inputImageCount,
+    inputVideoCount: params.inputVideoCount,
+  });
   const ignoredOverrides: VideoGenerationIgnoredOverride[] = [];
   let size = params.size;
   let aspectRatio = params.aspectRatio;
   let resolution = params.resolution;
   let audio = params.audio;
   let watermark = params.watermark;
+
+  if (!caps) {
+    return {
+      size,
+      aspectRatio,
+      resolution,
+      audio,
+      watermark,
+      ignoredOverrides,
+    };
+  }
 
   if (size && !caps.supportsSize) {
     ignoredOverrides.push({ key: "size", value: size });
@@ -149,6 +167,8 @@ export async function generateVideo(
         resolution: params.resolution,
         audio: params.audio,
         watermark: params.watermark,
+        inputImageCount: params.inputImages?.length ?? 0,
+        inputVideoCount: params.inputVideos?.length ?? 0,
       });
       const requestedDurationSeconds =
         typeof params.durationSeconds === "number" && Number.isFinite(params.durationSeconds)
@@ -158,10 +178,14 @@ export async function generateVideo(
         provider,
         model: candidate.model,
         durationSeconds: requestedDurationSeconds,
+        inputImageCount: params.inputImages?.length ?? 0,
+        inputVideoCount: params.inputVideos?.length ?? 0,
       });
       const supportedDurationSeconds = resolveVideoGenerationSupportedDurations({
         provider,
         model: candidate.model,
+        inputImageCount: params.inputImages?.length ?? 0,
+        inputVideoCount: params.inputVideos?.length ?? 0,
       });
       const result: VideoGenerationResult = await provider.generateVideo({
         provider: candidate.provider,
