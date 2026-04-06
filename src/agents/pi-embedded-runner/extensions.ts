@@ -6,6 +6,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../pi-hooks/context-pruning.js";
+import improvementsIntegrationExtension from "../pi-hooks/improvements-integration.js";
 import { setContextPruningRuntime } from "../pi-hooks/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-hooks/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../pi-hooks/context-pruning/tools.js";
@@ -101,6 +102,8 @@ export function buildEmbeddedExtensionFactories(params: {
     });
     factories.push(compactionSafeguardExtension);
   }
+  // Always add improvements integration
+  factories.push(improvementsIntegrationExtension);
   const pruningFactory = buildContextPruningFactory(params);
   if (pruningFactory) {
     factories.push(pruningFactory);
