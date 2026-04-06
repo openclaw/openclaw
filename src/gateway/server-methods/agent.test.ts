@@ -797,6 +797,47 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("does not create task rows for inter-session completion wakes", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: [
+          "[Mon 2026-04-06 02:42 GMT+1] <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+        ].join("\n"),
+        sessionKey: "agent:main:main",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "music_generation",
+            childSessionKey: "music:task-123",
+            childSessionId: "task-123",
+            announceType: "music generation task",
+            taskLabel: "compose a loop",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "MEDIA:/tmp/song.mp3",
+            replyInstruction: "Reply in your normal assistant voice now.",
+          },
+        ],
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "music_generate:task-123",
+          sourceChannel: "internal",
+          sourceTool: "music_generate",
+        },
+        idempotencyKey: "music-generation-event-inter-session",
+      },
+      { reqId: "music-generation-event-inter-session" },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(findTaskByRunId("music-generation-event-inter-session")).toBeUndefined();
+  });
+
   it("only forwards workspaceDir for spawned sessions with stored workspace inheritance", async () => {
     primeMainAgentRun();
     mockMainSessionEntry({
