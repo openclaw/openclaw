@@ -136,7 +136,7 @@ export function resolvePluginTools(params: {
     }
     if (!resolved) {
       if (entry.names.length > 0) {
-        context.logger.debug(
+        context.logger.debug?.(
           `plugin tool factory returned null (${entry.pluginId}): [${entry.names.join(", ")}]`,
         );
       }

@@ -1,37 +1,42 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadOpenClawPluginsMock = vi.fn();
+const loadOpenClawPluginsMock = vi.fn((_options: unknown): unknown => undefined);
 const getActivePluginRegistryMock = vi.fn();
-const resolveConfiguredChannelPluginIdsMock = vi.fn();
-const resolveChannelPluginIdsMock = vi.fn();
-const applyPluginAutoEnableMock = vi.fn();
-const resolveAgentWorkspaceDirMock = vi.fn(() => "/resolved-workspace");
-const resolveDefaultAgentIdMock = vi.fn(() => "default");
+const resolveConfiguredChannelPluginIdsMock = vi.fn(
+  (_options: unknown): string[] | undefined => undefined,
+);
+const resolveChannelPluginIdsMock = vi.fn((_options: unknown): string[] | undefined => undefined);
+const applyPluginAutoEnableMock = vi.fn((_params: { config: unknown }): unknown => undefined);
+const resolveAgentWorkspaceDirMock = vi.fn(
+  (_config: unknown, _agentId: unknown): string => "/resolved-workspace",
+);
+const resolveDefaultAgentIdMock = vi.fn((_config: unknown): string => "default");
 
 let ensurePluginRegistryLoaded: typeof import("./runtime-registry-loader.js").ensurePluginRegistryLoaded;
 let resetPluginRegistryLoadedForTests: typeof import("./runtime-registry-loader.js").__testing.resetPluginRegistryLoadedForTests;
 
 vi.mock("../loader.js", () => ({
-  loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+  loadOpenClawPlugins: (options: unknown) => loadOpenClawPluginsMock(options),
 }));
 
 vi.mock("../runtime.js", () => ({
-  getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
+  getActivePluginRegistry: () => getActivePluginRegistryMock(),
 }));
 
 vi.mock("../channel-plugin-ids.js", () => ({
-  resolveConfiguredChannelPluginIds: (...args: unknown[]) =>
-    resolveConfiguredChannelPluginIdsMock(...args),
-  resolveChannelPluginIds: (...args: unknown[]) => resolveChannelPluginIdsMock(...args),
+  resolveConfiguredChannelPluginIds: (options: unknown) =>
+    resolveConfiguredChannelPluginIdsMock(options),
+  resolveChannelPluginIds: (options: unknown) => resolveChannelPluginIdsMock(options),
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
+  applyPluginAutoEnable: (params: { config: unknown }) => applyPluginAutoEnableMock(params),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
-  resolveDefaultAgentId: (...args: unknown[]) => resolveDefaultAgentIdMock(...args),
+  resolveAgentWorkspaceDir: (config: unknown, agentId: unknown) =>
+    resolveAgentWorkspaceDirMock(config, agentId),
+  resolveDefaultAgentId: (config: unknown) => resolveDefaultAgentIdMock(config),
 }));
 
 describe("ensurePluginRegistryLoaded", () => {

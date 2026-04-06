@@ -202,7 +202,6 @@ function buildPluginReport(
     : loadPluginMetadataRegistrySnapshot({
         config: runtimeCompatConfig,
         activationSourceConfig: rawConfig,
-        activate: false,
         workspaceDir,
         env: params?.env,
         loadModules: false,

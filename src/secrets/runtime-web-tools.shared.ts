@@ -1,9 +1,15 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/manifest-registry.js";
-import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
+import type {
+  ResolverContext,
+  SecretDefaults,
+  SecretResolverWarningCode,
+} from "./runtime-shared.js";
 import { pushInactiveSurfaceWarning, pushWarning } from "./runtime-shared.js";
 import type { RuntimeWebDiagnostic, RuntimeWebDiagnosticCode } from "./runtime-web-tools.types.js";
+
+type RuntimeWebWarningDiagnosticCode = Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>;
 
 export type SecretResolutionResult<TSource extends string> = {
   value?: string;
@@ -43,9 +49,9 @@ export type RuntimeWebProviderSelectionParams<
   context: ResolverContext;
   defaults: SecretDefaults | undefined;
   deferKeylessFallback: boolean;
-  fallbackUsedCode: string;
-  noFallbackCode: string;
-  autoDetectSelectedCode: string;
+  fallbackUsedCode: RuntimeWebWarningDiagnosticCode;
+  noFallbackCode: RuntimeWebWarningDiagnosticCode;
+  autoDetectSelectedCode: RuntimeWebDiagnosticCode;
   readConfiguredCredential: (params: {
     provider: TProvider;
     config: OpenClawConfig;
@@ -134,7 +140,7 @@ export type ResolveRuntimeWebProviderSurfaceParams<
   toolConfig: TToolConfig;
   diagnostics: RuntimeWebDiagnostic[];
   metadataDiagnostics: RuntimeWebDiagnostic[];
-  invalidAutoDetectCode: RuntimeWebDiagnosticCode;
+  invalidAutoDetectCode: RuntimeWebWarningDiagnosticCode;
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
   resolveProviders: (params: { configuredBundledPluginId?: string }) => TProvider[];

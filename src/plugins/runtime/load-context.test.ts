@@ -1,9 +1,11 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfigMock = vi.fn();
-const applyPluginAutoEnableMock = vi.fn();
-const resolveAgentWorkspaceDirMock = vi.fn(() => "/resolved-workspace");
-const resolveDefaultAgentIdMock = vi.fn(() => "default");
+const applyPluginAutoEnableMock = vi.fn((_params: { config: unknown }): unknown => undefined);
+const resolveAgentWorkspaceDirMock = vi.fn(
+  (_config: unknown, _agentId: unknown): string => "/resolved-workspace",
+);
+const resolveDefaultAgentIdMock = vi.fn((_config: unknown): string => "default");
 
 let resolvePluginRuntimeLoadContext: typeof import("./load-context.js").resolvePluginRuntimeLoadContext;
 let buildPluginRuntimeLoadOptions: typeof import("./load-context.js").buildPluginRuntimeLoadOptions;
@@ -13,12 +15,13 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
+  applyPluginAutoEnable: (params: { config: unknown }) => applyPluginAutoEnableMock(params),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
-  resolveDefaultAgentId: (...args: unknown[]) => resolveDefaultAgentIdMock(...args),
+  resolveAgentWorkspaceDir: (config: unknown, agentId: unknown) =>
+    resolveAgentWorkspaceDirMock(config, agentId),
+  resolveDefaultAgentId: (config: unknown) => resolveDefaultAgentIdMock(config),
 }));
 
 describe("resolvePluginRuntimeLoadContext", () => {
