@@ -567,16 +567,16 @@ describe("runWithModelFallback", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const cfg = makeCfg();
       const run = vi
         .fn()
-        .mockRejectedValueOnce(new Error("Model not found: openai/gpt-6"))
+        .mockRejectedValueOnce(new Error("Model not found: openai/gpt-6spoof"))
         .mockResolvedValueOnce("ok");
 
       const result = await runWithModelFallback({
-        cfg,
+        cfg: undefined,
         provider: "openai",
         model: "gpt-6\u001B[31m\nspoof",
+        fallbacksOverride: ["anthropic/claude-haiku-3-5"],
         run,
       });
 

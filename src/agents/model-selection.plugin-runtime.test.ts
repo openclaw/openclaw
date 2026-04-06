@@ -38,4 +38,14 @@ describe("model-selection plugin runtime normalization", () => {
       },
     });
   });
+
+  it("does not consult plugin runtime hooks for openai model ids", async () => {
+    const { parseModelRef } = await import("./model-selection.js");
+
+    expect(parseModelRef("gpt-6", "openai")).toEqual({
+      provider: "openai",
+      model: "gpt-6",
+    });
+    expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+  });
 });

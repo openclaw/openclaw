@@ -106,6 +106,12 @@ export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
 
 function normalizeProviderModelId(provider: string, model: string): string {
   const staticModelId = normalizeStaticProviderModelId(provider, model);
+  // Avoid plugin manifest discovery for providers that do not currently expose
+  // normalizeModelId hooks. This keeps hot-path model normalization deterministic
+  // in tests and avoids unnecessary plugin-registry work for common providers.
+  if (provider === "openai") {
+    return staticModelId;
+  }
   return (
     normalizeProviderModelIdWithRuntime({
       provider,
