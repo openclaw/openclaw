@@ -112,7 +112,14 @@ stage="$tmpdir/stage"
 mkdir -p "$stage/payload/config" "$stage/payload/workspace" "$stage/payload/repo" "$stage/meta"
 
 echo "==> Copying config directory"
-rsync -a "$CONFIG_DIR/" "$stage/payload/config/"
+config_rsync_args=(-a)
+if [[ "$WORKSPACE_DIR" == "$CONFIG_DIR"/* ]]; then
+  nested_workspace_rel="${WORKSPACE_DIR#$CONFIG_DIR/}"
+  if [[ -n "$nested_workspace_rel" ]]; then
+    config_rsync_args+=(--exclude="/${nested_workspace_rel}/")
+  fi
+fi
+rsync "${config_rsync_args[@]}" "$CONFIG_DIR/" "$stage/payload/config/"
 
 echo "==> Copying workspace directory"
 rsync -a "$WORKSPACE_DIR/" "$stage/payload/workspace/"
