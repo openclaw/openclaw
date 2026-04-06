@@ -319,7 +319,7 @@ export type AgentDefaultsConfig = {
   sandbox?: AgentSandboxConfig;
 };
 
-export type AgentCompactionMode = "default" | "safeguard";
+export type AgentCompactionMode = "default" | "safeguard" | "pointer";
 export type AgentCompactionPostIndexSyncMode = "off" | "async" | "await";
 export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
 export type AgentCompactionQualityGuardConfig = {
@@ -344,6 +344,11 @@ export type AgentCompactionConfig = {
   customInstructions?: string;
   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
   recentTurnsPreserve?: number;
+  /**
+   * Number of most-recent user/assistant turn pairs to preserve verbatim in pointer compaction.
+   * Only applies when compaction.mode is "pointer". Default: 10.
+   */
+  hotTailTurns?: number;
   /** Identifier-preservation instruction policy for compaction summaries. */
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */

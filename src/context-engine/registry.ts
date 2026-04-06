@@ -404,16 +404,20 @@ export function listContextEngineIds(): string[] {
  *
  * Resolution order:
  *   1. `config.plugins.slots.contextEngine` (explicit slot override)
- *   2. Default slot value ("legacy")
+ *   2. `config.agents.defaults.compaction.mode === "pointer"` → "pointer"
+ *   3. Default slot value ("legacy")
  *
  * Throws if the resolved engine id has no registered factory.
  */
 export async function resolveContextEngine(config?: OpenClawConfig): Promise<ContextEngine> {
   const slotValue = config?.plugins?.slots?.contextEngine;
+  const compactionMode = config?.agents?.defaults?.compaction?.mode;
   const engineId =
     typeof slotValue === "string" && slotValue.trim()
       ? slotValue.trim()
-      : defaultSlotIdForKey("contextEngine");
+      : compactionMode === "pointer"
+        ? "pointer"
+        : defaultSlotIdForKey("contextEngine");
 
   const entry = getContextEngineRegistryState().engines.get(engineId);
   if (!entry) {
