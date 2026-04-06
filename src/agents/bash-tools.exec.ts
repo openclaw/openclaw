@@ -418,11 +418,11 @@ function analyzeInterpreterHeuristicsFromUnquoted(raw: string): {
   hasScriptHint: boolean;
 } {
   const hasPython =
-    /(?:^|\s|(?<!\\)[|&;()])(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*python(?:3(?:\.\d+)?)?(?=$|[\s|&;()<>\n\r`$])/i.test(
+    /(?:^|\s|(?<!\\)[|&;()])(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*python(?:3(?:\.\d+)?)?(?=$|[\s|&;()<>\n\r`$])/i.test(
       raw,
     );
   const hasNode =
-    /(?:^|\s|(?<!\\)[|&;()])(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*node(?=$|[\s|&;()<>\n\r`$])/i.test(
+    /(?:^|\s|(?<!\\)[|&;()])(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*node(?=$|[\s|&;()<>\n\r`$])/i.test(
       raw,
     );
   const hasProcessSubstitution = /(?<!\\)<\(|(?<!\\)>\(/u.test(raw);
@@ -622,7 +622,7 @@ function shouldFailClosedInterpreterPreflight(command: string): {
   };
   const hasInterpreterInvocationInSegment = (rawSegment: string): boolean => {
     const segment = extractUnquotedShellText(rawSegment) ?? rawSegment;
-    return /^\s*(?:(?:if|then|do|elif|else|while|until|time)\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
+    return /^\s*(?:(?:if|then|do|elif|else|while|until|time)\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*(?:python(?:3(?:\.\d+)?)?|node)(?=$|[\s|&;()<>\n\r`$])/i.test(
       segment,
     );
   };
