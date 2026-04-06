@@ -494,6 +494,57 @@ EOF
   printf '%s\n' "$npm_log"
 }
 
+stream_latest_guest_npm_log_tail_delta() {
+  local label="$1"
+  local state_path="$2"
+  local npm_log rc
+  set +e
+  npm_log="$(
+    guest_powershell_poll 20 "$(cat <<'EOF'
+$logDir = Join-Path $env:LOCALAPPDATA 'npm-cache\_logs'
+if (-not (Test-Path $logDir)) {
+  exit 0
+}
+$latest = Get-ChildItem $logDir -Filter '*-debug-0.log' |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+if ($null -eq $latest) {
+  exit 0
+}
+"==> npm-debug-log"
+$latest.FullName
+Get-Content $latest.FullName -Tail 80
+EOF
+)"
+  )"
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 || -z "$npm_log" ]]; then
+    return "$rc"
+  fi
+  GUEST_LOG="$npm_log" python3 - "$state_path" "$label" <<'PY'
+import os
+import pathlib
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+label = sys.argv[2]
+previous = state_path.read_text(encoding="utf-8", errors="replace")
+current = os.environ["GUEST_LOG"].replace("\r\n", "\n").replace("\r", "\n")
+
+if current.startswith(previous):
+    delta = current[len(previous):]
+else:
+    delta = current
+
+if delta:
+    sys.stdout.write(f"==> {label}\n")
+    sys.stdout.write(delta)
+
+state_path.write_text(current, encoding="utf-8")
+PY
+}
+
 guest_run_openclaw() {
   local env_name="${1:-}"
   local env_value="${2:-}"
@@ -1069,8 +1120,8 @@ install_baseline_npm_release() {
   local version="$2"
   local script_url
   local runner_name log_name done_name done_status launcher_state guest_log
-  local log_state_path
-  local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
+  local log_state_path npm_log_state_path
+  local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc last_npm_log_poll
 
   write_baseline_npm_install_runner_script
   script_url="http://$host_ip:$HOST_PORT/$(basename "$WINDOWS_BASELINE_INSTALL_SCRIPT_PATH")"
@@ -1078,10 +1129,13 @@ install_baseline_npm_release() {
   log_name="openclaw-install-baseline-$RANDOM-$RANDOM.log"
   done_name="openclaw-install-baseline-$RANDOM-$RANDOM.done"
   log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-install-baseline-log-state.XXXXXX")"
+  npm_log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-install-baseline-npm-log-state.XXXXXX")"
   : >"$log_state_path"
+  : >"$npm_log_state_path"
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + TIMEOUT_INSTALL_S + 60))
   startup_checked=0
+  last_npm_log_poll=0
 
   guest_powershell_poll 20 "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
@@ -1161,6 +1215,7 @@ PY
         dump_latest_guest_npm_log_tail "windows baseline install npm debug tail" || true
       fi
       rm -f "$log_state_path"
+      rm -f "$npm_log_state_path"
       [[ "$done_status" == "0" ]]
       return $?
     fi
@@ -1176,8 +1231,17 @@ PY
       if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
         warn "windows baseline install helper failed to materialize guest files"
         rm -f "$log_state_path"
+        rm -f "$npm_log_state_path"
         return 1
       fi
+    fi
+    if (( SECONDS - start_seconds >= 45 && SECONDS - last_npm_log_poll >= 30 )); then
+      if ! stream_latest_guest_npm_log_tail_delta \
+        "windows baseline install npm debug progress" \
+        "$npm_log_state_path"; then
+        :
+      fi
+      last_npm_log_poll=$SECONDS
     fi
     if (( SECONDS >= poll_deadline )); then
       if ! stream_windows_baseline_install_log; then
@@ -1186,6 +1250,7 @@ PY
       dump_latest_guest_npm_log_tail "windows baseline install npm debug tail" || true
       warn "windows baseline install helper timed out waiting for done file"
       rm -f "$log_state_path"
+      rm -f "$npm_log_state_path"
       return 1
     fi
     sleep 2
@@ -1324,7 +1389,7 @@ install_main_tgz() {
   local tgz_url script_url
   local runner_name log_name done_name done_status launcher_state guest_log
   local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
-  local log_state_path
+  local log_state_path npm_log_state_path last_npm_log_poll
   tgz_url="http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
   write_install_runner_script
   script_url="http://$host_ip:$HOST_PORT/$(basename "$WINDOWS_INSTALL_SCRIPT_PATH")"
@@ -1332,10 +1397,13 @@ install_main_tgz() {
   log_name="openclaw-install-$RANDOM-$RANDOM.log"
   done_name="openclaw-install-$RANDOM-$RANDOM.done"
   log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-install-log-state.XXXXXX")"
+  npm_log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-install-npm-log-state.XXXXXX")"
   : >"$log_state_path"
+  : >"$npm_log_state_path"
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + TIMEOUT_INSTALL_S + 60))
   startup_checked=0
+  last_npm_log_poll=0
 
   guest_powershell_poll 20 "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
@@ -1416,6 +1484,7 @@ PY
         dump_latest_guest_npm_log_tail "windows packaged install npm debug tail" || true
       fi
       rm -f "$log_state_path"
+      rm -f "$npm_log_state_path"
       [[ "$done_status" == "0" ]]
       return $?
     fi
@@ -1431,8 +1500,17 @@ PY
       if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
         warn "windows install helper failed to materialize guest files"
         rm -f "$log_state_path"
+        rm -f "$npm_log_state_path"
         return 1
       fi
+    fi
+    if (( SECONDS - start_seconds >= 45 && SECONDS - last_npm_log_poll >= 30 )); then
+      if ! stream_latest_guest_npm_log_tail_delta \
+        "windows packaged install npm debug progress" \
+        "$npm_log_state_path"; then
+        :
+      fi
+      last_npm_log_poll=$SECONDS
     fi
     if (( SECONDS >= poll_deadline )); then
       if ! stream_windows_install_log; then
@@ -1441,6 +1519,7 @@ PY
       dump_latest_guest_npm_log_tail "windows packaged install npm debug tail" || true
       warn "windows install helper timed out waiting for done file"
       rm -f "$log_state_path"
+      rm -f "$npm_log_state_path"
       return 1
     fi
     sleep 2

@@ -33,6 +33,25 @@ const routeMocks = vi.hoisted(() => ({
   routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
 }));
 
+const channelPluginMocks = vi.hoisted(() => ({
+  getChannelPlugin: vi.fn((channelId: string) => {
+    if (channelId !== "discord" && channelId !== "telegram") {
+      return undefined;
+    }
+    return {
+      outbound: {
+        shouldTreatDeliveredTextAsVisible: ({
+          kind,
+          text,
+        }: {
+          kind: "tool" | "block" | "final";
+          text?: string;
+        }) => kind === "block" && typeof text === "string" && text.trim().length > 0,
+      },
+    };
+  }),
+}));
+
 const messageActionMocks = vi.hoisted(() => ({
   runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
 }));
@@ -109,6 +128,8 @@ async function runDispatch(params: {
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
+  originatingChannel?: string;
+  originatingTo?: string;
   onReplyStart?: () => void;
   ctxOverrides?: Record<string, unknown>;
   sessionKeyOverride?: string;
@@ -128,7 +149,10 @@ async function runDispatch(params: {
     inboundAudio: false,
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
     ...(params.shouldRouteToOriginating
-      ? { originatingChannel: "telegram", originatingTo: "telegram:thread-1" }
+      ? {
+          originatingChannel: params.originatingChannel ?? "telegram",
+          originatingTo: params.originatingTo ?? "telegram:thread-1",
+        }
       : {}),
     shouldSendToolSummaries: true,
     bypassForCommand: false,
@@ -236,6 +260,13 @@ describe("tryDispatchAcpReply", () => {
     vi.doMock("./route-reply.js", () => ({
       routeReply: (params: unknown) => routeMocks.routeReply(params),
     }));
+    vi.doMock("../../channels/plugins/index.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../../channels/plugins/index.js")>();
+      return {
+        ...actual,
+        getChannelPlugin: (channelId: string) => channelPluginMocks.getChannelPlugin(channelId),
+      };
+    });
     vi.doMock("../../infra/outbound/message-action-runner.js", () => ({
       runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
     }));
@@ -295,6 +326,7 @@ describe("tryDispatchAcpReply", () => {
     policyMocks.resolveAcpAgentPolicyError.mockReturnValue(null);
     routeMocks.routeReply.mockReset();
     routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    channelPluginMocks.getChannelPlugin.mockClear();
     messageActionMocks.runMessageAction.mockReset();
     messageActionMocks.runMessageAction.mockResolvedValue({ ok: true as const });
     ttsMocks.maybeApplyTtsToPayload.mockClear();
@@ -957,6 +989,36 @@ describe("tryDispatchAcpReply", () => {
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
   });
 
+  it("does not deliver final fallback text when routed discord block text was already visible", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies(
+      { text: "Received your test message." },
+      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
+    );
+    mockRoutedTextTurn("Received your test message.");
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+      shouldRouteToOriginating: true,
+      originatingChannel: "discord",
+      originatingTo: "channel:1478836151241412759",
+    });
+
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(0);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:1478836151241412759",
+        payload: expect.objectContaining({ text: "Received your test message." }),
+      }),
+    );
+  });
+
   it("does not deliver final fallback text when direct block text was already visible", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
@@ -979,6 +1041,35 @@ describe("tryDispatchAcpReply", () => {
     expect(counts.final).toBe(0);
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "CODEX_OK" }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver final fallback text when direct discord block text was already visible", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies(
+      { text: "Received." },
+      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
+    );
+    mockVisibleTextTurn("Received.");
+
+    const { dispatcher, counts } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      ctxOverrides: {
+        Provider: "discord",
+        Surface: "discord",
+      },
+    });
+
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(0);
+    expect(counts.block).toBe(0);
+    expect(counts.final).toBe(0);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Received." }),
     );
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -1006,7 +1097,7 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("preserves final fallback when direct block text is filtered by non-telegram channels", async () => {
+  it("preserves final fallback when direct block text is filtered by channels without a visibility override", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
@@ -1016,6 +1107,10 @@ describe("tryDispatchAcpReply", () => {
     const result = await runDispatch({
       bodyForAgent: "reply",
       dispatcher,
+      ctxOverrides: {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+      },
     });
 
     expect(result?.counts.block).toBe(0);

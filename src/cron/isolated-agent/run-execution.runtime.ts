@@ -1,9 +1,11 @@
 export { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
 export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+export { getCliSessionId, runCliAgent } from "../../agents/cli-runner.runtime.js";
 export { resolveFastModeState } from "../../agents/fast-mode.js";
 export { resolveNestedAgentLane } from "../../agents/lanes.js";
 export { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
 export { runWithModelFallback } from "../../agents/model-fallback.js";
+export { isCliProvider } from "../../agents/model-selection.js";
 export { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 export {
   countActiveDescendantRuns,

@@ -1,7 +1,10 @@
-import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
+
+type MessageEvent = webhook.MessageEvent;
+type PostbackEvent = webhook.PostbackEvent;
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
@@ -53,7 +56,7 @@ vi.mock("openclaw/plugin-sdk/command-auth", () => ({
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
   }) => ({
     commandAuthorized:
-      hasControlCommand && authorizers.some((entry) => entry.allowed || entry.configured === false),
+      hasControlCommand && authorizers.some((entry) => entry.allowed || !entry.configured),
   }),
 }));
 vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
@@ -193,16 +196,6 @@ let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineW
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
-
-function buildDefaultLineMessageContext() {
-  return {
-    ctxPayload: { From: "line:group:group-1" },
-    replyToken: "reply-token",
-    route: { agentId: "default" },
-    isGroup: true,
-    accountId: "default",
-  };
-}
 
 function createReplayMessageEvent(params: {
   messageId: string;

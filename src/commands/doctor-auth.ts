@@ -11,16 +11,11 @@ import {
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
-import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import {
-  buildProviderAuthRecoveryHint,
-  resolveProviderAuthLoginCommand,
-} from "./provider-auth-guidance.js";
+import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
 export async function maybeRepairLegacyOAuthProfileIds(
   cfg: OpenClawConfig,
@@ -57,167 +52,6 @@ export async function maybeRepairLegacyOAuthProfileIds(
     }
   }
   return nextCfg;
-}
-
-function pruneAuthOrder(
-  order: Record<string, string[]> | undefined,
-  profileIds: Set<string>,
-): { next: Record<string, string[]> | undefined; changed: boolean } {
-  if (!order) {
-    return { next: order, changed: false };
-  }
-  let changed = false;
-  const next: Record<string, string[]> = {};
-  for (const [provider, list] of Object.entries(order)) {
-    const filtered = list.filter((id) => !profileIds.has(id));
-    if (filtered.length !== list.length) {
-      changed = true;
-    }
-    if (filtered.length > 0) {
-      next[provider] = filtered;
-    }
-  }
-  return { next: Object.keys(next).length > 0 ? next : undefined, changed };
-}
-
-function pruneAuthProfiles(
-  cfg: OpenClawConfig,
-  profileIds: Set<string>,
-): { next: OpenClawConfig; changed: boolean } {
-  const profiles = cfg.auth?.profiles;
-  const order = cfg.auth?.order;
-  const nextProfiles = profiles ? { ...profiles } : undefined;
-  let changed = false;
-
-  if (nextProfiles) {
-    for (const id of profileIds) {
-      if (id in nextProfiles) {
-        delete nextProfiles[id];
-        changed = true;
-      }
-    }
-  }
-
-  const prunedOrder = pruneAuthOrder(order, profileIds);
-  if (prunedOrder.changed) {
-    changed = true;
-  }
-
-  if (!changed) {
-    return { next: cfg, changed: false };
-  }
-
-  const nextAuth =
-    nextProfiles || prunedOrder.next
-      ? {
-          ...cfg.auth,
-          profiles: nextProfiles && Object.keys(nextProfiles).length > 0 ? nextProfiles : undefined,
-          order: prunedOrder.next,
-        }
-      : undefined;
-
-  return {
-    next: {
-      ...cfg,
-      auth: nextAuth,
-    },
-    changed: true,
-  };
-}
-
-export async function maybeRemoveDeprecatedCliAuthProfiles(
-  cfg: OpenClawConfig,
-  prompter: DoctorPrompter,
-): Promise<OpenClawConfig> {
-  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
-  const providers = resolvePluginProviders({
-    config: cfg,
-    env: process.env,
-    mode: "setup",
-  });
-  const deprecatedEntries = providers.flatMap((provider) =>
-    (provider.deprecatedProfileIds ?? [])
-      .filter((profileId) => store.profiles[profileId] || cfg.auth?.profiles?.[profileId])
-      .map((profileId) => ({
-        profileId,
-        providerId: provider.id,
-        providerLabel: provider.label,
-      })),
-  );
-  const deprecated = new Set(deprecatedEntries.map((entry) => entry.profileId));
-
-  if (deprecated.size === 0) {
-    return cfg;
-  }
-
-  const lines = ["Deprecated external CLI auth profiles detected (no longer supported):"];
-  for (const entry of deprecatedEntries) {
-    const authCommand =
-      resolveProviderAuthLoginCommand({
-        provider: entry.providerId,
-        config: cfg,
-        env: process.env,
-      }) ?? formatCliCommand("openclaw configure");
-    lines.push(`- ${entry.profileId} (${entry.providerLabel}): use ${authCommand}`);
-  }
-  note(lines.join("\n"), "Auth profiles");
-
-  const shouldRemove = await prompter.confirmAutoFix({
-    message: "Remove deprecated CLI auth profiles now?",
-    initialValue: true,
-  });
-  if (!shouldRemove) {
-    return cfg;
-  }
-
-  await updateAuthProfileStoreWithLock({
-    updater: (nextStore) => {
-      let mutated = false;
-      for (const id of deprecated) {
-        if (nextStore.profiles[id]) {
-          delete nextStore.profiles[id];
-          mutated = true;
-        }
-        if (nextStore.usageStats?.[id]) {
-          delete nextStore.usageStats[id];
-          mutated = true;
-        }
-      }
-      if (nextStore.order) {
-        for (const [provider, list] of Object.entries(nextStore.order)) {
-          const filtered = list.filter((id) => !deprecated.has(id));
-          if (filtered.length !== list.length) {
-            mutated = true;
-            if (filtered.length > 0) {
-              nextStore.order[provider] = filtered;
-            } else {
-              delete nextStore.order[provider];
-            }
-          }
-        }
-      }
-      if (nextStore.lastGood) {
-        for (const [provider, profileId] of Object.entries(nextStore.lastGood)) {
-          if (deprecated.has(profileId)) {
-            delete nextStore.lastGood[provider];
-            mutated = true;
-          }
-        }
-      }
-      return mutated;
-    },
-  });
-
-  const pruned = pruneAuthProfiles(cfg, deprecated);
-  if (pruned.changed) {
-    note(
-      Array.from(deprecated.values())
-        .map((id) => `- removed ${id} from config`)
-        .join("\n"),
-      "Doctor changes",
-    );
-  }
-  return pruned.next;
 }
 
 type AuthIssue = {

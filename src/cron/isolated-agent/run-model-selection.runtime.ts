@@ -1,1 +1,1 @@
-export { resolveThinkingDefault } from "../../agents/model-selection.js";
+export { isCliProvider, resolveThinkingDefault } from "../../agents/model-selection.js";

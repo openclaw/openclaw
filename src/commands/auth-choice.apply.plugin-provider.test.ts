@@ -253,17 +253,18 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
           agents: {
             defaults: {
               model: {
-                primary: "codex-cli/gpt-5.4",
-                fallbacks: ["openai/gpt-5.2"],
+                primary: "claude-cli/claude-sonnet-4-6",
+                fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
               },
               models: {
-                "codex-cli/gpt-5.4": { alias: "Codex" },
+                "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+                "claude-cli/claude-opus-4-6": { alias: "Opus" },
                 "openai/gpt-5.2": {},
               },
             },
           },
         },
-        defaultModel: "codex-cli/gpt-5.4",
+        defaultModel: "claude-cli/claude-sonnet-4-6",
       }),
     };
 
@@ -291,11 +292,12 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     });
 
     expect(result.config.agents?.defaults?.model).toEqual({
-      primary: "codex-cli/gpt-5.4",
-      fallbacks: ["openai/gpt-5.2"],
+      primary: "claude-cli/claude-sonnet-4-6",
+      fallbacks: ["claude-cli/claude-opus-4-6", "openai/gpt-5.2"],
     });
     expect(result.config.agents?.defaults?.models).toEqual({
-      "codex-cli/gpt-5.4": { alias: "Codex" },
+      "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+      "claude-cli/claude-opus-4-6": { alias: "Opus" },
       "openai/gpt-5.2": {},
     });
   });

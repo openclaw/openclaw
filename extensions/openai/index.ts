@@ -1,4 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { buildOpenAICodexCliBackend } from "./cli-backend.js";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import {
   openaiCodexMediaUnderstandingProvider,
@@ -36,6 +37,7 @@ export default definePluginEntry({
           modelId: ctx.modelId,
         }),
     });
+    api.registerCliBackend(buildOpenAICodexCliBackend());
     api.registerProvider(buildProviderWithPromptContribution(buildOpenAIProvider()));
     api.registerProvider(buildProviderWithPromptContribution(buildOpenAICodexProviderPlugin()));
     api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider());

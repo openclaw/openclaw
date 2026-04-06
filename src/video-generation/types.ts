@@ -52,7 +52,9 @@ export type VideoGenerationIgnoredOverride = {
   value: string | boolean;
 };
 
-export type VideoGenerationProviderCapabilities = {
+export type VideoGenerationMode = "generate" | "imageToVideo" | "videoToVideo";
+
+export type VideoGenerationModeCapabilities = {
   maxVideos?: number;
   maxInputImages?: number;
   maxInputVideos?: number;
@@ -64,6 +66,16 @@ export type VideoGenerationProviderCapabilities = {
   supportsResolution?: boolean;
   supportsAudio?: boolean;
   supportsWatermark?: boolean;
+};
+
+export type VideoGenerationTransformCapabilities = VideoGenerationModeCapabilities & {
+  enabled: boolean;
+};
+
+export type VideoGenerationProviderCapabilities = VideoGenerationModeCapabilities & {
+  generate?: VideoGenerationModeCapabilities;
+  imageToVideo?: VideoGenerationTransformCapabilities;
+  videoToVideo?: VideoGenerationTransformCapabilities;
 };
 
 export type VideoGenerationProvider = {

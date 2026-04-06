@@ -792,6 +792,49 @@ describe("runtime web tools resolution", () => {
     );
   });
 
+  it("emits inactive warnings for configured and lower-priority web-search providers when search is disabled", async () => {
+    const { context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              apiKey: { source: "env", provider: "default", id: "DISABLED_WEB_SEARCH_API_KEY" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "DISABLED_WEB_SEARCH_GEMINI_API_KEY",
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    expect(context.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "plugins.entries.brave.config.webSearch.apiKey",
+        }),
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "plugins.entries.google.config.webSearch.apiKey",
+        }),
+      ]),
+    );
+  });
+
   it("does not auto-enable search when tools.web.search is absent", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({}),

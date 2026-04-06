@@ -10,12 +10,7 @@ import {
   resolveDefaultDiscordSetupAccountId,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
-import {
-  createDiscordSetupWizardBase,
-  DISCORD_TOKEN_HELP_LINES,
-  parseDiscordAllowFromId,
-  setDiscordGuildChannelAllowlist,
-} from "./setup-core.js";
+import { createDiscordSetupWizardBase, parseDiscordAllowFromId } from "./setup-core.js";
 import {
   promptLegacyChannelAllowFromForAccount,
   resolveEntriesWithOptionalToken,

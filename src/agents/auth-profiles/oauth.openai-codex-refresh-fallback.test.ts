@@ -202,7 +202,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
   });
 
-  it("keeps throwing when expired Codex-managed credentials have no fresh fallback source", async () => {
+  it("prefers fresh Codex CLI credentials when the stored default profile is expired", async () => {
     const profileId = "openai-codex:default";
     saveAuthProfileStore(
       {
@@ -214,7 +214,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
             access: "expired-access-token",
             refresh: "expired-refresh-token",
             expires: Date.now() - 60_000,
-            managedBy: "codex-cli",
           },
         },
       },
@@ -235,9 +234,13 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
         profileId,
         agentDir,
       }),
-    ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
+    ).resolves.toEqual({
+      apiKey: "fresh-cli-access-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
 
-    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(refreshProviderOAuthCredentialWithPluginMock).not.toHaveBeenCalled();
     expect(writeCodexCliCredentialsMock).not.toHaveBeenCalled();
   });
 
@@ -253,7 +256,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
             access: "expired-access-token",
             refresh: "expired-refresh-token",
             expires: Date.now() - 60_000,
-            managedBy: "codex-cli",
           },
         },
       },
@@ -287,7 +289,17 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       provider: "openai-codex",
       email: undefined,
     });
-    expect(writeCodexCliCredentialsMock).not.toHaveBeenCalled();
+    expect(writeCodexCliCredentialsMock).toHaveBeenCalledTimes(1);
+    expect(writeCodexCliCredentialsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "rotated-cli-access-token",
+        refresh: "rotated-cli-refresh-token",
+        accountId: "acct-rotated",
+        managedBy: "codex-cli",
+      }),
+    );
 
     const persisted = await readPersistedStore(agentDir);
     expect(persisted.profiles[profileId]).toMatchObject({
@@ -296,7 +308,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       access: "rotated-cli-access-token",
       refresh: "rotated-cli-refresh-token",
       accountId: "acct-rotated",
-      managedBy: "codex-cli",
     });
     expect(persisted.profiles[profileId]).not.toEqual(
       expect.objectContaining({

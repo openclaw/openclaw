@@ -42,6 +42,7 @@ function buildPluginManifestRecord(params: {
     manifestPath: path.join(params.rootDir, "openclaw.plugin.json"),
     channels: [params.id],
     providers: [],
+    cliBackends: [],
     skills: [],
     hooks: [],
   };

@@ -26,6 +26,7 @@ let setActivePluginRegistry: SetActivePluginRegistry;
 function createManifestProviderPlugin(params: {
   id: string;
   providerIds: string[];
+  cliBackends?: string[];
   origin?: "bundled" | "workspace";
   enabledByDefault?: boolean;
   modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
@@ -35,6 +36,7 @@ function createManifestProviderPlugin(params: {
     enabledByDefault: params.enabledByDefault,
     channels: [],
     providers: params.providerIds,
+    cliBackends: params.cliBackends ?? [],
     modelSupport: params.modelSupport,
     skills: [],
     hooks: [],
@@ -68,6 +70,7 @@ function setOwningProviderManifestPlugins() {
     createManifestProviderPlugin({
       id: "anthropic",
       providerIds: ["anthropic"],
+      cliBackends: ["claude-cli"],
       modelSupport: {
         modelPrefixes: ["claude-"],
       },
@@ -91,6 +94,7 @@ function setOwningProviderManifestPluginsWithWorkspace() {
     createManifestProviderPlugin({
       id: "anthropic",
       providerIds: ["anthropic"],
+      cliBackends: ["claude-cli"],
       modelSupport: {
         modelPrefixes: ["claude-"],
       },
@@ -272,6 +276,13 @@ describe("resolvePluginProviders", () => {
     } = await import("./providers.js"));
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
     ({ setActivePluginRegistry } = await import("./runtime.js"));
+  });
+
+  it("maps cli backend ids to owning plugin ids via manifests", () => {
+    setOwningProviderManifestPlugins();
+
+    expectOwningPluginIds("claude-cli", ["anthropic"]);
+    expectOwningPluginIds("codex-cli", ["openai"]);
   });
 
   beforeEach(() => {

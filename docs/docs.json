@@ -1358,6 +1358,7 @@
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
                       "gateway/tools-invoke-http-api",
+                      "gateway/cli-backends",
                       "gateway/local-models"
                     ]
                   },

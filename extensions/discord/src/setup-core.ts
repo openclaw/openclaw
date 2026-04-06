@@ -6,10 +6,8 @@ import { createStandardChannelSetupStatus } from "openclaw/plugin-sdk/setup-runt
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   inspectDiscordSetupAccount,
-  listDiscordSetupAccountIds,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
-import { discordSetupAdapter } from "./setup-adapter.js";
 import {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,

@@ -158,6 +158,17 @@ describe("installSessionToolResultGuard", () => {
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
+  it("applies pi-style count-based truncation wording when persisting oversized tool results", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    appendToolResultText(sm, "x".repeat(80_000));
+
+    const text = getToolResultText(getPersistedMessages(sm));
+    expect(text).toContain("more characters truncated");
+    expect(text).toMatch(/\[\.\.\. \d+ more characters truncated\]$/);
+  });
+
   it("backfills blank toolResult names from pending tool calls", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);

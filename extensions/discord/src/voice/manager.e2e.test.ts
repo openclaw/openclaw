@@ -561,12 +561,14 @@ describe("DiscordVoiceManager", () => {
 
   it("DiscordVoiceReadyListener: propagates autoJoin errors fire-and-forget without throwing", async () => {
     const manager = createManager();
-    vi.spyOn(manager, "autoJoin").mockRejectedValue(new Error("autoJoin rejected"));
+    const autoJoinSpy = vi
+      .spyOn(manager, "autoJoin")
+      .mockRejectedValue(new Error("autoJoin rejected"));
 
     const { DiscordVoiceReadyListener } = managerModule;
     const listener = new DiscordVoiceReadyListener(manager);
 
     await expect(listener.handle(undefined, undefined as never)).resolves.not.toThrow();
-    expect(manager.autoJoin).toHaveBeenCalledTimes(1);
+    expect(autoJoinSpy).toHaveBeenCalledTimes(1);
   });
 });

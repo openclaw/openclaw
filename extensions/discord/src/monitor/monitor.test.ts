@@ -4,47 +4,21 @@ import type {
   ModalInteraction,
   StringSelectMenuInteraction,
 } from "@buape/carbon";
-import type { Client } from "@buape/carbon";
 import { ChannelType } from "discord-api-types/v10";
-import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
 import {
-  buildPluginBindingResolvedTextMock,
   dispatchPluginInteractiveHandlerMock,
   dispatchReplyMock,
   enqueueSystemEventMock,
-  readAllowFromStoreMock,
   readSessionUpdatedAtMock,
   recordInboundSessionMock,
   resetDiscordComponentRuntimeMocks,
   resolveStorePathMock,
-  resolvePluginConversationBindingApprovalMock,
-  upsertPairingRequestMock,
 } from "../test-support/component-runtime.js";
-import type { DiscordChannelConfigResolved } from "./allow-list.js";
-import {
-  resolveDiscordMemberAllowed,
-  resolveDiscordOwnerAllowFrom,
-  resolveDiscordRoleAllowed,
-} from "./allow-list.js";
-import {
-  clearGateways,
-  getGateway,
-  registerGateway,
-  unregisterGateway,
-} from "./gateway-registry.js";
-import { clearPresences, getPresence, presenceCacheSize, setPresence } from "./presence-cache.js";
-import { resolveDiscordPresenceUpdate } from "./presence.js";
-import {
-  maybeCreateDiscordAutoThread,
-  resolveDiscordAutoThreadContext,
-  resolveDiscordAutoThreadReplyPlan,
-  resolveDiscordReplyDeliveryPlan,
-} from "./threading.js";
 
 type CreateDiscordComponentButton =
   typeof import("./agent-components.js").createDiscordComponentButton;
@@ -750,8 +724,11 @@ describe("discord component interactions", () => {
       entries: [createButtonEntry({ callbackData: "codex:approve" })],
       modals: [],
     });
-    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: any) => {
-      await params.respond.reply({ text: "✓", ephemeral: true });
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as {
+        respond: { reply: (payload: { text: string; ephemeral: boolean }) => Promise<void> };
+      };
+      await typedParams.respond.reply({ text: "✓", ephemeral: true });
       return {
         matched: true,
         handled: true,
@@ -774,9 +751,15 @@ describe("discord component interactions", () => {
       entries: [createButtonEntry({ callbackData: "codex:approve" })],
       modals: [],
     });
-    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: any) => {
-      await params.respond.acknowledge();
-      await params.respond.clearComponents({ text: "Handled" });
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as {
+        respond: {
+          acknowledge: () => Promise<void>;
+          clearComponents: (payload: { text: string }) => Promise<void>;
+        };
+      };
+      await typedParams.respond.acknowledge();
+      await typedParams.respond.clearComponents({ text: "Handled" });
       return {
         matched: true,
         handled: true,
@@ -789,7 +772,7 @@ describe("discord component interactions", () => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const update = vi.fn().mockResolvedValue(undefined);
     const interaction = {
-      ...(createComponentButtonInteraction().interaction as any),
+      ...(createComponentButtonInteraction().interaction as unknown),
       acknowledge,
       reply,
       update,
@@ -840,7 +823,7 @@ describe("discord component interactions", () => {
     const acknowledge = vi.fn().mockResolvedValue(undefined);
     const followUp = vi.fn().mockResolvedValue(undefined);
     const interaction = {
-      ...(createComponentButtonInteraction().interaction as any),
+      ...(createComponentButtonInteraction().interaction as unknown),
       acknowledge,
       followUp,
     } as ButtonInteraction;

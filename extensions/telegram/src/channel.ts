@@ -20,6 +20,7 @@ import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/outbound-runtime";
+import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildOutboundBaseSessionKey,
   normalizeMessageChannel,
@@ -260,7 +261,7 @@ function matchTelegramAcpConversation(params: {
   };
 }
 
-function shouldTreatTelegramRoutedTextAsVisible(params: {
+function shouldTreatTelegramDeliveredTextAsVisible(params: {
   kind: "tool" | "block" | "final";
   text?: string;
 }): boolean {
@@ -993,7 +994,7 @@ export const telegramPlugin = createChatChannelPlugin({
   outbound: {
     base: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getTelegramRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkMarkdownText,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       pollMaxOptions: 10,
@@ -1020,7 +1021,7 @@ export const telegramPlugin = createChatChannelPlugin({
         }).catch(() => {});
       },
       shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
-      shouldTreatRoutedTextAsVisible: shouldTreatTelegramRoutedTextAsVisible,
+      shouldTreatDeliveredTextAsVisible: shouldTreatTelegramDeliveredTextAsVisible,
       targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
       resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
         typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,

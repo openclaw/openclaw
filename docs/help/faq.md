@@ -584,15 +584,14 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     For Anthropic in OpenClaw, the practical split is:
 
     - **Anthropic API key**: normal Anthropic API billing
-    - **Claude subscription auth in OpenClaw**: Anthropic told OpenClaw users on
-      **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that this requires
-      **Extra Usage** billed separately from the subscription
+    - **Claude CLI / Claude subscription auth in OpenClaw**: Anthropic staff
+      told us this usage is allowed again, and OpenClaw is treating `claude -p`
+      usage as sanctioned for this integration unless Anthropic publishes a new
+      policy
 
-    Our local repros also show that `claude -p --append-system-prompt ...` can
-    hit the same Extra Usage guard when the appended prompt identifies
-    OpenClaw, while the same prompt string does **not** reproduce that block on
-    the Anthropic SDK + API-key path. OpenAI Codex OAuth is explicitly
-    supported for external tools like OpenClaw.
+    For long-lived gateway hosts, Anthropic API keys are still the more
+    predictable setup. OpenAI Codex OAuth is explicitly supported for external
+    tools like OpenClaw.
 
     OpenClaw also supports other hosted subscription-style options including
     **Qwen Cloud Coding Plan**, **MiniMax Coding Plan**, and
@@ -606,33 +605,28 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Can I use Claude Max subscription without an API key?">
-    Yes, but treat it as **Claude subscription auth with Extra Usage**.
+    Yes.
 
-    Claude Pro/Max subscriptions do not include an API key. In OpenClaw, that
-    means Anthropic's OpenClaw-specific billing notice applies: subscription
-    traffic requires **Extra Usage**. If you want Anthropic traffic without
-    that Extra Usage path, use an Anthropic API key instead.
+    Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so
+    OpenClaw treats Claude subscription auth and `claude -p` usage as sanctioned
+    for this integration unless Anthropic publishes a new policy. If you want
+    the most predictable server-side setup, use an Anthropic API key instead.
 
   </Accordion>
 
   <Accordion title="Do you support Claude subscription auth (Claude Pro or Max)?">
-    Yes, but the supported interpretation is now:
+    Yes.
 
-    - Anthropic in OpenClaw with a subscription means **Extra Usage**
-    - Anthropic in OpenClaw without that path means **API key**
+    Anthropic staff told us this usage is allowed again, so OpenClaw treats
+    Claude CLI reuse and `claude -p` usage as sanctioned for this integration
+    unless Anthropic publishes a new policy.
 
-    Anthropic setup-token is still available as a legacy/manual OpenClaw path,
-    and Anthropic's OpenClaw-specific billing notice still applies there. We
-    also reproduced the same billing guard locally with direct
-    `claude -p --append-system-prompt ...` usage when the appended prompt
-    identifies OpenClaw, while the same prompt string did **not** reproduce on
-    the Anthropic SDK + API-key path.
-
-    For production or multi-user workloads, Anthropic API key auth is the
-    safer, recommended choice. If you want other subscription-style hosted
+    Anthropic setup-token is still available as a legacy/manual OpenClaw path.
+    For production or multi-user workloads, Anthropic API key auth is still the
+    safer, more predictable choice. If you want other subscription-style hosted
     options in OpenClaw, see [OpenAI](/providers/openai), [Qwen / Model
-    Cloud](/providers/qwen), [MiniMax](/providers/minimax), and
-    [GLM Models](/providers/glm).
+    Cloud](/providers/qwen), [MiniMax](/providers/minimax), and [GLM
+    Models](/providers/glm).
 
   </Accordion>
 
@@ -675,11 +669,17 @@ for usage/billing and raise limits as needed.
   <Accordion title="How do I set up Gemini CLI OAuth?">
     Gemini CLI uses a **plugin auth flow**, not a client id or secret in `openclaw.json`.
 
-    Use the Gemini API provider instead:
+    Steps:
 
-    1. Enable the plugin: `openclaw plugins enable google`
-    2. Run `openclaw onboard --auth-choice gemini-api-key`
-    3. Set a Google model such as `google/gemini-3.1-pro-preview`
+    1. Install Gemini CLI locally so `gemini` is on `PATH`
+       - Homebrew: `brew install gemini-cli`
+       - npm: `npm install -g @google/gemini-cli`
+    2. Enable the plugin: `openclaw plugins enable google`
+    3. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
+    4. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
+    5. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
+
+    This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
 
   </Accordion>
 
@@ -2645,7 +2645,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     for one model can still be usable for a sibling model on the same provider,
     while billing/disabled windows still block the whole profile.
 
-    You can also set a **per-agent** order override (stored in that agent's `auth-profiles.json`) via the CLI:
+    You can also set a **per-agent** order override (stored in that agent's `auth-state.json`) via the CLI:
 
     ```bash
     # Defaults to the configured default agent (omit --agent)

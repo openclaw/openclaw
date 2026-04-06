@@ -382,7 +382,8 @@ export async function resolveRuntimeWebTools(params: {
 
   const sourceTools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
   const sourceWeb = isRecord(sourceTools?.web) ? sourceTools.web : undefined;
-  if (!sourceWeb && !hasPluginWebToolConfig(params.sourceConfig)) {
+  const hasPluginWebConfig = hasPluginWebToolConfig(params.sourceConfig);
+  if (!sourceWeb && !hasPluginWebConfig) {
     return {
       search: {
         providerSource: "none",
@@ -396,6 +397,20 @@ export async function resolveRuntimeWebTools(params: {
     };
   }
   const search = isRecord(sourceWeb?.search) ? sourceWeb.search : undefined;
+  const fetch = isRecord(sourceWeb?.fetch) ? (sourceWeb.fetch as FetchConfig) : undefined;
+  if (!search && !fetch && !hasPluginWebConfig) {
+    return {
+      search: {
+        providerSource: "none",
+        diagnostics: [],
+      },
+      fetch: {
+        providerSource: "none",
+        diagnostics: [],
+      },
+      diagnostics,
+    };
+  }
   const rawProvider =
     typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
   const configuredBundledPluginId = resolveManifestContractOwnerPluginId({
@@ -703,7 +718,6 @@ export async function resolveRuntimeWebTools(params: {
     }
   }
 
-  const fetch = isRecord(sourceWeb?.fetch) ? (sourceWeb.fetch as FetchConfig) : undefined;
   const rawFetchProvider =
     typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
   const configuredBundledFetchPluginId = resolveManifestContractOwnerPluginId({

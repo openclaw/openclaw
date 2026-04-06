@@ -254,7 +254,7 @@ describe("handleMessageUpdate", () => {
     expect(ctx.state.blockBuffer).toBe("");
   });
 
-  it("suppresses commentary partials until a final_answer partial arrives", () => {
+  it("suppresses commentary partials even when they contain visible text", () => {
     const onAgentEvent = vi.fn();
     const ctx = {
       params: {
@@ -312,6 +312,10 @@ describe("handleMessageUpdate", () => {
         },
       },
     } as never);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(ctx.state.deltaBuffer).toBe("");
+    expect(ctx.state.blockBuffer).toBe("");
 
     handleMessageUpdate(ctx, {
       type: "message_update",

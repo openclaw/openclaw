@@ -1,47 +1,17 @@
-import type { OpenClawConfig } from "../config/types.js";
-import type { UpdateCheckResult } from "../infra/update-check.js";
+import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import {
-  buildGatewayStatusJsonPayload,
-  resolveStatusUpdateChannelInfo,
-} from "./status-all/format.js";
+  buildStatusGatewayJsonPayloadFromSurface,
+  type StatusOverviewSurface,
+} from "./status-overview-surface.ts";
 
 export { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 
-type UpdateConfigChannel = NonNullable<OpenClawConfig["update"]>["channel"];
-
 export function buildStatusJsonPayload(params: {
   summary: Record<string, unknown>;
-  updateConfigChannel?: UpdateConfigChannel | null;
-  update: UpdateCheckResult;
+  surface: StatusOverviewSurface;
   osSummary: unknown;
   memory: unknown;
   memoryPlugin: unknown;
-  gatewayMode: "local" | "remote";
-  gatewayConnection: {
-    url: string;
-    urlSource?: string;
-  };
-  remoteUrlMissing: boolean;
-  gatewayReachable: boolean;
-  gatewayProbe:
-    | {
-        connectLatencyMs?: number | null;
-        error?: string | null;
-      }
-    | null
-    | undefined;
-  gatewaySelf:
-    | {
-        host?: string | null;
-        ip?: string | null;
-        version?: string | null;
-        platform?: string | null;
-      }
-    | null
-    | undefined;
-  gatewayProbeAuthWarning?: string | null;
-  gatewayService: unknown;
-  nodeService: unknown;
   agents: unknown;
   secretDiagnostics: string[];
   securityAudit?: unknown;
@@ -51,28 +21,20 @@ export function buildStatusJsonPayload(params: {
   pluginCompatibility?: Array<Record<string, unknown>> | null | undefined;
 }) {
   const channelInfo = resolveStatusUpdateChannelInfo({
-    updateConfigChannel: params.updateConfigChannel ?? undefined,
-    update: params.update,
+    updateConfigChannel: params.surface.cfg.update?.channel ?? undefined,
+    update: params.surface.update,
   });
   return {
     ...params.summary,
     os: params.osSummary,
-    update: params.update,
+    update: params.surface.update,
     updateChannel: channelInfo.channel,
     updateChannelSource: channelInfo.source,
     memory: params.memory,
     memoryPlugin: params.memoryPlugin,
-    gateway: buildGatewayStatusJsonPayload({
-      gatewayMode: params.gatewayMode,
-      gatewayConnection: params.gatewayConnection,
-      remoteUrlMissing: params.remoteUrlMissing,
-      gatewayReachable: params.gatewayReachable,
-      gatewayProbe: params.gatewayProbe,
-      gatewaySelf: params.gatewaySelf,
-      gatewayProbeAuthWarning: params.gatewayProbeAuthWarning,
-    }),
-    gatewayService: params.gatewayService,
-    nodeService: params.nodeService,
+    gateway: buildStatusGatewayJsonPayloadFromSurface({ surface: params.surface }),
+    gatewayService: params.surface.gatewayService,
+    nodeService: params.surface.nodeService,
     agents: params.agents,
     secretDiagnostics: params.secretDiagnostics,
     ...(params.securityAudit ? { securityAudit: params.securityAudit } : {}),

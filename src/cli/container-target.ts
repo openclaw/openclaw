@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
-import { getPrimaryCommand } from "./argv.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { forwardConsumedCliRootOption } from "./root-option-forward.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
@@ -183,7 +183,7 @@ function buildContainerExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function isBlockedContainerCommand(argv: string[]): boolean {
-  if (getPrimaryCommand(["node", "openclaw", ...argv]) === "update") {
+  if (resolveCliArgvInvocation(["node", "openclaw", ...argv]).primary === "update") {
     return true;
   }
   for (let i = 0; i < argv.length; i += 1) {
