@@ -8,7 +8,6 @@ import {
 } from "./openai-codex-auth-identity.js";
 
 const PROVIDER_ID = "openai-codex";
-const CODEX_CLI_MANAGED_BY = "codex-cli";
 
 export const CODEX_CLI_PROFILE_ID = `${PROVIDER_ID}:codex-cli`;
 export const OPENAI_CODEX_DEFAULT_PROFILE_ID = `${PROVIDER_ID}:default`;
@@ -55,19 +54,26 @@ function readCodexCliAuthFile(env: NodeJS.ProcessEnv): CodexCliAuthFile | null {
   }
 }
 
+function oauthCredentialMatches(a: OAuthCredential, b: OAuthCredential): boolean {
+  return (
+    a.type === b.type &&
+    a.provider === b.provider &&
+    a.access === b.access &&
+    a.refresh === b.refresh &&
+    a.expires === b.expires &&
+    a.clientId === b.clientId &&
+    a.email === b.email &&
+    a.displayName === b.displayName &&
+    a.enterpriseUrl === b.enterpriseUrl &&
+    a.projectId === b.projectId &&
+    a.accountId === b.accountId
+  );
+}
+
 export function readOpenAICodexCliOAuthProfile(params: {
   env?: NodeJS.ProcessEnv;
   store: AuthProfileStore;
 }): { profileId: string; credential: OAuthCredential } | null {
-  const existing = params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
-  if (
-    existing?.type === "oauth" &&
-    existing.provider === PROVIDER_ID &&
-    existing.managedBy !== CODEX_CLI_MANAGED_BY
-  ) {
-    return null;
-  }
-
   const authFile = readCodexCliAuthFile(params.env ?? process.env);
   if (!authFile || authFile.auth_mode !== "chatgpt") {
     return null;
@@ -81,19 +87,23 @@ export function readOpenAICodexCliOAuthProfile(params: {
 
   const accountId = trimNonEmptyString(authFile.tokens?.account_id);
   const identity = resolveCodexAuthIdentity({ accessToken: access });
+  const credential: OAuthCredential = {
+    type: "oauth",
+    provider: PROVIDER_ID,
+    access,
+    refresh,
+    expires: resolveCodexAccessTokenExpiry(access) ?? 0,
+    ...(accountId ? { accountId } : {}),
+    ...(identity.email ? { email: identity.email } : {}),
+    ...(identity.profileName ? { displayName: identity.profileName } : {}),
+  };
+  const existing = params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
+  if (existing && (existing.type !== "oauth" || !oauthCredentialMatches(existing, credential))) {
+    return null;
+  }
 
   return {
     profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
-    credential: {
-      type: "oauth",
-      provider: PROVIDER_ID,
-      access,
-      refresh,
-      expires: resolveCodexAccessTokenExpiry(access) ?? 0,
-      ...(accountId ? { accountId } : {}),
-      ...(identity.email ? { email: identity.email } : {}),
-      ...(identity.profileName ? { displayName: identity.profileName } : {}),
-      managedBy: CODEX_CLI_MANAGED_BY,
-    },
+    credential,
   };
 }

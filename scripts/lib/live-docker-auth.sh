@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.minimax)
+OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.claude .codex .minimax)
 OPENCLAW_DOCKER_LIVE_AUTH_FILES_ALL=(
   .codex/auth.json
   .codex/config.toml
@@ -29,6 +29,12 @@ openclaw_live_should_include_auth_dir_for_provider() {
   local provider
   provider="$(openclaw_live_trim "${1:-}")"
   case "$provider" in
+    anthropic | claude-cli)
+      printf '%s\n' ".claude"
+      ;;
+    codex-cli | openai-codex)
+      printf '%s\n' ".codex"
+      ;;
     minimax | minimax-portal)
       printf '%s\n' ".minimax"
       ;;
@@ -39,11 +45,11 @@ openclaw_live_should_include_auth_file_for_provider() {
   local provider
   provider="$(openclaw_live_trim "${1:-}")"
   case "$provider" in
-    openai-codex)
+    codex-cli | openai-codex)
       printf '%s\n' ".codex/auth.json"
       printf '%s\n' ".codex/config.toml"
       ;;
-    anthropic)
+    anthropic | claude-cli)
       printf '%s\n' ".claude.json"
       printf '%s\n' ".claude/.credentials.json"
       printf '%s\n' ".claude/settings.json"

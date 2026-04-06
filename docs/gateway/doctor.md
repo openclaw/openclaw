@@ -315,7 +315,7 @@ skips refresh attempts.
 Doctor also detects stale removed Anthropic Claude CLI state. If old
 `anthropic:claude-cli` credential bytes still exist in `auth-profiles.json`,
 doctor converts them back into Anthropic token/OAuth profiles and rewrites
-stale `claude-cli/...` model refs.
+stale `claude-cli/...` model refs plus `agents.defaults.cliBackends.claude-cli`.
 If the bytes are gone, doctor removes the stale config and prints recovery
 commands instead.
 

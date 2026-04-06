@@ -225,6 +225,8 @@ The bundled Anthropic `claude-cli` backend was removed.
 - The same OpenClaw-like system prompt does not hit that guard on the
   Anthropic SDK + `ANTHROPIC_API_KEY` path.
 - Use Anthropic API keys for Anthropic traffic in OpenClaw.
+- If you need a local CLI fallback runtime, use another supported CLI backend
+  such as Codex CLI. See [/gateway/cli-backends](/gateway/cli-backends).
 
 ## Notes
 

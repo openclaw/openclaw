@@ -165,11 +165,13 @@ Current bundled examples:
   wrappers, provider-family metadata, bundled image-generation provider
   registration for `gpt-image-1`, and bundled video-generation provider
   registration for `sora-2`
-- `google`: Gemini 3.1 forward-compat fallback, native Gemini replay
-  validation, bootstrap replay sanitation, tagged reasoning-output mode,
-  modern-model matching, bundled image-generation provider registration for
-  Gemini image-preview models, and bundled video-generation provider
-  registration for Veo models
+- `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback,
+  native Gemini replay validation, bootstrap replay sanitation, tagged
+  reasoning-output mode, modern-model matching, bundled image-generation
+  provider registration for Gemini image-preview models, and bundled
+  video-generation provider registration for Veo models; Gemini CLI OAuth also
+  owns auth-profile token formatting, usage-token parsing, and quota endpoint
+  fetching for usage surfaces
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
 - `kilocode`: shared transport, plugin-owned request headers, reasoning payload
   normalization, proxy-Gemini thought-signature sanitation, and cache-TTL
@@ -347,10 +349,21 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
   (or legacy `cached_content`) to forward a provider-native
   `cachedContents/...` handle; Gemini cache hits surface as OpenClaw `cacheRead`
 
-### Google Vertex
+### Google Vertex and Gemini CLI
 
-- Provider: `google-vertex`
-- Auth: gcloud ADC
+- Providers: `google-vertex`, `google-gemini-cli`
+- Auth: Vertex uses gcloud ADC; Gemini CLI uses its OAuth flow
+- Caution: Gemini CLI OAuth in OpenClaw is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
+- Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
+  - Install Gemini CLI first:
+    - `brew install gemini-cli`
+    - or `npm install -g @google/gemini-cli`
+  - Enable: `openclaw plugins enable google`
+  - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
+  - Default model: `google-gemini-cli/gemini-3.1-pro-preview`
+  - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
+    tokens in auth profiles on the gateway host.
+  - If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host.
   - Gemini CLI JSON replies are parsed from `response`; usage falls back to
     `stats`, with `stats.cached` normalized into OpenClaw `cacheRead`.
 

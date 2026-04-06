@@ -122,6 +122,7 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-entry` | `defineSingleProviderPluginEntry` |
     | `plugin-sdk/provider-setup` | Curated local/self-hosted provider setup helpers |
     | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers |
+    | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth-runtime` | Runtime API-key resolution helpers for provider plugins |
     | `plugin-sdk/provider-auth-api-key` | API-key onboarding/profile-write helpers such as `upsertApiKeyProfile` |
     | `plugin-sdk/provider-auth-result` | Standard OAuth auth-result builder |
@@ -292,6 +293,7 @@ methods:
 | Method                                           | What it registers                |
 | ------------------------------------------------ | -------------------------------- |
 | `api.registerProvider(...)`                      | Text inference (LLM)             |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend      |
 | `api.registerChannel(...)`                       | Messaging channel                |
 | `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis   |
 | `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription |
@@ -361,6 +363,18 @@ api.registerCli(
 Use `commands` by itself only when you do not need lazy root CLI registration.
 That eager compatibility path remains supported, but it does not install
 descriptor-backed placeholders for parse-time lazy loading.
+
+### CLI backend registration
+
+`api.registerCliBackend(...)` lets a plugin own the default config for a local
+AI CLI backend such as `codex-cli`.
+
+- The backend `id` becomes the provider prefix in model refs like `codex-cli/gpt-5`.
+- The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
+- User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
+  plugin default before running the CLI.
+- Use `normalizeConfig` when a backend needs compatibility rewrites after merge
+  (for example normalizing old flag shapes).
 
 ### Exclusive slots
 

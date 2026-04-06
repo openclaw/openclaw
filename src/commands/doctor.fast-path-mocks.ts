@@ -12,6 +12,10 @@ vi.mock("./doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./doctor-claude-cli.js", () => ({
+  noteClaudeCliHealth: vi.fn(),
+}));
+
 vi.mock("./doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
 }));

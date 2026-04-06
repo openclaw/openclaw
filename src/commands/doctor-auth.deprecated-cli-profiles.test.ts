@@ -70,7 +70,7 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
         {
           version: 1,
           profiles: {
-            "anthropic:removed-cli": {
+            "anthropic:claude-cli": {
               type: "oauth",
               provider: "anthropic",
               access: "token-a",
@@ -104,7 +104,7 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
         id: "anthropic",
         label: "Anthropic",
         auth: [],
-        deprecatedProfileIds: ["anthropic:removed-cli"],
+        deprecatedProfileIds: ["anthropic:claude-cli"],
       },
       {
         id: "openai-codex",
@@ -117,12 +117,12 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
     const cfg = {
       auth: {
         profiles: {
-          "anthropic:removed-cli": { provider: "anthropic", mode: "oauth" },
+          "anthropic:claude-cli": { provider: "anthropic", mode: "oauth" },
           "openai-codex:codex-cli": { provider: "openai-codex", mode: "oauth" },
           "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
         },
         order: {
-          anthropic: ["anthropic:removed-cli"],
+          anthropic: ["anthropic:claude-cli"],
           "openai-codex": ["openai-codex:codex-cli", "openai-codex:default"],
         },
       },
@@ -136,11 +136,11 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
     const raw = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
       profiles?: Record<string, unknown>;
     };
-    expect(raw.profiles?.["anthropic:removed-cli"]).toBeUndefined();
+    expect(raw.profiles?.["anthropic:claude-cli"]).toBeUndefined();
     expect(raw.profiles?.["openai-codex:codex-cli"]).toBeUndefined();
     expect(raw.profiles?.["openai-codex:default"]).toBeDefined();
 
-    expect(next.auth?.profiles?.["anthropic:removed-cli"]).toBeUndefined();
+    expect(next.auth?.profiles?.["anthropic:claude-cli"]).toBeUndefined();
     expect(next.auth?.profiles?.["openai-codex:codex-cli"]).toBeUndefined();
     expect(next.auth?.profiles?.["openai-codex:default"]).toBeDefined();
     expect(next.auth?.order?.anthropic).toBeUndefined();

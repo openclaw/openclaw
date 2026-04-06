@@ -10,13 +10,13 @@ import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js
 import type {
   ProviderAuthDoctorHintContext,
   ProviderAugmentModelCatalogContext,
+  ProviderExternalAuthProfile,
   ProviderBuildMissingAuthMessageContext,
   ProviderBuildUnknownModelHintContext,
   ProviderBuiltInModelSuppressionContext,
   ProviderCacheTtlEligibilityContext,
   ProviderCreateEmbeddingProviderContext,
   ProviderDeferSyntheticProfileAuthContext,
-  ProviderExternalOAuthProfile,
   ProviderResolveSyntheticAuthContext,
   ProviderCreateStreamFnContext,
   ProviderDefaultThinkingPolicyContext,
@@ -34,6 +34,7 @@ import type {
   ProviderModernModelPolicyContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
+  ProviderResolveExternalAuthProfilesContext,
   ProviderResolveExternalOAuthProfilesContext,
   ProviderPrepareRuntimeAuthContext,
   ProviderApplyConfigDefaultsContext,
@@ -791,21 +792,32 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   return resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(params.context) ?? undefined;
 }
 
-export function resolveExternalOAuthProfilesWithPlugins(params: {
+export function resolveExternalAuthProfilesWithPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  context: ProviderResolveExternalOAuthProfilesContext;
-}): ProviderExternalOAuthProfile[] {
-  const matches: ProviderExternalOAuthProfile[] = [];
+  context: ProviderResolveExternalAuthProfilesContext;
+}): ProviderExternalAuthProfile[] {
+  const matches: ProviderExternalAuthProfile[] = [];
   for (const plugin of resolveProviderPluginsForHooks(params)) {
-    const profiles = plugin.resolveExternalOAuthProfiles?.(params.context);
+    const profiles =
+      plugin.resolveExternalAuthProfiles?.(params.context) ??
+      plugin.resolveExternalOAuthProfiles?.(params.context);
     if (!profiles || profiles.length === 0) {
       continue;
     }
     matches.push(...profiles);
   }
   return matches;
+}
+
+export function resolveExternalOAuthProfilesWithPlugins(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderResolveExternalOAuthProfilesContext;
+}): ProviderExternalAuthProfile[] {
+  return resolveExternalAuthProfilesWithPlugins(params);
 }
 
 export function shouldDeferProviderSyntheticProfileAuthWithPlugin(params: {

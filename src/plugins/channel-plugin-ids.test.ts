@@ -23,6 +23,7 @@ function createManifestRegistryFixture() {
         origin: "bundled",
         enabledByDefault: undefined,
         providers: [],
+        cliBackends: [],
       },
       {
         id: "demo-other-channel",
@@ -30,6 +31,7 @@ function createManifestRegistryFixture() {
         origin: "bundled",
         enabledByDefault: undefined,
         providers: [],
+        cliBackends: [],
       },
       {
         id: "browser",
@@ -37,6 +39,7 @@ function createManifestRegistryFixture() {
         origin: "bundled",
         enabledByDefault: true,
         providers: [],
+        cliBackends: [],
       },
       {
         id: "demo-provider-plugin",
@@ -44,6 +47,7 @@ function createManifestRegistryFixture() {
         origin: "bundled",
         enabledByDefault: undefined,
         providers: ["demo-provider"],
+        cliBackends: ["demo-cli"],
       },
       {
         id: "voice-call",
@@ -51,6 +55,7 @@ function createManifestRegistryFixture() {
         origin: "bundled",
         enabledByDefault: undefined,
         providers: [],
+        cliBackends: [],
       },
       {
         id: "demo-global-sidecar",
@@ -58,6 +63,7 @@ function createManifestRegistryFixture() {
         origin: "global",
         enabledByDefault: undefined,
         providers: [],
+        cliBackends: [],
       },
     ],
     diagnostics: [],

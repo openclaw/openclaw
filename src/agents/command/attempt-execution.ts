@@ -12,16 +12,24 @@ import { loadConfig } from "../../config/config.js";
 import { mergeSessionEntry, type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../../config/sessions/transcript.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
+import { runCliAgent } from "../cli-runner.js";
+import { clearCliSession, getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
+import { FailoverError } from "../failover-error.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { hasInternalRuntimeContext } from "../internal-runtime-context.js";
+import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent } from "../pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import type { AgentCommandOpts } from "./types.js";
+
+const log = createSubsystemLogger("agents/agent-command");
 
 /** Maximum number of JSONL records to inspect before giving up. */
 const SESSION_FILE_MAX_RECORDS = 500;
@@ -337,6 +345,97 @@ export function runAgentAttempt(params: {
     params.providerOverride === params.authProfileProvider
       ? params.sessionEntry?.authProfileOverride
       : undefined;
+  if (isCliProvider(params.providerOverride, params.cfg)) {
+    const cliSessionBinding = getCliSessionBinding(params.sessionEntry, params.providerOverride);
+    const runCliWithSession = (nextCliSessionId: string | undefined) =>
+      runCliAgent({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        agentId: params.sessionAgentId,
+        sessionFile: params.sessionFile,
+        workspaceDir: params.workspaceDir,
+        config: params.cfg,
+        prompt: effectivePrompt,
+        provider: params.providerOverride,
+        model: params.modelOverride,
+        thinkLevel: params.resolvedThinkLevel,
+        timeoutMs: params.timeoutMs,
+        runId: params.runId,
+        extraSystemPrompt: params.opts.extraSystemPrompt,
+        cliSessionId: nextCliSessionId,
+        cliSessionBinding:
+          nextCliSessionId === cliSessionBinding?.sessionId ? cliSessionBinding : undefined,
+        authProfileId,
+        bootstrapPromptWarningSignaturesSeen,
+        bootstrapPromptWarningSignature,
+        images: params.isFallbackRetry ? undefined : params.opts.images,
+        imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+        streamParams: params.opts.streamParams,
+        messageProvider: params.messageChannel,
+        agentAccountId: params.runContext.accountId,
+      });
+    return runCliWithSession(cliSessionBinding?.sessionId).catch(async (err) => {
+      if (
+        err instanceof FailoverError &&
+        err.reason === "session_expired" &&
+        cliSessionBinding?.sessionId &&
+        params.sessionKey &&
+        params.sessionStore &&
+        params.storePath
+      ) {
+        log.warn(
+          `CLI session expired, clearing from session store: provider=${sanitizeForLog(params.providerOverride)} sessionKey=${params.sessionKey}`,
+        );
+
+        const entry = params.sessionStore[params.sessionKey];
+        if (entry) {
+          const updatedEntry = { ...entry };
+          clearCliSession(updatedEntry, params.providerOverride);
+          updatedEntry.updatedAt = Date.now();
+
+          await persistSessionEntry({
+            sessionStore: params.sessionStore,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            entry: updatedEntry,
+            clearedFields: ["cliSessionBindings", "cliSessionIds", "claudeCliSessionId"],
+          });
+
+          params.sessionEntry = updatedEntry;
+        }
+
+        return runCliWithSession(undefined).then(async (result) => {
+          if (
+            result.meta.agentMeta?.cliSessionBinding?.sessionId &&
+            params.sessionKey &&
+            params.sessionStore &&
+            params.storePath
+          ) {
+            const entry = params.sessionStore[params.sessionKey];
+            if (entry) {
+              const updatedEntry = { ...entry };
+              setCliSessionBinding(
+                updatedEntry,
+                params.providerOverride,
+                result.meta.agentMeta.cliSessionBinding,
+              );
+              updatedEntry.updatedAt = Date.now();
+
+              await persistSessionEntry({
+                sessionStore: params.sessionStore,
+                sessionKey: params.sessionKey,
+                storePath: params.storePath,
+                entry: updatedEntry,
+              });
+            }
+          }
+          return result;
+        });
+      }
+      throw err;
+    });
+  }
+
   return runEmbeddedPiAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,

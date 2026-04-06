@@ -42,7 +42,12 @@ import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 
 // Some usage endpoints only work with CLI/session OAuth tokens, not API keys.
 // Skip those probes when the active auth mode cannot satisfy the endpoint.
-const USAGE_OAUTH_ONLY_PROVIDERS = new Set(["anthropic", "github-copilot", "openai-codex"]);
+const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
+  "anthropic",
+  "github-copilot",
+  "google-gemini-cli",
+  "openai-codex",
+]);
 
 function shouldLoadUsageSummary(params: {
   provider?: string;

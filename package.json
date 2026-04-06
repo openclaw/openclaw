@@ -275,6 +275,10 @@
       "types": "./dist/plugin-sdk/cli-runtime.d.ts",
       "default": "./dist/plugin-sdk/cli-runtime.js"
     },
+    "./plugin-sdk/cli-backend": {
+      "types": "./dist/plugin-sdk/cli-backend.d.ts",
+      "default": "./dist/plugin-sdk/cli-backend.js"
+    },
     "./plugin-sdk/hook-runtime": {
       "types": "./dist/plugin-sdk/hook-runtime.d.ts",
       "default": "./dist/plugin-sdk/hook-runtime.js"
@@ -1134,6 +1138,7 @@
     "test:docker:gateway-network": "bash scripts/e2e/gateway-network-docker.sh",
     "test:docker:live-acp-bind": "bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-build": "bash scripts/test-live-build-docker.sh",
+    "test:docker:live-cli-backend": "bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-models": "bash scripts/test-live-models-docker.sh",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",

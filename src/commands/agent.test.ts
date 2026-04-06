@@ -6,6 +6,7 @@ import "../cron/isolated-agent.mocks.js";
 import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import * as authProfilesModule from "../agents/auth-profiles.js";
+import * as sessionStoreModule from "../agents/command/session-store.js";
 import { resolveSession } from "../agents/command/session.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
@@ -103,6 +104,7 @@ async function loadFreshAgentCommandModulesForTest() {
   vi.resetModules();
   const runEmbeddedPiAgentMock = vi.fn();
   const loadModelCatalogMock = vi.fn();
+  const isCliProviderMock = vi.fn(() => false);
   vi.doMock("../agents/pi-embedded.js", () => ({
     abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
     runEmbeddedPiAgent: runEmbeddedPiAgentMock,
@@ -111,6 +113,15 @@ async function loadFreshAgentCommandModulesForTest() {
   vi.doMock("../agents/model-catalog.js", () => ({
     loadModelCatalog: loadModelCatalogMock,
   }));
+  vi.doMock("../agents/model-selection.js", async () => {
+    const actual = await vi.importActual<typeof import("../agents/model-selection.js")>(
+      "../agents/model-selection.js",
+    );
+    return {
+      ...actual,
+      isCliProvider: isCliProviderMock,
+    };
+  });
   const [agentModule, configModuleFresh, commandSecretGatewayModuleFresh] = await Promise.all([
     import("./agent.js"),
     import("../config/config.js"),
@@ -122,6 +133,7 @@ async function loadFreshAgentCommandModulesForTest() {
     commandSecretGatewayModuleFresh,
     runEmbeddedPiAgentMock,
     loadModelCatalogMock,
+    isCliProviderMock,
   };
 }
 
@@ -324,6 +336,7 @@ beforeEach(() => {
   configModule.clearRuntimeConfigSnapshot();
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadModelCatalog).mockResolvedValue([]);
+  vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   readConfigFileSnapshotForWriteSpy.mockResolvedValue({
     snapshot: { valid: false, resolved: {} as OpenClawConfig },
     writeOptions: {},
@@ -339,6 +352,7 @@ describe("agentCommand", () => {
         commandSecretGatewayModuleFresh,
         runEmbeddedPiAgentMock,
         loadModelCatalogMock,
+        isCliProviderMock,
       } = await loadFreshAgentCommandModulesForTest();
       const freshConfigSpy = vi.spyOn(configModuleFresh, "loadConfig");
       const freshReadConfigFileSnapshotForWriteSpy = vi.spyOn(
@@ -351,6 +365,7 @@ describe("agentCommand", () => {
       );
       runEmbeddedPiAgentMock.mockResolvedValue(createDefaultAgentResult());
       loadModelCatalogMock.mockResolvedValue([]);
+      isCliProviderMock.mockImplementation(() => false);
 
       const store = path.join(home, "sessions.json");
       const loadedConfig = {
@@ -547,6 +562,39 @@ describe("agentCommand", () => {
 
       expect(resolution.sessionKey).toBe("agent:main:explicit:explicit-session-123");
       expect(resolution.sessionId).toBe("explicit-session-123");
+    });
+  });
+
+  it("persists explicit session-id-only runs with the synthetic session key", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: { primary: "claude-cli/claude-sonnet-4-6" },
+        models: { "claude-cli/claude-sonnet-4-6": {} },
+      });
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: {
+            sessionId: "claude-cli-session-1",
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            cliSessionBinding: {
+              sessionId: "claude-cli-session-1",
+            },
+          },
+        },
+      });
+
+      await agentCommand({ message: "resume me", sessionId: "explicit-session-123" }, runtime);
+
+      expect(vi.mocked(sessionStoreModule.updateSessionStoreAfterAgentRun)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "explicit-session-123",
+          sessionKey: "agent:main:explicit:explicit-session-123",
+        }),
+      );
     });
   });
 

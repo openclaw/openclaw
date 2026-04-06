@@ -47,6 +47,7 @@ import {
   parseMessageWithAttachments,
 } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -1223,10 +1224,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         : typeof configMaxChars === "number"
           ? configMaxChars
           : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
+    const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
     const sessionId = entry?.sessionId;
+    const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const localMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
-    const rawMessages = localMessages;
+    const rawMessages = augmentChatHistoryWithCliSessionImports({
+      entry,
+      provider: resolvedSessionModel.provider,
+      localMessages,
+    });
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
