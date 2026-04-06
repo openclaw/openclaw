@@ -275,6 +275,61 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     expect(calls.some((call) => call.method === "agent")).toBe(false);
   });
 
+  it("sessions_spawn forwards resolved model to the agent gateway call", async () => {
+    const calls: GatewayCall[] = [];
+    mockPatchAndSingleAgentRun({ calls, runId: "run-model-forward" });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "discord:group:req",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-model-forward", {
+      task: "do thing",
+      model: "claude-haiku-4-5",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(agentCall).toBeDefined();
+    expect(agentCall?.params).toMatchObject({
+      model: "claude-haiku-4-5",
+    });
+  });
+
+  it("sessions_spawn forwards config-resolved model to the agent gateway call", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        list: [{ id: "research", model: { primary: "opencode/claude" } }],
+      },
+    });
+    const calls: GatewayCall[] = [];
+    mockPatchAndSingleAgentRun({ calls, runId: "run-config-model-forward" });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-config-model-forward", {
+      task: "do thing",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(agentCall).toBeDefined();
+    expect(agentCall?.params).toMatchObject({
+      model: "opencode/claude",
+    });
+  });
+
   it("sessions_spawn supports legacy timeoutSeconds alias", async () => {
     let spawnedTimeout: number | undefined;
 
