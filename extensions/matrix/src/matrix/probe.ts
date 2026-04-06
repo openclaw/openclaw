@@ -67,6 +67,7 @@ export async function probeMatrix(params: {
       userId: inputUserId,
       accessToken: params.accessToken,
       deviceId: params.deviceId,
+      persistStorageMeta: false,
       localTimeoutMs: params.timeoutMs,
       accountId: params.accountId,
       allowPrivateNetwork: params.allowPrivateNetwork,

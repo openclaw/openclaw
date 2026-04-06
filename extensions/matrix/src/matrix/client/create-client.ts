@@ -33,6 +33,7 @@ export async function createMatrixClient(params: {
   accessToken: string;
   password?: string;
   deviceId?: string;
+  persistStorageMeta?: boolean;
   encryption?: boolean;
   localTimeoutMs?: number;
   initialSyncLimit?: number;
@@ -66,13 +67,16 @@ export async function createMatrixClient(params: {
   });
   fs.mkdirSync(storagePaths.rootDir, { recursive: true });
 
-  writeStorageMeta({
-    storagePaths,
-    homeserver,
-    userId,
-    accountId: params.accountId,
-    deviceId: params.deviceId,
-  });
+  // Health probes still need validated paths, but they must not rewrite durable identity metadata.
+  if (params.persistStorageMeta !== false) {
+    writeStorageMeta({
+      storagePaths,
+      homeserver,
+      userId,
+      accountId: params.accountId,
+      deviceId: params.deviceId,
+    });
+  }
 
   const cryptoDatabasePrefix = `openclaw-matrix-${storagePaths.accountKey}-${storagePaths.tokenHash}`;
 

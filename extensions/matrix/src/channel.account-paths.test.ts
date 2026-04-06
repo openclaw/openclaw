@@ -67,7 +67,7 @@ describe("matrix account path propagation", () => {
     );
   });
 
-  it("forwards accountId to matrix probes", async () => {
+  it("forwards accountId and deviceId to matrix probes", async () => {
     await matrixPlugin.status!.probeAccount?.({
       cfg: {} as never,
       timeoutMs: 500,
