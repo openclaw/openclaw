@@ -710,7 +710,7 @@ run_dev_channel_update() {
   printf 'update-dev: run\n'
   guest_current_user_exec /bin/rm -rf "$update_root"
   guest_current_user_exec_path "$bootstrap_bin:$GUEST_EXEC_PATH" \
-    "$GUEST_OPENCLAW_BIN" update --channel dev --yes --json
+    "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" update --channel dev --yes --json
   printf 'update-dev: git-version\n'
   guest_current_user_node_cli "$update_entry" --version
   printf 'update-dev: git-status\n'
