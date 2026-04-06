@@ -95,6 +95,37 @@ describe("probeMatrix", () => {
     });
   });
 
+  it("passes deviceId through to client creation (#61317)", async () => {
+    await probeMatrix({
+      homeserver: "https://matrix.example.org",
+      accessToken: "tok",
+      userId: "@bot:example.org",
+      deviceId: "ABCDEF",
+      timeoutMs: 500,
+      accountId: "ops",
+    });
+
+    expect(createMatrixClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: "ABCDEF",
+      }),
+    );
+  });
+
+  it("omits deviceId when not provided", async () => {
+    await probeMatrix({
+      homeserver: "https://matrix.example.org",
+      accessToken: "tok",
+      timeoutMs: 500,
+    });
+
+    expect(createMatrixClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: undefined,
+      }),
+    );
+  });
+
   it("returns client validation errors for insecure public http homeservers", async () => {
     createMatrixClientMock.mockRejectedValue(
       new Error("Matrix homeserver must use https:// unless it targets a private or loopback host"),

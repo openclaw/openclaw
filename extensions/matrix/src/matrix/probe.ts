@@ -24,6 +24,7 @@ export async function probeMatrix(params: {
   homeserver: string;
   accessToken: string;
   userId?: string;
+  deviceId?: string;
   timeoutMs: number;
   accountId?: string | null;
   allowPrivateNetwork?: boolean;
@@ -65,6 +66,7 @@ export async function probeMatrix(params: {
       homeserver: params.homeserver,
       userId: inputUserId,
       accessToken: params.accessToken,
+      deviceId: params.deviceId,
       localTimeoutMs: params.timeoutMs,
       accountId: params.accountId,
       allowPrivateNetwork: params.allowPrivateNetwork,
