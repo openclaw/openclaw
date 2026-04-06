@@ -25,6 +25,8 @@ const ALLOWED_CONTRACT_BUNDLED_PATH_HELPERS = new Set([
 ]);
 
 const ALLOWED_CHANNEL_BUNDLED_METADATA_CONSUMERS = new Set([
+  "src/channels/plugins/bundled.ts",
+  "src/channels/plugins/contracts/runtime-artifacts.ts",
   "src/channels/plugins/session-conversation.bundled-fallback.test.ts",
 ]);
 

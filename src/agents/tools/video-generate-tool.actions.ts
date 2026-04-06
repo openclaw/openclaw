@@ -100,7 +100,7 @@ export function createVideoGenerateStatusActionResult(
 
 export function createVideoGenerateDuplicateGuardResult(
   sessionKey?: string,
-): VideoGenerateActionResult | null {
+): VideoGenerateActionResult | undefined {
   return createMediaGenerateDuplicateGuardResult({
     sessionKey,
     findActiveTask: (activeSessionKey) =>

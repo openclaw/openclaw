@@ -5,6 +5,7 @@ import { createJiti } from "jiti";
 import JSON5 from "json5";
 import { resolveConfigPath } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { configMayNeedPluginAutoEnable } from "../config/plugin-auto-enable.shared.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
@@ -45,6 +46,15 @@ const loadedFacadeModules = new Map<string, unknown>();
 const loadedFacadePluginIds = new Set<string>();
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
 let cachedBoundaryRawConfig: OpenClawConfig | undefined;
+let cachedBoundaryResolvedConfigKey: string | undefined;
+let cachedBoundaryConfigFileState:
+  | {
+      configPath: string;
+      mtimeMs: number;
+      size: number;
+      rawConfig: OpenClawConfig;
+    }
+  | undefined;
 let cachedBoundaryResolvedConfig:
   | {
       rawConfig: OpenClawConfig;
@@ -216,36 +226,72 @@ function getJiti(modulePath: string) {
   return loader;
 }
 
-function readFacadeBoundaryConfigSafely(): OpenClawConfig {
+function readFacadeBoundaryConfigSafely(): {
+  rawConfig: OpenClawConfig;
+  cacheKey?: string;
+} {
   try {
     const runtimeSnapshot = getRuntimeConfigSnapshot();
     if (runtimeSnapshot) {
-      return runtimeSnapshot;
+      return { rawConfig: runtimeSnapshot };
     }
     const configPath = resolveConfigPath();
     if (!fs.existsSync(configPath)) {
-      return EMPTY_FACADE_BOUNDARY_CONFIG;
+      return { rawConfig: EMPTY_FACADE_BOUNDARY_CONFIG, cacheKey: `missing:${configPath}` };
+    }
+    const stat = fs.statSync(configPath);
+    if (
+      cachedBoundaryConfigFileState &&
+      cachedBoundaryConfigFileState.configPath === configPath &&
+      cachedBoundaryConfigFileState.mtimeMs === stat.mtimeMs &&
+      cachedBoundaryConfigFileState.size === stat.size
+    ) {
+      return {
+        rawConfig: cachedBoundaryConfigFileState.rawConfig,
+        cacheKey: `file:${configPath}:${stat.mtimeMs}:${stat.size}`,
+      };
     }
     const raw = fs.readFileSync(configPath, "utf8");
     const parsed = JSON5.parse(raw);
-    return parsed && typeof parsed === "object"
-      ? (parsed as OpenClawConfig)
-      : EMPTY_FACADE_BOUNDARY_CONFIG;
+    const rawConfig =
+      parsed && typeof parsed === "object"
+        ? (parsed as OpenClawConfig)
+        : EMPTY_FACADE_BOUNDARY_CONFIG;
+    cachedBoundaryConfigFileState = {
+      configPath,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      rawConfig,
+    };
+    return {
+      rawConfig,
+      cacheKey: `file:${configPath}:${stat.mtimeMs}:${stat.size}`,
+    };
   } catch {
-    return EMPTY_FACADE_BOUNDARY_CONFIG;
+    return { rawConfig: EMPTY_FACADE_BOUNDARY_CONFIG };
   }
 }
 
 function getFacadeBoundaryResolvedConfig() {
-  const rawConfig = readFacadeBoundaryConfigSafely();
-  if (cachedBoundaryResolvedConfig && cachedBoundaryRawConfig === rawConfig) {
+  const readResult = readFacadeBoundaryConfigSafely();
+  const { rawConfig } = readResult;
+  if (
+    cachedBoundaryResolvedConfig &&
+    ((readResult.cacheKey && cachedBoundaryResolvedConfigKey === readResult.cacheKey) ||
+      (!readResult.cacheKey && cachedBoundaryRawConfig === rawConfig))
+  ) {
     return cachedBoundaryResolvedConfig;
   }
 
-  const autoEnabled = applyPluginAutoEnable({
-    config: rawConfig,
-    env: process.env,
-  });
+  const autoEnabled = configMayNeedPluginAutoEnable(rawConfig, process.env)
+    ? applyPluginAutoEnable({
+        config: rawConfig,
+        env: process.env,
+      })
+    : {
+        config: rawConfig,
+        autoEnabledReasons: {} as Record<string, string[]>,
+      };
   const config = autoEnabled.config;
   const resolved = {
     rawConfig,
@@ -255,6 +301,7 @@ function getFacadeBoundaryResolvedConfig() {
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
   };
   cachedBoundaryRawConfig = rawConfig;
+  cachedBoundaryResolvedConfigKey = readResult.cacheKey;
   cachedBoundaryResolvedConfig = resolved;
   return resolved;
 }
@@ -569,6 +616,8 @@ export function resetFacadeRuntimeStateForTest(): void {
   loadedFacadePluginIds.clear();
   jitiLoaders.clear();
   cachedBoundaryRawConfig = undefined;
+  cachedBoundaryResolvedConfigKey = undefined;
+  cachedBoundaryConfigFileState = undefined;
   cachedBoundaryResolvedConfig = undefined;
   cachedManifestRegistry = undefined;
   cachedFacadeModuleLocationsByKey.clear();

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
+import { runQaDockerUp } from "./docker-up.runtime.js";
 import { startQaLabServer } from "./lab-server.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import { runQaSuite } from "./suite.js";
@@ -105,6 +106,31 @@ export async function runQaDockerBuildImageCommand(opts: { image?: string }) {
     imageName: opts.image,
   });
   process.stdout.write(`QA docker image: ${result.imageName}\n`);
+}
+
+export async function runQaDockerUpCommand(opts: {
+  outputDir?: string;
+  gatewayPort?: number;
+  qaLabPort?: number;
+  providerBaseUrl?: string;
+  image?: string;
+  usePrebuiltImage?: boolean;
+  skipUiBuild?: boolean;
+}) {
+  const result = await runQaDockerUp({
+    repoRoot: process.cwd(),
+    outputDir: opts.outputDir ? path.resolve(opts.outputDir) : undefined,
+    gatewayPort: Number.isFinite(opts.gatewayPort) ? opts.gatewayPort : undefined,
+    qaLabPort: Number.isFinite(opts.qaLabPort) ? opts.qaLabPort : undefined,
+    providerBaseUrl: opts.providerBaseUrl,
+    image: opts.image,
+    usePrebuiltImage: opts.usePrebuiltImage,
+    skipUiBuild: opts.skipUiBuild,
+  });
+  process.stdout.write(`QA docker dir: ${result.outputDir}\n`);
+  process.stdout.write(`QA Lab UI: ${result.qaLabUrl}\n`);
+  process.stdout.write(`Gateway UI: ${result.gatewayUrl}\n`);
+  process.stdout.write(`Stop: ${result.stopCommand}\n`);
 }
 
 export async function runQaMockOpenAiCommand(opts: { host?: string; port?: number }) {

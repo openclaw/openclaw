@@ -61,7 +61,7 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
   return normalized;
 };
 
-export function addWildcardAllowFrom(allowFrom?: Array<string | number> | null): string[] {
+export function addWildcardAllowFrom(allowFrom?: ReadonlyArray<string | number> | null): string[] {
   const next = (allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
   if (!next.includes("*")) {
     next.push("*");

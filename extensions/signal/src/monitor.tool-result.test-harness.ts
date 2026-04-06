@@ -122,7 +122,9 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
         waitForIdle?: () => Promise<void>;
       };
     }) => {
-      const resolved = await replyMock(params.ctx, {}, params.cfg);
+      const resolved = (await replyMock(params.ctx, {}, params.cfg)) as
+        | { text?: string }
+        | undefined;
       const text = typeof resolved?.text === "string" ? resolved.text.trim() : "";
       if (text) {
         params.dispatcher.sendFinalReply({ text });

@@ -223,6 +223,20 @@ type TaskView = {
   terminalOutcome?: string;
 };
 
+function optionalField<TKey extends string, TValue>(
+  key: TKey,
+  value: TValue | undefined,
+): Partial<Record<TKey, TValue>> {
+  return value !== undefined ? ({ [key]: value } as Record<TKey, TValue>) : {};
+}
+
+function optionalTruthyStringField<TKey extends string>(
+  key: TKey,
+  value: string | undefined,
+): Partial<Record<TKey, string>> {
+  return value ? ({ [key]: value } as Record<TKey, string>) : {};
+}
+
 function toFlowView(flow: {
   flowId: string;
   syncMode: "task_mirrored" | "managed";
@@ -244,20 +258,20 @@ function toFlowView(flow: {
   return {
     flowId: flow.flowId,
     syncMode: flow.syncMode,
-    ...(flow.controllerId ? { controllerId: flow.controllerId } : {}),
+    ...optionalTruthyStringField("controllerId", flow.controllerId),
     revision: flow.revision,
     status: flow.status,
     notifyPolicy: flow.notifyPolicy,
     goal: flow.goal,
-    ...(flow.currentStep ? { currentStep: flow.currentStep } : {}),
-    ...(flow.blockedTaskId ? { blockedTaskId: flow.blockedTaskId } : {}),
-    ...(flow.blockedSummary ? { blockedSummary: flow.blockedSummary } : {}),
-    ...(flow.stateJson !== undefined ? { stateJson: flow.stateJson } : {}),
-    ...(flow.waitJson !== undefined ? { waitJson: flow.waitJson } : {}),
-    ...(flow.cancelRequestedAt !== undefined ? { cancelRequestedAt: flow.cancelRequestedAt } : {}),
+    ...optionalTruthyStringField("currentStep", flow.currentStep),
+    ...optionalTruthyStringField("blockedTaskId", flow.blockedTaskId),
+    ...optionalTruthyStringField("blockedSummary", flow.blockedSummary),
+    ...optionalField("stateJson", flow.stateJson),
+    ...optionalField("waitJson", flow.waitJson),
+    ...optionalField("cancelRequestedAt", flow.cancelRequestedAt),
     createdAt: flow.createdAt,
     updatedAt: flow.updatedAt,
-    ...(flow.endedAt !== undefined ? { endedAt: flow.endedAt } : {}),
+    ...optionalField("endedAt", flow.endedAt),
   };
 }
 
@@ -289,27 +303,27 @@ function toTaskView(task: {
   return {
     taskId: task.taskId,
     runtime: task.runtime,
-    ...(task.sourceId ? { sourceId: task.sourceId } : {}),
+    ...optionalTruthyStringField("sourceId", task.sourceId),
     scopeKind: task.scopeKind,
-    ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
-    ...(task.parentFlowId ? { parentFlowId: task.parentFlowId } : {}),
-    ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
-    ...(task.agentId ? { agentId: task.agentId } : {}),
-    ...(task.runId ? { runId: task.runId } : {}),
-    ...(task.label ? { label: task.label } : {}),
+    ...optionalTruthyStringField("childSessionKey", task.childSessionKey),
+    ...optionalTruthyStringField("parentFlowId", task.parentFlowId),
+    ...optionalTruthyStringField("parentTaskId", task.parentTaskId),
+    ...optionalTruthyStringField("agentId", task.agentId),
+    ...optionalTruthyStringField("runId", task.runId),
+    ...optionalTruthyStringField("label", task.label),
     task: task.task,
     status: task.status,
     deliveryStatus: task.deliveryStatus,
     notifyPolicy: task.notifyPolicy,
     createdAt: task.createdAt,
-    ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
-    ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
-    ...(task.lastEventAt !== undefined ? { lastEventAt: task.lastEventAt } : {}),
-    ...(task.cleanupAfter !== undefined ? { cleanupAfter: task.cleanupAfter } : {}),
-    ...(task.error ? { error: task.error } : {}),
-    ...(task.progressSummary ? { progressSummary: task.progressSummary } : {}),
-    ...(task.terminalSummary ? { terminalSummary: task.terminalSummary } : {}),
-    ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
+    ...optionalField("startedAt", task.startedAt),
+    ...optionalField("endedAt", task.endedAt),
+    ...optionalField("lastEventAt", task.lastEventAt),
+    ...optionalField("cleanupAfter", task.cleanupAfter),
+    ...optionalTruthyStringField("error", task.error),
+    ...optionalTruthyStringField("progressSummary", task.progressSummary),
+    ...optionalTruthyStringField("terminalSummary", task.terminalSummary),
+    ...optionalTruthyStringField("terminalOutcome", task.terminalOutcome),
   };
 }
 

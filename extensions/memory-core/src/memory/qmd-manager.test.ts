@@ -25,6 +25,7 @@ const { withFileLockMock } = vi.hoisted(() => ({
     async <T>(_filePath: string, _options: unknown, fn: () => Promise<T>) => await fn(),
   ),
 }));
+const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 
@@ -146,6 +147,22 @@ describe("QmdMemoryManager", () => {
   const openManagers = new Set<QmdMemoryManager>();
   let embedStartupJitterSpy: ReturnType<typeof vi.spyOn> | null = null;
 
+  function seedMemoryEmbeddingProviders(): void {
+    (globalThis as Record<PropertyKey, unknown>)[MEMORY_EMBEDDING_PROVIDERS_KEY] = new Map([
+      [
+        "openai",
+        {
+          adapter: {
+            id: "openai",
+            defaultModel: "text-embedding-3-small",
+            transport: "remote",
+            create: async () => ({ provider: null }),
+          },
+        },
+      ],
+    ]);
+  }
+
   function trackManager<T extends QmdMemoryManager | null>(manager: T): T {
     if (manager) {
       openManagers.add(manager);
@@ -220,6 +237,7 @@ describe("QmdMemoryManager", () => {
         },
       },
     } as OpenClawConfig;
+    seedMemoryEmbeddingProviders();
     embedStartupJitterSpy = vi
       .spyOn(
         QmdMemoryManager.prototype as unknown as {
@@ -237,7 +255,6 @@ describe("QmdMemoryManager", () => {
       }),
     );
     openManagers.clear();
-    await fs.rm(tmpRoot, { recursive: true, force: true });
     embedStartupJitterSpy?.mockRestore();
     embedStartupJitterSpy = null;
     vi.useRealTimers();
@@ -259,6 +276,7 @@ describe("QmdMemoryManager", () => {
     }
     delete (globalThis as Record<PropertyKey, unknown>)[MCPORTER_STATE_KEY];
     delete (globalThis as Record<PropertyKey, unknown>)[QMD_EMBED_QUEUE_KEY];
+    delete (globalThis as Record<PropertyKey, unknown>)[MEMORY_EMBEDDING_PROVIDERS_KEY];
   });
 
   it("debounces back-to-back sync calls", async () => {

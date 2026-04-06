@@ -12,53 +12,62 @@ import {
   resolveEnvApiKey,
 } from "./model-auth.js";
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  buildProviderMissingAuthMessageWithPlugin: (params: {
-    provider: string;
-    context: { listProfileIds: (providerId: string) => string[] };
-  }) => {
-    if (params.provider === "openai" && params.context.listProfileIds("openai-codex").length > 0) {
-      return 'No API key found for provider "openai". Use openai-codex/gpt-5.4.';
-    }
-    return undefined;
-  },
-  formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
-  refreshProviderOAuthCredentialWithPlugin: async () => null,
-  resolveExternalAuthProfilesWithPlugins: () => [],
-  resolveProviderSyntheticAuthWithPlugin: (params: {
-    provider: string;
-    context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
-  }) => {
-    if (params.provider !== "ollama" && params.provider !== "demo-local") {
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    buildProviderMissingAuthMessageWithPlugin: (params: {
+      provider: string;
+      context: { listProfileIds: (providerId: string) => string[] };
+    }) => {
+      if (
+        params.provider === "openai" &&
+        params.context.listProfileIds("openai-codex").length > 0
+      ) {
+        return 'No API key found for provider "openai". Use openai-codex/gpt-5.4.';
+      }
       return undefined;
-    }
-    const providerConfig = params.context.providerConfig;
-    const hasApiConfig =
-      Boolean(providerConfig?.api?.trim()) ||
-      Boolean(providerConfig?.baseUrl?.trim()) ||
-      (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
-    if (!hasApiConfig) {
-      return undefined;
-    }
-    return {
-      apiKey: params.provider === "ollama" ? "ollama-local" : "demo-local",
-      source: `models.providers.${params.provider} (synthetic local key)`,
-      mode: "api-key" as const,
-    };
-  },
-  shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
-    provider: string;
-    context: { resolvedApiKey?: string };
-  }) => {
-    const expectedMarker =
-      params.provider === "ollama"
-        ? "ollama-local"
-        : params.provider === "demo-local"
-          ? "demo-local"
-          : undefined;
-    return Boolean(expectedMarker && params.context.resolvedApiKey?.trim() === expectedMarker);
-  },
-}));
+    },
+    formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
+    refreshProviderOAuthCredentialWithPlugin: async () => null,
+    resolveExternalAuthProfilesWithPlugins: () => [],
+    resolveProviderSyntheticAuthWithPlugin: (params: {
+      provider: string;
+      context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+    }) => {
+      if (params.provider !== "ollama" && params.provider !== "demo-local") {
+        return undefined;
+      }
+      const providerConfig = params.context.providerConfig;
+      const hasApiConfig =
+        Boolean(providerConfig?.api?.trim()) ||
+        Boolean(providerConfig?.baseUrl?.trim()) ||
+        (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
+      if (!hasApiConfig) {
+        return undefined;
+      }
+      return {
+        apiKey: params.provider === "ollama" ? "ollama-local" : "demo-local",
+        source: `models.providers.${params.provider} (synthetic local key)`,
+        mode: "api-key" as const,
+      };
+    },
+    shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
+      provider: string;
+      context: { resolvedApiKey?: string };
+    }) => {
+      const expectedMarker =
+        params.provider === "ollama"
+          ? "ollama-local"
+          : params.provider === "demo-local"
+            ? "demo-local"
+            : undefined;
+      return Boolean(expectedMarker && params.context.resolvedApiKey?.trim() === expectedMarker);
+    },
+  };
+});
 
 vi.mock("./cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
@@ -260,6 +269,49 @@ describe("getApiKeyForModel", () => {
         expect(resolved.source).toContain("Z_AI_API_KEY");
       },
     );
+  });
+
+  it("keeps stored provider auth ahead of env by default", async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "env-openai-key" }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "openai",
+        store: {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "stored-openai-key",
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("stored-openai-key");
+      expect(resolved.source).toBe("profile:openai:default");
+      expect(resolved.profileId).toBe("openai:default");
+    });
+  });
+
+  it("supports env-first precedence for live auth probes", async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "env-openai-key" }, async () => {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "openai",
+        credentialPrecedence: "env-first",
+        store: {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "stored-openai-key",
+            },
+          },
+        },
+      });
+      expect(resolved.apiKey).toBe("env-openai-key");
+      expect(resolved.source).toContain("OPENAI_API_KEY");
+      expect(resolved.profileId).toBeUndefined();
+    });
   });
 
   it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {

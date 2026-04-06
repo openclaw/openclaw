@@ -122,9 +122,6 @@ describe("createMusicGenerateTool", () => {
       count: 1,
       instrumental: true,
       lyrics: ["wake the city up"],
-      task: {
-        taskId: "task-123",
-      },
       media: {
         mediaUrls: ["/tmp/generated-night-drive.mp3"],
       },

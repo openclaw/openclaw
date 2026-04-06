@@ -13,9 +13,10 @@ title: "Tests"
 - `pnpm test:coverage`: Runs the unit suite with V8 coverage (via `vitest.unit.config.ts`). Global thresholds are 70% lines/branches/functions/statements. Coverage excludes integration-heavy entrypoints (CLI wiring, gateway/telegram bridges, webchat static server) to keep the target focused on unit-testable logic.
 - `pnpm test:coverage:changed`: Runs unit coverage only for files changed since `origin/main`.
 - `pnpm test:changed`: expands changed git paths into scoped Vitest lanes when the diff only touches routable source/test files. Config/setup changes still fall back to the native root projects run so wiring edits rerun broadly when needed.
-- `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes, but still falls back to the native root projects run when you do a full untargeted sweep.
+- `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes. Untargeted runs now execute eight sequential shard configs (`vitest.full-core-unit-src.config.ts`, `vitest.full-core-unit-security.config.ts`, `vitest.full-core-unit-support.config.ts`, `vitest.full-core-contracts.config.ts`, `vitest.full-core-runtime.config.ts`, `vitest.full-agentic.config.ts`, `vitest.full-auto-reply.config.ts`, `vitest.full-extensions.config.ts`) instead of one giant root-project process.
 - Selected `plugin-sdk` and `commands` test files now route through dedicated light lanes that keep only `test/setup.ts`, leaving runtime-heavy cases on their existing lanes.
 - Selected `plugin-sdk` and `commands` helper source files also map `pnpm test:changed` to explicit sibling tests in those light lanes, so small helper edits avoid rerunning the heavy runtime-backed suites.
+- `auto-reply` now also splits into three dedicated configs (`core`, `top-level`, `reply`) so the reply harness does not dominate the lighter top-level status/token/helper tests.
 - Base Vitest config now defaults to `pool: "threads"` and `isolate: false`, with the shared non-isolated runner enabled across the repo configs.
 - `pnpm test:channels` runs `vitest.channels.config.ts`.
 - `pnpm test:extensions` runs `vitest.extensions.config.ts`.

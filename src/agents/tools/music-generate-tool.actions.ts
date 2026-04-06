@@ -96,7 +96,7 @@ export function createMusicGenerateStatusActionResult(
 
 export function createMusicGenerateDuplicateGuardResult(
   sessionKey?: string,
-): MusicGenerateActionResult | null {
+): MusicGenerateActionResult | undefined {
   return createMediaGenerateDuplicateGuardResult({
     sessionKey,
     findActiveTask: (activeSessionKey) =>

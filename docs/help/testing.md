@@ -26,6 +26,7 @@ Most days:
 - Faster local full-suite run on a roomy machine: `pnpm test:max`
 - Direct Vitest watch loop: `pnpm test:watch`
 - Direct file targeting now routes extension/channel paths too: `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts`
+- Docker-backed QA site: `pnpm qa:lab:up`
 
 When you touch tests or want extra confidence:
 
@@ -46,7 +47,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 ### Unit / integration (default)
 
 - Command: `pnpm test`
-- Config: native Vitest `projects` via `vitest.config.ts`
+- Config: five sequential shard runs (`vitest.full-*.config.ts`) over the existing scoped Vitest projects
 - Files: core/unit inventories under `src/**/*.test.ts`, `packages/**/*.test.ts`, `test/**/*.test.ts`, and the whitelisted `ui` node tests covered by `vitest.unit.config.ts`
 - Scope:
   - Pure unit tests
@@ -57,11 +58,13 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - No real keys required
   - Should be fast and stable
 - Projects note:
-  - Untargeted `pnpm test` still uses the native Vitest root `projects` config.
+  - Untargeted `pnpm test` now runs eight smaller shard configs (`core-unit-src`, `core-unit-security`, `core-unit-support`, `core-contracts`, `core-runtime`, `agentic`, `auto-reply`, `extensions`) instead of one giant native root-project process. This cuts peak RSS on loaded machines and avoids auto-reply/extension work starving unrelated suites.
+  - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical.
   - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
   - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun.
   - Selected `plugin-sdk` and `commands` tests also route through dedicated light lanes that skip `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
   - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
+  - `auto-reply` now has three dedicated buckets: top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. This keeps the heaviest reply harness work off the cheap status/chunk/token tests.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
     keep both levels of coverage.
@@ -77,7 +80,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Base Vitest config now defaults to `threads`.
   - The shared Vitest config also fixes `isolate: false` and uses the non-isolated runner across the root projects, e2e, and live configs.
   - The root UI lane keeps its `jsdom` setup and optimizer, but now runs on the shared non-isolated runner too.
-  - `pnpm test` inherits the same `threads` + `isolate: false` defaults from the root `vitest.config.ts` projects config.
+  - Each `pnpm test` shard inherits the same `threads` + `isolate: false` defaults from the shared Vitest config.
   - The shared `scripts/run-vitest.mjs` launcher now also adds `--no-maglev` for Vitest child Node processes by default to reduce V8 compile churn during big local runs. Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` if you need to compare against stock V8 behavior.
 - Fast-local iteration note:
   - `pnpm test:changed` routes through scoped lanes when the changed paths map cleanly to a smaller suite.
@@ -451,6 +454,7 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 
 - Test: `src/image-generation/runtime.live.test.ts`
 - Command: `pnpm test:live src/image-generation/runtime.live.test.ts`
+- Harness: `pnpm test:live:media image`
 - Scope:
   - Enumerates every registered image-generation provider plugin
   - Loads missing provider env vars from your login shell (`~/.profile`) before probing
@@ -475,6 +479,7 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 
 - Test: `extensions/music-generation-providers.live.test.ts`
 - Enable: `OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/music-generation-providers.live.test.ts`
+- Harness: `pnpm test:live:media music`
 - Scope:
   - Exercises the shared bundled music-generation provider path
   - Currently covers Google and MiniMax
@@ -498,6 +503,7 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 
 - Test: `extensions/video-generation-providers.live.test.ts`
 - Enable: `OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/video-generation-providers.live.test.ts`
+- Harness: `pnpm test:live:media video`
 - Scope:
   - Exercises the shared bundled video-generation provider path
   - Loads provider env vars from your login shell (`~/.profile`) before probing
@@ -505,19 +511,38 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
   - Skips providers with no usable auth/profile/model
   - Runs both declared runtime modes when available:
     - `generate` with prompt-only input
-    - `imageToVideo` when the provider declares `capabilities.imageToVideo.enabled`
+    - `imageToVideo` when the provider declares `capabilities.imageToVideo.enabled` and the selected provider/model accepts buffer-backed local image input in the shared sweep
     - `videoToVideo` when the provider declares `capabilities.videoToVideo.enabled` and the selected provider/model accepts buffer-backed local video input in the shared sweep
+  - Current declared-but-skipped `imageToVideo` providers in the shared sweep:
+    - `vydra` because bundled `veo3` is text-only and bundled `kling` requires a remote image URL
+  - Provider-specific Vydra coverage:
+    - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_VYDRA_VIDEO=1 pnpm test:live -- extensions/vydra/vydra.live.test.ts`
+    - that file runs `veo3` text-to-video plus a `kling` lane that uses a remote image URL fixture by default
   - Current `videoToVideo` live coverage:
-    - `google`
-    - `openai`
     - `runway` only when the selected model is `runway/gen4_aleph`
   - Current declared-but-skipped `videoToVideo` providers in the shared sweep:
     - `alibaba`, `qwen`, `xai` because those paths currently require remote `http(s)` / MP4 reference URLs
+    - `google` because the current shared Gemini/Veo lane uses local buffer-backed input and that path is not accepted in the shared sweep
+    - `openai` because the current shared lane lacks org-specific video inpaint/remix access guarantees
 - Optional narrowing:
   - `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="google,openai,runway"`
   - `OPENCLAW_LIVE_VIDEO_GENERATION_MODELS="google/veo-3.1-fast-generate-preview,openai/sora-2,runway/gen4_aleph"`
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
+
+## Media live harness
+
+- Command: `pnpm test:live:media`
+- Purpose:
+  - Runs the shared image, music, and video live suites through one repo-native entrypoint
+  - Auto-loads missing provider env vars from `~/.profile`
+  - Auto-narrows each suite to providers that currently have usable auth by default
+  - Reuses `scripts/test-live.mjs`, so heartbeat and quiet-mode behavior stay consistent
+- Examples:
+  - `pnpm test:live:media`
+  - `pnpm test:live:media image video --providers openai,google,minimax`
+  - `pnpm test:live:media video --video-providers openai,runway --all-providers`
+  - `pnpm test:live:media music --quiet`
 
 ## Docker runners (optional "works in Linux" checks)
 

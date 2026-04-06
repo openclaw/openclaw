@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
 
-vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
+vi.mock("../../../test/helpers/config/bundled-channel-config-runtime.js", () => ({
   getBundledChannelRuntimeMap: () => new Map(),
   getBundledChannelConfigSchemaMap: () => new Map(),
 }));

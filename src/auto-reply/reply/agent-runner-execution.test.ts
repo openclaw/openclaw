@@ -56,10 +56,16 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
-vi.mock("../../infra/agent-events.js", () => ({
-  emitAgentEvent: vi.fn(),
-  registerAgentRunContext: vi.fn(),
-}));
+vi.mock("../../infra/agent-events.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+    "../../infra/agent-events.js",
+  );
+  return {
+    ...actual,
+    emitAgentEvent: vi.fn(),
+    registerAgentRunContext: vi.fn(),
+  };
+});
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {

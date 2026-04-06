@@ -14,6 +14,15 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
     const joined = parts.slice(1).join(":");
     return joined.replace(/:topic:.*$/, "") || undefined;
   }
+  if (parts.length >= 2 && parts[0] === "whatsapp") {
+    const joined = parts
+      .slice(1)
+      .join(":")
+      .replace(/:topic:.*$/, "");
+    if (/@g\.us$/i.test(joined)) {
+      return joined || undefined;
+    }
+  }
   const channelId = normalizeChannelId(parts[0] ?? "") ?? parts[0]?.trim().toLowerCase();
   const parsed = channelId
     ? getChannelPlugin(channelId)?.messaging?.parseExplicitTarget?.({ raw: trimmed })

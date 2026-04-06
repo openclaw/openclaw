@@ -157,9 +157,42 @@ async function getFreeGatewayPort(): Promise<number> {
   });
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function connectClient(params: { url: string; token: string }) {
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError: Error | null = null;
+
+  while (Date.now() - startedAt < CLI_GATEWAY_CONNECT_TIMEOUT_MS) {
+    attempt += 1;
+    const remainingMs = CLI_GATEWAY_CONNECT_TIMEOUT_MS - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    try {
+      return await connectClientOnce({
+        ...params,
+        timeoutMs: Math.min(remainingMs, 10_000),
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (!isRetryableGatewayConnectError(lastError) || remainingMs <= 2_000) {
+        throw lastError;
+      }
+      await sleep(Math.min(500 * attempt, 2_000));
+    }
+  }
+
+  throw lastError ?? new Error("gateway connect timeout");
+}
+
+async function connectClientOnce(params: { url: string; token: string; timeoutMs: number }) {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let done = false;
+    let client: GatewayClient | undefined;
     const finish = (result: { client?: GatewayClient; error?: Error }) => {
       if (done) {
         return;
@@ -167,6 +200,9 @@ async function connectClient(params: { url: string; token: string }) {
       done = true;
       clearTimeout(connectTimeout);
       if (result.error) {
+        if (client) {
+          void client.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});
+        }
         reject(result.error);
         return;
       }
@@ -176,12 +212,14 @@ async function connectClient(params: { url: string; token: string }) {
     const failWithClose = (code: number, reason: string) =>
       finish({ error: new Error(`gateway closed during connect (${code}): ${reason}`) });
 
-    const client = new GatewayClient({
+    client = new GatewayClient({
       url: params.url,
       token: params.token,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientVersion: "dev",
       mode: "test",
+      requestTimeoutMs: params.timeoutMs,
+      connectChallengeTimeoutMs: params.timeoutMs,
       onHelloOk: () => finish({ client }),
       onConnectError: (error) => finish({ error }),
       onClose: failWithClose,
@@ -189,11 +227,20 @@ async function connectClient(params: { url: string; token: string }) {
 
     const connectTimeout = setTimeout(
       () => finish({ error: new Error("gateway connect timeout") }),
-      CLI_GATEWAY_CONNECT_TIMEOUT_MS,
+      params.timeoutMs,
     );
     connectTimeout.unref();
     client.start();
   });
+}
+
+function isRetryableGatewayConnectError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("gateway closed during connect (1000)") ||
+    message.includes("gateway connect timeout") ||
+    message.includes("gateway connect challenge timeout")
+  );
 }
 
 async function runGatewayCliBootstrapLiveProbe(): Promise<{

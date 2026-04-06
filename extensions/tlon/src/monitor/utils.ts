@@ -210,9 +210,14 @@ function renderInlineItem(
   if (ship) {
     return ship;
   }
-  const sect = readString(record, "sect");
-  if (sect !== undefined) {
-    return `@${sect || "all"}`;
+  if ("sect" in record) {
+    const sect = record.sect;
+    if (typeof sect === "string") {
+      return `@${sect || "all"}`;
+    }
+    if (sect === null) {
+      return "@all";
+    }
   }
   if (options?.allowBreak && "break" in record) {
     return "\n";

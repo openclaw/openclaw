@@ -4,7 +4,6 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
-  postTranscriptionRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
@@ -12,7 +11,6 @@ import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./defa
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_SIZE = "1024x1024";
-const DEFAULT_INPUT_IMAGE_MIME = "image/png";
 const OPENAI_SUPPORTED_SIZES = ["1024x1024", "1024x1536", "1536x1024"] as const;
 const OPENAI_MAX_INPUT_IMAGES = 5;
 
@@ -28,20 +26,8 @@ function resolveOpenAIBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0
   return direct || DEFAULT_OPENAI_IMAGE_BASE_URL;
 }
 
-function inferFileExtensionFromMimeType(mimeType: string): string {
-  if (mimeType.includes("jpeg")) {
-    return "jpg";
-  }
-  if (mimeType.includes("webp")) {
-    return "webp";
-  }
-  return "png";
-}
-
-function toBlobBytes(buffer: Buffer): ArrayBuffer {
-  const arrayBuffer = new ArrayBuffer(buffer.byteLength);
-  new Uint8Array(arrayBuffer).set(buffer);
-  return arrayBuffer;
+function toDataUrl(buffer: Buffer, mimeType: string): string {
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
 export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
@@ -103,27 +89,20 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       const size = req.size ?? DEFAULT_SIZE;
       const requestResult = isEdit
         ? await (() => {
-            const form = new FormData();
-            form.set("model", model);
-            form.set("prompt", req.prompt);
-            form.set("n", String(count));
-            form.set("size", size);
-            inputImages.forEach((image, index) => {
-              const mimeType = image.mimeType?.trim() || DEFAULT_INPUT_IMAGE_MIME;
-              const extension = inferFileExtensionFromMimeType(mimeType);
-              const fileName = image.fileName?.trim() || `image-${index + 1}.${extension}`;
-              form.append(
-                "image",
-                new Blob([toBlobBytes(image.buffer)], { type: mimeType }),
-                fileName,
-              );
-            });
-            const multipartHeaders = new Headers(headers);
-            multipartHeaders.delete("Content-Type");
-            return postTranscriptionRequest({
+            const jsonHeaders = new Headers(headers);
+            jsonHeaders.set("Content-Type", "application/json");
+            return postJsonRequest({
               url: `${baseUrl}/images/edits`,
-              headers: multipartHeaders,
-              body: form,
+              headers: jsonHeaders,
+              body: {
+                model,
+                prompt: req.prompt,
+                n: count,
+                size,
+                images: inputImages.map((image) => ({
+                  image_url: toDataUrl(image.buffer, image.mimeType?.trim() || DEFAULT_OUTPUT_MIME),
+                })),
+              },
               timeoutMs: req.timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork,

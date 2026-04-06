@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildFullSuiteVitestRunPlans,
   buildVitestRunPlans,
   resolveChangedTargetArgs,
 } from "../../scripts/test-projects.test-support.mjs";
@@ -154,6 +155,72 @@ describe("scripts/test-projects changed-target routing", () => {
         forwardedArgs: [],
         includePatterns: ["src/commands/**/*.test.ts"],
         watchMode: false,
+      },
+    ]);
+  });
+});
+
+describe("scripts/test-projects full-suite sharding", () => {
+  it("splits untargeted runs into fixed shard configs", () => {
+    expect(buildFullSuiteVitestRunPlans([], process.cwd())).toEqual([
+      {
+        config: "vitest.full-core-unit-src.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-core-unit-security.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-core-unit-support.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-core-contracts.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-core-runtime.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-agentic.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-extensions.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("keeps untargeted watch mode on the native root config", () => {
+    expect(buildFullSuiteVitestRunPlans(["--watch"], process.cwd())).toEqual([
+      {
+        config: "vitest.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: true,
       },
     ]);
   });

@@ -38,10 +38,10 @@ export function createMediaGenerateDuplicateGuardResult<Task>(params: {
   findActiveTask: (sessionKey?: string) => Task | undefined;
   buildStatusText: TaskStatusTextBuilder<Task>;
   buildStatusDetails: (task: Task) => Record<string, unknown>;
-}): MediaGenerateActionResult | null {
+}): MediaGenerateActionResult | undefined {
   const activeTask = params.findActiveTask(params.sessionKey);
   if (!activeTask) {
-    return null;
+    return undefined;
   }
   return {
     content: [

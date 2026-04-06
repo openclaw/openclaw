@@ -7,6 +7,8 @@ import type { MemoryIndexManager } from "./index.js";
 
 type EmbeddingTestMocksModule = typeof import("./embedding.test-mocks.js");
 type MemoryIndexModule = typeof import("./index.js");
+type MemoryEmbeddingProvidersModule =
+  typeof import("../../../../src/plugins/memory-embedding-providers.js");
 type MemorySearchManagerHandle = Awaited<
   ReturnType<MemoryIndexModule["getMemorySearchManager"]>
 >["manager"];
@@ -32,6 +34,13 @@ export function installEmbeddingManagerFixture(opts: {
   let embedBatch: Mock<(texts: string[]) => Promise<number[][]>> | undefined;
   let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
   let resetEmbeddingMocks: EmbeddingTestMocksModule["resetEmbeddingMocks"];
+  let clearRegistry: MemoryEmbeddingProvidersModule["clearMemoryEmbeddingProviders"];
+  let registerAdapter: MemoryEmbeddingProvidersModule["registerMemoryEmbeddingProvider"];
+  let restoreRegistry: MemoryEmbeddingProvidersModule["restoreRegisteredMemoryEmbeddingProviders"];
+  let listRegistry: MemoryEmbeddingProvidersModule["listRegisteredMemoryEmbeddingProviders"];
+  let originalRegistry:
+    | ReturnType<MemoryEmbeddingProvidersModule["listRegisteredMemoryEmbeddingProviders"]>
+    | undefined;
 
   const resetManager = (manager: MemoryIndexManager) => {
     (manager as unknown as { resetIndex: () => void }).resetIndex();
@@ -65,6 +74,21 @@ export function installEmbeddingManagerFixture(opts: {
     embedBatch = embeddingMocks.getEmbedBatchMock();
     resetEmbeddingMocks = embeddingMocks.resetEmbeddingMocks;
     ({ getMemorySearchManager } = await import("./index.js"));
+    ({
+      clearMemoryEmbeddingProviders: clearRegistry,
+      registerMemoryEmbeddingProvider: registerAdapter,
+      restoreRegisteredMemoryEmbeddingProviders: restoreRegistry,
+      listRegisteredMemoryEmbeddingProviders: listRegistry,
+    } = await import("../../../../src/plugins/memory-embedding-providers.js"));
+    const savedRegistry = listRegistry();
+    clearRegistry();
+    registerAdapter({
+      id: "openai",
+      defaultModel: "mock-embed",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
+    originalRegistry = savedRegistry;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), opts.fixturePrefix));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
@@ -108,6 +132,12 @@ export function installEmbeddingManagerFixture(opts: {
     if (fixtureRoot) {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
       fixtureRoot = undefined;
+    }
+    if (originalRegistry) {
+      restoreRegistry(originalRegistry);
+      originalRegistry = undefined;
+    } else {
+      clearRegistry();
     }
   });
 

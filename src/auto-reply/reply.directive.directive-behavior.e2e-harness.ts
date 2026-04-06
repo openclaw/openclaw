@@ -13,6 +13,7 @@ import {
   loadModelCatalogMock,
   runEmbeddedPiAgentMock,
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 type RunPreparedReply = typeof import("./reply/get-reply-run.js").runPreparedReply;
@@ -136,7 +137,7 @@ export function makeWhatsAppDirectiveConfig(
   defaults: Record<string, unknown>,
   extra: Record<string, unknown> = {},
 ) {
-  return {
+  return withFastReplyConfig({
     agents: {
       defaults: {
         workspace: path.join(home, "openclaw"),
@@ -146,7 +147,7 @@ export function makeWhatsAppDirectiveConfig(
     channels: { whatsapp: { allowFrom: ["*"] } },
     session: { store: sessionStorePath(home) },
     ...extra,
-  };
+  });
 }
 
 export const AUTHORIZED_WHATSAPP_COMMAND = {
@@ -228,6 +229,16 @@ export function installFreshDirectiveBehaviorReplyMocks(params?: {
     resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
     isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
     isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+  }));
+  vi.doMock("../agents/pi-embedded.runtime.js", () => ({
+    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+    runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
+    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+    resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
+    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+    waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(true),
   }));
   vi.doMock("../agents/model-catalog.js", () => ({
     loadModelCatalog: loadModelCatalogMock,

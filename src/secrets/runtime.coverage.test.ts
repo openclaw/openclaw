@@ -53,9 +53,13 @@ const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
 
 let applyResolvedAssignments: typeof import("./runtime-shared.js").applyResolvedAssignments;
+let clearBootstrapChannelPluginCache: typeof import("../channels/plugins/bootstrap-registry.js").clearBootstrapChannelPluginCache;
+let clearBundledPluginMetadataCache: typeof import("../plugins/bundled-plugin-metadata.js").clearBundledPluginMetadataCache;
+let clearPluginManifestRegistryCache: typeof import("../plugins/manifest-registry.js").clearPluginManifestRegistryCache;
 let collectAuthStoreAssignments: typeof import("./runtime-auth-collectors.js").collectAuthStoreAssignments;
 let collectConfigAssignments: typeof import("./runtime-config-collectors.js").collectConfigAssignments;
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
+let resetFacadeRuntimeStateForTest: typeof import("../plugin-sdk/facade-runtime.js").resetFacadeRuntimeStateForTest;
 let resolveSecretRefValues: typeof import("./resolve.js").resolveSecretRefValues;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
 
@@ -134,7 +138,11 @@ function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
     if (
       field === "accessToken" ||
       field === "password" ||
-      (channelId === "slack" && field === "signingSecret")
+      (channelId === "slack" &&
+        (field === "appToken" ||
+          field === "botToken" ||
+          field === "signingSecret" ||
+          field === "userToken"))
     ) {
       return entry.id;
     }
@@ -419,15 +427,31 @@ async function prepareCoverageSnapshot(params: {
 
 describe("secrets runtime target coverage", () => {
   beforeAll(async () => {
-    const [sharedRuntime, authCollectors, configCollectors, resolver, webTools] = await Promise.all(
-      [
-        import("./runtime-shared.js"),
-        import("./runtime-auth-collectors.js"),
-        import("./runtime-config-collectors.js"),
-        import("./resolve.js"),
-        import("./runtime-web-tools.js"),
-      ],
-    );
+    const [
+      bootstrapRegistry,
+      facadeRuntime,
+      bundledPluginMetadata,
+      manifestRegistry,
+      sharedRuntime,
+      authCollectors,
+      configCollectors,
+      resolver,
+      webTools,
+    ] = await Promise.all([
+      import("../channels/plugins/bootstrap-registry.js"),
+      import("../plugin-sdk/facade-runtime.js"),
+      import("../plugins/bundled-plugin-metadata.js"),
+      import("../plugins/manifest-registry.js"),
+      import("./runtime-shared.js"),
+      import("./runtime-auth-collectors.js"),
+      import("./runtime-config-collectors.js"),
+      import("./resolve.js"),
+      import("./runtime-web-tools.js"),
+    ]);
+    ({ clearBootstrapChannelPluginCache } = bootstrapRegistry);
+    ({ resetFacadeRuntimeStateForTest } = facadeRuntime);
+    ({ clearBundledPluginMetadataCache } = bundledPluginMetadata);
+    ({ clearPluginManifestRegistryCache } = manifestRegistry);
     ({ applyResolvedAssignments, createResolverContext } = sharedRuntime);
     ({ collectAuthStoreAssignments } = authCollectors);
     ({ collectConfigAssignments } = configCollectors);
@@ -440,6 +464,10 @@ describe("secrets runtime target coverage", () => {
       (entry) => entry.configFile === "openclaw.json",
     );
     for (const batch of buildCoverageBatches(entries)) {
+      clearBootstrapChannelPluginCache();
+      clearBundledPluginMetadataCache();
+      clearPluginManifestRegistryCache();
+      resetFacadeRuntimeStateForTest();
       logCoverageBatch("openclaw.json", batch);
       const config = {} as OpenClawConfig;
       const env: Record<string, string> = {};

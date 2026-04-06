@@ -3,21 +3,24 @@ import { createServer as createHttpServer } from "node:http";
 import { loadConfig } from "../config/config.js";
 import { logDebug, logWarn } from "../logger.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
+import {
+  clearActiveMcpLoopbackRuntime,
+  createMcpLoopbackServerConfig,
+  getActiveMcpLoopbackRuntime,
+  setActiveMcpLoopbackRuntime,
+} from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
   readMcpHttpBody,
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
 } from "./mcp-http.request.js";
-import {
-  clearActiveMcpLoopbackRuntime,
+import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
+
+export {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
-  McpLoopbackToolCache,
-  setActiveMcpLoopbackRuntime,
-} from "./mcp-http.runtime.js";
-
-export { createMcpLoopbackServerConfig, getActiveMcpLoopbackRuntime } from "./mcp-http.runtime.js";
+} from "./mcp-http.loopback-runtime.js";
 
 export async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;

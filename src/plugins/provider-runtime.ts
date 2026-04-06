@@ -4,7 +4,7 @@ import type { ProviderSystemPromptContribution } from "../agents/system-prompt-c
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import { resolveCatalogHookProviderPluginIds } from "./providers.js";
-import { resolvePluginProviders } from "./providers.runtime.js";
+import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import type {
@@ -154,6 +154,19 @@ function resolveProviderPluginsForHooks(params: {
   const cached = cacheBucket.get(cacheKey);
   if (cached) {
     return cached;
+  }
+  if (
+    isPluginProvidersLoadInFlight({
+      ...params,
+      workspaceDir,
+      env,
+      activate: false,
+      cache: false,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
+    })
+  ) {
+    return [];
   }
   const resolved = resolvePluginProviders({
     ...params,

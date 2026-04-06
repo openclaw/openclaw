@@ -11,10 +11,23 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   qwen: "qwen/wan2.6-t2v",
   runway: "runway/gen4.5",
   together: "together/Wan-AI/Wan2.2-T2V-A14B",
+  vydra: "vydra/veo3",
   xai: "xai/grok-imagine-video",
 };
 
-const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "qwen", "xai"]);
+const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "google", "openai", "qwen", "xai"]);
+const BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS = new Set(["vydra"]);
+
+export function resolveLiveVideoResolution(params: {
+  providerId: string;
+  modelRef: string;
+}): "480P" | "768P" | "1080P" {
+  const providerId = params.providerId.trim().toLowerCase();
+  if (providerId === "minimax") {
+    return "768P";
+  }
+  return "480P";
+}
 
 export function redactLiveApiKey(value: string | undefined): string {
   const trimmed = value?.trim();
@@ -97,6 +110,17 @@ export function canRunBufferBackedVideoToVideoLiveLane(params: {
       ? params.modelRef.trim()
       : params.modelRef.slice(slash + 1).trim();
   return model === "gen4_aleph";
+}
+
+export function canRunBufferBackedImageToVideoLiveLane(params: {
+  providerId: string;
+  modelRef: string;
+}): boolean {
+  const providerId = params.providerId.trim().toLowerCase();
+  if (BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS.has(providerId)) {
+    return false;
+  }
+  return true;
 }
 
 export function resolveLiveVideoAuthStore(params: {

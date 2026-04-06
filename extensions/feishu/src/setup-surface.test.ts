@@ -371,11 +371,17 @@ describe("feishu setup wizard status", () => {
     });
 
     const next = feishuSetupWizard.dmPolicy?.setPolicy?.(cfg as never, "open");
+    const workAccount = next?.channels?.feishu?.accounts?.work as
+      | {
+          dmPolicy?: string;
+          allowFrom?: string[];
+        }
+      | undefined;
 
     expect(next?.channels?.feishu?.dmPolicy).toBeUndefined();
     expect(next?.channels?.feishu?.allowFrom).toEqual(["ou_root"]);
-    expect(next?.channels?.feishu?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next?.channels?.feishu?.accounts?.work?.allowFrom).toEqual(["ou_work", "*"]);
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["ou_work", "*"]);
   });
 
   it("treats env SecretRef appId as not configured when env var is missing", async () => {

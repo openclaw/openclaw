@@ -102,6 +102,10 @@ describe("runEmbeddedAttempt context injection", () => {
       contextEngine: {
         assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
       },
+      attemptOverrides: {
+        bootstrapContextMode: "full",
+        bootstrapContextRunKind: "default",
+      },
       sessionKey: "agent:main",
       tempPaths,
     });

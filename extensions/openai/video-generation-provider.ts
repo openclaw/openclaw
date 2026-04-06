@@ -4,7 +4,6 @@ import {
   assertOkOrThrowHttpError,
   fetchWithTimeout,
   postJsonRequest,
-  postTranscriptionRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import type {
@@ -45,6 +44,10 @@ function toBlobBytes(buffer: Buffer): ArrayBuffer {
   const arrayBuffer = new ArrayBuffer(buffer.byteLength);
   new Uint8Array(arrayBuffer).set(buffer);
   return arrayBuffer;
+}
+
+function toDataUrl(buffer: Buffer, mimeType: string): string {
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
 function resolveDurationSeconds(durationSeconds: number | undefined): "4" | "8" | "12" | undefined {
@@ -245,36 +248,67 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         aspectRatio: req.aspectRatio,
         resolution: req.resolution,
       });
+      const inputImage = req.inputImages?.[0];
       const referenceAsset = resolveReferenceAsset(req);
+      const requestUrl = `${baseUrl}/videos`;
       const requestResult = referenceAsset
-        ? await (() => {
-            const form = new FormData();
-            form.set("prompt", req.prompt);
-            form.set("model", model);
-            if (seconds) {
-              form.set("seconds", seconds);
-            }
-            if (size) {
-              form.set("size", size);
-            }
-            form.set("input_reference", referenceAsset);
-            const multipartHeaders = new Headers(headers);
-            multipartHeaders.delete("Content-Type");
-            return postTranscriptionRequest({
-              url: `${baseUrl}/videos`,
-              headers: multipartHeaders,
-              body: form,
-              timeoutMs: req.timeoutMs,
-              fetchFn,
-              allowPrivateNetwork,
-              dispatcherPolicy,
-            });
-          })()
+        ? inputImage?.buffer
+          ? await (() => {
+              const jsonHeaders = new Headers(headers);
+              jsonHeaders.set("Content-Type", "application/json");
+              return postJsonRequest({
+                url: requestUrl,
+                headers: jsonHeaders,
+                body: {
+                  prompt: req.prompt,
+                  model,
+                  ...(seconds ? { seconds } : {}),
+                  ...(size ? { size } : {}),
+                  input_reference: {
+                    image_url: toDataUrl(
+                      inputImage.buffer,
+                      inputImage.mimeType?.trim() || "image/png",
+                    ),
+                  },
+                },
+                timeoutMs: req.timeoutMs,
+                fetchFn,
+                allowPrivateNetwork,
+                dispatcherPolicy,
+              });
+            })()
+          : await (() => {
+              const form = new FormData();
+              form.set("prompt", req.prompt);
+              form.set("model", model);
+              if (seconds) {
+                form.set("seconds", seconds);
+              }
+              if (size) {
+                form.set("size", size);
+              }
+              form.set("input_reference", referenceAsset);
+              const multipartHeaders = new Headers(headers);
+              multipartHeaders.delete("Content-Type");
+              return fetchWithTimeout(
+                requestUrl,
+                {
+                  method: "POST",
+                  headers: multipartHeaders,
+                  body: form,
+                },
+                req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+                fetchFn,
+              ).then((response) => ({
+                response,
+                release: async () => {},
+              }));
+            })()
         : await (() => {
             const jsonHeaders = new Headers(headers);
             jsonHeaders.set("Content-Type", "application/json");
             return postJsonRequest({
-              url: `${baseUrl}/videos`,
+              url: requestUrl,
               headers: jsonHeaders,
               body: {
                 prompt: req.prompt,

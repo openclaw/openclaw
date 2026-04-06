@@ -25,68 +25,74 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
   sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderRuntimePlugin: ({ provider }: { provider?: string }) =>
-    provider === "openrouter" || provider === "github-copilot"
-      ? {
-          buildReplayPolicy: (context?: { modelId?: string | null }) => {
-            const modelId = String(context?.modelId ?? "").toLowerCase();
-            if (provider === "openrouter") {
-              return {
-                applyAssistantFirstOrderingFix: false,
-                validateGeminiTurns: false,
-                validateAnthropicTurns: false,
-                ...(modelId.includes("gemini")
-                  ? {
-                      sanitizeThoughtSignatures: {
-                        allowBase64Only: true,
-                        includeCamelCase: true,
-                      },
-                    }
-                  : {}),
-              };
-            }
-            if (provider === "github-copilot" && modelId.includes("claude")) {
-              return {
-                dropThinkingBlocks: true,
-              };
-            }
-            return undefined;
-          },
-        }
-      : undefined,
-  sanitizeProviderReplayHistoryWithPlugin: vi.fn(
-    async ({
-      provider,
-      context,
-    }: {
-      provider?: string;
-      context: {
-        messages: AgentMessage[];
-        sessionState?: {
-          appendCustomEntry(customType: string, data: unknown): void;
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderRuntimePlugin: ({ provider }: { provider?: string }) =>
+      provider === "openrouter" || provider === "github-copilot"
+        ? {
+            buildReplayPolicy: (context?: { modelId?: string | null }) => {
+              const modelId = String(context?.modelId ?? "").toLowerCase();
+              if (provider === "openrouter") {
+                return {
+                  applyAssistantFirstOrderingFix: false,
+                  validateGeminiTurns: false,
+                  validateAnthropicTurns: false,
+                  ...(modelId.includes("gemini")
+                    ? {
+                        sanitizeThoughtSignatures: {
+                          allowBase64Only: true,
+                          includeCamelCase: true,
+                        },
+                      }
+                    : {}),
+                };
+              }
+              if (provider === "github-copilot" && modelId.includes("claude")) {
+                return {
+                  dropThinkingBlocks: true,
+                };
+              }
+              return undefined;
+            },
+          }
+        : undefined,
+    sanitizeProviderReplayHistoryWithPlugin: vi.fn(
+      async ({
+        provider,
+        context,
+      }: {
+        provider?: string;
+        context: {
+          messages: AgentMessage[];
+          sessionState?: {
+            appendCustomEntry(customType: string, data: unknown): void;
+          };
         };
-      };
-    }) => {
-      if (
-        provider &&
-        provider.startsWith("google") &&
-        context.messages[0]?.role === "assistant" &&
-        context.sessionState
-      ) {
-        context.sessionState.appendCustomEntry("google-turn-ordering-bootstrap", {
-          timestamp: Date.now(),
-        });
-        return [
-          { role: "user", content: "(session bootstrap)" } as AgentMessage,
-          ...context.messages,
-        ];
-      }
-      return context.messages;
-    },
-  ),
-  validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
-}));
+      }) => {
+        if (
+          provider &&
+          provider.startsWith("google") &&
+          context.messages[0]?.role === "assistant" &&
+          context.sessionState
+        ) {
+          context.sessionState.appendCustomEntry("google-turn-ordering-bootstrap", {
+            timestamp: Date.now(),
+          });
+          return [
+            { role: "user", content: "(session bootstrap)" } as AgentMessage,
+            ...context.messages,
+          ];
+        }
+        return context.messages;
+      },
+    ),
+    validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
+  };
+});
 
 let sanitizeSessionHistory: SanitizeSessionHistoryFn;
 let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];

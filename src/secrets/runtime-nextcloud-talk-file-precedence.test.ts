@@ -1,12 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as nextcloudTalkSecrets from "../../extensions/nextcloud-talk/src/secret-contract.ts";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 
-vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
-  const nextcloudTalkSecrets =
-    await import("../../extensions/nextcloud-talk/src/secret-contract.ts");
+vi.mock("../channels/plugins/bootstrap-registry.js", () => {
   return {
     getBootstrapChannelPlugin: (id: string) =>
       id === "nextcloud-talk"
@@ -117,12 +116,11 @@ describe("secrets runtime snapshot nextcloud talk file precedence", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.["nextcloud-talk"]?.accounts?.work?.botSecret).toBe(
-      "resolved-nextcloud-work-bot-secret",
-    );
-    expect(snapshot.config.channels?.["nextcloud-talk"]?.accounts?.work?.apiPassword).toBe(
-      "resolved-nextcloud-work-api-password",
-    );
+    const workAccount = snapshot.config.channels?.["nextcloud-talk"]?.accounts?.work as
+      | { botSecret?: unknown; apiPassword?: unknown }
+      | undefined;
+    expect(workAccount?.botSecret).toBe("resolved-nextcloud-work-bot-secret");
+    expect(workAccount?.apiPassword).toBe("resolved-nextcloud-work-api-password");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.nextcloud-talk.accounts.work.botSecret",
     );

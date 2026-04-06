@@ -33,7 +33,8 @@
     "!docs/.i18n/zh-CN.tm.jsonl",
     "skills/",
     "scripts/npm-runner.mjs",
-    "scripts/postinstall-bundled-plugins.mjs"
+    "scripts/postinstall-bundled-plugins.mjs",
+    "scripts/windows-cmd-helpers.mjs"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -591,6 +592,10 @@
       "types": "./dist/plugin-sdk/video-generation.d.ts",
       "default": "./dist/plugin-sdk/video-generation.js"
     },
+    "./plugin-sdk/video-generation-runtime": {
+      "types": "./dist/plugin-sdk/video-generation-runtime.d.ts",
+      "default": "./dist/plugin-sdk/video-generation-runtime.js"
+    },
     "./plugin-sdk/video-generation-core": {
       "types": "./dist/plugin-sdk/video-generation-core.d.ts",
       "default": "./dist/plugin-sdk/video-generation-core.js"
@@ -618,6 +623,10 @@
     "./plugin-sdk/media-understanding": {
       "types": "./dist/plugin-sdk/media-understanding.d.ts",
       "default": "./dist/plugin-sdk/media-understanding.js"
+    },
+    "./plugin-sdk/media-understanding-runtime": {
+      "types": "./dist/plugin-sdk/media-understanding-runtime.d.ts",
+      "default": "./dist/plugin-sdk/media-understanding-runtime.js"
     },
     "./plugin-sdk/messaging-targets": {
       "types": "./dist/plugin-sdk/messaging-targets.d.ts",
@@ -846,6 +855,10 @@
     "./plugin-sdk/provider-model-shared": {
       "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-model-shared.js"
+    },
+    "./plugin-sdk/volc-model-catalog-shared": {
+      "types": "./dist/plugin-sdk/volc-model-catalog-shared.d.ts",
+      "default": "./dist/plugin-sdk/volc-model-catalog-shared.js"
     },
     "./plugin-sdk/provider-onboard": {
       "types": "./dist/plugin-sdk/provider-onboard.d.ts",
@@ -1114,6 +1127,7 @@
     "qa:e2e": "node --import tsx scripts/qa-e2e.ts",
     "qa:lab:build": "vite build --config extensions/qa-lab/web/vite.config.ts",
     "qa:lab:ui": "pnpm openclaw qa ui",
+    "qa:lab:up": "node --import tsx scripts/qa-lab-up.ts",
     "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
@@ -1169,6 +1183,10 @@
     "test:live": "node scripts/test-live.mjs",
     "test:live:cache": "bun scripts/check-live-cache.ts",
     "test:live:gateway-profiles": "node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts",
+    "test:live:media": "node --import tsx scripts/test-live-media.ts",
+    "test:live:media:image": "node --import tsx scripts/test-live-media.ts image",
+    "test:live:media:music": "node --import tsx scripts/test-live-media.ts music",
+    "test:live:media:video": "node --import tsx scripts/test-live-media.ts video",
     "test:live:models-profiles": "node scripts/test-live.mjs -- src/agents/models.profiles.live.test.ts",
     "test:max": "OPENCLAW_VITEST_MAX_WORKERS=8 node scripts/test-projects.mjs",
     "test:parallels:linux": "bash scripts/e2e/parallels-linux-smoke.sh",
@@ -1321,6 +1339,7 @@
       "yauzl": "3.2.1"
     },
     "onlyBuiltDependencies": [
+      "@discordjs/opus",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
@@ -1333,10 +1352,7 @@
       "protobufjs",
       "sharp"
     ],
-    "ignoredBuiltDependencies": [
-      "@discordjs/opus",
-      "koffi"
-    ],
+    "ignoredBuiltDependencies": ["koffi"],
     "packageExtensions": {
       "@mariozechner/pi-coding-agent": {
         "dependencies": {

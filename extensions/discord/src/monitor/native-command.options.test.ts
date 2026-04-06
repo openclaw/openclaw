@@ -26,6 +26,10 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  resolveHumanDelayConfig: () => undefined,
+}));
+
 let listNativeCommandSpecs: typeof import("openclaw/plugin-sdk/command-auth").listNativeCommandSpecs;
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;

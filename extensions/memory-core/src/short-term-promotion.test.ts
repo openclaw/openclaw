@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
+  appendMemoryHostEvent: vi.fn(async () => {}),
+}));
+
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -17,13 +22,23 @@ import {
 } from "./short-term-promotion.js";
 
 describe("short-term promotion", () => {
-  async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-promote-"));
-    try {
-      await run(workspaceDir);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
+  let fixtureRoot = "";
+  let caseId = 0;
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-promote-"));
+  });
+
+  afterAll(async () => {
+    if (!fixtureRoot) {
+      return;
     }
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
+    const workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
+    await run(workspaceDir);
   }
 
   async function writeDailyMemoryNote(
@@ -1144,7 +1159,7 @@ describe("short-term promotion", () => {
         return result;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      await new Promise((resolve) => setTimeout(resolve, 45));
       expect(settled).toBe(false);
 
       await fs.unlink(lockPath);

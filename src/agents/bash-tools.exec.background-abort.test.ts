@@ -17,7 +17,6 @@ let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
 let getSession: typeof import("./bash-process-registry.js").getSession;
 let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
-
 type ExecToolExecuteParams = Parameters<ReturnType<typeof createExecTool>["execute"]>[1];
 
 const createTestExecTool = (

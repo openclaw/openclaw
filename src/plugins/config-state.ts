@@ -1,13 +1,16 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  resolveMemorySlotDecisionShared,
+  resolveEnableStateResult,
+} from "./config-activation-shared.js";
+import {
   hasExplicitPluginConfig as hasExplicitPluginConfigShared,
   isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
   normalizePluginsConfigWithResolver,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import { hasKind } from "./slots.js";
-import type { PluginKind, PluginOrigin } from "./types.js";
+import type { PluginOrigin } from "./types.js";
 
 export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
 
@@ -377,13 +380,15 @@ export function resolveEnableState(
   config: NormalizedPluginsConfig,
   enabledByDefault?: boolean,
 ): { enabled: boolean; reason?: string } {
-  const state = resolvePluginActivationState({
-    id,
-    origin,
-    config,
-    enabledByDefault,
-  });
-  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
+  return resolveEnableStateResult(
+    {
+      id,
+      origin,
+      config,
+      enabledByDefault,
+    },
+    resolvePluginActivationState,
+  );
 }
 
 export function isBundledChannelEnabledByChannelConfig(
@@ -401,8 +406,7 @@ export function resolveEffectiveEnableState(params: {
   enabledByDefault?: boolean;
   activationSource?: PluginActivationConfigSource;
 }): { enabled: boolean; reason?: string } {
-  const state = resolveEffectivePluginActivationState(params);
-  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
+  return resolveEnableStateResult(params, resolveEffectivePluginActivationState);
 }
 
 export function resolveEffectivePluginActivationState(params: {
@@ -423,27 +427,5 @@ export function resolveMemorySlotDecision(params: {
   slot: string | null | undefined;
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
-  if (!hasKind(params.kind as PluginKind | PluginKind[] | undefined, "memory")) {
-    return { enabled: true };
-  }
-  // A dual-kind plugin (e.g. ["memory", "context-engine"]) that lost the
-  // memory slot must stay enabled so its other slot role can still load.
-  const isMultiKind = Array.isArray(params.kind) && params.kind.length > 1;
-  if (params.slot === null) {
-    return isMultiKind ? { enabled: true } : { enabled: false, reason: "memory slot disabled" };
-  }
-  if (typeof params.slot === "string") {
-    if (params.slot === params.id) {
-      return { enabled: true, selected: true };
-    }
-    return isMultiKind
-      ? { enabled: true }
-      : { enabled: false, reason: `memory slot set to "${params.slot}"` };
-  }
-  if (params.selectedId && params.selectedId !== params.id) {
-    return isMultiKind
-      ? { enabled: true }
-      : { enabled: false, reason: `memory slot already filled by "${params.selectedId}"` };
-  }
-  return { enabled: true, selected: true };
+  return resolveMemorySlotDecisionShared(params);
 }

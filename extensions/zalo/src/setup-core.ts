@@ -12,6 +12,12 @@ import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
 
 const channel = "zalo" as const;
 
+type ZaloAccountSetupConfig = {
+  enabled?: boolean;
+  dmPolicy?: string;
+  allowFrom?: Array<string | number> | ReadonlyArray<string | number>;
+};
+
 export const zaloSetupAdapter = createPatchedAccountSetupAdapter({
   channelKey: channel,
   validateInput: createSetupInputPresenceValidator({
@@ -78,6 +84,9 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
         },
       };
     }
+    const currentAccount = cfg.channels?.zalo?.accounts?.[resolvedAccountId] as
+      | ZaloAccountSetupConfig
+      | undefined;
     return {
       ...cfg,
       channels: {
@@ -88,8 +97,8 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
           accounts: {
             ...cfg.channels?.zalo?.accounts,
             [resolvedAccountId]: {
-              ...cfg.channels?.zalo?.accounts?.[resolvedAccountId],
-              enabled: cfg.channels?.zalo?.accounts?.[resolvedAccountId]?.enabled ?? true,
+              ...currentAccount,
+              enabled: currentAccount?.enabled ?? true,
               dmPolicy: policy,
               ...(policy === "open"
                 ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) }

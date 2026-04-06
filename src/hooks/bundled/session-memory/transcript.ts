@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 
 function extractTextMessageContent(content: unknown): string | undefined {
@@ -35,7 +34,11 @@ export async function getRecentSessionContent(
       try {
         const entry = JSON.parse(line);
         if (entry.type === "message" && entry.message) {
-          const msg = entry.message as AgentMessage & { content?: unknown };
+          const msg = entry.message as {
+            role?: unknown;
+            content?: unknown;
+            provenance?: unknown;
+          };
           const role = msg.role;
           if ((role === "user" || role === "assistant") && "content" in msg && msg.content) {
             if (role === "user" && hasInterSessionUserProvenance(msg)) {

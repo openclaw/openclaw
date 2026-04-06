@@ -4,14 +4,12 @@ import { buildOpenAIVideoGenerationProvider } from "./video-generation-provider.
 const {
   resolveApiKeyForProviderMock,
   postJsonRequestMock,
-  postTranscriptionRequestMock,
   fetchWithTimeoutMock,
   assertOkOrThrowHttpErrorMock,
   resolveProviderHttpRequestConfigMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openai-key" })),
   postJsonRequestMock: vi.fn(),
-  postTranscriptionRequestMock: vi.fn(),
   fetchWithTimeoutMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
@@ -30,7 +28,6 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   fetchWithTimeout: fetchWithTimeoutMock,
   postJsonRequest: postJsonRequestMock,
-  postTranscriptionRequest: postTranscriptionRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
@@ -38,7 +35,6 @@ describe("openai video generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
     postJsonRequestMock.mockReset();
-    postTranscriptionRequestMock.mockReset();
     fetchWithTimeoutMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
@@ -84,7 +80,6 @@ describe("openai video generation provider", () => {
         url: "https://api.openai.com/v1/videos",
       }),
     );
-    expect(postTranscriptionRequestMock).not.toHaveBeenCalled();
     expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
       1,
       "https://api.openai.com/v1/videos/vid_123",
@@ -102,8 +97,8 @@ describe("openai video generation provider", () => {
     );
   });
 
-  it("uses multipart when a reference asset is present", async () => {
-    postTranscriptionRequestMock.mockResolvedValue({
+  it("uses JSON input_reference.image_url for image-to-video requests", async () => {
+    postJsonRequestMock.mockResolvedValue({
       response: {
         json: async () => ({
           id: "vid_456",
@@ -135,12 +130,68 @@ describe("openai video generation provider", () => {
       inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
     });
 
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-    expect(postTranscriptionRequestMock).toHaveBeenCalledWith(
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://api.openai.com/v1/videos",
+        body: expect.objectContaining({
+          input_reference: {
+            image_url: "data:image/png;base64,cG5nLWJ5dGVz",
+          },
+        }),
+      }),
+    );
+    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
+      1,
+      "https://api.openai.com/v1/videos/vid_456",
+      expect.objectContaining({
+        method: "GET",
+      }),
+      120000,
+      fetch,
+    );
+  });
+
+  it("uses multipart input_reference for video-to-video uploads", async () => {
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: "vid_789",
+          model: "sora-2",
+          status: "queued",
+        }),
+      })
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "vid_789",
+          model: "sora-2",
+          status: "completed",
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "openai",
+      model: "sora-2",
+      prompt: "Remix this clip",
+      cfg: {},
+      inputVideos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+    });
+
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
+      1,
+      "https://api.openai.com/v1/videos",
+      expect.objectContaining({
+        method: "POST",
         body: expect.any(FormData),
       }),
+      120000,
+      fetch,
     );
   });
 
