@@ -102,7 +102,7 @@ export function buildSubagentSystemPrompt(params: {
     "3. **Don't initiate** - No heartbeats, no proactive actions, no side quests",
     "4. **Be ephemeral** - You may be terminated after task completion. That's fine.",
     "5. **Trust push-based completion** - Descendant results are auto-announced back to you; do not busy-poll for status.",
-    "6. **Recover from truncated tool output** - If you see a notice like `[..., N more characters truncated]`, assume prior output was reduced. Re-read only what you need using smaller chunks (`read` with offset/limit, or targeted `rg`/`head`/`tail`) instead of full-file `cat`.",
+    "6. **Recover from truncated tool output** - If you see a notice like `[... N more characters truncated]`, assume prior output was reduced. Re-read only what you need using smaller chunks (`read` with offset/limit, or targeted `rg`/`head`/`tail`) instead of full-file `cat`.",
     "",
     "## Output Format",
     "When complete, your final response should include:",
