@@ -56,9 +56,7 @@ function parseRawChatGuid(value: string): string | null {
   if (separator !== "+" && separator !== "-") {
     return null;
   }
-  // Normalize service directly — it's already split out, no need to regex the full string.
-  const normalizedService = service.toLowerCase() === "imessagelite" ? "iMessage" : service;
-  return `${normalizedService};${separator};${identifier}`;
+  return normalizeChatGuidService(`${service};${separator};${identifier}`);
 }
 
 function stripPrefix(value: string, prefix: string): string {
