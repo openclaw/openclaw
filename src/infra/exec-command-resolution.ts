@@ -250,7 +250,6 @@ const TRAILING_SHELL_REDIRECTIONS_RE = /\s+(?:[12]>&[12]|[12]>\/dev\/null)\s*$/;
 
 function stripTrailingRedirections(value: string): string {
   let prev = value;
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const next = prev.replace(TRAILING_SHELL_REDIRECTIONS_RE, "");
     if (next === prev) {
