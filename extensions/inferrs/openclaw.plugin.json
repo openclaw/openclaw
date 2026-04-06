@@ -1,0 +1,25 @@
+{
+  "id": "inferrs",
+  "enabledByDefault": true,
+  "providers": ["inferrs"],
+  "providerAuthEnvVars": {
+    "inferrs": ["INFERRS_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "inferrs",
+      "method": "custom",
+      "choiceId": "inferrs",
+      "choiceLabel": "inferrs",
+      "choiceHint": "Local inferrs inference server (OpenAI-compatible)",
+      "groupId": "inferrs",
+      "groupLabel": "inferrs",
+      "groupHint": "Local/self-hosted OpenAI-compatible"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
