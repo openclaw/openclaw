@@ -674,15 +674,41 @@ function resolveDiscordForwardedMessagesText(message: Message): string {
   if (!referencedForward) {
     return "";
   }
-  const referencedText = resolveDiscordMessageText(referencedForward, {
-    includeForwarded: true,
-  });
+  const referencedText = resolveDiscordMessageText(referencedForward);
   if (!referencedText) {
     return "";
   }
   const authorLabel = formatDiscordSnapshotAuthor(referencedForward.author);
   const heading = authorLabel ? `[Forwarded message from ${authorLabel}]` : "[Forwarded message]";
   return `${heading}\n${referencedText}`;
+}
+
+function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapshot[] {
+  const rawData = (message as { rawData?: { message_snapshots?: unknown } }).rawData;
+  return normalizeDiscordMessageSnapshots(
+    rawData?.message_snapshots ??
+      (message as { message_snapshots?: unknown }).message_snapshots ??
+      (message as { messageSnapshots?: unknown }).messageSnapshots,
+  );
+}
+
+function normalizeDiscordMessageSnapshots(snapshots: unknown): DiscordMessageSnapshot[] {
+  if (!Array.isArray(snapshots)) {
+    return [];
+  }
+  return snapshots.filter(
+    (entry): entry is DiscordMessageSnapshot => Boolean(entry) && typeof entry === "object",
+  );
+}
+
+export function resolveDiscordForwardedMessagesTextFromSnapshots(snapshots: unknown): string {
+  const forwardedBlocks = normalizeDiscordMessageSnapshots(snapshots)
+    .map((snapshot) => buildDiscordForwardedMessageBlock(snapshot.message))
+    .filter((entry): entry is string => Boolean(entry));
+  if (forwardedBlocks.length === 0) {
+    return "";
+  }
+  return forwardedBlocks.join("\n\n");
 }
 
 function buildDiscordForwardedMessageBlock(
